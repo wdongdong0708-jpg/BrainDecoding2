@@ -153,6 +153,7 @@ def test_colab_setup_constraints_and_drive_symlink_guard(tmp_path):
 
 def test_colab_notebooks_follow_streaming_and_symlink_rules():
     notebooks = [
+        PROJECT_ROOT / "scripts" / "colab" / "colab_drive_init.ipynb",
         PROJECT_ROOT / "scripts" / "colab" / "colab_cpu_cache.ipynb",
         PROJECT_ROOT / "scripts" / "colab" / "colab_gpu_train.ipynb",
     ]

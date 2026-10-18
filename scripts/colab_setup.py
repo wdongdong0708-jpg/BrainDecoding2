@@ -207,8 +207,9 @@ def setup_studies_links(
             f"严禁在 Google Drive FUSE 挂载路径内创建软链接：{links_root}（会触发 Errno 95）。"
             "请将 links_dir 设为本地盘路径（如 /content/studies_links）。"
         )
-    if not source_root.is_dir():
-        raise FileNotFoundError(f"云盘原始数据目录不存在：{source_root}")
+    if not source_root.exists():
+        print(f"[colab_setup] 云盘原始数据目录尚不存在，已自动创建：{source_root}", flush=True)
+        source_root.mkdir(parents=True, exist_ok=True)
 
     links_root.mkdir(parents=True, exist_ok=True)
     created_links: list[dict] = []

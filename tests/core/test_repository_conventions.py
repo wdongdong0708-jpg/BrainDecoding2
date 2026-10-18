@@ -39,12 +39,18 @@ FORBIDDEN_ABBREVIATION_TOKENS = {
 }
 
 
+GITIGNORED_LOCAL_DIRS = {"archives", "outputs", "workspace", "tmp", "build", "dist", "__pycache__"}
+
+
 def test_top_level_directories_strictly_limited_to_six() -> None:
     """顶层业务目录必须严格收敛为 6 个标准目录，防止目录膨胀。"""
     actual_dirs = {
         p.name
         for p in PROJECT_ROOT.iterdir()
-        if p.is_dir() and not p.name.startswith(".") and not p.name.endswith(".egg-info")
+        if p.is_dir()
+        and not p.name.startswith(".")
+        and not p.name.endswith(".egg-info")
+        and p.name not in GITIGNORED_LOCAL_DIRS
     }
     assert actual_dirs == ALLOWED_TOP_LEVEL_DIRS, (
         f"顶层目录超出 6 个标准目录规范: 实际={sorted(actual_dirs)}, 允许={sorted(ALLOWED_TOP_LEVEL_DIRS)}"

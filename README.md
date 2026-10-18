@@ -132,9 +132,10 @@ python -m braindecoding train --dataset chineseeeg2_littleprince --stage word --
 python scripts/cache_archive.py pack --cache-dir /content/local_cache --archive-dir /content/drive/MyDrive/BrainDecoding/archives --modality eeg
 python scripts/cache_archive.py unpack --archive-dir /content/drive/MyDrive/BrainDecoding/archives --cache-dir /content/local_cache --modality eeg --skip-existing
 
-# 5. Colab 双云端 Notebook
-# - scripts/colab/colab_cpu_cache.ipynb : CPU 实例预热特征缓存并打包为单文件 .tar
-# - scripts/colab/colab_gpu_train.ipynb : GPU 实例秒级解包缓存并启动 bf16-mixed 训练
+# 5. Colab 云端 Notebook
+# - scripts/colab/colab_drive_init.ipynb : 一键创建 Google Drive 标准目录并核验上传的 .tar 缓存包
+# - scripts/colab/colab_cpu_cache.ipynb  : CPU 实例预热特征缓存并打包为单文件 .tar
+# - scripts/colab/colab_gpu_train.ipynb  : GPU 实例秒级解包缓存并启动 bf16-mixed 训练
 
 # 6. 查看当前注册的标准实验协议与运行单元测试
 python -m braindecoding list
