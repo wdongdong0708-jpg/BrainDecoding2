@@ -242,6 +242,9 @@ def build_workflow_config(
     subjects: str | Iterable[str] | None = None,
     epochs: int | None = None,
     batch_size: int | None = None,
+    eval_batch_size: int | None = None,
+    learning_rate: float | None = None,
+    num_workers: int | None = None,
     precision: str = "bf16-mixed",
     mode: str = "train",
     output_dir: str | Path | None = None,
@@ -305,6 +308,24 @@ def build_workflow_config(
     )
     if batch_size is not None:
         tc["batch_size"] = int(batch_size)
+    elif mode == "train":
+        tc["batch_size"] = 256
+    if eval_batch_size is not None:
+        tc["eval_batch_size"] = int(eval_batch_size)
+    else:
+        tc["eval_batch_size"] = max(
+            int(tc["batch_size"]), 512 if mode == "train" else 256
+        )
+    tc["validation_query_batch_size"] = max(
+        int(tc.get("validation_query_batch_size", 256)),
+        int(tc["eval_batch_size"]),
+    )
+    if learning_rate is not None:
+        tc["learning_rate"] = float(learning_rate)
+    elif mode == "train" and int(tc["batch_size"]) >= 256:
+        tc["learning_rate"] = 0.0004
+    if num_workers is not None:
+        tc["num_workers"] = int(num_workers)
     if max_train_rows is not None:
         tc["max_train_rows"] = int(max_train_rows)
     if max_val_rows is not None:
@@ -528,8 +549,15 @@ def _load_subset_datasets_and_loaders(cfg: dict):
     train_loader, train_sampler = make_loader(
         train_ds, cfg["training"], shuffle=True, group_column=grp_col
     )
+    eval_bs = int(
+        cfg["training"].get("eval_batch_size", cfg["training"]["batch_size"])
+    )
     val_loader, _ = make_loader(
-        val_ds, cfg["training"], shuffle=False, group_column=grp_col
+        val_ds,
+        cfg["training"],
+        shuffle=False,
+        group_column=grp_col,
+        batch_size=eval_bs,
     )
     return train_ds, train_loader, train_sampler, val_ds, val_loader
 
@@ -627,6 +655,8 @@ def _evaluate_subset_validation(
     *,
     revision: bool,
     device: torch.device,
+    show_progress: bool = False,
+    progress_desc: str | None = None,
 ) -> dict:
     """在所选受试者子集验证集上计算检索指标（支持 bf16-mixed / fp16 / fp32）。"""
     dataset = cfg["experiment"]["dataset"]
@@ -638,6 +668,8 @@ def _evaluate_subset_validation(
         device,
         amp=amp_enabled,
         amp_dtype=amp_dtype,
+        show_progress=show_progress,
+        progress_desc=progress_desc,
     )
     if len(encoded["event_ids"]) != len(val_ds):
         raise ValueError(
@@ -904,6 +936,9 @@ def run_training_workflow(
     subjects: str | Iterable[str] | None = None,
     epochs: int | None = None,
     batch_size: int | None = None,
+    eval_batch_size: int | None = None,
+    learning_rate: float | None = None,
+    num_workers: int | None = None,
     precision: str = "bf16-mixed",
     require_cache: bool = False,
     resume: str | None = None,
@@ -913,6 +948,7 @@ def run_training_workflow(
     max_train_rows: int | None = None,
     max_val_rows: int | None = None,
     overwrite: bool = False,
+    show_progress: bool = True,
 ) -> dict:
     """运行 smoke 冒烟测试或 train 正式训练工作流。"""
     cfg, subset_spec = build_workflow_config(
@@ -924,6 +960,9 @@ def run_training_workflow(
         subjects=subjects,
         epochs=epochs,
         batch_size=batch_size,
+        eval_batch_size=eval_batch_size,
+        learning_rate=learning_rate,
+        num_workers=num_workers,
         precision=precision,
         mode=mode,
         output_dir=output_dir,
@@ -955,6 +994,9 @@ def run_training_workflow(
     if device.type != "cuda":
         raise RuntimeError("训练与 GPU 冒烟测试要求 CUDA 设备可用。")
 
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     resume_mode = str(resume or "").strip()
     resume_ckpt_path: Path | None = None
     if resume_mode.lower() == "auto":
@@ -985,7 +1027,8 @@ def run_training_workflow(
     )
 
     set_seed(seed)
-    torch.set_num_threads(2)
+    cpu_threads = min(8, max(2, (os.cpu_count() or 4) // 2))
+    torch.set_num_threads(cpu_threads)
     train_ds, train_loader, train_sampler, val_ds, val_loader = (
         _load_subset_datasets_and_loaders(cfg)
     )
@@ -1070,19 +1113,47 @@ def run_training_workflow(
         stale_epochs = int(ckpt.get("stale_epochs", 0))
         total_updates = int(ckpt.get("optimizer_updates", 0))
         resumed_from = str(resume_ckpt_path)
-        print(
-            f"[workflow] Resumed from {resume_ckpt_path} at epoch {start_epoch}/{tc['epochs']}",
-            flush=True,
-        )
 
     torch.cuda.reset_peak_memory_stats(device)
     selection_metric = cfg["evaluation"]["selection_metric"]
+    max_epochs = int(tc["epochs"])
+    patience = int(tc.get("patience", 6))
+    gpu_name = torch.cuda.get_device_name(device)
+    gpu_total_gb = torch.cuda.get_device_properties(device).total_memory / (1024.0**3)
 
-    for epoch in range(start_epoch, int(tc["epochs"])):
+    sep = "=" * 96
+    thin_sep = "-" * 96
+    print(
+        f"\n{sep}\n"
+        f" BrainDecoding Training  |  dataset={dataset}  |  stage={stage}  |  mode={mode}\n"
+        f"{thin_sep}\n"
+        f" GPU / AMP   : {gpu_name} ({gpu_total_gb:.1f} GB)  |  precision={tc['precision']} (TF32=on)\n"
+        f" Subset      : {subset_spec['subset_tag']} ({subset_spec['subject_count']}/{subset_spec['total_canonical_subjects']} subjects)  |  seed={seed}\n"
+        f" DataLoader  : train={len(train_ds):,} rows ({len(train_loader)} batches @ bs={tc['batch_size']})"
+        f"  |  val={len(val_ds):,} rows (eval_bs={tc.get('eval_batch_size', tc['batch_size'])}, workers={tc.get('num_workers', 0)})\n"
+        f" Optimizer   : AdamW (lr={float(tc['learning_rate']):.2e}, wd={float(tc.get('weight_decay', 1e-4)):.1e})"
+        f"  |  epochs={max_epochs} (patience={patience})\n"
+        f" Output Dir  : {out}",
+        flush=True,
+    )
+    if resumed_from:
+        print(
+            f" Resumed     : {resumed_from} (starting from epoch {start_epoch + 1}/{max_epochs})",
+            flush=True,
+        )
+    print(
+        f"{sep}\n"
+        f" {'Epoch':^7} | {'Train Loss':^10} | {'Val Top10(50)':^13} | {'Val Top10(Full)':^15} | {'LR':^9} | {'VRAM (Alloc/Res)':^18} | {'Time':^7} | Status\n"
+        f"{'-' * 9}+{'-' * 12}+{'-' * 15}+{'-' * 17}+{'-' * 11}+{'-' * 20}+{'-' * 9}+{'-' * 18}",
+        flush=True,
+    )
+
+    for epoch in range(start_epoch, max_epochs):
         epoch_started = time.perf_counter()
         train_sampler.set_epoch(epoch)
         frozen = revision and epoch < int(tc.get("freeze_brain_encoder_epochs", 0))
         pallier_task.set_brain_encoder_trainable(model, not frozen)
+        epoch_lr = float(optimizer.param_groups[0]["lr"])
 
         train_loss, epoch_updates, batches_seen, diagnostics = train_one_epoch(
             model,
@@ -1096,6 +1167,8 @@ def run_training_workflow(
             return_stats=True,
             return_diagnostics=True,
             epoch_index=epoch,
+            show_progress=show_progress,
+            progress_desc=f"Epoch {epoch + 1:02d}/{max_epochs:02d} [train]",
         )
         if not np.isfinite(train_loss):
             raise RuntimeError(f"Epoch {epoch + 1} 训练损失出现非有限值：{train_loss}")
@@ -1110,6 +1183,8 @@ def run_training_workflow(
             cfg,
             revision=revision,
             device=device,
+            show_progress=show_progress,
+            progress_desc=f"Epoch {epoch + 1:02d}/{max_epochs:02d} [val]  ",
         )
         scheduler.step()
 
@@ -1132,6 +1207,7 @@ def run_training_workflow(
         row = {
             "epoch": epoch + 1,
             "train_loss": float(train_loss),
+            "learning_rate": epoch_lr,
             "seconds": float(epoch_seconds),
             "optimizer_updates": int(total_updates),
             "epoch_optimizer_updates": int(epoch_updates),
@@ -1151,12 +1227,16 @@ def run_training_workflow(
 
         scores = {"legacy50": legacy_score, "full_vocab": full_vocab_score}
         stale_epochs += 1
+        improved_tags: list[str] = []
         for selection, score in scores.items():
             if score > best[selection]:
                 best[selection] = score
                 best_rows[selection] = row
                 if selection == "legacy50":
                     stale_epochs = 0
+                    improved_tags.append("50")
+                else:
+                    improved_tags.append("full")
                 best_payload = {
                     "dataset": dataset,
                     "stage": stage,
@@ -1216,28 +1296,21 @@ def run_training_workflow(
         }
         save_checkpoint(out / "last.ckpt", last_payload)
 
+        if improved_tags:
+            status_str = f"* best({','.join(improved_tags)})"
+        else:
+            status_str = f"stale {stale_epochs}/{patience}"
+        if frozen:
+            status_str += " [frozen]"
+
+        epoch_col = f"{epoch + 1:02d}/{max_epochs:02d}"
+        vram_col = f"{peak_alloc_mb:6.0f} / {peak_reserved_mb:5.0f} MB"
         print(
-            json.dumps(
-                {
-                    "event": "epoch_complete",
-                    "dataset": dataset,
-                    "stage": stage,
-                    "mode": mode,
-                    "subset_tag": subset_spec["subset_tag"],
-                    "epoch": epoch + 1,
-                    "max_epochs": int(tc["epochs"]),
-                    "train_loss": round(float(train_loss), 5),
-                    "val_legacy50_score": round(legacy_score, 5),
-                    "val_full_vocab_score": round(full_vocab_score, 5),
-                    "peak_memory_allocated_mb": round(peak_alloc_mb, 2),
-                    "peak_memory_reserved_mb": round(peak_reserved_mb, 2),
-                    "seconds": round(float(epoch_seconds), 2),
-                },
-                ensure_ascii=False,
-            ),
+            f" {epoch_col:^7} | {train_loss:10.4f} | {legacy_score * 100.0:11.2f}%  | {full_vocab_score * 100.0:13.2f}%  |"
+            f" {epoch_lr:9.2e} | {vram_col:^18} | {epoch_seconds:6.1f}s | {status_str}",
             flush=True,
         )
-        if stale_epochs >= int(tc.get("patience", 6)):
+        if stale_epochs >= patience:
             break
 
     peak_alloc_mb = float(
@@ -1248,8 +1321,19 @@ def run_training_workflow(
     )
     stop_reason = (
         "patience_exhausted"
-        if stale_epochs >= int(tc.get("patience", 6))
+        if stale_epochs >= patience
         else "maximum_epochs"
+    )
+    best50_epoch = best_rows.get("legacy50", {}).get("epoch", "-")
+    best_full_epoch = best_rows.get("full_vocab", {}).get("epoch", "-")
+    print(
+        f"{thin_sep}\n"
+        f" Completed ({stop_reason}, epochs={len(history)}/{max_epochs})\n"
+        f" Best Val Top10 (50-word)   : {best['legacy50'] * 100.0:6.2f}% (epoch {best50_epoch}) -> {out / 'best.ckpt'}\n"
+        f" Best Val Top10 (Full-Vocab): {best['full_vocab'] * 100.0:6.2f}% (epoch {best_full_epoch}) -> {out / 'best_full_vocab.pt'}\n"
+        f" Peak GPU Memory            : {peak_alloc_mb:.1f} MB allocated / {peak_reserved_mb:.1f} MB reserved\n"
+        f"{sep}\n",
+        flush=True,
     )
     summary = {
         "status": "completed",

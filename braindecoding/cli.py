@@ -350,7 +350,27 @@ def _add_training_workflow_args(
         "--batch-size",
         type=int,
         default=None,
-        help="可选覆写批大小",
+        help="可选覆写训练批大小（train 默认 256）",
+    )
+    parser.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=None,
+        help="可选覆写验证与检索批大小（train 默认 512）",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        "--lr",
+        dest="learning_rate",
+        type=float,
+        default=None,
+        help="可选覆写初始学习率（train bs>=256 默认 4e-4）",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help="DataLoader 工作进程数（默认 0 使用进程内缓存零拷贝）",
     )
     parser.add_argument(
         "--precision",
@@ -395,6 +415,11 @@ def _add_training_workflow_args(
         action="store_true",
         help="允许覆盖已完成的同子集实验输出目录",
     )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="禁用 tqdm 实时进度条（仅输出每轮汇总表格）",
+    )
 
 
 def _workflow_cache(args) -> int:
@@ -415,7 +440,7 @@ def _workflow_cache(args) -> int:
 def _workflow_train(args, *, mode: str) -> int:
     from braindecoding.training.workflow_runner import run_training_workflow
 
-    summary = run_training_workflow(
+    run_training_workflow(
         args.dataset,
         stage=args.stage,
         seed=args.seed,
@@ -424,6 +449,9 @@ def _workflow_train(args, *, mode: str) -> int:
         subjects=args.subjects,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        eval_batch_size=args.eval_batch_size,
+        learning_rate=args.learning_rate,
+        num_workers=args.num_workers,
         precision=args.precision,
         require_cache=args.require_cache,
         resume=args.resume,
@@ -433,27 +461,7 @@ def _workflow_train(args, *, mode: str) -> int:
         max_train_rows=args.max_train_rows,
         max_val_rows=args.max_val_rows,
         overwrite=args.overwrite,
-    )
-    print(
-        json.dumps(
-            {
-                "status": summary["status"],
-                "mode": summary["mode"],
-                "dataset": summary["dataset"],
-                "stage": summary["stage"],
-                "seed": summary["seed"],
-                "precision": summary["precision"],
-                "subset_tag": summary["subset"]["subset_tag"],
-                "subjects": summary["subset"]["subjects"],
-                "completed_epochs": summary["completed_epochs"],
-                "best_scores": summary["best_scores"],
-                "peak_memory_allocated_mb": summary["peak_memory_allocated_mb"],
-                "peak_memory_reserved_mb": summary["peak_memory_reserved_mb"],
-                "output_dir": summary["output_dir"],
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+        show_progress=not bool(getattr(args, "no_progress", False)),
     )
     return 0
 

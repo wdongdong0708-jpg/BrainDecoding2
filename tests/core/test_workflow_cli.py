@@ -203,6 +203,14 @@ def test_cli_parses_smoke_cache_and_train_subcommands():
             "pallier2025",
             "--subjects",
             "sub-01,sub-02",
+            "--batch-size",
+            "256",
+            "--eval-batch-size",
+            "512",
+            "--lr",
+            "0.0004",
+            "--num-workers",
+            "0",
             "--require-cache",
             "--resume",
             "auto",
@@ -210,4 +218,16 @@ def test_cli_parses_smoke_cache_and_train_subcommands():
     )
     assert train_args.command == "train"
     assert train_args.subjects == "sub-01,sub-02"
+    assert train_args.batch_size == 256
+    assert train_args.eval_batch_size == 512
+    assert train_args.learning_rate == pytest.approx(0.0004)
+    assert train_args.num_workers == 0
     assert train_args.resume == "auto"
+
+    cfg_train, _ = build_workflow_config(
+        "pallier2025", stage="word", seed=0, mode="train"
+    )
+    assert cfg_train["training"]["batch_size"] == 256
+    assert cfg_train["training"]["eval_batch_size"] == 512
+    assert cfg_train["training"]["learning_rate"] == pytest.approx(0.0004)
+

@@ -1198,7 +1198,7 @@ def 确保记录缓存(event_table, dataset_config, cache_dir, force=False):
     return outputs
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=256)
 def _打开处理后记录(path: str):
     return np.load(path, mmap_mode="r")
 
@@ -1298,22 +1298,50 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
             [sentence_to_index[value] for value in sentence_uids], dtype=np.int64
         )
 
+        # 预提取行级索引数组，避免每个样本在 DataLoader 中重复调用 DataFrame.iloc
+        self._words = tuple(self.table["normalized_word"].astype(str).tolist())
+        self._event_ids = tuple(self.table["event_id"].astype(str).tolist())
+        self._recording_ids = tuple(self.table["recording_id"].astype(str).tolist())
+        self._vhdr_relpaths = tuple(self.table["vhdr_relpath"].astype(str).tolist())
+        self._cache_path_strs = tuple(
+            str(self.recording_cache_paths[rel]) for rel in self._vhdr_relpaths
+        )
+        self._window_starts = self.table["window_start_target_sample"].to_numpy(
+            dtype=np.int64, copy=True
+        )
+        self._embedding_tensors = {
+            word: torch.from_numpy(np.array(vec, dtype=np.float32, copy=True))
+            for word, vec in self.embedding_map.items()
+        }
+        subject_indices = np.asarray(
+            [
+                self.subject_to_index[subj]
+                for subj in self.table["subject_id"].astype(str)
+            ],
+            dtype=np.int64,
+        )
+        self._subject_index_tensors = torch.as_tensor(
+            subject_indices, dtype=torch.long
+        )
+        self._sentence_index_tensors = torch.as_tensor(
+            self.sentence_indices, dtype=torch.long
+        )
+
     def __len__(self):
         return len(self.table)
 
     def 读取脑电(self, index) -> np.ndarray:
-        row = self.table.iloc[int(index)]
+        idx = int(index)
         if self.zero_eeg:
             return np.zeros(
                 (self.channel_count, self.window_samples), dtype=np.float32
             )
-        cache_path = self.recording_cache_paths[str(row["vhdr_relpath"])]
-        recording = _打开处理后记录(str(cache_path))
-        start = int(row["window_start_target_sample"])
+        recording = _打开处理后记录(self._cache_path_strs[idx])
+        start = int(self._window_starts[idx])
         stop = start + self.window_samples
         if start < 0 or stop > recording.shape[1]:
             raise IndexError(
-                f"事件窗口越界：{row['event_id']} [{start}, {stop}) / {recording.shape[1]}"
+                f"事件窗口越界：{self._event_ids[idx]} [{start}, {stop}) / {recording.shape[1]}"
             )
         window = np.array(recording[:, start:stop], dtype=np.float32, copy=True)
         if self.clamp is not None:
@@ -1321,23 +1349,16 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
         return window
 
     def __getitem__(self, index):
-        row = self.table.iloc[int(index)]
-        word = str(row["normalized_word"])
-        subject_id = str(row["subject_id"])
+        idx = int(index)
+        word = self._words[idx]
         return {
-            "eeg": torch.from_numpy(self.读取脑电(index)),
-            "text_embedding": torch.from_numpy(
-                np.array(self.embedding_map[word], dtype=np.float32, copy=True)
-            ),
-            "subject_index": torch.tensor(
-                self.subject_to_index[subject_id], dtype=torch.long
-            ),
-            "sentence_index": torch.tensor(
-                self.sentence_indices[int(index)], dtype=torch.long
-            ),
+            "eeg": torch.from_numpy(self.读取脑电(idx)),
+            "text_embedding": self._embedding_tensors[word],
+            "subject_index": self._subject_index_tensors[idx],
+            "sentence_index": self._sentence_index_tensors[idx],
             "word": word,
-            "event_id": str(row["event_id"]),
-            "recording_id": str(row["recording_id"]),
+            "event_id": self._event_ids[idx],
+            "recording_id": self._recording_ids[idx],
         }
 
 

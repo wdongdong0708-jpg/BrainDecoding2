@@ -1087,7 +1087,7 @@ def runtime_context_statistics(table, max_context_words=128) -> dict:
     }
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=256)
 def _open_signal_product(path: str):
     """只读映射 canonical continuous signal，避免反复载入完整记录。"""
     return np.load(path, mmap_mode="r")
@@ -1157,7 +1157,11 @@ class Pallier2025WordDataset(Dataset):
         self.dataset_config = dict(dataset_config)
         self.meg_cache_dir = Path(meg_cache_dir)
         self.zero_meg = bool(zero_meg)
-        self.window_samples = word_window_contract(dataset_config)["window_samples"]
+        contract = word_window_contract(dataset_config)
+        self.window_samples = int(contract["window_samples"])
+        self._baseline_samples = int(contract["baseline_samples"])
+        self._clamp = float(contract["clamp"])
+        self._window_offset_seconds = float(contract["window_start_offset_seconds"])
         self.channel_count = MEG_CHANNEL_COUNT
         self.subject_map = {
             subject: index for index, subject in enumerate(configured_subjects)
@@ -1232,41 +1236,76 @@ class Pallier2025WordDataset(Dataset):
             self.channel_names, self.dataset_config.get("layout_path")
         )
 
+        # 预提取行级索引数组，避免每个样本在 DataLoader 中重复调用 DataFrame.iloc
+        self._recording_ids = tuple(self.table["recording_id"].astype(str).tolist())
+        self._words = tuple(self.table["normalized_word"].astype(str).tolist())
+        self._event_ids = tuple(self.table["event_id"].astype(str).tolist())
+        self._onset_seconds = self.table["onset_seconds"].to_numpy(
+            dtype=np.float64, copy=True
+        )
+        self._signal_path_strs = tuple(
+            str(self.signal_paths[rec_id]) for rec_id in self._recording_ids
+        )
+        self._window_starts = np.asarray(
+            [
+                recording_onset_to_sample(
+                    float(onset) + self._window_offset_seconds,
+                    source_first_samp=self.signal_metadata[rec_id]["source_first_samp"],
+                    source_sampling_rate_hz=self.signal_metadata[rec_id][
+                        "source_sampling_rate_hz"
+                    ],
+                    output_sampling_rate_hz=self.signal_metadata[rec_id][
+                        "output_sampling_rate_hz"
+                    ],
+                )
+                for rec_id, onset in zip(self._recording_ids, self._onset_seconds)
+            ],
+            dtype=np.int64,
+        )
+        self._embedding_tensors = {
+            word: torch.from_numpy(np.array(vec, dtype=np.float32, copy=True))
+            for word, vec in self.embedding_map.items()
+        }
+        self._subject_index_tensors = torch.as_tensor(
+            self.subject_indices, dtype=torch.long
+        )
+        self._sentence_index_tensors = torch.as_tensor(
+            self.sentence_indices, dtype=torch.long
+        )
+
     def __len__(self):
         return len(self.table)
 
     def read_meg(self, index) -> np.ndarray:
-        row = self.table.iloc[int(index)]
+        idx = int(index)
         if self.zero_meg:
             return np.zeros(
                 (self.channel_count, self.window_samples), dtype=np.float32
             )
-        recording_id = str(row["recording_id"])
-        recording = _open_signal_product(str(self.signal_paths[recording_id]))
-        return extract_word_window(
-            recording,
-            float(row["onset_seconds"]),
-            self.signal_metadata[recording_id],
-            self.dataset_config,
+        recording = _open_signal_product(self._signal_path_strs[idx])
+        start = int(self._window_starts[idx])
+        stop = start + self.window_samples
+        if recording.ndim != 2 or start < 0 or stop > recording.shape[1]:
+            raise ValueError("Pallier2025 词窗口超出 canonical continuous signal。")
+        window = recording[:, start:stop].astype(np.float32, copy=True)
+        baseline = window[:, : self._baseline_samples].mean(
+            axis=1, keepdims=True
         )
+        window -= baseline
+        np.clip(window, -self._clamp, self._clamp, out=window)
+        return window
 
     def __getitem__(self, index):
-        row = self.table.iloc[int(index)]
-        word = str(row["normalized_word"])
+        idx = int(index)
+        word = self._words[idx]
         return {
-            "meg": torch.from_numpy(self.read_meg(index)),
-            "text_embedding": torch.from_numpy(
-                np.array(self.embedding_map[word], dtype=np.float32, copy=True)
-            ),
-            "subject_index": torch.tensor(
-                self.subject_indices[int(index)], dtype=torch.long
-            ),
-            "sentence_index": torch.tensor(
-                self.sentence_indices[int(index)], dtype=torch.long
-            ),
+            "meg": torch.from_numpy(self.read_meg(idx)),
+            "text_embedding": self._embedding_tensors[word],
+            "subject_index": self._subject_index_tensors[idx],
+            "sentence_index": self._sentence_index_tensors[idx],
             "word": word,
-            "event_id": str(row["event_id"]),
-            "recording_id": str(row["recording_id"]),
+            "event_id": self._event_ids[idx],
+            "recording_id": self._recording_ids[idx],
         }
 
 
