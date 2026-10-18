@@ -72,6 +72,7 @@ _SUBPACKAGE_MAP: dict[str, str] = {
     "windowed_sequence_baseline": "decoding",
     "word_encoder_training": "training",
     "word_paired_statistics_evaluation": "evaluation",
+    "workflow_runner": "training",
 }
 _MERGED_MODULE_ALIASES: dict[str, tuple[str, str]] = {
     "beam_search": ("decoding", "rolling_beam_search"),

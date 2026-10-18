@@ -15,8 +15,11 @@ dist/
 
 # Local runtime & scratch outputs (never commit)
 outputs/
+workspace/
+archives/
 tmp/
 data/cache/derived/*
+data/cache/runs/
 data/cache/artifacts/*
 !data/cache/artifacts/annotations/
 !data/cache/artifacts/annotations/**
@@ -27,6 +30,7 @@ paper/manuscript/build/
 *.pth
 *.ckpt
 *.onnx
+*.tar
 
 # Editor & OS files
 .vscode/

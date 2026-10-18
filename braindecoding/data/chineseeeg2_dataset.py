@@ -693,10 +693,17 @@ def 审计事件表(event_table, config) -> dict:
         split: int(trainable["split"].eq(split).sum())
         for split in ("train", "val", "test")
     }
-    if expected_counts is not None and counts != {
+    configured_subjects = tuple(str(s) for s in config.get("subjects", ()))
+    is_subset = bool(config.get("allow_subject_subset", False)) or (
+        0 < len(configured_subjects) < 8
+        and expected_counts == {"train": 81620, "val": 14132, "test": 8480}
+    )
+    if expected_counts is not None and not is_subset and counts != {
         key: int(value) for key, value in expected_counts.items()
     }:
         raise ValueError(f"有效事件计数漂移：实际 {counts}，预期 {expected_counts}。")
+    if is_subset and any(counts[split] <= 0 for split in ("train", "val")):
+        raise ValueError(f"子集有效事件计数异常（train/val 不能为空）：{counts}")
     group_sizes = trainable.groupby(["split", "sentence_uid"]).size()
     source_specs = config.get("actual_reading_sources") or [config]
     source_paths = [Path(source["alignment_path"]).resolve() for source in source_specs]
@@ -876,12 +883,17 @@ def 载入事件表(path, split=None, trainable_only=True, subjects=None) -> pd.
     return table.reset_index(drop=True)
 
 
-def _预处理签名(config, source_path) -> dict:
+def _预处理签名(config, source_path, *, resolve_symlinks=True) -> dict:
     source_path = Path(source_path)
     schema = 检查记录结构(source_path)
     data_path = source_path.with_suffix(".eeg")
+    canonical_source = (
+        str(source_path.resolve())
+        if resolve_symlinks
+        else os.path.abspath(source_path)
+    )
     return {
-        "source_path": str(source_path.resolve()),
+        "source_path": canonical_source,
         "source_size": source_path.stat().st_size,
         "source_mtime_ns": source_path.stat().st_mtime_ns,
         "data_size": data_path.stat().st_size,
@@ -903,9 +915,9 @@ def _签名摘要(signature) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
-def 处理后记录路径(source_path, config, cache_dir) -> Path:
+def 处理后记录路径(source_path, config, cache_dir, *, resolve_symlinks=True) -> Path:
     """按源文件和预处理合同生成不会冲突的缓存路径。"""
-    signature = _预处理签名(config, source_path)
+    signature = _预处理签名(config, source_path, resolve_symlinks=resolve_symlinks)
     directory = signal_cache_directory(
         cache_dir,
         source_path,
@@ -927,6 +939,76 @@ def _记录缓存有效(cache_path, signature) -> bool:
         return array.shape == tuple(metadata["shape"]) and array.dtype == np.float32
     except (OSError, ValueError, KeyError, json.JSONDecodeError):
         return False
+
+
+def _预处理合同匹配(signature: dict, config: dict, source_path: Path | None = None) -> bool:
+    """检查已有缓存 sidecar 的科学预处理合同是否与当前配置一致（忽略跨机器路径与 mtime 差异）。"""
+    try:
+        if float(signature["source_sampling_rate_hz"]) != float(config["source_sampling_rate_hz"]):
+            return False
+        if float(signature["target_sampling_rate_hz"]) != float(config["target_sampling_rate_hz"]):
+            return False
+        if [float(v) for v in signature["source_preprocessed_filter_hz"]] != [
+            float(v) for v in config["source_preprocessed_filter_hz"]
+        ]:
+            return False
+        if signature.get("additional_filter") != config.get("additional_filter"):
+            return False
+        if str(signature.get("scaler", "RobustScaler")) != str(config.get("scaler", "RobustScaler")):
+            return False
+        if source_path is not None and source_path.exists():
+            data_path = source_path.with_suffix(".eeg")
+            if int(signature.get("source_size", -1)) != source_path.stat().st_size:
+                return False
+            if data_path.exists() and int(signature.get("data_size", -1)) != data_path.stat().st_size:
+                return False
+        return True
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
+
+
+def 定位缓存记录(source_path, config, cache_dir) -> tuple[Path, dict] | None:
+    """定位有效脑电缓存：优先精确签名匹配，其次兼容软链接桥或跨机解包后的同合同缓存。"""
+    source_path = Path(source_path)
+    directory = signal_cache_directory(
+        cache_dir,
+        source_path,
+        by_subject=bool(config.get("signal_cache_subject_subdirectories", False)),
+    )
+    if source_path.exists() and source_path.with_suffix(".eeg").exists():
+        for resolve_symlinks in (True, False):
+            try:
+                signature = _预处理签名(
+                    config, source_path, resolve_symlinks=resolve_symlinks
+                )
+                candidate = directory / f"{source_path.stem}_{_签名摘要(signature)}.npy"
+                if _记录缓存有效(candidate, signature):
+                    metadata = json.loads(
+                        candidate.with_suffix(".json").read_text(encoding="utf-8")
+                    )
+                    return candidate, metadata
+            except (OSError, ValueError):
+                pass
+    if not directory.is_dir():
+        return None
+    matches: list[tuple[Path, dict]] = []
+    for candidate in sorted(directory.glob(f"{source_path.stem}_*.npy")):
+        meta_path = candidate.with_suffix(".json")
+        if not meta_path.is_file():
+            continue
+        try:
+            metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+            sig = metadata.get("signature", {})
+            if not _预处理合同匹配(sig, config, source_path):
+                continue
+            array = np.load(candidate, mmap_mode="r")
+            if array.shape == tuple(metadata["shape"]) and array.dtype == np.float32:
+                matches.append((candidate, metadata))
+        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            continue
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 class _直接BrainVision记录:
@@ -1035,11 +1117,13 @@ def 物化记录缓存(source_path, config, cache_dir, force=False) -> Path:
     source_path = Path(source_path)
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    if not force:
+        located = 定位缓存记录(source_path, config, cache_dir)
+        if located is not None:
+            return located[0]
     signature = _预处理签名(config, source_path)
     cache_path = 处理后记录路径(source_path, config, cache_dir)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    if not force and _记录缓存有效(cache_path, signature):
-        return cache_path
 
     raw = _读取脑电记录(source_path)
     try:
@@ -1090,6 +1174,7 @@ def 物化记录缓存(source_path, config, cache_dir, force=False) -> Path:
                 "signature": signature,
                 "shape": list(output.shape),
                 "dtype": "float32",
+                "channel_positions": schema["channel_positions"].tolist(),
             },
             ensure_ascii=False,
             indent=2,
@@ -1145,11 +1230,52 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
             raise ValueError(f"文本向量缓存缺少 {len(missing)} 个词，例如 {missing[:5]}。")
 
         root = Path(self.dataset_config["root"])
+        self.recording_cache_paths = {}
+        first_metadata = None
+        for relative_path in self.table["vhdr_relpath"].drop_duplicates():
+            source_path = root / str(relative_path)
+            located = 定位缓存记录(
+                source_path, self.dataset_config, self.eeg_cache_dir
+            )
+            if located is not None:
+                cache_path, metadata = located
+                if first_metadata is None:
+                    first_metadata = metadata
+            elif self.zero_eeg:
+                cache_path = 处理后记录路径(
+                    source_path, self.dataset_config, self.eeg_cache_dir
+                )
+            else:
+                expected_hint = (
+                    处理后记录路径(
+                        source_path, self.dataset_config, self.eeg_cache_dir
+                    )
+                    if source_path.exists()
+                    else self.eeg_cache_dir / f"{source_path.stem}_*.npy"
+                )
+                raise FileNotFoundError(
+                    f"脑电缓存尚未物化：{expected_hint}。请先运行 prepare --with-eeg-cache。"
+                )
+            self.recording_cache_paths[str(relative_path)] = cache_path
+
         first_source = root / str(self.table["vhdr_relpath"].iloc[0])
-        schema = 检查记录结构(first_source)
-        self.channel_names = schema["channel_names"]
-        self.channel_positions = schema["channel_positions"]
-        self.channel_count = schema["channel_count"]
+        if first_source.exists():
+            schema = 检查记录结构(first_source)
+            self.channel_names = schema["channel_names"]
+            self.channel_positions = schema["channel_positions"]
+            self.channel_count = schema["channel_count"]
+        elif first_metadata is not None and "channel_positions" in first_metadata:
+            self.channel_names = tuple(
+                first_metadata.get("signature", {}).get("channel_names", ())
+            )
+            self.channel_positions = np.asarray(
+                first_metadata["channel_positions"], dtype=np.float32
+            )
+            self.channel_count = len(self.channel_names)
+        else:
+            raise FileNotFoundError(
+                f"缺少原始记录头文件或缓存通道坐标元数据：{first_source}"
+            )
         self.window_samples = int(self.table["target_sample_count"].iloc[0])
         self.clamp = self.dataset_config.get("clamp", 5.0)
 
@@ -1171,18 +1297,6 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
         self.sentence_indices = np.asarray(
             [sentence_to_index[value] for value in sentence_uids], dtype=np.int64
         )
-        self.recording_cache_paths = {}
-        for relative_path in self.table["vhdr_relpath"].drop_duplicates():
-            source_path = root / str(relative_path)
-            cache_path = 处理后记录路径(
-                source_path, self.dataset_config, self.eeg_cache_dir
-            )
-            signature = _预处理签名(self.dataset_config, source_path)
-            if not self.zero_eeg and not _记录缓存有效(cache_path, signature):
-                raise FileNotFoundError(
-                    f"脑电缓存尚未物化：{cache_path}。请先运行 prepare --with-eeg-cache。"
-                )
-            self.recording_cache_paths[str(relative_path)] = cache_path
 
     def __len__(self):
         return len(self.table)
@@ -1243,5 +1357,6 @@ load_candidate_vocabulary = 载入候选词
 frozen_vocabulary = 载入候选词
 audit_event_table = 审计事件表
 processed_recording_path = 处理后记录路径
+locate_recording_signal = 定位缓存记录
 materialize_recording_signal = 物化记录缓存
 ensure_recording_signals = 确保记录缓存

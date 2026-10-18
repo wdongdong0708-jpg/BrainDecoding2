@@ -209,14 +209,41 @@ def _load_events(dataset: str, config: dict):
     raise ValueError(f"未知数据集：{dataset}")
 
 
+def _derived_root() -> Path:
+    env_cache = os.environ.get("BRAINDECODING_CACHE_DIR", "").strip()
+    if env_cache:
+        base = Path(env_cache).expanduser()
+        return base if base.is_absolute() else PROJECT_ROOT / base
+    return PROJECT_ROOT / "data/cache/derived"
+
+
+def _manifest_relpath(path: Path) -> str:
+    resolved = Path(path).resolve()
+    proj_resolved = PROJECT_ROOT.resolve()
+    if resolved.is_relative_to(proj_resolved):
+        return resolved.relative_to(proj_resolved).as_posix()
+    derived_resolved = _derived_root().resolve()
+    if resolved.is_relative_to(derived_resolved):
+        return f"data/cache/derived/{resolved.relative_to(derived_resolved).as_posix()}"
+    return resolved.as_posix()
+
+
+def _resolve_manifest_path(rel_path: str) -> Path:
+    norm = normalize_project_relative(str(rel_path))
+    cand = PROJECT_ROOT / norm
+    if cand.exists():
+        return cand
+    return project_path(norm)
+
+
 def _write_step_manifest(dataset: str, config: dict, step: str, files) -> Path:
-    provenance_dir = PROJECT_ROOT / "data/cache/derived" / dataset / "provenance"
+    provenance_dir = _derived_root() / dataset / "provenance"
     provenance_dir.mkdir(parents=True, exist_ok=True)
     file_records = []
     for path in sorted({Path(value) for value in files}):
         file_records.append(
             {
-                "path": path.relative_to(PROJECT_ROOT).as_posix(),
+                "path": _manifest_relpath(path),
                 "size_bytes": path.stat().st_size,
                 "sha256": sha256_file(path),
             }
@@ -251,7 +278,7 @@ def validate_step_manifest(path) -> dict:
     if stable_sha256(body) != recorded_sha:
         raise ValueError(f"derived 步骤 manifest 自摘要不一致：{path}")
     for record in payload.get("files", ()):
-        product = PROJECT_ROOT / record["path"]
+        product = _resolve_manifest_path(record["path"])
         if not product.exists():
             raise FileNotFoundError(f"derived 产品缺失：{product}")
         if product.stat().st_size != int(record["size_bytes"]):
@@ -296,15 +323,27 @@ def _validate_signal_coverage(dataset: str, config: dict, table) -> dict:
     for row in records.itertuples(index=False):
         relative_path = str(getattr(row, relative_column))
         source_path = root / relative_path
-        output_path = path_builder(
-            source_path, config["dataset"], cache_dir
+        located = (
+            chineseeeg2.定位缓存记录(source_path, config["dataset"], cache_dir)
+            if dataset == "chineseeeg2_littleprince"
+            else None
         )
+        if located is not None:
+            output_path, metadata = located
+        else:
+            output_path = path_builder(
+                source_path, config["dataset"], cache_dir
+            )
+            metadata = (
+                json.loads(
+                    output_path.with_suffix(".json").read_text(encoding="utf-8")
+                )
+                if output_path.exists() and output_path.with_suffix(".json").exists()
+                else None
+            )
         expected[str(row.recording_id)] = output_path.resolve()
-        if not output_path.exists() or not output_path.with_suffix(".json").exists():
+        if metadata is None or not output_path.exists():
             continue
-        metadata = json.loads(
-            output_path.with_suffix(".json").read_text(encoding="utf-8")
-        )
         array = np.load(output_path, mmap_mode="r")
         if array.dtype != np.float32 or list(array.shape) != metadata.get("shape"):
             raise ValueError(f"信号产品 shape/dtype 与 sidecar 不一致：{output_path}")
@@ -395,7 +434,7 @@ def _validate_text_contract(dataset: str, config: dict, table) -> dict:
 def _build_signals(dataset: str, config: dict, table, *, force=False) -> Path:
     dataset_config = config["dataset"]
     if dataset == "pallier2025":
-        provenance_dir = PROJECT_ROOT / "data/cache/derived/pallier2025/provenance"
+        provenance_dir = _derived_root() / "pallier2025/provenance"
         pallier2025.run_reference_gate(dataset_config, provenance_dir)
         pallier2025.build_time_origin_audit(dataset_config, provenance_dir)
         timing_records = []
@@ -465,10 +504,11 @@ def _build_text(dataset: str, config: dict, table, *, force=False) -> Path:
 
 
 def _component_manifest_paths(dataset: str, config: dict) -> dict[str, Path]:
+    derived = _derived_root()
     signal_path = (
-        PROJECT_ROOT / "data/cache/derived/pallier2025/signals/manifest.json"
+        derived / "pallier2025/signals/manifest.json"
         if dataset == "pallier2025"
-        else PROJECT_ROOT / "data/cache/derived" / dataset / "provenance" / "signals.json"
+        else derived / dataset / "provenance" / "signals.json"
     )
     return {
         "events": event_manifest_path(config["cache"]["event_table"]),
@@ -476,13 +516,13 @@ def _component_manifest_paths(dataset: str, config: dict) -> dict[str, Path]:
         "text": (
             Path(config["cache"]["text_embeddings"]).parent / "manifest.json"
             if dataset == "pallier2025"
-            else PROJECT_ROOT / "data/cache/derived" / dataset / "provenance" / "text.json"
+            else derived / dataset / "provenance" / "text.json"
         ),
     }
 
 
 def _dataset_manifest_path(dataset: str) -> Path:
-    return PROJECT_ROOT / "data/cache/derived" / dataset / "manifest.json"
+    return _derived_root() / dataset / "manifest.json"
 
 
 def _validate_components(dataset: str, config: dict, table) -> dict:
@@ -523,7 +563,7 @@ def _write_dataset_manifest(dataset: str, config: dict, table) -> Path:
     for name, path in paths.items():
         components[name] = {
             "status": "complete",
-            "manifest": path.relative_to(PROJECT_ROOT).as_posix(),
+            "manifest": _manifest_relpath(path),
             "sha256": sha256_file(path),
         }
     components["events"]["event_table_sha256"] = validated["events"][
@@ -557,7 +597,7 @@ def _write_partial_dataset_manifest(dataset: str, config: dict) -> Path:
         signal_payload = pallier2025.validate_signal_manifest(signal_manifest)
         signal_component = {
             "status": "complete",
-            "manifest": signal_manifest.relative_to(PROJECT_ROOT).as_posix(),
+            "manifest": _manifest_relpath(signal_manifest),
             "sha256": sha256_file(signal_manifest),
             "coverage": signal_payload["coverage"],
         }
@@ -568,7 +608,7 @@ def _write_partial_dataset_manifest(dataset: str, config: dict) -> Path:
         "components": {
             "events": {
                 "status": "complete",
-                "manifest": event_manifest.relative_to(PROJECT_ROOT).as_posix(),
+                "manifest": _manifest_relpath(event_manifest),
                 "sha256": sha256_file(event_manifest),
                 "event_table_sha256": event_payload["event_table_sha256"],
             },
@@ -602,7 +642,7 @@ def validate_dataset_manifest(path, *, require_complete=True) -> dict:
             continue
         if "manifest" not in record or "sha256" not in record:
             raise ValueError(f"derived 组件未完成：{component}")
-        manifest_path = PROJECT_ROOT / normalize_project_relative(str(record["manifest"]))
+        manifest_path = _resolve_manifest_path(str(record["manifest"]))
         if sha256_file(manifest_path) != record["sha256"]:
             raise ValueError(f"derived 组件 manifest SHA 漂移：{manifest_path}")
     return payload
@@ -622,13 +662,13 @@ def check_dataset(dataset: str) -> dict:
         signal_record = dataset_manifest["components"]["signals"]
         if signal_record["status"] == "complete":
             signal_payload = pallier2025.validate_signal_manifest(
-                PROJECT_ROOT / normalize_project_relative(str(signal_record["manifest"])), event_table=table
+                _resolve_manifest_path(str(signal_record["manifest"])), event_table=table
             )
             signal_coverage = signal_payload["coverage"]
         text_record = dataset_manifest["components"]["text"]
         if text_record["status"] == "complete":
             pallier2025.validate_text_manifest(
-                PROJECT_ROOT / normalize_project_relative(str(text_record["manifest"])),
+                _resolve_manifest_path(str(text_record["manifest"])),
                 expected_config=config["text_embedding"],
             )
             text_contract = _validate_text_contract(dataset, config, table)

@@ -93,7 +93,11 @@ def experiment_identity(config):
 def run_directory(config, output_root=None):
     """仅由实验五元组推导单次运行目录。"""
     identity = experiment_identity(config)
-    root = Path(output_root) if output_root is not None else PROJECT_ROOT / "outputs"
+    if output_root is not None:
+        root = Path(output_root)
+    else:
+        env_results = os.environ.get("BRAINDECODING_RESULTS_DIR", "").strip()
+        root = Path(env_results).expanduser() if env_results else PROJECT_ROOT / "outputs"
     path = root / identity["task"] / identity["dataset"]
     output_group = config["experiment"].get("output_group")
     if output_group:
@@ -238,10 +242,13 @@ def _portable_path(value, key=None):
     ):
         return f"<RESOURCE>/{path.name}"
     roots = [("PROJECT_ROOT", PROJECT_ROOT)]
-    for name in ("BRAINDATA_ROOT", "BRAINDECODING_MODEL_ROOT"):
-        root = os.environ.get(name)
+    for canonical_name, fallback_name in (
+        ("BRAINDATA_ROOT", "BRAINDECODING_DATA_DIR"),
+        ("BRAINDECODING_MODEL_ROOT", "BRAINDECODING_MODEL_DIR"),
+    ):
+        root = os.environ.get(canonical_name) or os.environ.get(fallback_name)
         if root:
-            roots.append((name, Path(root)))
+            roots.append((canonical_name, Path(root)))
     if path.is_absolute():
         for name, root in roots:
             try:

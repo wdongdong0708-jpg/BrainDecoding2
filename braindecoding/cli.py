@@ -304,6 +304,160 @@ def _report(selector: str, write: bool) -> int:
     return 0
 
 
+def _add_subject_subset_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--subject",
+        default="all",
+        help="受试者选择：'all' 或单个受试者 ID（如 sub-01）",
+    )
+    parser.add_argument(
+        "--num-subjects",
+        type=int,
+        default=None,
+        help="按标准顺序自动选取前 N 个有效受试者",
+    )
+    parser.add_argument(
+        "--subjects",
+        default=None,
+        help="逗号分隔的受试者列表（如 sub-01,sub-02）",
+    )
+
+
+def _add_training_workflow_args(
+    parser: argparse.ArgumentParser, *, default_epochs: int | None = None
+) -> None:
+    parser.add_argument(
+        "--dataset",
+        choices=("chineseeeg2_littleprince", "pallier2025"),
+        default="chineseeeg2_littleprince",
+        help="目标数据集（默认：chineseeeg2_littleprince）",
+    )
+    parser.add_argument(
+        "--stage",
+        choices=("word", "revision"),
+        default="word",
+        help="训练阶段：word（单窗脑编码器）或 revision（16 层局部窗口修订）",
+    )
+    parser.add_argument("--seed", type=int, default=0, help="随机种子（默认：0）")
+    _add_subject_subset_args(parser)
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=default_epochs,
+        help="训练轮数（smoke 默认 2，train 默认按协议配置）",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="可选覆写批大小",
+    )
+    parser.add_argument(
+        "--precision",
+        default="bf16-mixed",
+        choices=("bf16-mixed", "fp16-mixed", "fp16", "fp32"),
+        help="混合精度模式（默认：bf16-mixed）",
+    )
+    parser.add_argument(
+        "--require-cache",
+        action="store_true",
+        help="要求必须命中预处理特征缓存，缺失时立即报错（禁止在 GPU 上现场重算原始数据）",
+    )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        help="断点续训策略：'auto' 自动从 last.ckpt 恢复，或传入具体检查点路径",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="可选显式指定输出目录（默认按数据集/阶段/受试者子集自动隔离）",
+    )
+    parser.add_argument(
+        "--word-checkpoint",
+        default=None,
+        help="revision 阶段可选显式指定预训练 word 检查点路径",
+    )
+    parser.add_argument(
+        "--max-train-rows",
+        type=int,
+        default=None,
+        help="可选限制训练事件行数上限（用于超快冒烟联调）",
+    )
+    parser.add_argument(
+        "--max-val-rows",
+        type=int,
+        default=None,
+        help="可选限制验证事件行数上限（用于超快冒烟联调）",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="允许覆盖已完成的同子集实验输出目录",
+    )
+
+
+def _workflow_cache(args) -> int:
+    from braindecoding.training.workflow_runner import run_cache_workflow
+
+    report = run_cache_workflow(
+        args.dataset,
+        subject=args.subject,
+        num_subjects=args.num_subjects,
+        subjects=args.subjects,
+        include_test=args.include_test,
+        force=args.force,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _workflow_train(args, *, mode: str) -> int:
+    from braindecoding.training.workflow_runner import run_training_workflow
+
+    summary = run_training_workflow(
+        args.dataset,
+        stage=args.stage,
+        seed=args.seed,
+        subject=args.subject,
+        num_subjects=args.num_subjects,
+        subjects=args.subjects,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        precision=args.precision,
+        require_cache=args.require_cache,
+        resume=args.resume,
+        mode=mode,
+        output_dir=args.output_dir,
+        word_checkpoint=args.word_checkpoint,
+        max_train_rows=args.max_train_rows,
+        max_val_rows=args.max_val_rows,
+        overwrite=args.overwrite,
+    )
+    print(
+        json.dumps(
+            {
+                "status": summary["status"],
+                "mode": summary["mode"],
+                "dataset": summary["dataset"],
+                "stage": summary["stage"],
+                "seed": summary["seed"],
+                "precision": summary["precision"],
+                "subset_tag": summary["subset"]["subset_tag"],
+                "subjects": summary["subset"]["subjects"],
+                "completed_epochs": summary["completed_epochs"],
+                "best_scores": summary["best_scores"],
+                "peak_memory_allocated_mb": summary["peak_memory_allocated_mb"],
+                "peak_memory_reserved_mb": summary["peak_memory_reserved_mb"],
+                "output_dir": summary["output_dir"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="brain-decoding")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -321,6 +475,37 @@ def build_parser() -> argparse.ArgumentParser:
     data_build.add_argument("--text", action="store_true")
     data_build.add_argument("--all", action="store_true")
     data_build.add_argument("--force", action="store_true")
+
+    cache_cmd = commands.add_parser(
+        "cache", help="预热并校验指定数据集与受试者子集的预处理特征缓存"
+    )
+    cache_cmd.add_argument(
+        "--dataset",
+        choices=("chineseeeg2_littleprince", "pallier2025", "all"),
+        default="chineseeeg2_littleprince",
+        help="要预热缓存的数据集（默认：chineseeeg2_littleprince，支持 all）",
+    )
+    _add_subject_subset_args(cache_cmd)
+    cache_cmd.add_argument(
+        "--include-test",
+        action="store_true",
+        help="同时预热留出测试集信号缓存",
+    )
+    cache_cmd.add_argument(
+        "--force",
+        action="store_true",
+        help="强制重新计算并覆盖已有缓存",
+    )
+
+    smoke_cmd = commands.add_parser(
+        "smoke", help="本地小样本极速冒烟测试（默认 2 Epoch + bf16-mixed）"
+    )
+    _add_training_workflow_args(smoke_cmd, default_epochs=2)
+
+    train_cmd = commands.add_parser(
+        "train", help="支持灵活受试者子集、缓存校验与断点续训的正式训练入口"
+    )
+    _add_training_workflow_args(train_cmd, default_epochs=None)
 
     show = commands.add_parser("show", help="显示当前协议或显式指定的历史配置")
     show.add_argument("experiment")
@@ -351,6 +536,12 @@ def main(argv=None) -> int:
             return _print_list(args.legacy)
         if args.command == "data":
             return _data_check(args.dataset) if args.data_command == "check" else _data_build(args)
+        if args.command == "cache":
+            return _workflow_cache(args)
+        if args.command == "smoke":
+            return _workflow_train(args, mode="smoke")
+        if args.command == "train":
+            return _workflow_train(args, mode="train")
         if args.command == "show":
             return _show(args.experiment, args.resolved)
         if args.command == "preflight":
@@ -365,7 +556,7 @@ def main(argv=None) -> int:
             return _retired_execution("audit", args.experiment)
         if args.command == "report":
             return _report(args.experiment, args.write)
-    except (FileNotFoundError, RuntimeError, ValueError) as error:
+    except (FileExistsError, FileNotFoundError, RuntimeError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 2
     raise AssertionError(f"未处理的命令：{args.command}")

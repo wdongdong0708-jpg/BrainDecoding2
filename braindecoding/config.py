@@ -12,7 +12,15 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BRAINDATA_ROOT = "D:/dataset"
 DEFAULT_MODEL_ROOT = "D:/code/dascoli-word-decoding/models"
+DEFAULT_CACHE_ROOT = PROJECT_ROOT / "data" / "cache" / "derived"
+DEFAULT_RESULTS_ROOT = PROJECT_ROOT / "data" / "cache" / "runs"
 _ENVIRONMENT_VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_ENV_FALLBACKS: dict[str, tuple[str, ...]] = {
+    "BRAINDATA_ROOT": ("BRAINDECODING_DATA_DIR",),
+    "BRAINDECODING_DATA_DIR": ("BRAINDATA_ROOT",),
+    "BRAINDECODING_MODEL_ROOT": ("BRAINDECODING_MODEL_DIR",),
+    "BRAINDECODING_MODEL_DIR": ("BRAINDECODING_MODEL_ROOT",),
+}
 
 
 def expand_environment_variables(value):
@@ -28,9 +36,12 @@ def expand_environment_variables(value):
 
     def replace(match):
         name = match.group(1)
-        if name not in os.environ:
-            raise ValueError(f"配置引用了未设置的环境变量：{name}")
-        return os.environ[name]
+        if name in os.environ:
+            return os.environ[name]
+        for fallback in _ENV_FALLBACKS.get(name, ()):
+            if fallback in os.environ:
+                return os.environ[fallback]
+        raise ValueError(f"配置引用了未设置的环境变量：{name}")
 
     return _ENVIRONMENT_VARIABLE.sub(replace, value)
 
@@ -56,13 +67,64 @@ def normalize_project_relative(value: str) -> str:
 
 
 def project_path(value):
-    """以项目根目录为基准解析相对路径，绝对路径保持不变。"""
+    """以项目根目录为基准解析相对路径，绝对路径保持不变。
+
+    当设置了 ``BRAINDECODING_CACHE_DIR`` 时，``data/cache/derived`` 下的相对路径
+    将自动解析到该环境变量指定的缓存根目录。
+    """
     expanded_value = expand_environment_variables(str(value))
     path = Path(expanded_value)
     if path.is_absolute():
         return path
-    return PROJECT_ROOT / normalize_project_relative(expanded_value)
+    normalized = normalize_project_relative(expanded_value)
+    posix_rel = normalized.replace("\\", "/")
+    cache_env = os.environ.get("BRAINDECODING_CACHE_DIR")
+    if cache_env and (
+        posix_rel == "data/cache/derived"
+        or posix_rel.startswith("data/cache/derived/")
+    ):
+        suffix = posix_rel[len("data/cache/derived") :].lstrip("/")
+        base = Path(cache_env)
+        if not base.is_absolute():
+            base = PROJECT_ROOT / base
+        return base / suffix if suffix else base
+    return PROJECT_ROOT / normalized
 
+
+def data_root() -> Path:
+    """返回原始数据集根目录（优先读取 ``BRAINDECODING_DATA_DIR``，兼容 ``BRAINDATA_ROOT``）。"""
+    raw = (
+        os.environ.get("BRAINDECODING_DATA_DIR")
+        or os.environ.get("BRAINDATA_ROOT")
+        or DEFAULT_BRAINDATA_ROOT
+    )
+    path = Path(raw)
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def cache_root() -> Path:
+    """返回预处理派生特征缓存根目录（由 ``BRAINDECODING_CACHE_DIR`` 驱动）。"""
+    return project_path("data/cache/derived")
+
+
+def results_root() -> Path:
+    """返回训练 Checkpoint 与日志输出根目录（由 ``BRAINDECODING_RESULTS_DIR`` 驱动）。"""
+    raw = os.environ.get("BRAINDECODING_RESULTS_DIR")
+    if raw:
+        path = Path(raw)
+        return path if path.is_absolute() else PROJECT_ROOT / path
+    return DEFAULT_RESULTS_ROOT
+
+
+def model_root() -> Path:
+    """返回本地预训练语言/嵌入模型根目录。"""
+    raw = (
+        os.environ.get("BRAINDECODING_MODEL_DIR")
+        or os.environ.get("BRAINDECODING_MODEL_ROOT")
+        or DEFAULT_MODEL_ROOT
+    )
+    path = Path(raw)
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 def deep_merge(base, override):
@@ -101,9 +163,36 @@ def load_yaml_with_extends(path):
 
 def ensure_default_environment(
     *,
-    data_root: str = DEFAULT_BRAINDATA_ROOT,
-    model_root: str = DEFAULT_MODEL_ROOT,
-) -> None:
-    """为独立运行的协议入口设置默认数据与本地模型根目录（若外部未显式设置）。"""
-    os.environ.setdefault("BRAINDATA_ROOT", str(data_root))
-    os.environ.setdefault("BRAINDECODING_MODEL_ROOT", str(model_root))
+    data_root: str | Path = DEFAULT_BRAINDATA_ROOT,
+    model_root: str | Path = DEFAULT_MODEL_ROOT,
+    cache_dir: str | Path | None = None,
+    results_dir: str | Path | None = None,
+) -> dict[str, str]:
+    """为独立运行的协议与工作流入口设置默认数据、缓存、结果与模型根目录（若外部未显式设置）。"""
+    resolved_data = str(
+        os.environ.get("BRAINDECODING_DATA_DIR")
+        or os.environ.get("BRAINDATA_ROOT")
+        or data_root
+    )
+    resolved_model = str(
+        os.environ.get("BRAINDECODING_MODEL_DIR")
+        or os.environ.get("BRAINDECODING_MODEL_ROOT")
+        or model_root
+    )
+    os.environ.setdefault("BRAINDECODING_DATA_DIR", resolved_data)
+    os.environ.setdefault("BRAINDATA_ROOT", resolved_data)
+    os.environ.setdefault("BRAINDECODING_MODEL_ROOT", resolved_model)
+    if cache_dir is not None:
+        os.environ.setdefault("BRAINDECODING_CACHE_DIR", str(cache_dir))
+    if results_dir is not None:
+        os.environ.setdefault("BRAINDECODING_RESULTS_DIR", str(results_dir))
+    return {
+        "BRAINDECODING_DATA_DIR": os.environ["BRAINDECODING_DATA_DIR"],
+        "BRAINDECODING_CACHE_DIR": str(
+            os.environ.get("BRAINDECODING_CACHE_DIR", DEFAULT_CACHE_ROOT)
+        ),
+        "BRAINDECODING_RESULTS_DIR": str(
+            os.environ.get("BRAINDECODING_RESULTS_DIR", DEFAULT_RESULTS_ROOT)
+        ),
+        "BRAINDECODING_MODEL_ROOT": os.environ["BRAINDECODING_MODEL_ROOT"],
+    }

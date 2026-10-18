@@ -94,15 +94,50 @@ BrainDecoding/
 | `braindecoding.evaluation` | `gwilliams_forgetting_evaluation.py` | Gwilliams 2023 遗忘门控留出评测 |
 | `braindecoding.evaluation` | `bilingual_embedding_reranker.py` | 双语文本嵌入重排序器评测 |
 | `braindecoding.evaluation` | `heldout_selection_evaluation.py` | 留出集超参数选择一致性评测 |
+| `braindecoding.training` | `workflow_runner.py` | 本地小样本极速联调与云端 CPU 预热 / GPU 训练统一工作流执行器 |
+| `scripts` | `cache_archive.py` | 预处理特征缓存单文件 `.tar` 打包 (`pack`) 与秒级解包 (`unpack`) 工具 |
+| `scripts` | `colab_setup.py` | 防崩版 Google Colab 虚拟环境初始化、PyTorch 约束锁定与本地软链接桥工具 |
 
 ---
 
-## 4. 常用命令
+## 4. 本地小样本联调 + Google Colab 云端双模工作流
+
+### 4.1 环境变量路径解耦
+
+所有路径统一由环境变量驱动（未设置时自动回退到本地合理默认值）：
+
+| 环境变量 | 说明 | 本地默认值 | Colab 推荐值 |
+| :--- | :--- | :--- | :--- |
+| `BRAINDECODING_DATA_DIR`（兼容 `BRAINDATA_ROOT`） | 原始数据目录 | `D:/dataset` | `/content/studies_links`（指向云盘 `data/` 的本地软链接桥） |
+| `BRAINDECODING_CACHE_DIR` | 预处理特征缓存目录 | `data/cache/derived` | `/content/local_cache`（本地高速盘） |
+| `BRAINDECODING_RESULTS_DIR` | 训练 Checkpoint 与日志目录 | `data/cache/runs` | `/content/drive/MyDrive/BrainDecoding/runs` |
+| `BRAINDECODING_MODEL_DIR`（兼容 `BRAINDECODING_MODEL_ROOT`） | 预训练文本/语言模型目录 | `D:/code/dascoli-word-decoding/models` | `/content/drive/MyDrive/BrainDecoding/models` |
+
+### 4.2 统一 CLI 入口（`smoke` / `cache` / `train`）
+
+支持灵活的数据子集参数（`--subject all`、`--num-subjects N`、`--subjects id1,id2,...`），自动根据所选子集动态校验样本与词表，并在独立子目录中写入 `subjects.json` 防止不同子集断点权重互相覆盖：
 
 ```bash
-# 查看当前注册的标准实验协议
-python -m braindecoding list
+# 1. 本地单受试者 2 Epoch 极速冒烟测试（验证前反向传播、bf16-mixed、指标计算与 Checkpoint 保存）
+python -m braindecoding smoke --dataset chineseeeg2_littleprince --num-subjects 1 --epochs 2 --precision bf16-mixed --require-cache
 
-# 运行全量自动化单元测试与仓库规范守卫
+# 2. 仅预热特征缓存（支持全量或指定受试者子集）
+python -m braindecoding cache --dataset chineseeeg2_littleprince --subject all
+python -m braindecoding cache --dataset pallier2025 --subjects sub-01,sub-02
+
+# 3. 正式训练（强制要求命中缓存 --require-cache，支持 --resume auto 自动从 last.ckpt 断点续训）
+python -m braindecoding train --dataset chineseeeg2_littleprince --stage word --seed 0 --subject all --precision bf16-mixed --require-cache --resume auto
+
+# 4. 缓存单文件打包与解包（Colab 本地高速盘 <-> Google Drive）
+python scripts/cache_archive.py pack --cache-dir /content/local_cache --archive-dir /content/drive/MyDrive/BrainDecoding/archives --modality eeg
+python scripts/cache_archive.py unpack --archive-dir /content/drive/MyDrive/BrainDecoding/archives --cache-dir /content/local_cache --modality eeg --skip-existing
+
+# 5. Colab 双云端 Notebook
+# - scripts/colab/colab_cpu_cache.ipynb : CPU 实例预热特征缓存并打包为单文件 .tar
+# - scripts/colab/colab_gpu_train.ipynb : GPU 实例秒级解包缓存并启动 bf16-mixed 训练
+
+# 6. 查看当前注册的标准实验协议与运行单元测试
+python -m braindecoding list
 pytest tests -q
 ```
+

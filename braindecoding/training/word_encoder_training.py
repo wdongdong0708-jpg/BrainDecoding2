@@ -174,6 +174,23 @@ def three_state_internal_mask(group_indices):
     return local_context_internal_mask(group_indices, radius=1)
 
 
+def resolve_amp_dtype(config_or_dtype=None):
+    """解析混合精度训练/推理使用的 autocast dtype（默认 float16，支持 bf16-mixed）。"""
+    if isinstance(config_or_dtype, torch.dtype):
+        return config_or_dtype
+    raw = config_or_dtype
+    if isinstance(config_or_dtype, dict):
+        raw = config_or_dtype.get("amp_dtype", config_or_dtype.get("precision", "fp16"))
+    text = str(raw or "fp16").strip().lower()
+    if text in {"bf16", "bfloat16", "bf16-mixed", "bf16_mixed"}:
+        return torch.bfloat16
+    if text in {"fp16", "float16", "16", "16-mixed", "fp16-mixed", "fp16_mixed"}:
+        return torch.float16
+    if text in {"fp32", "float32", "32", "32-true"}:
+        return torch.float32
+    raise ValueError(f"不支持的混合精度类型: {raw!r}")
+
+
 def train_one_epoch(
     model,
     loss_module,
@@ -192,7 +209,12 @@ def train_one_epoch(
     if freeze_brain_encoder:
         model.brain_encoder.eval()
     loss_module.train()
-    use_amp = bool(config.get("amp", True)) and device.type == "cuda"
+    amp_dtype = resolve_amp_dtype(config)
+    use_amp = (
+        bool(config.get("amp", True))
+        and device.type == "cuda"
+        and amp_dtype in {torch.float16, torch.bfloat16}
+    )
     loss_sum = 0.0
     sample_count = 0
     optimizer_updates = 0
@@ -241,7 +263,7 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(
             device_type=device.type,
-            dtype=torch.float16,
+            dtype=amp_dtype,
             enabled=use_amp,
         ):
             if getattr(model, "candidate_conditioned", False):
@@ -372,7 +394,11 @@ def train_one_epoch(
         previous_scale = float(scaler.get_scale())
         scaler.step(optimizer)
         scaler.update()
-        step_succeeded = not use_amp or float(scaler.get_scale()) >= previous_scale
+        step_succeeded = (
+            not use_amp
+            or not scaler.is_enabled()
+            or float(scaler.get_scale()) >= previous_scale
+        )
         if step_succeeded:
             optimizer_updates += 1
         loss_sum += float(loss.detach()) * len(meg)
@@ -433,6 +459,7 @@ def encode_loader(
     subject_index_map=None,
     evaluate_relation_auxiliary=False,
     relation_seed=104729,
+    amp_dtype=None,
 ):
     """编码完整数据划分并保留现有检索元数据。"""
     model.eval()
@@ -449,7 +476,12 @@ def encode_loader(
     relation_generator = torch.Generator(device="cpu")
     relation_generator.manual_seed(int(relation_seed))
     local_context_radius = int(getattr(model, "local_context_radius", 1))
-    use_amp = bool(amp) and device.type == "cuda"
+    resolved_dtype = resolve_amp_dtype(amp_dtype)
+    use_amp = (
+        bool(amp)
+        and device.type == "cuda"
+        and resolved_dtype in {torch.float16, torch.bfloat16}
+    )
     for batch in loader:
         meg, text_embedding, subject_indices, sentence_indices = move_batch(
             batch, device
@@ -463,7 +495,7 @@ def encode_loader(
             )
         with torch.autocast(
             device_type=device.type,
-            dtype=torch.float16,
+            dtype=resolved_dtype,
             enabled=use_amp,
         ):
             if bool(getattr(model, "prefix_revision_enabled", False)):
@@ -547,7 +579,9 @@ def encode_loader(
 
 
 @torch.inference_mode()
-def score_loader(model, loader, candidate_embeddings, device, amp=True):
+def score_loader(
+    model, loader, candidate_embeddings, device, amp=True, amp_dtype=None
+):
     """让候选条件模型对固定候选集逐项读取完整数据划分。"""
     if not getattr(model, "candidate_conditioned", False):
         raise ValueError("score_loader 只接受候选条件模型。")
@@ -560,14 +594,19 @@ def score_loader(model, loader, candidate_embeddings, device, amp=True):
     words = []
     event_ids = []
     recording_ids = []
-    use_amp = bool(amp) and device.type == "cuda"
+    resolved_dtype = resolve_amp_dtype(amp_dtype)
+    use_amp = (
+        bool(amp)
+        and device.type == "cuda"
+        and resolved_dtype in {torch.float16, torch.bfloat16}
+    )
     for batch in loader:
         meg, text_embedding, subject_indices, sentence_indices = move_batch(
             batch, device
         )
         with torch.autocast(
             device_type=device.type,
-            dtype=torch.float16,
+            dtype=resolved_dtype,
             enabled=use_amp,
         ):
             batch_scores = model(

@@ -91,7 +91,10 @@ def build_dataset(config, table, zero_meg=False, zero_signal=False):
         config["cache"]["text_embeddings"],
         config["text_embedding"],
         zero_meg=bool(zero_meg or zero_signal),
-        allow_subject_subset=bool(config.get("subject_generalization")),
+        allow_subject_subset=bool(
+            config.get("subject_generalization")
+            or config["dataset"].get("allow_subject_subset")
+        ),
     )
 
 
