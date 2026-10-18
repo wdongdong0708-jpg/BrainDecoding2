@@ -33,7 +33,7 @@ text_embedding:
 
 model:
   embedding_dimension: 1024
-  use_transformer: true
+  use_transformer: false
   context_mode: grouped
   conv:
     merger_channels: 270

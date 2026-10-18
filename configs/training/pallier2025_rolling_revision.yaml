@@ -1,4 +1,4 @@
-# Pallier2025 法语 MEG 第二阶段：16 层局部窗口滚动修订训练配置（NVIDIA L4 GPU 默认调优）
+# Pallier2025 法语 MEG 阶段 2.2：词级脑编码器 + 16 层局部窗口滚动修订训练配置（NVIDIA L4 GPU 默认调优）
 # 启动命令：
 #   python -u -m braindecoding train --config configs/training/pallier2025_rolling_revision.yaml --require-cache --resume auto
 extends: ../word_decoding/pallier2025/rolling_revision/local_window_revision.yaml

@@ -18,6 +18,9 @@ from braindecoding.config import (
 )
 from braindecoding.training.workflow_runner import (
     build_workflow_config,
+    normalize_workflow_stage,
+    plot_evaluation_figures,
+    plot_stage_comparison_figure,
     resolve_subject_subset,
     write_subjects_manifest,
 )
@@ -156,6 +159,7 @@ def test_colab_notebooks_follow_streaming_and_symlink_rules():
         PROJECT_ROOT / "scripts" / "colab" / "colab_drive_init.ipynb",
         PROJECT_ROOT / "scripts" / "colab" / "colab_cpu_cache.ipynb",
         PROJECT_ROOT / "scripts" / "colab" / "colab_gpu_train.ipynb",
+        PROJECT_ROOT / "scripts" / "colab" / "colab_gpu_evaluation.ipynb",
     ]
     for nb_path in notebooks:
         assert nb_path.is_file(), f"缺少 Notebook: {nb_path}"
@@ -174,13 +178,15 @@ def test_colab_notebooks_follow_streaming_and_symlink_rules():
         assert "BRAINDECODING_RESULTS_DIR" in code_text
 
 
-def test_cli_parses_smoke_cache_and_train_subcommands():
+def test_cli_parses_smoke_cache_train_and_eval_run_subcommands():
     parser = cli.build_parser()
     smoke_args = parser.parse_args(
         [
             "smoke",
             "--dataset",
             "chineseeeg2_littleprince",
+            "--stage",
+            "2.1",
             "--num-subjects",
             "1",
             "--epochs",
@@ -191,6 +197,7 @@ def test_cli_parses_smoke_cache_and_train_subcommands():
         ]
     )
     assert smoke_args.command == "smoke"
+    assert normalize_workflow_stage(smoke_args.stage) == "context"
     assert smoke_args.num_subjects == 1
     assert smoke_args.epochs == 2
     assert smoke_args.precision == "bf16-mixed"
@@ -201,6 +208,8 @@ def test_cli_parses_smoke_cache_and_train_subcommands():
             "train",
             "--dataset",
             "pallier2025",
+            "--stage",
+            "context",
             "--subjects",
             "sub-01,sub-02",
             "--batch-size",
@@ -217,6 +226,7 @@ def test_cli_parses_smoke_cache_and_train_subcommands():
         ]
     )
     assert train_args.command == "train"
+    assert train_args.stage == "context"
     assert train_args.subjects == "sub-01,sub-02"
     assert train_args.batch_size == 256
     assert train_args.eval_batch_size == 512
@@ -224,40 +234,32 @@ def test_cli_parses_smoke_cache_and_train_subcommands():
     assert train_args.num_workers == 0
     assert train_args.resume == "auto"
 
-    cfg_train, _ = build_workflow_config(
-        "pallier2025", stage="word", seed=0, mode="train"
-    )
-    assert cfg_train["training"]["batch_size"] == 256
-    assert cfg_train["training"]["eval_batch_size"] == 512
-    assert cfg_train["training"]["learning_rate"] == pytest.approx(0.0004)
-    assert (
-        cfg_train["workflow"]["config_path"]
-        == "configs/training/pallier2025_word_encoder.yaml"
-    )
-
-
-def test_workflow_config_loads_explicit_yaml_files():
-    parser = cli.build_parser()
-    cfg_args = parser.parse_args(
+    eval_args = parser.parse_args(
         [
-            "train",
-            "--config",
-            "configs/training/pallier2025_word_encoder.yaml",
+            "eval-run",
+            "--dataset",
+            "pallier2025",
+            "--split",
+            "test",
+            "--all-stages",
             "--seed",
             "0",
             "--require-cache",
-            "--resume",
-            "auto",
         ]
     )
-    assert cfg_args.config == "configs/training/pallier2025_word_encoder.yaml"
-    assert cfg_args.dataset is None
-    assert cfg_args.stage is None
+    assert eval_args.command == "eval-run"
+    assert eval_args.split == "test"
+    assert eval_args.all_stages is True
+    assert eval_args.require_cache is True
 
+
+def test_workflow_config_loads_all_six_stage_yaml_files():
     for expected_ds, expected_stage, rel_yaml in (
         ("pallier2025", "word", "configs/training/pallier2025_word_encoder.yaml"),
+        ("pallier2025", "context", "configs/training/pallier2025_context_transformer.yaml"),
         ("pallier2025", "revision", "configs/training/pallier2025_rolling_revision.yaml"),
         ("chineseeeg2_littleprince", "word", "configs/training/chineseeeg2_word_encoder.yaml"),
+        ("chineseeeg2_littleprince", "context", "configs/training/chineseeeg2_context_transformer.yaml"),
         ("chineseeeg2_littleprince", "revision", "configs/training/chineseeeg2_rolling_revision.yaml"),
     ):
         cfg, subset = build_workflow_config(
@@ -270,5 +272,62 @@ def test_workflow_config_loads_explicit_yaml_files():
         assert cfg["training"]["eval_batch_size"] == 512
         assert cfg["training"]["learning_rate"] == pytest.approx(0.0004)
         assert cfg["training"]["precision"] == "bf16-mixed"
-        assert cfg["model"]["use_transformer"] is (expected_stage == "revision")
+        assert cfg["model"]["use_transformer"] is (expected_stage in ("context", "revision"))
+        if expected_stage == "word":
+            assert "local_window_revision" not in cfg["model"]
+            assert "pretrained_brain_encoder_checkpoint" not in cfg["training"]
+        elif expected_stage == "context":
+            assert "local_window_revision" not in cfg["model"]
+            assert cfg["training"]["freeze_brain_encoder_epochs"] == 1
+            assert cfg["training"]["preserve_complete_groups"] is True
+            assert "pretrained_brain_encoder_checkpoint" in cfg["training"]
+            assert "revision_cutoff_policy" not in cfg["training"]
+        elif expected_stage == "revision":
+            assert cfg["model"]["local_window_revision"]["enabled"] is True
+            assert cfg["training"]["freeze_brain_encoder_epochs"] == 1
+            assert cfg["training"]["preserve_complete_groups"] is True
+            assert cfg["training"]["revision_cutoff_policy"] == "all"
+            assert "pretrained_brain_encoder_checkpoint" in cfg["training"]
+
+
+def test_plot_evaluation_and_stage_comparison_figures(tmp_path):
+    dummy_sweep = {
+        "N20": {"label": "Top-20 Vocab", "macro_top10": 0.72, "micro_top10": 0.75, "macro_top5": 0.52, "macro_top1": 0.24, "mrr": 0.41, "chance_top10": 0.50},
+        "N50": {"label": "Top-50 Vocab", "macro_top10": 0.45, "micro_top10": 0.48, "macro_top5": 0.30, "macro_top1": 0.12, "mrr": 0.25, "chance_top10": 0.20},
+        "N100": {"label": "Top-100 Vocab", "macro_top10": 0.29, "micro_top10": 0.32, "macro_top5": 0.18, "macro_top1": 0.07, "mrr": 0.16, "chance_top10": 0.10},
+        "N150": {"label": "Top-150 Vocab", "macro_top10": 0.22, "micro_top10": 0.25, "macro_top5": 0.13, "macro_top1": 0.05, "mrr": 0.12, "chance_top10": 10.0 / 150.0},
+        "full_vocab": {"label": "Full Vocab (2020)", "macro_top10": 0.06, "micro_top10": 0.09, "macro_top5": 0.03, "macro_top1": 0.01, "mrr": 0.03, "chance_top10": 10.0 / 2020.0},
+    }
+    eval_res = {
+        "dataset": "pallier2025",
+        "stage": "context",
+        "split": "val",
+        "seed": 0,
+        "subset": {"subset_tag": "all-n10", "subject_count": 10, "total_canonical_subjects": 10},
+        "checkpoint": {"path": "best.ckpt", "epoch": 12},
+        "metrics": {
+            "vocabulary_sweep": dummy_sweep,
+            "per_subject": [
+                {"subject_id": "sub-01", "macro_top10": 0.46, "macro_top1": 0.13},
+                {"subject_id": "sub-02", "macro_top10": 0.44, "macro_top1": 0.11},
+            ],
+            "revision_horizons": {},
+        },
+        "training_history": [
+            {"epoch": 1, "train_loss": 5.5, "selection_score_legacy50": 0.28, "selection_score_full_vocab": 0.02},
+            {"epoch": 2, "train_loss": 4.8, "selection_score_legacy50": 0.45, "selection_score_full_vocab": 0.06},
+        ],
+    }
+    figs = plot_evaluation_figures(eval_res, tmp_path / "figures")
+    assert Path(figs["overview_png"]).is_file()
+    assert Path(figs["overview_pdf"]).is_file()
+
+    comp_figs = plot_stage_comparison_figure(
+        {"word": eval_res, "context": eval_res, "revision": eval_res},
+        tmp_path / "figures",
+        split="val",
+    )
+    assert Path(comp_figs["stage_comparison_png"]).is_file()
+    assert Path(comp_figs["stage_comparison_pdf"]).is_file()
+
 

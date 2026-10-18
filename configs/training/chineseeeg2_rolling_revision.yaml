@@ -1,4 +1,4 @@
-# ChineseEEG-2 中文《小王子》EEG 第二阶段：16 层局部窗口滚动修订训练配置（NVIDIA L4 GPU 默认调优）
+# ChineseEEG-2 中文《小王子》EEG 阶段 2.2：词级脑编码器 + 16 层局部窗口滚动修订训练配置（NVIDIA L4 GPU 默认调优）
 # 启动命令：
 #   python -u -m braindecoding train --config configs/training/chineseeeg2_rolling_revision.yaml --require-cache --resume auto
 extends: ../word_decoding/chineseeeg2_littleprince/rolling_revision/full_coverage_local_window_revision.yaml

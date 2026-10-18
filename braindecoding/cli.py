@@ -341,9 +341,9 @@ def _add_training_workflow_args(
     )
     parser.add_argument(
         "--stage",
-        choices=("word", "revision"),
+        choices=("word", "context", "revision", "1", "2.1", "2.2"),
         default=None,
-        help="训练阶段：word（单窗脑编码器）或 revision（16 层局部窗口修订）",
+        help="训练阶段：word/1（阶段1：单窗脑编码器）、context/2.1（阶段2.1：脑编码器+16层Transformer）或 revision/2.2（阶段2.2：16层局部窗口滚动修订）",
     )
     parser.add_argument("--seed", type=int, default=0, help="随机种子（默认：0）")
     _add_subject_subset_args(parser)
@@ -403,7 +403,7 @@ def _add_training_workflow_args(
     parser.add_argument(
         "--word-checkpoint",
         default=None,
-        help="revision 阶段可选显式指定预训练 word 检查点路径",
+        help="context (2.1) / revision (2.2) 阶段可选显式指定预训练 word 检查点路径",
     )
     parser.add_argument(
         "--max-train-rows",
@@ -426,6 +426,90 @@ def _add_training_workflow_args(
         "--no-progress",
         action="store_true",
         help="禁用 tqdm 实时进度条（仅输出每轮汇总表格）",
+    )
+
+
+def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--config",
+        "-c",
+        dest="config",
+        default=None,
+        help="YAML 配置文件路径（如 configs/training/pallier2025_context_transformer.yaml）",
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=("chineseeeg2_littleprince", "pallier2025"),
+        default=None,
+        help="目标数据集（指定 --config 时自动从 YAML 读取；未指定时默认 chineseeeg2_littleprince）",
+    )
+    parser.add_argument(
+        "--stage",
+        choices=("word", "context", "revision", "1", "2.1", "2.2"),
+        default=None,
+        help="要评估的阶段：word/1、context/2.1 或 revision/2.2",
+    )
+    parser.add_argument(
+        "--all-stages",
+        action="store_true",
+        help="自动扫描并评估当前数据集/受试者子集下已训练完成的全部阶段（word / context / revision）并生成多阶段对比图",
+    )
+    parser.add_argument(
+        "--split",
+        choices=("val", "test"),
+        default="val",
+        help="评估划分：val（验证集）或 test（留出测试集）",
+    )
+    parser.add_argument("--seed", type=int, default=0, help="随机种子（默认：0）")
+    _add_subject_subset_args(parser)
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="可选显式指定待评估的 best.ckpt / best.pt 路径",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="可选显式指定评估结果与图表输出目录",
+    )
+    parser.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=None,
+        help="评估前向批大小（默认从 YAML 读取，L4 GPU 默认为 512）",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help="DataLoader 工作进程数（默认 0）",
+    )
+    parser.add_argument(
+        "--precision",
+        default=None,
+        choices=("bf16-mixed", "fp16-mixed", "fp16", "fp32"),
+        help="混合精度模式（默认 bf16-mixed）",
+    )
+    parser.add_argument(
+        "--require-cache",
+        action="store_true",
+        help="要求必须命中预处理特征缓存，缺失时立即报错",
+    )
+    parser.add_argument(
+        "--max-eval-rows",
+        type=int,
+        default=None,
+        help="可选限制评估事件行数上限（用于快速联调）",
+    )
+    parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="禁用可视化图表生成",
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="禁用 tqdm 实时进度条",
     )
 
 
@@ -477,6 +561,35 @@ def _workflow_train(args, *, mode: str) -> int:
         overwrite=args.overwrite,
         show_progress=not bool(getattr(args, "no_progress", False)),
         config_path=args.config,
+    )
+    return 0
+
+
+def _workflow_eval(args) -> int:
+    from braindecoding.training.workflow_runner import run_evaluation_workflow
+
+    dataset = args.dataset
+    if dataset is None and args.config is None:
+        dataset = "chineseeeg2_littleprince"
+    run_evaluation_workflow(
+        dataset,
+        stage=args.stage,
+        seed=args.seed,
+        split=args.split,
+        subject=args.subject,
+        num_subjects=args.num_subjects,
+        subjects=args.subjects,
+        eval_batch_size=args.eval_batch_size,
+        num_workers=args.num_workers,
+        precision=args.precision,
+        require_cache=args.require_cache,
+        checkpoint_path=args.checkpoint,
+        output_dir=args.output_dir,
+        config_path=args.config,
+        all_stages=args.all_stages,
+        plot=not bool(getattr(args, "no_plot", False)),
+        show_progress=not bool(getattr(args, "no_progress", False)),
+        max_eval_rows=args.max_eval_rows,
     )
     return 0
 
@@ -537,6 +650,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_training_workflow_args(train_cmd, default_epochs=None)
 
+    eval_run_cmd = commands.add_parser(
+        "eval-run", help="评估已训练检查点（支持 val 验证集与 test 测试集、单阶段或全阶段对比及可视化绘图）"
+    )
+    _add_evaluation_workflow_args(eval_run_cmd)
+
     show = commands.add_parser("show", help="显示当前协议或显式指定的历史配置")
     show.add_argument("experiment")
     show.add_argument("--resolved", action="store_true", help="显示协议索引元数据或历史完整配置")
@@ -572,6 +690,8 @@ def main(argv=None) -> int:
             return _workflow_train(args, mode="smoke")
         if args.command == "train":
             return _workflow_train(args, mode="train")
+        if args.command == "eval-run":
+            return _workflow_eval(args)
         if args.command == "show":
             return _show(args.experiment, args.resolved)
         if args.command == "preflight":

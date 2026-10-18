@@ -115,34 +115,47 @@ BrainDecoding/
 | `BRAINDECODING_RESULTS_DIR` | 训练 Checkpoint 与日志目录 | `data/cache/runs` | `/content/drive/MyDrive/BrainDecoding/runs` |
 | `BRAINDECODING_MODEL_DIR`（兼容 `BRAINDECODING_MODEL_ROOT`） | 预训练文本/语言模型目录 | `D:/code/dascoli-word-decoding/models` | `/content/drive/MyDrive/BrainDecoding/models` |
 
-### 4.2 统一 CLI 入口（`smoke` / `cache` / `train`）与训练 YAML 配置
+### 4.2 统一 CLI 入口（`smoke` / `cache` / `train` / `eval-run`）与三阶段训练 YAML 配置
 
-支持通过 `--config` / `-c` 直接指定 `configs/training/*.yaml` 配置文件（或通过 `--dataset` + `--stage` 指定），并支持灵活的数据子集参数（`--subject all`、`--num-subjects N`、`--subjects id1,id2,...`），在独立子目录中写入 `subjects.json` 防止不同子集断点权重互相覆盖：
+项目训练划分为三个递进阶段，均支持通过 `--config` / `-c` 直接指定 `configs/training/*.yaml` 配置文件（或通过 `--dataset` + `--stage` 指定）：
+- **阶段 1 (`word` / `1`)**：词级脑编码器（纯 CNN，`use_transformer: false`），从头训练。
+- **阶段 2.1 (`context` / `2.1`)**：词级脑编码器 + 16 层全局上下文 Transformer（`use_transformer: true`，使用完整窗口，不启用局部窗口滚动修订）；加载阶段 1 最佳检查点初始化脑编码器，第 1 轮冻结 CNN，随后联合训练。
+- **阶段 2.2 (`revision` / `2.2`)**：词级脑编码器 + 16 层局部窗口滚动修订（`use_transformer: true`，`K0/K1/K2` 局部窗口滚动回修）；加载阶段 1 最佳检查点初始化脑编码器，第 1 轮冻结 CNN，随后联合训练。
 
 ```bash
 # 1. 本地单受试者 2 Epoch 极速冒烟测试（验证前反向传播、bf16-mixed、指标计算与 Checkpoint 保存）
 python -m braindecoding smoke --config configs/training/chineseeeg2_word_encoder.yaml --num-subjects 1 --epochs 2 --require-cache
 
-# 2. 仅预热特征缓存（支持全量或指定受试者子集）
-python -m braindecoding cache --dataset chineseeeg2_littleprince --subject all
-python -m braindecoding cache --dataset pallier2025 --subjects sub-01,sub-02
+# 2. 仅预热特征缓存（支持全量或指定受试者子集，--include-test 同时预热测试集）
+python -m braindecoding cache --dataset chineseeeg2_littleprince --subject all --include-test
+python -m braindecoding cache --dataset pallier2025 --subject all --include-test
 
-# 3. 正式训练（直接传入 configs/training/*.yaml，内置 L4 GPU 调优超参，支持 --resume auto 自动从 last.ckpt 断点续训）
+# 3. 正式三阶段训练（直接传入 configs/training/*.yaml，内置 L4 GPU 调优超参，支持 --resume auto 自动从 last.ckpt 断点续训）
+# Pallier2025 法语 MEG（阶段 1 -> 阶段 2.1 / 阶段 2.2）
 python -m braindecoding train --config configs/training/pallier2025_word_encoder.yaml --seed 0 --subject all --require-cache --resume auto
+python -m braindecoding train --config configs/training/pallier2025_context_transformer.yaml --seed 0 --subject all --require-cache --resume auto
 python -m braindecoding train --config configs/training/pallier2025_rolling_revision.yaml --seed 0 --subject all --require-cache --resume auto
+
+# ChineseEEG-2 中文《小王子》EEG（阶段 1 -> 阶段 2.1 / 阶段 2.2）
 python -m braindecoding train --config configs/training/chineseeeg2_word_encoder.yaml --seed 0 --subject all --require-cache --resume auto
+python -m braindecoding train --config configs/training/chineseeeg2_context_transformer.yaml --seed 0 --subject all --require-cache --resume auto
 python -m braindecoding train --config configs/training/chineseeeg2_rolling_revision.yaml --seed 0 --subject all --require-cache --resume auto
 
-# 4. 缓存单文件打包与解包（Colab 本地高速盘 <-> Google Drive）
+# 4. 验证集 (val) 与测试集 (test) 评估及可视化绘图（生成 2x2 综合看板图与跨阶段对比图）
+python -m braindecoding eval-run --config configs/training/pallier2025_context_transformer.yaml --seed 0 --split val --require-cache
+python -m braindecoding eval-run --dataset pallier2025 --seed 0 --split test --all-stages --require-cache
+
+# 5. 缓存单文件打包与解包（Colab 本地高速盘 <-> Google Drive）
 python scripts/cache_archive.py pack --cache-dir /content/local_cache --archive-dir /content/drive/MyDrive/BrainDecoding/archives --modality meg
 python scripts/cache_archive.py unpack --archive-dir /content/drive/MyDrive/BrainDecoding/archives --cache-dir /content/local_cache --modality meg --skip-existing
 
-# 5. Colab 云端 Notebook
-# - scripts/colab/colab_drive_init.ipynb : 一键创建 Google Drive 标准目录并核验上传的 .tar 缓存包
-# - scripts/colab/colab_cpu_cache.ipynb  : CPU 实例预热特征缓存并打包为单文件 .tar
-# - scripts/colab/colab_gpu_train.ipynb  : GPU 实例秒级解包缓存并通过 --config 启动 bf16-mixed 训练
+# 6. Colab 云端 Notebook
+# - scripts/colab/colab_drive_init.ipynb     : 一键创建 Google Drive 标准目录并核验上传的 .tar 缓存包
+# - scripts/colab/colab_cpu_cache.ipynb      : CPU 实例预热特征缓存（含 train/val/test）并打包为单文件 .tar
+# - scripts/colab/colab_gpu_train.ipynb      : GPU 实例秒级解包缓存、按 --config 启动三阶段训练并可视化验证集评估结果
+# - scripts/colab/colab_gpu_evaluation.ipynb : GPU 实例专门用于评估留出测试集（支持单阶段或三阶段横向对比及可视化图表）
 
-# 6. 查看当前注册的标准实验协议与运行单元测试
+# 7. 查看当前注册的标准实验协议与运行单元测试
 python -m braindecoding list
 pytest tests -q
 ```

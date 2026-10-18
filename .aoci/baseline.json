@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-10-18T13:49:02Z",
+  "updated_at": "2026-10-18T15:01:14Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -23,15 +23,15 @@
     },
     "README.md": {
       "role": "index",
-      "sha256": "a5587af1df5fb371ecb46a95b4761781eefa85d6c0d4b6e2974194109499f30a",
-      "size": 11884,
-      "normalized_sha256": "a5587af1df5fb371ecb46a95b4761781eefa85d6c0d4b6e2974194109499f30a"
+      "sha256": "a8a0a4ca5bee0a1c414c4b9d4a45ade716112e02213b93f65cabeb64c77e9e91",
+      "size": 13485,
+      "normalized_sha256": "a8a0a4ca5bee0a1c414c4b9d4a45ade716112e02213b93f65cabeb64c77e9e91"
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "8043197f786af5556729a5f21b1a5ae4e2650ecbd86e069a87648fc1dac9dc3f",
-      "size": 93080,
-      "normalized_sha256": "8043197f786af5556729a5f21b1a5ae4e2650ecbd86e069a87648fc1dac9dc3f"
+      "sha256": "632e3af0e7815e3b3581e35e04a2fdf1f5ec0f807a7cd9fe162a077cd1ff1cab",
+      "size": 94727,
+      "normalized_sha256": "632e3af0e7815e3b3581e35e04a2fdf1f5ec0f807a7cd9fe162a077cd1ff1cab"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "braindecoding/cli.py": {
       "role": "index",
-      "sha256": "ef57cc472b57b73c67b1b8525bd41e85d1d43ec6729862d25792b90b82393a66",
-      "size": 22607,
-      "normalized_sha256": "ef57cc472b57b73c67b1b8525bd41e85d1d43ec6729862d25792b90b82393a66"
+      "sha256": "ed4c5fe7e21f910da8da0fb5ac82f3d2865b3f4048b72c319f8a62b174c88a9d",
+      "size": 26774,
+      "normalized_sha256": "ed4c5fe7e21f910da8da0fb5ac82f3d2865b3f4048b72c319f8a62b174c88a9d"
     },
     "braindecoding/config.py": {
       "role": "index",
@@ -527,9 +527,9 @@
     },
     "braindecoding/training/workflow_runner.py": {
       "role": "index",
-      "sha256": "1a3aa73833703e62d4e8812335ee22cb62e09bbc96e00841999e6ed5fe4c5545",
-      "size": 60321,
-      "normalized_sha256": "1a3aa73833703e62d4e8812335ee22cb62e09bbc96e00841999e6ed5fe4c5545"
+      "sha256": "5a7b91c0471225877be5f13065abc332b929beb03c6af827070e0cf764875e15",
+      "size": 103610,
+      "normalized_sha256": "5a7b91c0471225877be5f13065abc332b929beb03c6af827070e0cf764875e15"
     },
     "configs/decoding/revision_gain_evaluation.yaml": {
       "role": "index",
@@ -597,11 +597,17 @@
       "size": 2207,
       "normalized_sha256": "0d96cd709af27cbaab325feaedf3b0462a6ed0c876ad1bd70508ffcd8bd1d80b"
     },
+    "configs/training/chineseeeg2_context_transformer.yaml": {
+      "role": "index",
+      "sha256": "0a24d2b459fd887122d40f1318f0a0cfed434c35e58ff7e390ca5655b845b2df",
+      "size": 2925,
+      "normalized_sha256": "0a24d2b459fd887122d40f1318f0a0cfed434c35e58ff7e390ca5655b845b2df"
+    },
     "configs/training/chineseeeg2_rolling_revision.yaml": {
       "role": "index",
-      "sha256": "38416b8f970351e28f926f57f614ae71174f6eb458b21ee888222c77c0e71429",
-      "size": 2996,
-      "normalized_sha256": "38416b8f970351e28f926f57f614ae71174f6eb458b21ee888222c77c0e71429"
+      "sha256": "0666344bfd1b50a8e11d86285ab3d1c04e298b3dd08b4ec0323764ac967f2f93",
+      "size": 3015,
+      "normalized_sha256": "0666344bfd1b50a8e11d86285ab3d1c04e298b3dd08b4ec0323764ac967f2f93"
     },
     "configs/training/chineseeeg2_word_encoder.yaml": {
       "role": "index",
@@ -639,11 +645,17 @@
       "size": 449,
       "normalized_sha256": "244b0c48c80e246575a523bab7e80540cc7cd8caf833943b9f5eab594d92adaa"
     },
+    "configs/training/pallier2025_context_transformer.yaml": {
+      "role": "index",
+      "sha256": "bc8bebacf1b7769304d5db96edb5fc058a868233245a2b03ad8d4d89cea4098a",
+      "size": 2859,
+      "normalized_sha256": "bc8bebacf1b7769304d5db96edb5fc058a868233245a2b03ad8d4d89cea4098a"
+    },
     "configs/training/pallier2025_rolling_revision.yaml": {
       "role": "index",
-      "sha256": "5c112640494f28bec6cc54f5d3927229be5978e1725d81bbb8bb63803b995046",
-      "size": 2916,
-      "normalized_sha256": "5c112640494f28bec6cc54f5d3927229be5978e1725d81bbb8bb63803b995046"
+      "sha256": "a9f7711178cc6ddb1712490ee39591463f30ab70df538d02f1abb36ca57b199c",
+      "size": 2935,
+      "normalized_sha256": "a9f7711178cc6ddb1712490ee39591463f30ab70df538d02f1abb36ca57b199c"
     },
     "configs/training/pallier2025_word_encoder.yaml": {
       "role": "index",
@@ -3278,9 +3290,9 @@
     },
     "scripts/colab/colab_cpu_cache.ipynb": {
       "role": "index",
-      "sha256": "b408332ecb640ef69c8bdb797862e5fe1d33335c3e8f518f4b24d1c3a2fa975b",
-      "size": 5580,
-      "normalized_sha256": "b408332ecb640ef69c8bdb797862e5fe1d33335c3e8f518f4b24d1c3a2fa975b"
+      "sha256": "3894d06476e737ec7ef35874043354988825ca86579b0b991f0c73f2e3ad0d41",
+      "size": 5732,
+      "normalized_sha256": "3894d06476e737ec7ef35874043354988825ca86579b0b991f0c73f2e3ad0d41"
     },
     "scripts/colab/colab_drive_init.ipynb": {
       "role": "index",
@@ -3288,11 +3300,17 @@
       "size": 5238,
       "normalized_sha256": "b0696289c73c0495c169a9f21063b63f27f688593b6450e7275678f259fc9725"
     },
+    "scripts/colab/colab_gpu_evaluation.ipynb": {
+      "role": "index",
+      "sha256": "2a3d7893e4138d26dee80b19af7ab391db18b82930675ec4c74b022507c21b99",
+      "size": 8516,
+      "normalized_sha256": "2a3d7893e4138d26dee80b19af7ab391db18b82930675ec4c74b022507c21b99"
+    },
     "scripts/colab/colab_gpu_train.ipynb": {
       "role": "index",
-      "sha256": "e4f52599fc7280ac3a6b033474231286b9e771ecd252486485de1765a042d10b",
-      "size": 6432,
-      "normalized_sha256": "e4f52599fc7280ac3a6b033474231286b9e771ecd252486485de1765a042d10b"
+      "sha256": "b2391876a806a09c11c1d071cc857cc2f4ef7fe002fd5ec1532e2e7e8339c864",
+      "size": 8072,
+      "normalized_sha256": "b2391876a806a09c11c1d071cc857cc2f4ef7fe002fd5ec1532e2e7e8339c864"
     },
     "scripts/colab_setup.py": {
       "role": "index",
@@ -3518,9 +3536,9 @@
     },
     "tests/core/test_workflow_cli.py": {
       "role": "observe",
-      "sha256": "c0933c0a68353c67d6c65734e7294c231781ef6a892edb95b4be2e6da89287d6",
-      "size": 9755,
-      "normalized_sha256": "c0933c0a68353c67d6c65734e7294c231781ef6a892edb95b4be2e6da89287d6"
+      "sha256": "d977d22a0b7fb34cf7bcc631d33e0397dce060f7ca3d549720e25a2de70866a9",
+      "size": 13143,
+      "normalized_sha256": "d977d22a0b7fb34cf7bcc631d33e0397dce060f7ca3d549720e25a2de70866a9"
     },
     "tests/data/test_chineseeeg2_littleprince.py": {
       "role": "observe",

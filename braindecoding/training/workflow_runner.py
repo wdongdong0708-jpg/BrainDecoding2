@@ -82,12 +82,53 @@ CANONICAL_SUBJECTS: dict[str, tuple[str, ...]] = {
     "pallier2025": tuple(pallier2025.SUBJECTS),
 }
 
+WORKFLOW_STAGES: tuple[str, ...] = ("word", "context", "revision")
+
+STAGE_DISPLAY_NAMES: dict[str, str] = {
+    "word": "Stage 1: Word Encoder (CNN)",
+    "context": "Stage 2.1: Context Transformer (CNN + 16L Full Window)",
+    "revision": "Stage 2.2: Rolling Revision (CNN + 16L Local Window K0/K1/K2)",
+}
+
+_STAGE_ALIASES: dict[str, str] = {
+    "1": "word",
+    "stage1": "word",
+    "stage_1": "word",
+    "word": "word",
+    "word_encoder": "word",
+    "2.1": "context",
+    "stage2.1": "context",
+    "stage_2_1": "context",
+    "context": "context",
+    "context_transformer": "context",
+    "transformer": "context",
+    "2.2": "revision",
+    "stage2.2": "revision",
+    "stage_2_2": "revision",
+    "revision": "revision",
+    "rolling_revision": "revision",
+}
+
 DEFAULT_STAGE_CONFIGS: dict[tuple[str, str], str] = {
     ("pallier2025", "word"): "configs/training/pallier2025_word_encoder.yaml",
+    ("pallier2025", "context"): "configs/training/pallier2025_context_transformer.yaml",
     ("pallier2025", "revision"): "configs/training/pallier2025_rolling_revision.yaml",
     ("chineseeeg2_littleprince", "word"): "configs/training/chineseeeg2_word_encoder.yaml",
+    ("chineseeeg2_littleprince", "context"): "configs/training/chineseeeg2_context_transformer.yaml",
     ("chineseeeg2_littleprince", "revision"): "configs/training/chineseeeg2_rolling_revision.yaml",
 }
+
+
+def normalize_workflow_stage(stage: str | None) -> str:
+    """将用户输入或配置中的阶段标识标准化为 'word' | 'context' | 'revision'。"""
+    if stage is None:
+        return "word"
+    token = str(stage).strip().lower()
+    if token in _STAGE_ALIASES:
+        return _STAGE_ALIASES[token]
+    raise ValueError(
+        f"不支持的训练阶段 {stage!r}，可选：{WORKFLOW_STAGES}（或别名 1 / 2.1 / 2.2）"
+    )
 
 
 def canonical_subjects_for_dataset(dataset: str) -> tuple[str, ...]:
@@ -231,6 +272,7 @@ def workflow_output_directory(
     """计算受试者子集隔离的实验输出目录。"""
     if output_dir is not None:
         return Path(output_dir).resolve()
+    stage = normalize_workflow_stage(stage)
     stage_dir = f"smoke_{stage}" if mode == "smoke" else stage
     return (
         results_root()
@@ -247,27 +289,49 @@ def _infer_dataset_and_stage_from_yaml(
     dataset: str | None = None,
     stage: str | None = None,
 ) -> tuple[str, str]:
-    """从 YAML 配置推断或核验 dataset 与 stage。"""
+    """从 YAML 配置推断或核验 dataset 与 stage（支持 word / context / revision）。"""
+    wf_block = raw_cfg.get("workflow") if isinstance(raw_cfg.get("workflow"), dict) else {}
     exp = raw_cfg.get("experiment") if isinstance(raw_cfg.get("experiment"), dict) else {}
     ds_block = raw_cfg.get("dataset") if isinstance(raw_cfg.get("dataset"), dict) else {}
     model_block = raw_cfg.get("model") if isinstance(raw_cfg.get("model"), dict) else {}
 
-    yaml_dataset = exp.get("dataset") or ds_block.get("name")
-    yaml_stage = exp.get("stage")
-    if yaml_stage not in STAGES and "use_transformer" in model_block:
-        yaml_stage = "revision" if bool(model_block.get("use_transformer")) else "word"
+    yaml_dataset = wf_block.get("dataset") or exp.get("dataset") or ds_block.get("name")
+    raw_yaml_stage = wf_block.get("stage") or exp.get("stage")
+    yaml_stage = (
+        normalize_workflow_stage(raw_yaml_stage)
+        if raw_yaml_stage is not None
+        else None
+    )
+    if yaml_stage is None and "use_transformer" in model_block:
+        if not bool(model_block.get("use_transformer")):
+            yaml_stage = "word"
+        else:
+            lwr = model_block.get("local_window_revision")
+            pr = model_block.get("prefix_revision")
+            has_revision = (
+                (isinstance(lwr, dict) and bool(lwr.get("enabled", False)))
+                or (isinstance(pr, dict) and bool(pr.get("enabled", False)))
+            )
+            yaml_stage = "revision" if has_revision else "context"
 
+    norm_explicit_stage = (
+        normalize_workflow_stage(stage) if stage is not None else None
+    )
     if dataset is not None and yaml_dataset and dataset != yaml_dataset:
         raise ValueError(
             f"--dataset={dataset!r} 与配置文件中的 dataset={yaml_dataset!r} 不一致。"
         )
-    if stage is not None and exp.get("stage") in STAGES and stage != exp.get("stage"):
+    if (
+        norm_explicit_stage is not None
+        and raw_yaml_stage is not None
+        and norm_explicit_stage != yaml_stage
+    ):
         raise ValueError(
-            f"--stage={stage!r} 与配置文件中的 stage={exp.get('stage')!r} 不一致。"
+            f"--stage={stage!r} 与配置文件中的 stage={raw_yaml_stage!r} 不一致。"
         )
 
     final_dataset = str(dataset or yaml_dataset or "pallier2025")
-    final_stage = str(stage or yaml_stage or "word")
+    final_stage = str(norm_explicit_stage or yaml_stage or "word")
     return final_dataset, final_stage
 
 
@@ -306,12 +370,11 @@ def build_workflow_config(
         )
     else:
         dataset = str(dataset or "pallier2025")
-        stage = str(stage or "word")
+        stage = normalize_workflow_stage(stage)
 
     if dataset not in DATASETS:
         raise ValueError(f"不支持的数据集 {dataset!r}，可选：{DATASETS}")
-    if stage not in STAGES:
-        raise ValueError(f"不支持的训练阶段 {stage!r}，可选：{STAGES}")
+    stage = normalize_workflow_stage(stage)
 
     if seed is None and explicit_yaml is not None:
         seed = explicit_yaml.get("training", {}).get("seed", 0)
@@ -333,7 +396,8 @@ def build_workflow_config(
         else chinese_task.load_config
     )
     default_source_rel = DEFAULT_STAGE_CONFIGS.get(
-        (dataset, stage), adapter[f"{stage}_source_config"]
+        (dataset, stage),
+        adapter.get(f"{stage}_source_config", adapter["word_source_config"]),
     )
     active_config_path = (
         explicit_cfg_path
@@ -360,8 +424,8 @@ def build_workflow_config(
     )
     if explicit_yaml is None or "model" not in explicit_yaml:
         cfg["model"] = copy.deepcopy(settings["model"])
-    cfg["model"]["use_transformer"] = stage == "revision"
-    if stage == "word":
+    cfg["model"]["use_transformer"] = stage in ("context", "revision")
+    if stage in ("word", "context"):
         cfg["model"].pop("local_window_revision", None)
     if explicit_yaml is None or "text_embedding" not in explicit_yaml:
         cfg["text_embedding"] = copy.deepcopy(settings["text_embedding"])
@@ -388,7 +452,11 @@ def build_workflow_config(
     default_epochs = (
         2
         if mode == "smoke"
-        else int(yaml_epochs if yaml_epochs is not None else common[f"{stage}_epochs"])
+        else int(
+            yaml_epochs
+            if yaml_epochs is not None
+            else common.get(f"{stage}_epochs", common.get("revision_epochs", 30))
+        )
     )
     tc.update(
         seed=seed,
@@ -443,10 +511,9 @@ def build_workflow_config(
     ):
         tc.pop(key, None)
 
-    if stage == "revision":
+    if stage in ("context", "revision"):
         tc.update(
             preserve_complete_groups=bool(yaml_tc.get("preserve_complete_groups", True)),
-            revision_cutoff_policy=str(yaml_tc.get("revision_cutoff_policy", "all")),
             freeze_brain_encoder_epochs=int(
                 yaml_tc.get("freeze_brain_encoder_epochs", common["freeze_brain_encoder_epochs"])
             ),
@@ -455,6 +522,10 @@ def build_workflow_config(
             warm_start_seed=seed,
             warm_start_output_group=cfg["experiment"]["output_group"],
         )
+        if stage == "revision":
+            tc["revision_cutoff_policy"] = str(
+                yaml_tc.get("revision_cutoff_policy", "all")
+            )
         if word_checkpoint:
             tc["pretrained_brain_encoder_checkpoint"] = str(
                 project_path(word_checkpoint)
@@ -474,7 +545,7 @@ def build_workflow_config(
 
     cfg["evaluation"]["selection_metric"] = (
         cfg.get("evaluation", {}).get("selection_metric")
-        or adapter[f"main_selection_metric_{stage}"]
+        or adapter.get(f"main_selection_metric_{stage}", adapter["main_selection_metric_word"])
     )
     cfg["evaluation"]["default_split"] = "val"
     out_dir = workflow_output_directory(
@@ -1091,6 +1162,7 @@ def run_training_workflow(
     seed = int(tc["seed"])
     out = Path(tc["output_dir"])
     revision = stage == "revision"
+    warm_start_stage = stage in ("context", "revision")
 
     if require_cache:
         cache_verification = verify_cache_ready(cfg, splits=("train", "val"))
@@ -1165,7 +1237,7 @@ def run_training_workflow(
     embedding_hash = file_sha256(cfg["cache"]["text_embeddings"])
 
     initialization = None
-    if revision and resume_ckpt_path is None:
+    if warm_start_stage and resume_ckpt_path is None:
         source_ckpt = Path(tc["pretrained_brain_encoder_checkpoint"])
         if source_ckpt.is_file():
             checkpoint = load_checkpoint(source_ckpt)
@@ -1185,7 +1257,7 @@ def run_training_workflow(
             del checkpoint
         elif mode != "smoke":
             raise FileNotFoundError(
-                f"revision 阶段需要已完成同受试者子集的 word 检查点：{source_ckpt}"
+                f"{stage} 阶段需要已完成同受试者子集的 word 检查点：{source_ckpt}"
             )
 
     optimizer = build_adamw_for_modules([model, loss_module], tc)
@@ -1242,9 +1314,10 @@ def run_training_workflow(
 
     sep = "=" * 96
     thin_sep = "-" * 96
+    stage_label = STAGE_DISPLAY_NAMES.get(stage, stage)
     print(
         f"\n{sep}\n"
-        f" BrainDecoding Training  |  dataset={dataset}  |  stage={stage}  |  mode={mode}\n"
+        f" BrainDecoding Training  |  dataset={dataset}  |  stage={stage} ({stage_label})  |  mode={mode}\n"
         f"{thin_sep}\n"
         f" Config File : {cfg['workflow']['config_path']}\n"
         f" GPU / AMP   : {gpu_name} ({gpu_total_gb:.1f} GB)  |  precision={tc['precision']} (TF32=on)\n"
@@ -1256,6 +1329,11 @@ def run_training_workflow(
         f" Output Dir  : {out}",
         flush=True,
     )
+    if initialization:
+        print(
+            f" Warm-Start  : {initialization['path']} (epoch {initialization['epoch']})",
+            flush=True,
+        )
     if resumed_from:
         print(
             f" Resumed     : {resumed_from} (starting from epoch {start_epoch + 1}/{max_epochs})",
@@ -1271,7 +1349,7 @@ def run_training_workflow(
     for epoch in range(start_epoch, max_epochs):
         epoch_started = time.perf_counter()
         train_sampler.set_epoch(epoch)
-        frozen = revision and epoch < int(tc.get("freeze_brain_encoder_epochs", 0))
+        frozen = warm_start_stage and epoch < int(tc.get("freeze_brain_encoder_epochs", 0))
         pallier_task.set_brain_encoder_trainable(model, not frozen)
         epoch_lr = float(optimizer.param_groups[0]["lr"])
 
@@ -1548,3 +1626,1025 @@ def run_training_workflow(
     gc.collect()
     torch.cuda.empty_cache()
     return summary
+
+
+def _compute_encoded_evaluation_metrics(
+    encoded: dict,
+    eval_ds,
+    vocabulary: list[str],
+    vocab50: list[str],
+    cfg: dict,
+    *,
+    stage: str,
+    split: str,
+) -> dict:
+    """基于单次前向编码结果计算多词表规模检索、分受试者拆解与滚动修订各延迟指标。"""
+    from braindecoding.results import load_vocabulary_assets
+
+    dataset = cfg["experiment"]["dataset"]
+    revision = stage == "revision" and "revision_predictions" in encoded
+    manifest_dir = PROJECT_ROOT / "data/manifests" / (
+        "pallier2025" if dataset == "pallier2025" else "chineseeeg2"
+    )
+    manifests = load_vocabulary_assets(manifest_dir)
+
+    primary_preds = (
+        encoded["revision_predictions"][max(encoded["revision_predictions"])]
+        if revision
+        else encoded["predictions"]
+    )
+    if revision:
+        max_delay = max(encoded["revision_predictions"])
+        avail_mask = encoded["revision_availability_masks"][max_delay].bool()
+    else:
+        avail_mask = torch.ones(len(encoded["words"]), dtype=torch.bool)
+
+    eval_preds = primary_preds[avail_mask]
+    eval_targets = encoded["targets"][avail_mask]
+    eval_words = [
+        w for w, keep in zip(encoded["words"], avail_mask.tolist()) if keep
+    ]
+
+    vocab_Sweep: dict[str, dict] = {}
+    for size in (20, 50, 100, 150):
+        cand_words = list(manifests[size]["vocabulary"])
+        m = fixed_vocabulary_retrieval_metrics(
+            eval_preds,
+            eval_targets,
+            eval_words,
+            cand_words,
+            top_ks=(1, 5, 10),
+            vocabulary_name=f"N{size}",
+        )
+        vocab_Sweep[f"N{size}"] = {
+            "label": f"Top-{size} Vocab",
+            "candidate_count": int(size),
+            "supported_candidates": int(m.get("candidate_count", size)),
+            "query_count": int(m.get("query_count", 0)),
+            "macro_top1": float(m.get("macro_recall_at_1", 0.0)),
+            "macro_top5": float(m.get("macro_recall_at_5", 0.0)),
+            "macro_top10": float(m.get("macro_recall_at_10", 0.0)),
+            "micro_top1": float(m.get("micro_recall_at_1", 0.0)),
+            "micro_top5": float(m.get("micro_recall_at_5", 0.0)),
+            "micro_top10": float(m.get("micro_recall_at_10", 0.0)),
+            "mrr": float(m.get("mean_reciprocal_rank", 0.0)),
+            "median_rank": float(m.get("median_rank", float(size) / 2.0)),
+            "chance_top1": float(1.0 / size),
+            "chance_top10": float(min(10.0, float(size)) / size),
+        }
+
+    strict_encoded = (
+        encoded
+        if revision
+        else {
+            **encoded,
+            "revision_predictions": {0: encoded["predictions"]},
+            "revision_availability_masks": {
+                0: torch.ones(len(encoded["words"]), dtype=torch.bool)
+            },
+        }
+    )
+    strict50 = strict_bank_metrics(strict_encoded, eval_ds, vocab50)
+    full_vocab = full_vocabulary_metrics(encoded, eval_ds, vocabulary)
+
+    full_horizon_key = "2" if (revision and "2" in full_vocab.get("horizons", {})) else "0"
+    full_block = full_vocab.get("horizons", {}).get(full_horizon_key, {}).get(
+        "common_targets" if revision else "all_targets", {}
+    )
+    full_cand_count = max(1, int(len(vocabulary)))
+    vocab_Sweep["full_vocab"] = {
+        "label": f"Full Vocab ({full_cand_count})",
+        "candidate_count": full_cand_count,
+        "supported_candidates": full_cand_count,
+        "query_count": int(full_block.get("query_count", len(eval_words))),
+        "macro_top1": float(full_block.get("word_macro_recall_at_1", 0.0)),
+        "macro_top5": float(full_block.get("word_macro_recall_at_5", 0.0)),
+        "macro_top10": float(
+            full_block.get(
+                "subject_equal_macro_recall_at_10",
+                full_vocab.get("selection_score", 0.0),
+            )
+        ),
+        "micro_top1": float(full_block.get("micro_recall_at_1", 0.0)),
+        "micro_top5": float(full_block.get("micro_recall_at_5", 0.0)),
+        "micro_top10": float(full_block.get("micro_recall_at_10", 0.0)),
+        "mrr": float(full_block.get("mean_reciprocal_rank", 0.0)),
+        "median_rank": float(full_block.get("median_rank", full_cand_count / 2.0)),
+        "chance_top1": float(1.0 / full_cand_count),
+        "chance_top10": float(min(10.0, float(full_cand_count)) / full_cand_count),
+    }
+
+    subject_col = eval_ds.table["subject_id"].astype(str).to_numpy()
+    avail_np = avail_mask.cpu().numpy()
+    per_subject: list[dict] = []
+    for subj in cfg["dataset"]["subjects"]:
+        subj_mask_np = (subject_col == str(subj)) & avail_np
+        if not subj_mask_np.any():
+            continue
+        subj_mask_t = torch.from_numpy(subj_mask_np)
+        subj_words = [
+            w for w, keep in zip(encoded["words"], subj_mask_np.tolist()) if keep
+        ]
+        m50 = fixed_vocabulary_retrieval_metrics(
+            primary_preds[subj_mask_t],
+            encoded["targets"][subj_mask_t],
+            subj_words,
+            vocab50,
+            top_ks=(1, 5, 10),
+            vocabulary_name=f"{subj}_N50",
+        )
+        per_subject.append(
+            {
+                "subject_id": str(subj),
+                "total_events": int(subj_mask_np.sum()),
+                "vocab50_queries": int(m50.get("query_count", 0)),
+                "macro_top10": float(m50.get("macro_recall_at_10", 0.0)),
+                "micro_top10": float(m50.get("micro_recall_at_10", 0.0)),
+                "macro_top1": float(m50.get("macro_recall_at_1", 0.0)),
+                "micro_top1": float(m50.get("micro_recall_at_1", 0.0)),
+                "mrr": float(m50.get("mean_reciprocal_rank", 0.0)),
+                "median_rank": float(m50.get("median_rank", 25.0)),
+            }
+        )
+
+    revision_horizons: dict[str, dict] = {}
+    if revision:
+        for delay in sorted(encoded["revision_predictions"]):
+            d_key = str(delay)
+            s50_common = strict50.get(d_key, {}).get("common_targets", {})
+            s50_all = strict50.get(d_key, {}).get("all_targets", {})
+            fv_common = (
+                full_vocab.get("horizons", {})
+                .get(d_key, {})
+                .get("common_targets", {})
+            )
+            revision_horizons[f"K{delay}"] = {
+                "delay": int(delay),
+                "label": f"K{delay} (+{delay}w)",
+                "common_vocab50_macro_top10": float(
+                    s50_common.get("macro_recall_at_10", 0.0)
+                ),
+                "common_vocab50_micro_top10": float(
+                    s50_common.get("micro_recall_at_10", 0.0)
+                ),
+                "common_vocab50_macro_top1": float(
+                    s50_common.get("macro_recall_at_1", 0.0)
+                ),
+                "all_vocab50_macro_top10": float(
+                    s50_all.get("macro_recall_at_10", 0.0)
+                ),
+                "common_full_vocab_macro_top10": float(
+                    fv_common.get("subject_equal_macro_recall_at_10", 0.0)
+                ),
+                "common_full_vocab_micro_top10": float(
+                    fv_common.get("micro_recall_at_10", 0.0)
+                ),
+            }
+
+    return {
+        "split": split,
+        "total_events": int(len(eval_ds)),
+        "evaluated_events": int(avail_mask.sum().item()),
+        "vocabulary_sweep": vocab_Sweep,
+        "per_subject": per_subject,
+        "revision_horizons": revision_horizons,
+        "strict_vocab50": strict50,
+        "full_vocabulary": full_vocab,
+    }
+
+
+def _print_evaluation_report(eval_result: dict) -> None:
+    """在终端或 Notebook 输出格式化的评估指标报表。"""
+    sep = "=" * 96
+    thin_sep = "-" * 96
+    dataset = eval_result["dataset"]
+    stage = eval_result["stage"]
+    stage_label = STAGE_DISPLAY_NAMES.get(stage, stage)
+    split = eval_result["split"].upper()
+    subset = eval_result["subset"]
+    ckpt_info = eval_result["checkpoint"]
+    sweep = eval_result["metrics"]["vocabulary_sweep"]
+
+    print(
+        f"\n{sep}\n"
+        f" BrainDecoding Evaluation  |  dataset={dataset}  |  split={split}  |  {stage_label}\n"
+        f"{thin_sep}\n"
+        f" Checkpoint  : {ckpt_info['path']} (epoch {ckpt_info['epoch']})\n"
+        f" Subset      : {subset['subset_tag']} ({subset['subject_count']}/{subset['total_canonical_subjects']} subjects)  |  seed={eval_result['seed']}\n"
+        f" Split Rows  : {eval_result['metrics']['total_events']:,} total events ({eval_result['metrics']['evaluated_events']:,} evaluated)\n"
+        f"{sep}\n"
+        f" {'Vocabulary Scale':<22} | {'Queries':>8} | {'Macro Top10':>11} | {'Micro Top10':>11} | {'Macro Top1':>10} | {'MRR':>8} | {'Med Rank':>8} | {'Chance Top10':>12}\n"
+        f"{'-' * 24}+{'-' * 10}+{'-' * 13}+{'-' * 13}+{'-' * 12}+{'-' * 10}+{'-' * 10}+{'-' * 14}",
+        flush=True,
+    )
+    for key in ("N20", "N50", "N100", "N150", "full_vocab"):
+        if key not in sweep:
+            continue
+        row = sweep[key]
+        print(
+            f" {row['label']:<22} | {row['query_count']:8,d} | {row['macro_top10'] * 100.0:10.2f}% | {row['micro_top10'] * 100.0:10.2f}% |"
+            f" {row['macro_top1'] * 100.0:9.2f}% | {row['mrr'] * 100.0:7.2f}% | {row['median_rank']:8.1f} | {row['chance_top10'] * 100.0:11.2f}%",
+            flush=True,
+        )
+
+    horizons = eval_result["metrics"].get("revision_horizons") or {}
+    if horizons:
+        print(
+            f"{thin_sep}\n"
+            f" Rolling Revision Horizons (Common Targets across K0 / K1 / K2):\n"
+            f" {'Horizon':<16} | {'50-Word Macro Top10':>20} | {'50-Word Micro Top10':>20} | {'50-Word Macro Top1':>19} | {'Full-Vocab Top10':>17}\n"
+            f"{'-' * 18}+{'-' * 22}+{'-' * 22}+{'-' * 21}+{'-' * 19}",
+            flush=True,
+        )
+        for h_key in ("K0", "K1", "K2"):
+            if h_key not in horizons:
+                continue
+            h = horizons[h_key]
+            print(
+                f" {h['label']:<16} | {h['common_vocab50_macro_top10'] * 100.0:19.2f}% | {h['common_vocab50_micro_top10'] * 100.0:19.2f}% |"
+                f" {h['common_vocab50_macro_top1'] * 100.0:18.2f}% | {h['common_full_vocab_macro_top10'] * 100.0:16.2f}%",
+                flush=True,
+            )
+
+    per_subject = eval_result["metrics"].get("per_subject") or []
+    if len(per_subject) > 1:
+        print(
+            f"{thin_sep}\n"
+            f" Per-Subject 50-Word Retrieval Breakdown ({split}):\n"
+            f" {'Subject':<12} | {'Events':>8} | {'50w Queries':>11} | {'Macro Top10':>12} | {'Micro Top10':>12} | {'Macro Top1':>11} | {'Median Rank':>11}\n"
+            f"{'-' * 14}+{'-' * 10}+{'-' * 13}+{'-' * 14}+{'-' * 14}+{'-' * 13}+{'-' * 13}",
+            flush=True,
+        )
+        for s in per_subject:
+            print(
+                f" {s['subject_id']:<12} | {s['total_events']:8,d} | {s['vocab50_queries']:11,d} |"
+                f" {s['macro_top10'] * 100.0:11.2f}% | {s['micro_top10'] * 100.0:11.2f}% |"
+                f" {s['macro_top1'] * 100.0:10.2f}% | {s['median_rank']:11.1f}",
+                flush=True,
+            )
+    print(f"{sep}\n", flush=True)
+
+
+def plot_evaluation_figures(
+    eval_result: dict,
+    figures_dir: str | Path,
+) -> dict[str, str]:
+    """生成单阶段 2x2 综合评估看板图（PNG 与 PDF），返回生成的文件路径字典。"""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(figures_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    dataset = eval_result["dataset"]
+    stage = eval_result["stage"]
+    stage_title = STAGE_DISPLAY_NAMES.get(stage, stage)
+    split = eval_result["split"].upper()
+    subset_tag = eval_result["subset"]["subset_tag"]
+    seed = eval_result["seed"]
+    metrics = eval_result["metrics"]
+    sweep = metrics["vocabulary_sweep"]
+    per_subject = metrics.get("per_subject") or []
+    horizons = metrics.get("revision_horizons") or {}
+    history = eval_result.get("training_history") or []
+
+    primary_color = "#1f77b4" if dataset == "pallier2025" else "#6a3d9a"
+    secondary_color = "#ff7f0e"
+    accent_color = "#2ca02c"
+
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10.5), dpi=160)
+    fig.suptitle(
+        f"BrainDecoding {split} Evaluation Dashboard  |  {dataset}  |  {stage_title}\n"
+        f"Subset: {subset_tag} (seed={seed}, checkpoint epoch={eval_result['checkpoint']['epoch']})",
+        fontsize=13,
+        fontweight="bold",
+        y=0.98,
+    )
+
+    # Panel A: Retrieval Accuracy Across Vocabulary Sizes
+    ax_a = axes[0, 0]
+    keys = [k for k in ("N20", "N50", "N100", "N150", "full_vocab") if k in sweep]
+    x = np.arange(len(keys))
+    width = 0.26
+    macro_top10 = [sweep[k]["macro_top10"] * 100.0 for k in keys]
+    micro_top10 = [sweep[k]["micro_top10"] * 100.0 for k in keys]
+    macro_top1 = [sweep[k]["macro_top1"] * 100.0 for k in keys]
+    chance_top10 = [sweep[k]["chance_top10"] * 100.0 for k in keys]
+    labels = [sweep[k]["label"].replace(" (", "\n(") for k in keys]
+
+    bars1 = ax_a.bar(x - width, macro_top10, width, label="Macro Top-10 (%)", color=primary_color, alpha=0.9)
+    bars2 = ax_a.bar(x, micro_top10, width, label="Micro Top-10 (%)", color=secondary_color, alpha=0.85)
+    bars3 = ax_a.bar(x + width, macro_top1, width, label="Macro Top-1 (%)", color=accent_color, alpha=0.85)
+    ax_a.plot(x, chance_top10, "k--o", linewidth=1.4, markersize=4, label="Random Chance (Top-10)")
+
+    for bar in bars1:
+        h = bar.get_height()
+        ax_a.annotate(
+            f"{h:.1f}%",
+            xy=(bar.get_x() + bar.get_width() / 2, h),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            fontweight="bold",
+        )
+    ax_a.set_title(f"(A) Retrieval Accuracy by Vocabulary Size ({split})", fontsize=11, fontweight="bold")
+    ax_a.set_xticks(x)
+    ax_a.set_xticklabels(labels, fontsize=9)
+    ax_a.set_ylabel("Accuracy (%)", fontsize=10)
+    ax_a.set_ylim(0, max(max(macro_top10 + micro_top10 + chance_top10, default=50.0) * 1.18, 20.0))
+    ax_a.grid(axis="y", linestyle=":", alpha=0.5)
+    ax_a.legend(loc="upper right", fontsize=8.5)
+
+    # Panel B: Per-Subject 50-Word Decoding Accuracy
+    ax_b = axes[0, 1]
+    if per_subject:
+        subj_ids = [s["subject_id"] for s in per_subject]
+        s_top10 = [s["macro_top10"] * 100.0 for s in per_subject]
+        s_top1 = [s["macro_top1"] * 100.0 for s in per_subject]
+        sx = np.arange(len(subj_ids))
+        sw = 0.36
+        b_s10 = ax_b.bar(sx - sw / 2, s_top10, sw, label="50-Word Macro Top-10 (%)", color=primary_color, alpha=0.88)
+        ax_b.bar(sx + sw / 2, s_top1, sw, label="50-Word Macro Top-1 (%)", color=accent_color, alpha=0.85)
+        mean_top10 = float(np.mean(s_top10))
+        ax_b.axhline(mean_top10, color=primary_color, linestyle="-.", linewidth=1.3, label=f"Mean Top-10 ({mean_top10:.1f}%)")
+        ax_b.axhline(20.0, color="gray", linestyle="--", linewidth=1.2, label="Chance Top-10 (20.0%)")
+        for bar in b_s10:
+            h = bar.get_height()
+            ax_b.annotate(
+                f"{h:.1f}",
+                xy=(bar.get_x() + bar.get_width() / 2, h),
+                xytext=(0, 2),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=7.5,
+            )
+        ax_b.set_xticks(sx)
+        ax_b.set_xticklabels(subj_ids, rotation=25 if len(subj_ids) > 6 else 0, fontsize=9)
+        ax_b.set_ylim(0, max(max(s_top10, default=30.0) * 1.2, 35.0))
+        ax_b.legend(loc="upper right", fontsize=8.5)
+    else:
+        ax_b.text(0.5, 0.5, "No per-subject data available", ha="center", va="center", transform=ax_b.transAxes)
+    ax_b.set_title(f"(B) Per-Subject 50-Word Retrieval Accuracy ({split})", fontsize=11, fontweight="bold")
+    ax_b.set_ylabel("Accuracy (%)", fontsize=10)
+    ax_b.grid(axis="y", linestyle=":", alpha=0.5)
+
+    # Panel C: Training Convergence Curve (if training_summary.json history exists)
+    ax_c = axes[1, 0]
+    if history:
+        ep_nums = [int(r["epoch"]) for r in history]
+        tr_loss = [float(r["train_loss"]) for r in history]
+        val_50 = [float(r.get("selection_score_legacy50", 0.0)) * 100.0 for r in history]
+        val_full = [float(r.get("selection_score_full_vocab", 0.0)) * 100.0 for r in history]
+
+        ax_c_right = ax_c.twinx()
+        l1 = ax_c.plot(ep_nums, tr_loss, "-o", color="#d62728", linewidth=1.8, markersize=4, label="Train Loss")
+        l2 = ax_c_right.plot(ep_nums, val_50, "-s", color=primary_color, linewidth=2.0, markersize=4.5, label="Val 50-Word Top-10 (%)")
+        l3 = ax_c_right.plot(ep_nums, val_full, "--^", color=accent_color, linewidth=1.6, markersize=4, label="Val Full-Vocab Top-10 (%)")
+
+        best_ep = int(eval_result["checkpoint"].get("epoch", 0))
+        if best_ep in ep_nums:
+            ax_c.axvline(best_ep, color="black", linestyle=":", linewidth=1.3, label=f"Best Epoch ({best_ep})")
+
+        ax_c.set_xlabel("Epoch", fontsize=10)
+        ax_c.set_ylabel("Train Loss (SigLIP)", color="#d62728", fontsize=10)
+        ax_c_right.set_ylabel("Validation Top-10 Accuracy (%)", color=primary_color, fontsize=10)
+        lines = l1 + l2 + l3
+        labels_c = [line.get_label() for line in lines]
+        ax_c.legend(lines, labels_c, loc="center right", fontsize=8.5)
+        ax_c.grid(True, linestyle=":", alpha=0.5)
+    else:
+        ax_c.text(
+            0.5,
+            0.5,
+            "Training history not found in output directory\n(Checkpoint evaluated standalone)",
+            ha="center",
+            va="center",
+            fontsize=10,
+            transform=ax_c.transAxes,
+        )
+    ax_c.set_title("(C) Training Loss & Validation Accuracy Progression", fontsize=11, fontweight="bold")
+
+    # Panel D: Rolling Revision Horizons (for stage 2.2) OR Detailed Metric Summary (for stage 1 / 2.1)
+    ax_d = axes[1, 1]
+    if horizons and all(k in horizons for k in ("K0", "K1", "K2")):
+        h_keys = ["K0", "K1", "K2"]
+        hx = np.arange(len(h_keys))
+        hw = 0.34
+        h_50 = [horizons[k]["common_vocab50_macro_top10"] * 100.0 for k in h_keys]
+        h_full = [horizons[k]["common_full_vocab_macro_top10"] * 100.0 for k in h_keys]
+        h_labels = [horizons[k]["label"] for k in h_keys]
+
+        b_h1 = ax_d.bar(hx - hw / 2, h_50, hw, label="50-Word Common Macro Top-10 (%)", color=primary_color, alpha=0.9)
+        b_h2 = ax_d.bar(hx + hw / 2, h_full, hw, label="Full-Vocab Common Top-10 (%)", color=secondary_color, alpha=0.88)
+        for bar in list(b_h1) + list(b_h2):
+            h = bar.get_height()
+            ax_d.annotate(
+                f"{h:.2f}%",
+                xy=(bar.get_x() + bar.get_width() / 2, h),
+                xytext=(0, 3),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8.5,
+                fontweight="bold",
+            )
+        delta_50 = h_50[-1] - h_50[0]
+        ax_d.set_title(
+            f"(D) Stage 2.2 Rolling Revision Gain: K2 - K0 = {delta_50:+.2f}% (50-Word)",
+            fontsize=11,
+            fontweight="bold",
+        )
+        ax_d.set_xticks(hx)
+        ax_d.set_xticklabels(h_labels, fontsize=9.5)
+        ax_d.set_ylabel("Macro Top-10 Accuracy (%)", fontsize=10)
+        ax_d.set_ylim(0, max(max(h_50 + h_full, default=30.0) * 1.22, 25.0))
+        ax_d.legend(loc="upper left", fontsize=8.5)
+        ax_d.grid(axis="y", linestyle=":", alpha=0.5)
+    else:
+        n50 = sweep.get("N50", {})
+        fv = sweep.get("full_vocab", {})
+        metric_names = ["Macro Top-10", "Micro Top-10", "Macro Top-5", "Macro Top-1", "MRR"]
+        vals_50 = [
+            n50.get("macro_top10", 0.0) * 100.0,
+            n50.get("micro_top10", 0.0) * 100.0,
+            n50.get("macro_top5", 0.0) * 100.0,
+            n50.get("macro_top1", 0.0) * 100.0,
+            n50.get("mrr", 0.0) * 100.0,
+        ]
+        vals_fv = [
+            fv.get("macro_top10", 0.0) * 100.0,
+            fv.get("micro_top10", 0.0) * 100.0,
+            fv.get("macro_top5", 0.0) * 100.0,
+            fv.get("macro_top1", 0.0) * 100.0,
+            fv.get("mrr", 0.0) * 100.0,
+        ]
+        mx = np.arange(len(metric_names))
+        mw = 0.35
+        bm1 = ax_d.bar(mx - mw / 2, vals_50, mw, label="50-Word Candidate Pool", color=primary_color, alpha=0.9)
+        bm2 = ax_d.bar(mx + mw / 2, vals_fv, mw, label="Full Training Vocabulary", color=secondary_color, alpha=0.88)
+        for bar in list(bm1) + list(bm2):
+            h = bar.get_height()
+            ax_d.annotate(
+                f"{h:.1f}%",
+                xy=(bar.get_x() + bar.get_width() / 2, h),
+                xytext=(0, 2),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+        ax_d.set_title(f"(D) Detailed Retrieval Profile: 50-Word vs Full Vocabulary ({split})", fontsize=11, fontweight="bold")
+        ax_d.set_xticks(mx)
+        ax_d.set_xticklabels(metric_names, fontsize=9)
+        ax_d.set_ylabel("Score (%)", fontsize=10)
+        ax_d.set_ylim(0, max(max(vals_50 + vals_fv, default=30.0) * 1.22, 25.0))
+        ax_d.legend(loc="upper right", fontsize=8.5)
+        ax_d.grid(axis="y", linestyle=":", alpha=0.5)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    png_path = out_dir / f"evaluation_{eval_result['split']}_overview.png"
+    pdf_path = out_dir / f"evaluation_{eval_result['split']}_overview.pdf"
+    fig.savefig(png_path, dpi=160)
+    fig.savefig(pdf_path)
+    plt.close(fig)
+    return {
+        "overview_png": str(png_path),
+        "overview_pdf": str(pdf_path),
+    }
+
+
+def plot_stage_comparison_figure(
+    stage_results: dict[str, dict],
+    figures_dir: str | Path,
+    *,
+    split: str = "val",
+) -> dict[str, str]:
+    """生成阶段 1 (word)、阶段 2.1 (context) 与阶段 2.2 (revision) 的横向对比图。"""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(figures_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ordered_stages = [s for s in WORKFLOW_STAGES if s in stage_results]
+    if not ordered_stages:
+        return {}
+
+    first_res = stage_results[ordered_stages[0]]
+    dataset = first_res["dataset"]
+    subset_tag = first_res["subset"]["subset_tag"]
+    seed = first_res["seed"]
+    split_upper = split.upper()
+
+    stage_colors = {
+        "word": "#4e79a7",
+        "context": "#f28e2b",
+        "revision": "#59a14f",
+    }
+    short_labels = {
+        "word": "Stage 1: Word\n(CNN Only)",
+        "context": "Stage 2.1: Context\n(CNN + 16L Full Window)",
+        "revision": "Stage 2.2: Revision\n(CNN + 16L Local K2)",
+    }
+
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(14.5, 5.8), dpi=160)
+    fig.suptitle(
+        f"BrainDecoding Multi-Stage Comparison ({split_upper})  |  dataset={dataset}  |  subset={subset_tag} (seed={seed})",
+        fontsize=13,
+        fontweight="bold",
+        y=0.98,
+    )
+
+    # Left panel: 50-Word & Full-Vocab Core Metrics by Stage
+    metric_defs = [
+        ("N50", "macro_top10", "50-Word\nMacro Top-10"),
+        ("N50", "micro_top10", "50-Word\nMicro Top-10"),
+        ("N50", "macro_top1", "50-Word\nMacro Top-1"),
+        ("full_vocab", "macro_top10", "Full-Vocab\nMacro Top-10"),
+    ]
+    mx = np.arange(len(metric_defs))
+    bar_w = 0.75 / max(1, len(ordered_stages))
+
+    for idx, st in enumerate(ordered_stages):
+        res = stage_results[st]
+        sw = res["metrics"]["vocabulary_sweep"]
+        vals = [
+            float(sw.get(v_key, {}).get(m_key, 0.0)) * 100.0
+            for v_key, m_key, _ in metric_defs
+        ]
+        offset = (idx - (len(ordered_stages) - 1) / 2.0) * bar_w
+        bars = ax_left.bar(
+            mx + offset,
+            vals,
+            bar_w,
+            label=STAGE_DISPLAY_NAMES.get(st, st),
+            color=stage_colors.get(st, "#333333"),
+            alpha=0.9,
+        )
+        for bar in bars:
+            h = bar.get_height()
+            ax_left.annotate(
+                f"{h:.1f}%",
+                xy=(bar.get_x() + bar.get_width() / 2, h),
+                xytext=(0, 3),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                fontweight="bold",
+            )
+
+    ax_left.set_title(f"(A) Stage Comparison on Core Retrieval Metrics ({split_upper})", fontsize=11, fontweight="bold")
+    ax_left.set_xticks(mx)
+    ax_left.set_xticklabels([label for _, _, label in metric_defs], fontsize=9.5)
+    ax_left.set_ylabel("Accuracy (%)", fontsize=10)
+    ax_left.set_ylim(0, max(40.0, ax_left.get_ylim()[1] * 1.18))
+    ax_left.grid(axis="y", linestyle=":", alpha=0.5)
+    ax_left.legend(loc="upper right", fontsize=8.5)
+
+    # Right panel: Scaling Curve Across Vocabulary Sizes (N=20, 50, 100, 150, Full Vocab)
+    scale_keys = ["N20", "N50", "N100", "N150", "full_vocab"]
+    sx = np.arange(len(scale_keys))
+    scale_labels = ["N=20", "N=50", "N=100", "N=150", "Full Vocab"]
+
+    for st in ordered_stages:
+        res = stage_results[st]
+        sw = res["metrics"]["vocabulary_sweep"]
+        y_vals = [float(sw.get(k, {}).get("macro_top10", 0.0)) * 100.0 for k in scale_keys]
+        ax_right.plot(
+            sx,
+            y_vals,
+            "-o",
+            linewidth=2.2,
+            markersize=6,
+            color=stage_colors.get(st, "#333333"),
+            label=short_labels.get(st, st).replace("\n", " "),
+        )
+        for x_i, y_v in zip(sx, y_vals):
+            ax_right.annotate(
+                f"{y_v:.1f}%",
+                xy=(x_i, y_v),
+                xytext=(0, 6),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8,
+            )
+
+    first_sw = first_res["metrics"]["vocabulary_sweep"]
+    chance_curve = [float(first_sw.get(k, {}).get("chance_top10", 0.0)) * 100.0 for k in scale_keys]
+    ax_right.plot(sx, chance_curve, "k--", linewidth=1.3, label="Random Chance (Top-10)")
+
+    ax_right.set_title(f"(B) Macro Top-10 Scaling Across Vocabulary Sizes ({split_upper})", fontsize=11, fontweight="bold")
+    ax_right.set_xticks(sx)
+    ax_right.set_xticklabels(scale_labels, fontsize=9.5)
+    ax_right.set_ylabel("Macro Top-10 Accuracy (%)", fontsize=10)
+    ax_right.set_ylim(0, max(60.0, ax_right.get_ylim()[1] * 1.15))
+    ax_right.grid(True, linestyle=":", alpha=0.5)
+    ax_right.legend(loc="upper right", fontsize=8.5)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
+    png_path = out_dir / f"stage_comparison_{split}.png"
+    pdf_path = out_dir / f"stage_comparison_{split}.pdf"
+    fig.savefig(png_path, dpi=160)
+    fig.savefig(pdf_path)
+    plt.close(fig)
+    return {
+        "stage_comparison_png": str(png_path),
+        "stage_comparison_pdf": str(pdf_path),
+    }
+
+
+def _evaluate_single_stage(
+    dataset: str | None = None,
+    *,
+    stage: str | None = None,
+    seed: int | None = 0,
+    split: str = "val",
+    subject: str | None = None,
+    num_subjects: int | None = None,
+    subjects: str | Iterable[str] | None = None,
+    eval_batch_size: int | None = None,
+    num_workers: int | None = None,
+    precision: str | None = None,
+    require_cache: bool = False,
+    checkpoint_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    config_path: str | Path | None = None,
+    plot: bool = True,
+    show_progress: bool = True,
+    max_eval_rows: int | None = None,
+) -> dict:
+    """对单个训练阶段（word / context / revision）执行验证集或测试集评估并生成图表。"""
+    if split not in {"val", "test"}:
+        raise ValueError(f"评估 split 只能是 'val' 或 'test'，收到：{split!r}")
+
+    cfg, subset_spec = build_workflow_config(
+        dataset,
+        stage=stage,
+        seed=seed,
+        subject=subject,
+        num_subjects=num_subjects,
+        subjects=subjects,
+        eval_batch_size=eval_batch_size,
+        num_workers=num_workers,
+        precision=precision,
+        mode="train",
+        output_dir=output_dir,
+        config_path=config_path,
+    )
+    dataset = subset_spec["dataset"]
+    stage = cfg["workflow"]["stage"]
+    tc = cfg["training"]
+    seed = int(tc["seed"])
+    out = Path(tc["output_dir"])
+
+    if checkpoint_path is not None:
+        ckpt_file = Path(checkpoint_path).resolve()
+        if not ckpt_file.is_file():
+            raise FileNotFoundError(f"指定的评估检查点不存在：{ckpt_file}")
+        if output_dir is None:
+            out = ckpt_file.parent
+    else:
+        ckpt_file = out / "best.ckpt"
+        if not ckpt_file.is_file():
+            ckpt_file = out / "best.pt"
+        if not ckpt_file.is_file():
+            smoke_dir = workflow_output_directory(
+                dataset, stage, subset_spec["subset_tag"], seed, mode="smoke"
+            )
+            smoke_ckpt = smoke_dir / "best.ckpt"
+            if not smoke_ckpt.is_file():
+                smoke_ckpt = smoke_dir / "best.pt"
+            if smoke_ckpt.is_file():
+                ckpt_file = smoke_ckpt
+                if output_dir is None:
+                    out = smoke_dir
+        if not ckpt_file.is_file():
+            raise FileNotFoundError(
+                f"未找到阶段 {stage} ({STAGE_DISPLAY_NAMES.get(stage, stage)}) 的训练检查点：{out / 'best.ckpt'}。"
+                f"请先完成该阶段的训练，或通过 --checkpoint 显式指定检查点路径。"
+            )
+
+    if require_cache:
+        cache_verification = verify_cache_ready(cfg, splits=(split,))
+    else:
+        try:
+            cache_verification = verify_cache_ready(cfg, splits=(split,))
+        except FileNotFoundError:
+            run_cache_workflow(
+                dataset,
+                subject=subject,
+                num_subjects=num_subjects,
+                subjects=subjects,
+                include_test=(split == "test"),
+                force=False,
+                config_path=config_path,
+            )
+            cache_verification = verify_cache_ready(cfg, splits=(split,))
+
+    device = choose_device(tc.get("device", "auto"))
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+    set_seed(seed)
+    task = pallier_task if dataset == "pallier2025" else chinese_task
+    read_fn = task.dataset_module.load_event_table
+    build_fn = task.build_dataset
+    selected_subjects = cfg["dataset"]["subjects"]
+
+    train_table = read_fn(
+        cfg["cache"]["event_table"],
+        split="train",
+        subjects=selected_subjects,
+        trainable_only=True,
+    )
+    eval_table = read_fn(
+        cfg["cache"]["event_table"],
+        split=split,
+        subjects=selected_subjects,
+        trainable_only=True,
+    )
+    if max_eval_rows is not None:
+        eval_table = limit_rows(eval_table, int(max_eval_rows))
+    if len(eval_table) <= 0:
+        raise ValueError(f"数据集 {dataset} 在划分 {split!r} 与受试者 {selected_subjects} 上的事件数为 0。")
+
+    eval_ds = build_fn(cfg, eval_table)
+    grp_col = group_column(cfg)
+    eval_bs = int(tc.get("eval_batch_size", tc["batch_size"]))
+    eval_loader, _ = make_loader(
+        eval_ds,
+        tc,
+        shuffle=False,
+        group_column=grp_col,
+        batch_size=eval_bs,
+    )
+
+    vocabulary = sorted(set(train_table["normalized_word"].astype(str)))
+    vocab50 = list(
+        pallier_task.frozen_vocabulary()
+        if dataset == "pallier2025"
+        else chinese_task.frozen_vocabulary(cfg["cache"]["event_table"])
+    )
+
+    checkpoint = load_checkpoint(ckpt_file, map_location="cpu")
+    model_cfg = checkpoint.get("model_config", cfg["model"])
+    ckpt_subjects = list(checkpoint.get("subject_ids", selected_subjects))
+    subject_count = max(len(ckpt_subjects), eval_ds.subject_count)
+
+    model = build_brain_embedding_model(
+        eval_ds.channel_count,
+        eval_ds.channel_positions,
+        subject_count,
+        model_cfg,
+    ).to(device)
+    model.load_state_dict(checkpoint["model_state"], strict=True)
+
+    amp_enabled = bool(tc.get("amp", True)) and device.type == "cuda"
+    amp_dtype = resolve_amp_dtype(tc)
+    encoded = encode_loader(
+        model,
+        eval_loader,
+        device,
+        amp=amp_enabled,
+        amp_dtype=amp_dtype,
+        show_progress=show_progress,
+        progress_desc=f"Eval [{stage} | {split}]",
+    )
+
+    metrics = _compute_encoded_evaluation_metrics(
+        encoded,
+        eval_ds,
+        vocabulary,
+        vocab50,
+        cfg,
+        stage=stage,
+        split=split,
+    )
+
+    training_history = []
+    summary_path = out / "training_summary.json"
+    if summary_path.is_file():
+        try:
+            summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
+            training_history = list(summary_data.get("history", ()))
+        except Exception:
+            training_history = []
+
+    out.mkdir(parents=True, exist_ok=True)
+    eval_result = {
+        "status": "evaluation_completed",
+        "dataset": dataset,
+        "stage": stage,
+        "stage_display_name": STAGE_DISPLAY_NAMES.get(stage, stage),
+        "split": split,
+        "seed": seed,
+        "precision": tc["precision"],
+        "subset": subset_spec,
+        "checkpoint": {
+            "path": str(ckpt_file),
+            "sha256": file_sha256(ckpt_file),
+            "epoch": int(checkpoint.get("epoch", 0)),
+            "selection": str(checkpoint.get("selection", "legacy50")),
+        },
+        "cache_verification": cache_verification,
+        "metrics": metrics,
+        "training_history": training_history,
+        "output_dir": str(out),
+        "figures": {},
+    }
+
+    _print_evaluation_report(eval_result)
+
+    if plot:
+        figs = plot_evaluation_figures(eval_result, out / "figures")
+        eval_result["figures"].update(figs)
+
+    eval_json_path = out / f"evaluation_{split}.json"
+    save_json(eval_json_path, eval_result)
+    eval_result["evaluation_json"] = str(eval_json_path)
+
+    del model, eval_ds, eval_loader, checkpoint
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    return eval_result
+
+
+def run_evaluation_workflow(
+    dataset: str | None = None,
+    *,
+    stage: str | None = None,
+    seed: int | None = 0,
+    split: str = "val",
+    subject: str | None = None,
+    num_subjects: int | None = None,
+    subjects: str | Iterable[str] | None = None,
+    eval_batch_size: int | None = None,
+    num_workers: int | None = None,
+    precision: str | None = None,
+    require_cache: bool = False,
+    checkpoint_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    config_path: str | Path | None = None,
+    all_stages: bool = False,
+    plot: bool = True,
+    show_progress: bool = True,
+    max_eval_rows: int | None = None,
+) -> dict:
+    """运行验证集 (val) 或测试集 (test) 评估与可视化工作流（支持单阶段或全阶段对比）。"""
+    if split not in {"val", "test"}:
+        raise ValueError(f"评估 split 只能是 'val' 或 'test'，收到：{split!r}")
+
+    if not all_stages:
+        single_res = _evaluate_single_stage(
+            dataset,
+            stage=stage,
+            seed=seed,
+            split=split,
+            subject=subject,
+            num_subjects=num_subjects,
+            subjects=subjects,
+            eval_batch_size=eval_batch_size,
+            num_workers=num_workers,
+            precision=precision,
+            require_cache=require_cache,
+            checkpoint_path=checkpoint_path,
+            output_dir=output_dir,
+            config_path=config_path,
+            plot=plot,
+            show_progress=show_progress,
+            max_eval_rows=max_eval_rows,
+        )
+        if plot:
+            ds_name = single_res["dataset"]
+            sub_tag = single_res["subset"]["subset_tag"]
+            sd = single_res["seed"]
+            discovered: dict[str, dict] = {single_res["stage"]: single_res}
+            for other_st in WORKFLOW_STAGES:
+                if other_st == single_res["stage"]:
+                    continue
+                other_dir = workflow_output_directory(
+                    ds_name, other_st, sub_tag, sd, mode="train"
+                )
+                other_eval_file = other_dir / f"evaluation_{split}.json"
+                if not other_eval_file.is_file():
+                    smoke_other = workflow_output_directory(
+                        ds_name, other_st, sub_tag, sd, mode="smoke"
+                    ) / f"evaluation_{split}.json"
+                    if smoke_other.is_file():
+                        other_eval_file = smoke_other
+                if other_eval_file.is_file():
+                    try:
+                        discovered[other_st] = json.loads(
+                            other_eval_file.read_text(encoding="utf-8")
+                        )
+                    except Exception:
+                        pass
+            if len(discovered) >= 1:
+                comp_figs = plot_stage_comparison_figure(
+                    discovered,
+                    Path(single_res["output_dir"]) / "figures",
+                    split=split,
+                )
+                single_res["figures"].update(comp_figs)
+                save_json(Path(single_res["evaluation_json"]), single_res)
+        return single_res
+
+    base_cfg, subset_spec = build_workflow_config(
+        dataset,
+        stage="word",
+        seed=seed,
+        subject=subject,
+        num_subjects=num_subjects,
+        subjects=subjects,
+        config_path=config_path,
+    )
+    ds_name = subset_spec["dataset"]
+    sub_tag = subset_spec["subset_tag"]
+    sd = int(base_cfg["training"]["seed"])
+
+    available_stages: list[str] = []
+    for st in WORKFLOW_STAGES:
+        for mode_candidate in ("train", "smoke"):
+            cand_dir = workflow_output_directory(
+                ds_name, st, sub_tag, sd, mode=mode_candidate
+            )
+            if (cand_dir / "best.ckpt").is_file() or (cand_dir / "best.pt").is_file():
+                available_stages.append(st)
+                break
+
+    if not available_stages:
+        expected_dir = workflow_output_directory(
+            ds_name, "word", sub_tag, sd, mode="train"
+        )
+        raise FileNotFoundError(
+            f"未找到数据集 {ds_name} (subset={sub_tag}, seed={sd}) 任何已训练阶段的检查点（如 {expected_dir / 'best.ckpt'}）。"
+        )
+
+    stage_results: dict[str, dict] = {}
+    for st in available_stages:
+        stage_results[st] = _evaluate_single_stage(
+            ds_name,
+            stage=st,
+            seed=sd,
+            split=split,
+            subject=subject,
+            num_subjects=num_subjects,
+            subjects=subjects,
+            eval_batch_size=eval_batch_size,
+            num_workers=num_workers,
+            precision=precision,
+            require_cache=require_cache,
+            config_path=None,
+            plot=plot,
+            show_progress=show_progress,
+            max_eval_rows=max_eval_rows,
+        )
+
+    comp_dir = (
+        Path(output_dir).resolve()
+        if output_dir is not None
+        else (
+            results_root()
+            / ds_name
+            / f"evaluation_{split}"
+            / sub_tag
+            / f"seed-{sd:03d}"
+        ).resolve()
+    )
+    comp_dir.mkdir(parents=True, exist_ok=True)
+    comp_figs = {}
+    if plot:
+        comp_figs = plot_stage_comparison_figure(
+            stage_results, comp_dir / "figures", split=split
+        )
+        for st_res in stage_results.values():
+            st_figs = plot_stage_comparison_figure(
+                stage_results, Path(st_res["output_dir"]) / "figures", split=split
+            )
+            st_res["figures"].update(st_figs)
+            save_json(Path(st_res["evaluation_json"]), st_res)
+
+    multi_summary = {
+        "status": "multi_stage_evaluation_completed",
+        "dataset": ds_name,
+        "split": split,
+        "seed": sd,
+        "subset": subset_spec,
+        "evaluated_stages": available_stages,
+        "stages": stage_results,
+        "output_dir": str(comp_dir),
+        "figures": comp_figs,
+    }
+    summary_file = comp_dir / f"multi_stage_evaluation_{split}.json"
+    save_json(summary_file, multi_summary)
+    multi_summary["evaluation_json"] = str(summary_file)
+    return multi_summary
+
