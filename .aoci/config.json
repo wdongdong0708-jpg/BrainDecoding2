@@ -41,12 +41,12 @@
   "line_ending_tolerance": true,
   "cognition_refresh_threshold": 30,
   "overview_delivery": {
-    "chunk_tokens": 7000
+    "chunk_tokens": 20000
   },
   "managed_scope": {
     "version": "managed-scope-policy/v2",
     "profile": "production",
-    "observe_change_policy": "review_required",
+    "observe_change_policy": "informational",
     "approval_mode": "inherit",
     "approval_thresholds": {
       "entry_removal_count": 25,
@@ -132,10 +132,10 @@
       },
       {
         "rule_id": "data-cache",
-        "action": "observe",
+        "action": "exclude",
         "pattern": "data/cache/**",
         "pattern_kind": "glob",
-        "reason": "local derived cache and alignment artifacts are observed data products",
+        "reason": "local derived cache and alignment artifacts are excluded data products",
         "source": "user",
         "created_by": "human",
         "order": 0,
@@ -143,10 +143,10 @@
       },
       {
         "rule_id": "data-results-outputs",
-        "action": "observe",
+        "action": "exclude",
         "pattern": "data/results/**",
         "pattern_kind": "glob",
-        "reason": "experiment result JSONs and exported CSV tables are observed outputs",
+        "reason": "experiment result JSONs and exported CSV tables are excluded outputs",
         "source": "user",
         "created_by": "human",
         "order": 0,
@@ -154,10 +154,10 @@
       },
       {
         "rule_id": "paper-figures",
-        "action": "observe",
+        "action": "exclude",
         "pattern": "paper/figures/**",
         "pattern_kind": "glob",
-        "reason": "rendered publication figure assets are observed outputs",
+        "reason": "rendered publication figure assets are excluded outputs",
         "source": "user",
         "created_by": "human",
         "order": 0,
@@ -165,10 +165,10 @@
       },
       {
         "rule_id": "paper-tables",
-        "action": "observe",
+        "action": "exclude",
         "pattern": "paper/tables/**",
         "pattern_kind": "glob",
-        "reason": "generated LaTeX result tables are observed outputs",
+        "reason": "generated LaTeX result tables are excluded outputs",
         "source": "user",
         "created_by": "human",
         "order": 0,

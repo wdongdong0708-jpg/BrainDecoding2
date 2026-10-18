@@ -404,6 +404,11 @@ def build_workflow_config(
         if explicit_cfg_path is not None
         else resolve_config_path(project_path(default_source_rel))
     )
+    active_yaml = (
+        explicit_yaml
+        if explicit_yaml is not None
+        else load_yaml_with_extends(active_config_path)
+    )
     cfg = loader(active_config_path)
     yaml_tc = dict(cfg.get("training", {}))
 
@@ -417,22 +422,41 @@ def build_workflow_config(
     )
 
     cfg["experiment"]["output_group"] = (
-        explicit_yaml.get("experiment", {}).get("output_group")
-        if explicit_yaml is not None
-        and explicit_yaml.get("experiment", {}).get("output_group")
+        active_yaml.get("experiment", {}).get("output_group")
+        if active_yaml is not None
+        and active_yaml.get("experiment", {}).get("output_group")
         else settings["execution"]["output_group"]
     )
-    if explicit_yaml is None or "model" not in explicit_yaml:
+    if active_yaml is None or "model" not in active_yaml:
         cfg["model"] = copy.deepcopy(settings["model"])
     cfg["model"]["use_transformer"] = stage in ("context", "revision")
     if stage in ("word", "context"):
         cfg["model"].pop("local_window_revision", None)
-    if explicit_yaml is None or "text_embedding" not in explicit_yaml:
+    if active_yaml is None or "text_embedding" not in active_yaml:
         cfg["text_embedding"] = copy.deepcopy(settings["text_embedding"])
-    if explicit_yaml is None or "loss" not in explicit_yaml:
+    if active_yaml is None or "loss" not in active_yaml:
         cfg["loss"] = copy.deepcopy(settings["loss"])
-    if explicit_yaml is None or not explicit_yaml.get("cache", {}).get("text_embeddings"):
+    if active_yaml is None or not active_yaml.get("cache", {}).get("text_embeddings"):
         cfg["cache"]["text_embeddings"] = str(project_path(adapter["embedding_cache"]))
+
+    text_cache_norm = str(cfg["cache"].get("text_embeddings", "")).replace("\\", "/")
+    if "t5_large_layer_0_5" in text_cache_norm or str(
+        cfg.get("text_embedding", {}).get("model_name", "")
+    ) == "t5-large":
+        te = dict(cfg.get("text_embedding", {}))
+        is_t5 = str(te.get("model_name", "")) == "t5-large"
+        cfg["text_embedding"] = {
+            "model_name": "t5-large",
+            "layer_fraction": float(te.get("layer_fraction", 0.5)) if is_t5 else 0.5,
+            "token_aggregation": str(te.get("token_aggregation", "mean")) if is_t5 else "mean",
+            "embedding_dimension": int(te.get("embedding_dimension", 1024)),
+            "batch_size": int(te.get("batch_size", 32)) if is_t5 else 32,
+            "device": str(te.get("device", "cpu")) if is_t5 else "cpu",
+            "local_files_only": bool(te.get("local_files_only", True)),
+            "word_normalization": str(
+                te.get("word_normalization", "canonical_standard_word")
+            ),
+        }
 
     cfg["dataset"]["subjects"] = list(subset_spec["subjects"])
     cfg["dataset"]["allow_subject_subset"] = True
@@ -1022,11 +1046,12 @@ def run_cache_workflow(
                 if len(all_trainable) > 0
                 else subset_table["normalized_word"]
             )
+            if force and Path(cfg["cache"]["text_embeddings"]).is_file():
+                Path(cfg["cache"]["text_embeddings"]).unlink(missing_ok=True)
             text_data.ensure_text_embedding_cache(
                 text_words,
                 cfg["text_embedding"],
                 cfg["cache"]["text_embeddings"],
-                force=force,
             )
             chineseeeg2.ensure_recording_signals(
                 subset_table,
@@ -1057,11 +1082,12 @@ def run_cache_workflow(
                 if len(all_trainable) > 0
                 else subset_table["标准词"]
             )
+            if force and Path(cfg["cache"]["text_embeddings"]).is_file():
+                Path(cfg["cache"]["text_embeddings"]).unlink(missing_ok=True)
             text_data.ensure_text_embedding_cache(
                 text_words,
                 cfg["text_embedding"],
                 cfg["cache"]["text_embeddings"],
-                force=force,
             )
             raw_root = Path(cfg["dataset"]["root"])
             recordings = (

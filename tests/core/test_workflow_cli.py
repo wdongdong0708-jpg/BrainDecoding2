@@ -273,6 +273,16 @@ def test_workflow_config_loads_all_six_stage_yaml_files():
         assert cfg["training"]["learning_rate"] == pytest.approx(0.0004)
         assert cfg["training"]["precision"] == "bf16-mixed"
         assert cfg["model"]["use_transformer"] is (expected_stage in ("context", "revision"))
+        if expected_ds == "pallier2025":
+            assert "t5_large_layer_0_5/embeddings.npz" in cfg["cache"]["text_embeddings"].replace("\\", "/")
+            assert cfg["text_embedding"]["model_name"] == "t5-large"
+            assert cfg["text_embedding"]["layer_fraction"] == pytest.approx(0.5)
+            assert "revision" not in cfg["text_embedding"]
+            cfg_no_explicit, _ = build_workflow_config(
+                expected_ds, stage=expected_stage, seed=1, mode="train"
+            )
+            assert cfg_no_explicit["text_embedding"]["model_name"] == "t5-large"
+            assert "t5_large_layer_0_5/embeddings.npz" in cfg_no_explicit["cache"]["text_embeddings"].replace("\\", "/")
         if expected_stage == "word":
             assert "local_window_revision" not in cfg["model"]
             assert "pretrained_brain_encoder_checkpoint" not in cfg["training"]

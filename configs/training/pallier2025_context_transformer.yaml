@@ -14,23 +14,34 @@ experiment:
   output_group: unified_rolling_v2
 
 cache:
-  text_embeddings: data/cache/derived/pallier2025/text/unified_bge_m3_v1/embeddings.npz
+  text_embeddings: data/cache/derived/pallier2025/text/t5_large_layer_0_5/embeddings.npz
+  # 后续切换 BGE-M3 时改为：
+  # text_embeddings: data/cache/derived/pallier2025/text/unified_bge_m3_v1/embeddings.npz
 
 text_embedding:
-  model_name: BAAI/bge-m3
-  revision: 5617a9f61b028005a4858fdac845db406aefb181
-  backend: auto_model
-  layer_fraction: 1.0
-  token_aggregation: first
-  add_special_tokens: true
-  normalize_embeddings: true
+  model_name: t5-large
+  layer_fraction: 0.5
+  token_aggregation: mean
   embedding_dimension: 1024
-  max_length: 64
-  batch_size: 64
-  dtype: float16
-  device: cuda
+  batch_size: 32
+  device: cpu
   local_files_only: true
   word_normalization: canonical_standard_word
+  # 后续切换 BGE-M3 时改为：
+  # model_name: BAAI/bge-m3
+  # revision: 5617a9f61b028005a4858fdac845db406aefb181
+  # backend: auto_model
+  # layer_fraction: 1.0
+  # token_aggregation: first
+  # add_special_tokens: true
+  # normalize_embeddings: true
+  # embedding_dimension: 1024
+  # max_length: 64
+  # batch_size: 64
+  # dtype: float16
+  # device: cuda
+  # local_files_only: true
+  # word_normalization: canonical_standard_word
 
 model:
   embedding_dimension: 1024
