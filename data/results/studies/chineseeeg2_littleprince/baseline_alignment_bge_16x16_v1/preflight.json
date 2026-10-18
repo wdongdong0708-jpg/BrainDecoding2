@@ -1,0 +1,45 @@
+{
+  "status": "preflight_passed",
+  "population": {
+    "expected_all_vocab50_queries": 6160,
+    "expected_common_vocab50_queries": 5280,
+    "expected_common_rows": 11780,
+    "expected_legacy_word_candidates": 47,
+    "expected_legacy_common_candidates": 46
+  },
+  "expected_supervision_counts": {
+    "0": 81620,
+    "1": 73344,
+    "2": 65320
+  },
+  "source_sha256": {
+    "braindecoding\\chineseeeg_bge_trial.py": "9de1a18b3771a1d6761b176464f969de012e323ddb63d53cbbb9957d73d47885",
+    "configs\\unified_rolling\\chineseeeg2_seed0_bge_16x16_v1.yaml": "a3b0c785fa29ffd70f64309480a44a28263fc4852f46ef3030798667ebe4a9f7",
+    "braindecoding\\config.py": "d6b9e71b1cc3c61c828fb47f8fce1bdb176e717dd5a71174ba29e8e3e5b93186",
+    "braindecoding\\experiment.py": "e1cbd8b56b6793db2d2c854615c84be0c977802aae333238763f08a2e1fadfdb",
+    "braindecoding\\pallier_bge_trial.py": "31b65c9668915d18c81b22414defaa914ba0517c7d04c16d53c66b6da23670e6",
+    "braindecoding\\pallier_alignment_trial.py": "9d49956557050d5b1b98d86a2a8cf8460bc7c95454f489f82eaea6a7c344f786",
+    "braindecoding\\training\\word.py": "31f28f9da3ccdc74320c85869d9a863916d67b0b69c04ca84e61acd991ee8af3",
+    "braindecoding\\training\\runtime.py": "1998ee3463c91839beb8890e28c938168ae31c66d7b1bd65d01886162ee324c0",
+    "braindecoding\\models.py": "d64a01b5455890d7d81a24760fb8082218799ad0fd1dcd305b81dd66324065fe",
+    "braindecoding\\losses.py": "174b9b219dcea647be6cad55c935c483c370aa6c5a8281a2f0e3a12bf71a51ad",
+    "braindecoding\\optimizers.py": "5c69feac47d56ea4acfe755871422b405ab3475c78b0bd81909e93db2ab3eb2d",
+    "braindecoding\\unified_rolling_training.py": "7fb872aefbda01d248ff8b709adad076756a4f117069ef83e8c1d02d05c89e4b",
+    "braindecoding\\data\\text.py": "3274cf75697bcf8fbbec256749dceb0167b7b0cde7d240d248fe62a98a39e4f6",
+    "braindecoding\\data\\chineseeeg2.py": "bb6df69262cda79e6c39e2307ba5abab2077cb53e7707c5df7504441ba1c8225",
+    "braindecoding\\evaluation\\retrieval.py": "5b6472a2a6f9f303fb61d242a0ddba758a65361faa0525c7c75a8edce33db503",
+    "braindecoding\\tasks\\word_decoding\\chineseeeg2_littleprince\\train.py": "a611b7c50e93f802fe061db93c56238b96571a4776a5ea482f98978d6b8d1d8f",
+    "configs\\word_decoding\\chineseeeg2_littleprince\\base.yaml": "039d5fe71d634915d66d58a610b876e0c09b5cf4b0b9511ed5d0edf3c21a0512",
+    "configs\\word_decoding\\chineseeeg2_littleprince\\rolling_revision\\k2_d2_full_coverage.yaml": "26d2753dcad96a6e4a034c5c6498f8a6867d0b42d52cecd5ec4082fb8b631ba0",
+    "configs\\word_decoding\\chineseeeg2_littleprince\\sub01-08\\main_word.yaml": "7fa1257b757b93e36410b534be40599cdbfbeeb8acc8272e6679685c00628881",
+    "experiments\\manifests\\rolling_sentence\\chineseeeg2_littleprince_train_vocabulary.json": "4dee010c46a8643706cd9d56bba9ac1512baa0fa9aa715b802a52118acaf4ce6",
+    "derived\\chineseeeg2_littleprince\\events\\events.csv": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+    "derived\\chineseeeg2_littleprince\\text\\unified_bge_m3_v1\\embeddings.npz": "8e07384b187a892790ecad53c75ada3cefbf0d4bc9ad9113751072bd728a656e",
+    "derived\\chineseeeg2_littleprince\\text\\unified_bge_m3_v1\\embeddings.json": "e82faf75256731a5ee42ecf6cb33cd8f3b87606022504f825cba33e0f03d1f0c",
+    "outputs\\word_decoding\\pallier2025\\baseline_alignment_bge_v1_retry1\\sub01-10\\main_word\\seed-000\\resolved_config.yaml": "19293b0afd79bca1fd6550f250fa854fe589265b47b568f879c2d9cf88126bc7",
+    "outputs\\word_decoding\\pallier2025\\baseline_alignment_bge_v1_retry1\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000\\resolved_config.yaml": "8f62175b6396a038790fe90388f03dbf0c77a8e2d0fc8588c474e27064c721ab",
+    "derived\\chineseeeg2_littleprince\\events\\manifest.json": "a4938a1ed2183f2432516afa3cbde0d9a697727c4e53991052cc84f6bf3ede5f"
+  },
+  "reference_rules_match": true,
+  "test_evaluated": false
+}

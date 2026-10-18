@@ -1,0 +1,94 @@
+{
+  "updated_unix": 1791027735.4393823,
+  "updated_local": "2026-10-03 19:42:15",
+  "timezone": "Asia/Shanghai",
+  "state": "complete",
+  "worker_alive": false,
+  "worker_pid": 22240,
+  "observer_pid": 10372,
+  "refresh_seconds": 30,
+  "stage": "completed",
+  "current_dataset": "chineseeeg2_littleprince",
+  "current_seed": 2,
+  "current_chunk": 50,
+  "current_arrival": 0,
+  "current_longest_segment": 9,
+  "worker_status_age_seconds": 26667.208800315857,
+  "completed_segment_seed_units": 8244,
+  "total_segment_seed_units": 8244,
+  "progress_percent": 100.0,
+  "completed_chunks": 519,
+  "total_chunks": 519,
+  "completed_word_seed_units": 80790,
+  "total_word_seed_units": 80790,
+  "saved_chunk_compute_seconds": 49567.03624570032,
+  "runs": [
+    {
+      "dataset": "pallier2025",
+      "seed": 0,
+      "completed": 1940,
+      "total": 1940,
+      "completed_words": 18450,
+      "total_words": 18450,
+      "chunks": 122,
+      "total_chunks": 122
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 1,
+      "completed": 1940,
+      "total": 1940,
+      "completed_words": 18450,
+      "total_words": 18450,
+      "chunks": 122,
+      "total_chunks": 122
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 2,
+      "completed": 1940,
+      "total": 1940,
+      "completed_words": 18450,
+      "total_words": 18450,
+      "chunks": 122,
+      "total_chunks": 122
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 0,
+      "completed": 808,
+      "total": 808,
+      "completed_words": 8480,
+      "total_words": 8480,
+      "chunks": 51,
+      "total_chunks": 51
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 1,
+      "completed": 808,
+      "total": 808,
+      "completed_words": 8480,
+      "total_words": 8480,
+      "chunks": 51,
+      "total_chunks": 51
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 2,
+      "completed": 808,
+      "total": 808,
+      "completed_words": 8480,
+      "total_words": 8480,
+      "chunks": 51,
+      "total_chunks": 51
+    }
+  ],
+  "manifest_sha256": "90934e139ee62e1fedf89ebf57370f38ac0ca73930ed02d951e11a64e6d2f278",
+  "eta_method": "observed compute seconds per word, per dataset when available; global rate otherwise",
+  "eta_range_note": "0.7 to 1.4 times point estimate; planning range, not a confidence interval",
+  "datasets_with_observed_timings": [
+    "pallier2025",
+    "chineseeeg2_littleprince"
+  ]
+}

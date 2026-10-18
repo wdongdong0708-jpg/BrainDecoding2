@@ -1,0 +1,201 @@
+{
+  "asset_type": "evaluation_vocabulary_support",
+  "dataset": "ChineseEEG2",
+  "generator": "braindecoding.protocols",
+  "generator_sha256": "f76d12721baee4a0d746e3851210252fbbffd62239a1660e49861bffaed86e79",
+  "manifest_sha256": "5a6304151c788ad10e794c0815dd4febcdab4a5ed856b1975bd85ce68f71f7c7",
+  "status": "frozen_support_audit",
+  "support_audit_used_for_vocabulary_selection": false,
+  "test_status": "previously_used_for_exploratory_analysis",
+  "vocabularies": {
+    "N100": {
+      "candidate_manifest_sha256": "27123171a15f5a1c51d43c51e5e7f2619c61162ab4d2fc6cbd65628cc0ae33ba",
+      "splits": {
+        "test": {
+          "candidate_count": 100,
+          "missing_candidate_count": 18,
+          "missing_words": [
+            "他们",
+            "星星",
+            "国王",
+            "狐狸",
+            "知道",
+            "地理学家",
+            "做",
+            "到",
+            "呀",
+            "要是",
+            "命令",
+            "来说",
+            "用",
+            "啊",
+            "您",
+            "这么",
+            "只有",
+            "下"
+          ],
+          "support_fraction": 0.82,
+          "supported_candidate_count": 82
+        },
+        "val": {
+          "candidate_count": 100,
+          "missing_candidate_count": 12,
+          "missing_words": [
+            "她",
+            "星星",
+            "国王",
+            "地理学家",
+            "大人",
+            "一朵",
+            "看见",
+            "命令",
+            "还是",
+            "您",
+            "只有",
+            "走"
+          ],
+          "support_fraction": 0.88,
+          "supported_candidate_count": 88
+        }
+      }
+    },
+    "N150": {
+      "candidate_manifest_sha256": "37d60f4b16191a77b7772b64dc0c02aa67b7bb5ce519e3c570bed53987920488",
+      "splits": {
+        "test": {
+          "candidate_count": 150,
+          "missing_candidate_count": 42,
+          "missing_words": [
+            "他们",
+            "星星",
+            "国王",
+            "狐狸",
+            "知道",
+            "地理学家",
+            "做",
+            "到",
+            "呀",
+            "要是",
+            "命令",
+            "来说",
+            "用",
+            "啊",
+            "您",
+            "这么",
+            "只有",
+            "下",
+            "驯养",
+            "蛇",
+            "一颗",
+            "爱",
+            "行星",
+            "些",
+            "哪儿",
+            "探险家",
+            "明白",
+            "正事",
+            "真",
+            "那个",
+            "重要",
+            "望",
+            "使",
+            "商人",
+            "看到",
+            "颗",
+            "如果",
+            "朵",
+            "玫瑰",
+            "意思",
+            "找",
+            "时间"
+          ],
+          "support_fraction": 0.72,
+          "supported_candidate_count": 108
+        },
+        "val": {
+          "candidate_count": 150,
+          "missing_candidate_count": 28,
+          "missing_words": [
+            "她",
+            "星星",
+            "国王",
+            "地理学家",
+            "大人",
+            "一朵",
+            "看见",
+            "命令",
+            "还是",
+            "您",
+            "只有",
+            "走",
+            "蛇",
+            "谁",
+            "行星",
+            "些",
+            "探险家",
+            "正事",
+            "望",
+            "刺",
+            "商人",
+            "有点",
+            "看到",
+            "如果",
+            "朵",
+            "意思",
+            "所有",
+            "时间"
+          ],
+          "support_fraction": 0.8133333333333334,
+          "supported_candidate_count": 122
+        }
+      }
+    },
+    "N20": {
+      "candidate_manifest_sha256": "e4b677e07ddd28ec5eb5ee23821fe6fd09ff70ab54ce3a2612433ea2196a450e",
+      "splits": {
+        "test": {
+          "candidate_count": 20,
+          "missing_candidate_count": 0,
+          "missing_words": [],
+          "support_fraction": 1.0,
+          "supported_candidate_count": 20
+        },
+        "val": {
+          "candidate_count": 20,
+          "missing_candidate_count": 0,
+          "missing_words": [],
+          "support_fraction": 1.0,
+          "supported_candidate_count": 20
+        }
+      }
+    },
+    "N50": {
+      "candidate_manifest_sha256": "3fcd20c7fbf37e6ce4f53d4a55452fd2815154c6595aa7e9df7c6b6ac1411eac",
+      "splits": {
+        "test": {
+          "candidate_count": 50,
+          "missing_candidate_count": 4,
+          "missing_words": [
+            "他们",
+            "星星",
+            "国王",
+            "狐狸"
+          ],
+          "support_fraction": 0.92,
+          "supported_candidate_count": 46
+        },
+        "val": {
+          "candidate_count": 50,
+          "missing_candidate_count": 3,
+          "missing_words": [
+            "她",
+            "星星",
+            "国王"
+          ],
+          "support_fraction": 0.94,
+          "supported_candidate_count": 47
+        }
+      }
+    }
+  }
+}

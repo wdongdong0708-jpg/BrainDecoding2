@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "dataset": "pallier2025",
+  "scope": "sub01-10",
+  "unit": "complete_run",
+  "strategy": {
+    "algorithm": "sha256_sorted_rank_assignment",
+    "version": 1,
+    "salt": "pallier2025-main-run-split-v1",
+    "key_format": "{salt}|{run_id}",
+    "allocation": "first_7_train_eighth_val_ninth_test",
+    "uses_word_labels": false,
+    "uses_vocabulary_support": false,
+    "uses_neural_data": false,
+    "uses_model_results": false
+  },
+  "assignments": {
+    "train": ["run-01", "run-02", "run-03", "run-04", "run-05", "run-08", "run-09"],
+    "val": ["run-07"],
+    "test": ["run-06"]
+  },
+  "hash_ranking": [
+    {"rank": 0, "run": "run-09", "sha256": "6378dee9eb85d3a0f33937be44fe54fad4b19ba091813022f1a88ac215013413"},
+    {"rank": 1, "run": "run-02", "sha256": "6dc4091373aaca51ac6dff1a9bb4aa34b193aed7993f77ff6c0e622aba54044e"},
+    {"rank": 2, "run": "run-03", "sha256": "a5b8b2aa37fab1ede44ce75c7e7ecc9f8ed95164d4570a8352762ffa93575227"},
+    {"rank": 3, "run": "run-01", "sha256": "b2981cf5092e3917ab3ba98e5337edd3c009d5925a106b552c53b26a193d4a41"},
+    {"rank": 4, "run": "run-05", "sha256": "b53cce1e6affefec027955abde0cf0f947e9488eb5e8e74348dfe25f0dd51087"},
+    {"rank": 5, "run": "run-04", "sha256": "b96c80bb46f48306027a5725389c2c3e9c542da0ab137c593bde2500c67ca218"},
+    {"rank": 6, "run": "run-08", "sha256": "bdc02be115b156510cba20c715931edbd5932d6f0d402b74ff4aaa9ae85eaceb"},
+    {"rank": 7, "run": "run-07", "sha256": "c260eaca63abb1bc939e7e4054576c38790403aaff36a0ae63e1ba5cb00ee9b8"},
+    {"rank": 8, "run": "run-06", "sha256": "cb28ccc3f0304fcbba47c16deda913930d13f06f79538fe59d68faa12be2d07c"}
+  ],
+  "reproduction_candidate": {
+    "name": "dascoli_sequence_level_hash_split",
+    "status": "future_reproduction_only",
+    "used_for_main_split": false
+  },
+  "manifest_sha256": "b4ae34972090e51ebe31eef6a50e90c005e9bfda3c0c0b2d146978eb46e211cd"
+}

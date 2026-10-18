@@ -1,0 +1,44 @@
+{
+  "purpose": "engineering_check_not_performance_evidence",
+  "checks": {
+    "word": {
+      "one_batch_finite": true,
+      "batches": 1,
+      "successful_updates": 0,
+      "primary_selection_key_present": true,
+      "complete_validation_contract_passed": true,
+      "population": {
+        "expected_all_vocab50_queries": 6160,
+        "expected_common_vocab50_queries": 5280,
+        "expected_common_rows": 11780,
+        "expected_legacy_word_candidates": 47,
+        "expected_legacy_common_candidates": 46
+      },
+      "peak_allocated_gib": 0.4877300262451172,
+      "seconds": 11.17986450000899,
+      "coverage_counts": {}
+    },
+    "revision": {
+      "one_batch_finite": true,
+      "batches": 1,
+      "successful_updates": 1,
+      "primary_selection_key_present": true,
+      "complete_validation_contract_passed": true,
+      "population": {
+        "expected_all_vocab50_queries": 6160,
+        "expected_common_vocab50_queries": 5280,
+        "expected_common_rows": 11780,
+        "expected_legacy_word_candidates": 47,
+        "expected_legacy_common_candidates": 46
+      },
+      "peak_allocated_gib": 3.805102825164795,
+      "seconds": 35.93244929998764,
+      "coverage_counts": {
+        "0": 112,
+        "1": 100,
+        "2": 89
+      }
+    }
+  },
+  "test_evaluated": false
+}

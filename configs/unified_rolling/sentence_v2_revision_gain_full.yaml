@@ -1,0 +1,55 @@
+profile:
+  id: unified_sentence_v2_revision_gain_full
+  parent_sentence_protocol: unified_sentence_v2
+  neural_protocol: unified_rolling_v2
+  purpose: delayed_rolling_revision_performance_gain
+population:
+  source: data/manifests/rolling_sentence/unified_sentence_v2.json
+  partition: evaluation
+  seeds: [0, 1, 2]
+  scope: all_frozen_evaluation_materials
+  retain_all_subjects_and_voices: true
+  reserve_entire_parent_calibration_partition: true
+decoding:
+  inherit_frozen_parent_decoder: true
+  branch: open
+  alignment: real
+  conditions: [A, C]
+  initial: K0
+  rolling: available_K1_K2_recent_three_words
+calibration:
+  source: data/manifests/rolling_sentence/unified_sentence_v2_preview.json
+  reuse_existing_preview_A_calibration: true
+  calibration_seed: 0
+  recalibrate: false
+  selected_language_weights:
+    pallier2025: 0.1
+    chineseeeg2_littleprince: 0.1
+  apply_same_weight_to_all_seeds_and_conditions: true
+comparison:
+  primary: C_minus_A_sentence_bleu1
+  aggregation: within_subject_mean_then_equal_subjects_then_equal_seeds
+  secondary: [aligned_word_accuracy_gain, wer_reduction]
+  final_output_transitions: A_final_to_C_final_all_positions
+  rolling_action_transitions: C_own_first_output_to_C_final_excluding_last_word
+controls: []
+ablations: []
+statistics:
+  metric: subject_equal_sentence_bleu1_then_seed_equal
+  family: both_datasets_C_minus_A
+  alternative: greater
+  paired_material_block_sign_flips: 10000
+  material_block_bootstrap_repetitions: 10000
+  bootstrap_interval: percentile_95
+  multiplicity: holm
+  seed: 161803
+  seeds_are_replicates_not_additional_subjects: true
+execution:
+  entry: python -m braindecoding.unified_sentence_v2_complete --full
+  output_group: unified_sentence_v2_revision_gain_full
+  resume: completed_chunks_with_matching_frozen_manifest_only
+  reuse_compatible_real_open_AC_outputs: true
+  progress_interval_seconds: 30
+  full_population_authorized: true
+  authorization_date: '2026-09-28'
+  test_evaluation_allowed: false

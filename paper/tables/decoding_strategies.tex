@@ -1,0 +1,16 @@
+% Definitions of the six frozen text-decoding strategies; no experimental results.
+\begingroup
+\papertablestyle
+\begin{tabular}{@{}llccc@{}}
+\toprule
+策略 & 名称 & 神经表示 & 每次重搜词位 & 输出固定时刻 \\
+\midrule
+A  & 固定输出     & K0                       & 1（当前词） & $c_i^{(0)}$ \\
+B  & 固定表示重搜 & K0                       & 3           & $c_i^{(2)}$ \\
+C1 & 一次回修     & K0$\to$K1                & 2           & $c_i^{(1)}$ \\
+C  & 滚动修正     & K0$\to$K1$\to$K2         & 3           & $c_i^{(2)}$ \\
+F  & 完整片段     & 完整上下文               & 整段        & $\tau_n+T$ \\
+F-local & 局部整段 & K2                       & 整段        & $\tau_n+T$ \\
+\bottomrule
+\end{tabular}
+\endgroup

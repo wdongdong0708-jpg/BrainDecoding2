@@ -1,0 +1,32 @@
+{
+  "manifest_sha256": "6be90d2a1ea630f41a19faf7513d24528465e70d5c8d1af2ba0210cc0ea9ceea",
+  "sources": [
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2/pallier2025/seed-000/neural_predictions.npz",
+      "sha256": "1ec0fe4a5404fab5c28994f868eea4b460804102cc69aa7caa7335421c33b12c"
+    },
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2/pallier2025/seed-001/neural_predictions.npz",
+      "sha256": "632dd1847d729e8a5b98cc0d89789a6d7edc61692f5e89ffb255cf247517b1f5"
+    },
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2/pallier2025/seed-002/neural_predictions.npz",
+      "sha256": "b87c97728e8abd1f4506077961605eefac3109e2db3ee9e46132cf05d854319d"
+    },
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2/chineseeeg2_littleprince/seed-000/neural_predictions.npz",
+      "sha256": "ecef8d1d304a812be5df0fc50a646a2d07b2f4609f72d55512dcdf944530c045"
+    },
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2/chineseeeg2_littleprince/seed-001/neural_predictions.npz",
+      "sha256": "2606f9a0957d807cd04eb6730b5da2294515c412618e4f546fb5d00e6fc71001"
+    },
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2/chineseeeg2_littleprince/seed-002/neural_predictions.npz",
+      "sha256": "0c801b6a2f492a937ebdb99f0654e42dbd1877e784e79485cb0e68e607d0ef2b"
+    }
+  ],
+  "implementation_sha256": "96e24228b5f0b7ddfc9975a26dd1244a64361a5c66a115bd6b956d1c2ffa9e9c",
+  "test_evaluated": false,
+  "oov_retained_as_errors": true
+}

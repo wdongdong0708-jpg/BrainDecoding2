@@ -1,0 +1,7 @@
+dataset,seed,wrong_to_wrong,wrong_to_right,right_to_wrong,net_correct_words
+pallier2025,0,10077,1135,219,916
+pallier2025,1,9825,1168,257,911
+pallier2025,2,9868,1165,225,940
+chineseeeg2_littleprince,0,9252,432,135,297
+chineseeeg2_littleprince,1,9204,401,180,221
+chineseeeg2_littleprince,2,9187,451,158,293

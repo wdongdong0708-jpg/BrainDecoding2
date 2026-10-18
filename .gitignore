@@ -1,0 +1,41 @@
+# Python bytecode & packaging
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Test & tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Local runtime & scratch outputs (never commit)
+outputs/
+tmp/
+data/cache/derived/*
+data/cache/artifacts/*
+!data/cache/artifacts/annotations/
+!data/cache/artifacts/annotations/**
+paper/manuscript/build/
+*.log
+*.pid
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Editor & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# AOCI agent host integration (machine-bound; do not commit)
+.mcp.json
+.mcp.json.backup.*
+.codex/config.toml
+.codex/config.toml.backup.*

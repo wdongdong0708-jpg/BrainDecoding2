@@ -1,0 +1,998 @@
+{
+  "status": "completed",
+  "analysis_status": "post_result_sensitivity_frozen_before_resampling",
+  "manifest_sha256": "95b265241f62c3a0534d11156e102ae7d3f03a029ae91f2bdb496666d6a0a888",
+  "parent_manifest_sha256": "90934e139ee62e1fedf89ebf57370f38ac0ca73930ed02d951e11a64e6d2f278",
+  "block_lengths": [
+    1,
+    2,
+    3,
+    5,
+    8,
+    10,
+    15,
+    20
+  ],
+  "statistic_seeds": [
+    161803,
+    271828,
+    314159
+  ],
+  "bootstrap_repetitions": 10000,
+  "metric": "sentence_bleu1_mean",
+  "robustness": [
+    {
+      "dataset": "pallier2025",
+      "comparison": "C_minus_A",
+      "effect_pp": 4.994044066700591,
+      "baseline_ci_pp": [
+        4.160480998196315,
+        5.801575989243216
+      ],
+      "baseline_interval_class": "positive",
+      "primary_class_stable": true,
+      "all_rng_class_stable": true,
+      "zero_including_block_lengths": [],
+      "min_lower_pp": 4.160480998196315,
+      "max_lower_pp": 4.3705647858583125,
+      "min_upper_pp": 5.678218174437025,
+      "max_upper_pp": 5.9161696059409365,
+      "min_width_ratio": 0.8009149943291255,
+      "max_width_ratio": 1.0630959278974532,
+      "holm_significant_lengths": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        10,
+        15,
+        20
+      ],
+      "primary_holm_status_stable": true,
+      "monte_carlo_endpoint_ranges": [
+        {
+          "block_length": 1,
+          "lower_endpoint_range_pp": 0.02488829735185355,
+          "upper_endpoint_range_pp": 0.01092791758461678,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 2,
+          "lower_endpoint_range_pp": 0.011582111009512952,
+          "upper_endpoint_range_pp": 0.028530007543781793,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 3,
+          "lower_endpoint_range_pp": 0.021325730901381595,
+          "upper_endpoint_range_pp": 0.03594263679028778,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 5,
+          "lower_endpoint_range_pp": 0.023547451305751255,
+          "upper_endpoint_range_pp": 0.019382001724664588,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 8,
+          "lower_endpoint_range_pp": 0.014548121425733695,
+          "upper_endpoint_range_pp": 0.029912883851795913,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 10,
+          "lower_endpoint_range_pp": 0.021314384566906847,
+          "upper_endpoint_range_pp": 0.014597622282099681,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 15,
+          "lower_endpoint_range_pp": 0.01626036520578772,
+          "upper_endpoint_range_pp": 0.014496456509643929,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 20,
+          "lower_endpoint_range_pp": 0.006816755563361643,
+          "upper_endpoint_range_pp": 0.017971301968854048,
+          "interval_classes": [
+            "positive"
+          ]
+        }
+      ]
+    },
+    {
+      "dataset": "pallier2025",
+      "comparison": "B_minus_A",
+      "effect_pp": 0.5007390164931036,
+      "baseline_ci_pp": [
+        0.22044192987822425,
+        0.7787099988917271
+      ],
+      "baseline_interval_class": "positive",
+      "primary_class_stable": true,
+      "all_rng_class_stable": true,
+      "zero_including_block_lengths": [],
+      "min_lower_pp": 0.18225098951733687,
+      "max_lower_pp": 0.26753837631434674,
+      "min_upper_pp": 0.7354333306385488,
+      "max_upper_pp": 0.833310074005379,
+      "min_width_ratio": 0.8483431025582547,
+      "max_width_ratio": 1.1612132970413107,
+      "holm_significant_lengths": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        10,
+        15,
+        20
+      ],
+      "primary_holm_status_stable": true,
+      "monte_carlo_endpoint_ranges": [
+        {
+          "block_length": 1,
+          "lower_endpoint_range_pp": 0.014338888117179129,
+          "upper_endpoint_range_pp": 0.00821443557792248,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 2,
+          "lower_endpoint_range_pp": 0.00791337539466088,
+          "upper_endpoint_range_pp": 0.003658784530801394,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 3,
+          "lower_endpoint_range_pp": 0.009287169680748499,
+          "upper_endpoint_range_pp": 0.0044929461175492735,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 5,
+          "lower_endpoint_range_pp": 0.005391104479347689,
+          "upper_endpoint_range_pp": 0.004953426669806766,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 8,
+          "lower_endpoint_range_pp": 0.00823631568838449,
+          "upper_endpoint_range_pp": 0.006768333866046493,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 10,
+          "lower_endpoint_range_pp": 0.0028030351625461455,
+          "upper_endpoint_range_pp": 0.012003173385903045,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 15,
+          "lower_endpoint_range_pp": 0.0069778889975858575,
+          "upper_endpoint_range_pp": 0.004851998889742956,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 20,
+          "lower_endpoint_range_pp": 0.004397397345630785,
+          "upper_endpoint_range_pp": 0.004792540359312234,
+          "interval_classes": [
+            "positive"
+          ]
+        }
+      ]
+    },
+    {
+      "dataset": "pallier2025",
+      "comparison": "C_minus_B",
+      "effect_pp": 4.493305050207488,
+      "baseline_ci_pp": [
+        3.7005130852291916,
+        5.272879870360034
+      ],
+      "baseline_interval_class": "positive",
+      "primary_class_stable": true,
+      "all_rng_class_stable": true,
+      "zero_including_block_lengths": [],
+      "min_lower_pp": 3.6961806171275993,
+      "max_lower_pp": 3.848100345448481,
+      "min_upper_pp": 5.202167953772451,
+      "max_upper_pp": 5.344110373807468,
+      "min_width_ratio": 0.8738203737042675,
+      "max_width_ratio": 1.0480568352521755,
+      "holm_significant_lengths": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        10,
+        15,
+        20
+      ],
+      "primary_holm_status_stable": true,
+      "monte_carlo_endpoint_ranges": [
+        {
+          "block_length": 1,
+          "lower_endpoint_range_pp": 0.01099235044612068,
+          "upper_endpoint_range_pp": 0.015450468277002083,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 2,
+          "lower_endpoint_range_pp": 0.007215828777380751,
+          "upper_endpoint_range_pp": 0.02728717457650756,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 3,
+          "lower_endpoint_range_pp": 0.01628213720957089,
+          "upper_endpoint_range_pp": 0.030838948842450836,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 5,
+          "lower_endpoint_range_pp": 0.020436454603313392,
+          "upper_endpoint_range_pp": 0.014680188740958527,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 8,
+          "lower_endpoint_range_pp": 0.01818301023686006,
+          "upper_endpoint_range_pp": 0.02203366373294824,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 10,
+          "lower_endpoint_range_pp": 0.009664343135432074,
+          "upper_endpoint_range_pp": 0.008993163810013666,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 15,
+          "lower_endpoint_range_pp": 0.010447266724507298,
+          "upper_endpoint_range_pp": 0.027412537627181238,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 20,
+          "lower_endpoint_range_pp": 0.016947732141561755,
+          "upper_endpoint_range_pp": 0.012308144628375706,
+          "interval_classes": [
+            "positive"
+          ]
+        }
+      ]
+    },
+    {
+      "dataset": "pallier2025",
+      "comparison": "C1_minus_A",
+      "effect_pp": 3.7567545094614756,
+      "baseline_ci_pp": [
+        3.0838555605865086,
+        4.418281470747284
+      ],
+      "baseline_interval_class": "positive",
+      "primary_class_stable": true,
+      "all_rng_class_stable": true,
+      "zero_including_block_lengths": [],
+      "min_lower_pp": 3.080395360836813,
+      "max_lower_pp": 3.375481486348403,
+      "min_upper_pp": 4.1675276906636505,
+      "max_upper_pp": 4.446966680919523,
+      "min_width_ratio": 0.5993246441732633,
+      "max_width_ratio": 1.0240893178685821,
+      "holm_significant_lengths": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        10,
+        15,
+        20
+      ],
+      "primary_holm_status_stable": true,
+      "monte_carlo_endpoint_ranges": [
+        {
+          "block_length": 1,
+          "lower_endpoint_range_pp": 0.00818682734838698,
+          "upper_endpoint_range_pp": 0.009847252651256494,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 2,
+          "lower_endpoint_range_pp": 0.007465416896688254,
+          "upper_endpoint_range_pp": 0.02726694931037346,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 3,
+          "lower_endpoint_range_pp": 0.020813986266100815,
+          "upper_endpoint_range_pp": 0.010492867296645059,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 5,
+          "lower_endpoint_range_pp": 0.0215866649280836,
+          "upper_endpoint_range_pp": 0.027967083219879868,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 8,
+          "lower_endpoint_range_pp": 0.017623545304778707,
+          "upper_endpoint_range_pp": 0.011549443566848117,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 10,
+          "lower_endpoint_range_pp": 0.0023397403545961926,
+          "upper_endpoint_range_pp": 0.009600854184965701,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 15,
+          "lower_endpoint_range_pp": 0.012605212970812074,
+          "upper_endpoint_range_pp": 0.01067785211706293,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 20,
+          "lower_endpoint_range_pp": 0.00270590802868495,
+          "upper_endpoint_range_pp": 0.003999200721839513,
+          "interval_classes": [
+            "positive"
+          ]
+        }
+      ]
+    },
+    {
+      "dataset": "pallier2025",
+      "comparison": "C_minus_C1",
+      "effect_pp": 1.2372895572391174,
+      "baseline_ci_pp": [
+        0.7980389646329118,
+        1.6606182977672506
+      ],
+      "baseline_interval_class": "positive",
+      "primary_class_stable": true,
+      "all_rng_class_stable": true,
+      "zero_including_block_lengths": [],
+      "min_lower_pp": 0.707750239940139,
+      "max_lower_pp": 0.7980389646329118,
+      "min_upper_pp": 1.6606182977672506,
+      "max_upper_pp": 1.7678730177981457,
+      "min_width_ratio": 1.0,
+      "max_width_ratio": 1.2204385062432326,
+      "holm_significant_lengths": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        10,
+        15,
+        20
+      ],
+      "primary_holm_status_stable": true,
+      "monte_carlo_endpoint_ranges": [
+        {
+          "block_length": 1,
+          "lower_endpoint_range_pp": 0.02222024590434659,
+          "upper_endpoint_range_pp": 0.010137115151177128,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 2,
+          "lower_endpoint_range_pp": 0.009693967755887434,
+          "upper_endpoint_range_pp": 0.009014540690399295,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 3,
+          "lower_endpoint_range_pp": 0.020221108335313244,
+          "upper_endpoint_range_pp": 0.019989636368129143,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 5,
+          "lower_endpoint_range_pp": 0.00795674751843875,
+          "upper_endpoint_range_pp": 0.0063321513652309785,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 8,
+          "lower_endpoint_range_pp": 0.005427530648933945,
+          "upper_endpoint_range_pp": 0.018850902718131612,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 10,
+          "lower_endpoint_range_pp": 0.010896099430559528,
+          "upper_endpoint_range_pp": 0.009942731931158327,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 15,
+          "lower_endpoint_range_pp": 0.0045326776026620615,
+          "upper_endpoint_range_pp": 0.007814172475107892,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 20,
+          "lower_endpoint_range_pp": 0.01652584501127298,
+          "upper_endpoint_range_pp": 0.004667984321238619,
+          "interval_classes": [
+            "positive"
+          ]
+        }
+      ]
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "comparison": "C_minus_A",
+      "effect_pp": 1.9353983147424505,
+      "baseline_ci_pp": [
+        1.3744510914656525,
+        2.4871495024080015
+      ],
+      "baseline_interval_class": "positive",
+      "primary_class_stable": true,
+      "all_rng_class_stable": true,
+      "zero_including_block_lengths": [],
+      "min_lower_pp": 1.1881226552333786,
+      "max_lower_pp": 1.5442691740216847,
+      "min_upper_pp": 2.2756805063662187,
+      "max_upper_pp": 2.689535252074359,
+      "min_width_ratio": 0.6573311556409062,
+      "max_width_ratio": 1.3493437054245703,
+      "holm_significant_lengths": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        10,
+        15,
+        20
+      ],
+      "primary_holm_status_stable": true,
+      "monte_carlo_endpoint_ranges": [
+        {
+          "block_length": 1,
+          "lower_endpoint_range_pp": 0.009121523968985863,
+          "upper_endpoint_range_pp": 0.0208656219428182,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 2,
+          "lower_endpoint_range_pp": 0.003929462978989953,
+          "upper_endpoint_range_pp": 0.008865856117658277,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 3,
+          "lower_endpoint_range_pp": 0.018422369756171918,
+          "upper_endpoint_range_pp": 0.023375997018638267,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 5,
+          "lower_endpoint_range_pp": 0.007421850247991968,
+          "upper_endpoint_range_pp": 0.02187610608673056,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 8,
+          "lower_endpoint_range_pp": 0.008552700132377633,
+          "upper_endpoint_range_pp": 0.022542853488703024,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 10,
+          "lower_endpoint_range_pp": 0.015678740640430455,
+          "upper_endpoint_range_pp": 0.00705717585752115,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 15,
+          "lower_endpoint_range_pp": 0.0015920930841134204,
+          "upper_endpoint_range_pp": 0.02596876960515304,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 20,
+          "lower_endpoint_range_pp": 0.0,
+          "upper_endpoint_range_pp": 0.005593221236289622,
+          "interval_classes": [
+            "positive"
+          ]
+        }
+      ]
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "comparison": "B_minus_A",
+      "effect_pp": 0.032856672504441436,
+      "baseline_ci_pp": [
+        -0.22316284786556384,
+        0.2858650278967885
+      ],
+      "baseline_interval_class": "includes_zero",
+      "primary_class_stable": true,
+      "all_rng_class_stable": true,
+      "zero_including_block_lengths": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        10,
+        15,
+        20
+      ],
+      "min_lower_pp": -0.24857940020545113,
+      "max_lower_pp": -0.14181618488053013,
+      "min_upper_pp": 0.21486962564448794,
+      "max_upper_pp": 0.3599632681971063,
+      "min_width_ratio": 0.7127667265165495,
+      "max_width_ratio": 1.139709096021535,
+      "holm_significant_lengths": [],
+      "primary_holm_status_stable": true,
+      "monte_carlo_endpoint_ranges": [
+        {
+          "block_length": 1,
+          "lower_endpoint_range_pp": 0.006997706660002425,
+          "upper_endpoint_range_pp": 0.002116186374768146,
+          "interval_classes": [
+            "includes_zero"
+          ]
+        },
+        {
+          "block_length": 2,
+          "lower_endpoint_range_pp": 0.007393121229248151,
+          "upper_endpoint_range_pp": 0.0035072512351201537,
+          "interval_classes": [
+            "includes_zero"
+          ]
+        },
+        {
+          "block_length": 3,
+          "lower_endpoint_range_pp": 0.001576675036843965,
+          "upper_endpoint_range_pp": 0.00536983525086486,
+          "interval_classes": [
+            "includes_zero"
+          ]
+        },
+        {
+          "block_length": 5,
+          "lower_endpoint_range_pp": 0.004736733243176005,
+          "upper_endpoint_range_pp": 0.005487810246983249,
+          "interval_classes": [
+            "includes_zero"
+          ]
+        },
+        {
+          "block_length": 8,
+          "lower_endpoint_range_pp": 0.0019020569941311178,
+          "upper_endpoint_range_pp": 0.0017067809022893767,
+          "interval_classes": [
+            "includes_zero"
+          ]
+        },
+        {
+          "block_length": 10,
+          "lower_endpoint_range_pp": 0.006931215811567179,
+          "upper_endpoint_range_pp": 0.014854509559424122,
+          "interval_classes": [
+            "includes_zero"
+          ]
+        },
+        {
+          "block_length": 15,
+          "lower_endpoint_range_pp": 0.0008188399383188966,
+          "upper_endpoint_range_pp": 0.0,
+          "interval_classes": [
+            "includes_zero"
+          ]
+        },
+        {
+          "block_length": 20,
+          "lower_endpoint_range_pp": 0.0,
+          "upper_endpoint_range_pp": 0.0,
+          "interval_classes": [
+            "includes_zero"
+          ]
+        }
+      ]
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "comparison": "C_minus_B",
+      "effect_pp": 1.9025416422380093,
+      "baseline_ci_pp": [
+        1.2232527212016415,
+        2.574192355861283
+      ],
+      "baseline_interval_class": "positive",
+      "primary_class_stable": true,
+      "all_rng_class_stable": true,
+      "zero_including_block_lengths": [],
+      "min_lower_pp": 1.0277779029328775,
+      "max_lower_pp": 1.4946533158709716,
+      "min_upper_pp": 2.1812653319221513,
+      "max_upper_pp": 2.7508773242502604,
+      "min_width_ratio": 0.5082477398956217,
+      "max_width_ratio": 1.2754821733774242,
+      "holm_significant_lengths": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        10,
+        15
+      ],
+      "primary_holm_status_stable": false,
+      "monte_carlo_endpoint_ranges": [
+        {
+          "block_length": 1,
+          "lower_endpoint_range_pp": 0.00957989482239692,
+          "upper_endpoint_range_pp": 0.03553139701202544,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 2,
+          "lower_endpoint_range_pp": 0.01913137773828337,
+          "upper_endpoint_range_pp": 0.007352897793422644,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 3,
+          "lower_endpoint_range_pp": 0.014421141120046256,
+          "upper_endpoint_range_pp": 0.017173600177238305,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 5,
+          "lower_endpoint_range_pp": 0.023873400132891527,
+          "upper_endpoint_range_pp": 0.01857163893749271,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 8,
+          "lower_endpoint_range_pp": 0.009149481566648326,
+          "upper_endpoint_range_pp": 0.004672097114467519,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 10,
+          "lower_endpoint_range_pp": 0.011717825221597804,
+          "upper_endpoint_range_pp": 0.005133280774946222,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 15,
+          "lower_endpoint_range_pp": 0.013473818748060973,
+          "upper_endpoint_range_pp": 0.05398598454356314,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 20,
+          "lower_endpoint_range_pp": 0.0,
+          "upper_endpoint_range_pp": 0.0,
+          "interval_classes": [
+            "positive"
+          ]
+        }
+      ]
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "comparison": "C1_minus_A",
+      "effect_pp": 0.773489938950593,
+      "baseline_ci_pp": [
+        0.2105203673592391,
+        1.3453802550816525
+      ],
+      "baseline_interval_class": "positive",
+      "primary_class_stable": false,
+      "all_rng_class_stable": false,
+      "zero_including_block_lengths": [
+        15
+      ],
+      "min_lower_pp": -0.016332497168983637,
+      "max_lower_pp": 0.27512880699350656,
+      "min_upper_pp": 1.3129474640963612,
+      "max_upper_pp": 1.516808383400686,
+      "min_width_ratio": 0.9144905625184145,
+      "max_width_ratio": 1.350951687654217,
+      "holm_significant_lengths": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        10
+      ],
+      "primary_holm_status_stable": false,
+      "monte_carlo_endpoint_ranges": [
+        {
+          "block_length": 1,
+          "lower_endpoint_range_pp": 0.03054893905365913,
+          "upper_endpoint_range_pp": 0.008549377658299655,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 2,
+          "lower_endpoint_range_pp": 0.011610054303555734,
+          "upper_endpoint_range_pp": 0.022756820901749866,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 3,
+          "lower_endpoint_range_pp": 0.00559767380448144,
+          "upper_endpoint_range_pp": 0.0075622108395007395,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 5,
+          "lower_endpoint_range_pp": 0.02303089365766483,
+          "upper_endpoint_range_pp": 0.011870164988423207,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 8,
+          "lower_endpoint_range_pp": 0.013527199450619871,
+          "upper_endpoint_range_pp": 0.026875728411162626,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 10,
+          "lower_endpoint_range_pp": 0.02213211523403296,
+          "upper_endpoint_range_pp": 0.016930817021808958,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 15,
+          "lower_endpoint_range_pp": 0.006409875639436276,
+          "upper_endpoint_range_pp": 0.003230066731615619,
+          "interval_classes": [
+            "includes_zero"
+          ]
+        },
+        {
+          "block_length": 20,
+          "lower_endpoint_range_pp": 0.009181426089167237,
+          "upper_endpoint_range_pp": 0.04322935970945338,
+          "interval_classes": [
+            "positive"
+          ]
+        }
+      ]
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "comparison": "C_minus_C1",
+      "effect_pp": 1.1619083757918578,
+      "baseline_ci_pp": [
+        0.5147135192300317,
+        1.8622919136663731
+      ],
+      "baseline_interval_class": "positive",
+      "primary_class_stable": true,
+      "all_rng_class_stable": true,
+      "zero_including_block_lengths": [],
+      "min_lower_pp": 0.4325689587814112,
+      "max_lower_pp": 0.5726991710431932,
+      "min_upper_pp": 1.7611526136305948,
+      "max_upper_pp": 2.1466071541695557,
+      "min_width_ratio": 0.8819178516768237,
+      "max_width_ratio": 1.2359513347999196,
+      "holm_significant_lengths": [
+        1,
+        2,
+        3,
+        5,
+        8,
+        10,
+        15
+      ],
+      "primary_holm_status_stable": false,
+      "monte_carlo_endpoint_ranges": [
+        {
+          "block_length": 1,
+          "lower_endpoint_range_pp": 0.001932740193850025,
+          "upper_endpoint_range_pp": 0.030764366117675204,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 2,
+          "lower_endpoint_range_pp": 0.010177968745229537,
+          "upper_endpoint_range_pp": 0.02051368939746251,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 3,
+          "lower_endpoint_range_pp": 0.016510245754223184,
+          "upper_endpoint_range_pp": 0.013400156675899208,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 5,
+          "lower_endpoint_range_pp": 0.017821015390544117,
+          "upper_endpoint_range_pp": 0.016368850251724174,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 8,
+          "lower_endpoint_range_pp": 0.015933719019881314,
+          "upper_endpoint_range_pp": 0.0068747014423501535,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 10,
+          "lower_endpoint_range_pp": 0.017796184483938587,
+          "upper_endpoint_range_pp": 0.024274582063677982,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 15,
+          "lower_endpoint_range_pp": 0.010042456904123427,
+          "upper_endpoint_range_pp": 0.004954448643747222,
+          "interval_classes": [
+            "positive"
+          ]
+        },
+        {
+          "block_length": 20,
+          "lower_endpoint_range_pp": 0.014671719334646057,
+          "upper_endpoint_range_pp": 0.01467171933464649,
+          "interval_classes": [
+            "positive"
+          ]
+        }
+      ]
+    }
+  ],
+  "checks": {
+    "original_L5_block_identities_reproduced": true,
+    "original_L5_all_statistics_reproduced": true,
+    "original_L5_Holm_reproduced": true,
+    "all_point_estimands_unchanged": true,
+    "A_C_metrics_identical_in_B_C1_exports": true,
+    "complete_segment_seed_units": 8244,
+    "conditions": 4,
+    "statistics_runs": 240,
+    "discarded_bootstrap_samples": 0,
+    "shared_material_components_unchanged": true,
+    "all_stratum_tails_retained": true,
+    "GPU_used": false,
+    "sources_unchanged_before_and_after": true
+  }
+}

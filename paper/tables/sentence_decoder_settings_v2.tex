@@ -1,0 +1,24 @@
+% Rendered only from verified manuscript_text_stage3_v1 exports.
+% Presentation only: verified reports/exports; polish_main_assets_test_v2.py.
+\begingroup
+\papertablestyle
+\begin{tabular}{@{}lll@{}}
+\toprule
+设置 & Pallier2025 & ChineseEEG-2 \\
+\midrule
+语言模型 & \multicolumn{2}{l}{Qwen2.5-1.5B 基础版} \\
+神经检索候选／词位 & \multicolumn{2}{l}{20} \\
+神经相似度缩放系数 & \multicolumn{2}{l}{10} \\
+束搜索保留序列数 & \multicolumn{2}{l}{5} \\
+每个前缀的候选续写数 & \multicolumn{2}{l}{5} \\
+每条续写的最大新 token 数 & \multicolumn{2}{l}{16} \\
+近期重搜词位数（B/C） & \multicolumn{2}{l}{3} \\
+语言模型上下文上限 & \multicolumn{2}{l}{32768 token} \\
+验证语言权重候选 & \multicolumn{2}{l}{0, 0.025, 0.1, 0.5, 1.5} \\
+语言权重选模指标 & \multicolumn{2}{l}{验证材料策略 A 的 WER} \\
+权重平局规则 & \multicolumn{2}{l}{取较小值} \\
+\midrule
+测试固定语言权重 & 0.1 & 0.5 \\
+\bottomrule
+\end{tabular}
+\endgroup

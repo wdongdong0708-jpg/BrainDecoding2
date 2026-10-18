@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "analysis_status": "exploratory_validation",
+  "sources": [
+    {
+      "path": "derived/pallier2025/jayalath_stage2_seed0_no_oov.json",
+      "sha256": "775e2e57561a87b999fe121459111010b2aee6b4cc8aecefac16d5847340062d",
+      "checkpoint_sha256": "b591d8f93d2e9844aa00827a42b5e7caa9e258191b795ada8c625ead60bc6502",
+      "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+      "protocol": {
+        "calibration_groups": 350,
+        "heldout_groups": 1550,
+        "retrieval_size": 250,
+        "retrieval_sha256": "00614bc43d654a0aee8a2efaa21b96702b5166d8946cd31f5e860d18e319d074",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 0.025,
+        "lm_weights_sha256": "71aa852dfdaac82252d7b737fb33b79d0c15e295a6cfc64963613d96741e3d7a",
+        "neural_score": "cosine_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/pallier2025/jayalath_stage2_seed1_no_oov.json",
+      "sha256": "df76fe7f42401f7ff8959e5468b9b5ed67ddd5bb4a7f91b87c652adcd02f2193",
+      "checkpoint_sha256": "bebbb149b8b14903ebe5937e073dc99f33894822605b93d99fbdf251237dc486",
+      "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+      "protocol": {
+        "calibration_groups": 350,
+        "heldout_groups": 1550,
+        "retrieval_size": 250,
+        "retrieval_sha256": "00614bc43d654a0aee8a2efaa21b96702b5166d8946cd31f5e860d18e319d074",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 0.025,
+        "lm_weights_sha256": "71aa852dfdaac82252d7b737fb33b79d0c15e295a6cfc64963613d96741e3d7a",
+        "neural_score": "cosine_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/pallier2025/jayalath_stage2_seed2_no_oov.json",
+      "sha256": "8d35cfa69002ca48673e09b169f8731db5d2a7d59a56fb19d52acfe06369613b",
+      "checkpoint_sha256": "ecdc163aff8f1633b0fab9aa16af51cdee0fd40dff3bcbea3b121ea52e74b06f",
+      "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+      "protocol": {
+        "calibration_groups": 350,
+        "heldout_groups": 1550,
+        "retrieval_size": 250,
+        "retrieval_sha256": "00614bc43d654a0aee8a2efaa21b96702b5166d8946cd31f5e860d18e319d074",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 0.025,
+        "lm_weights_sha256": "71aa852dfdaac82252d7b737fb33b79d0c15e295a6cfc64963613d96741e3d7a",
+        "neural_score": "cosine_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/chineseeeg2_littleprince/jayalath_stage2_seed0_no_oov.json",
+      "sha256": "9203f3adb0a7ded44a0c8ccc236c10cfaea50d715d395016ec81558f18ceca1d",
+      "checkpoint_sha256": "5c2349df66e8b5e15a3d7804f602a1a644014652b8ab57fbef66139eb6d45810",
+      "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+      "protocol": {
+        "condition": "real_signal",
+        "shift_permutation_seed": null,
+        "shift_scope": null,
+        "calibration_groups": 236,
+        "heldout_groups": 948,
+        "max_groups": null,
+        "random_retrieval_selection_seed": 20260923,
+        "retrieval_size": 250,
+        "retrieval_sha256": "24c598ef122e45c164a6cfd43a7cb515b172f3b0b78e01d28825e0fb09412a6e",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 1.5,
+        "lm_weights_sha256": "5478b950f53650c82f7f7e91010787c870813a76adeabe23c8571b01af1379b4",
+        "lm_proposal_score": "all_subtokens",
+        "lm_max_context_words": null,
+        "neural_score": "cosine_times_10_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/chineseeeg2_littleprince/jayalath_stage2_seed1_no_oov.json",
+      "sha256": "b2060e06fcc7327c4765538086d6a334910b91555590c4fe0541a8e16d2dde63",
+      "checkpoint_sha256": "1d6c8525ceda68e98e869cbd5f4a87fc062110ee6f83d8c51eaf6c9874b041fb",
+      "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+      "protocol": {
+        "condition": "real_signal",
+        "shift_permutation_seed": null,
+        "shift_scope": null,
+        "calibration_groups": 236,
+        "heldout_groups": 948,
+        "max_groups": null,
+        "random_retrieval_selection_seed": 20260923,
+        "retrieval_size": 250,
+        "retrieval_sha256": "24c598ef122e45c164a6cfd43a7cb515b172f3b0b78e01d28825e0fb09412a6e",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 1.5,
+        "lm_weights_sha256": "5478b950f53650c82f7f7e91010787c870813a76adeabe23c8571b01af1379b4",
+        "lm_proposal_score": "all_subtokens",
+        "lm_max_context_words": null,
+        "neural_score": "cosine_times_10_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/chineseeeg2_littleprince/jayalath_stage2_seed2_no_oov.json",
+      "sha256": "4577f3c25847e585ca75e4a1084f092e81da5d4e2a108effe40f23c7ca4504a1",
+      "checkpoint_sha256": "1a34b965f2308f29bd66d276be114c93a6be1ed23a09b0ea0d76dd3579fe2359",
+      "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+      "protocol": {
+        "condition": "real_signal",
+        "shift_permutation_seed": null,
+        "shift_scope": null,
+        "calibration_groups": 236,
+        "heldout_groups": 948,
+        "max_groups": null,
+        "random_retrieval_selection_seed": 20260923,
+        "retrieval_size": 250,
+        "retrieval_sha256": "24c598ef122e45c164a6cfd43a7cb515b172f3b0b78e01d28825e0fb09412a6e",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 1.5,
+        "lm_weights_sha256": "5478b950f53650c82f7f7e91010787c870813a76adeabe23c8571b01af1379b4",
+        "lm_proposal_score": "all_subtokens",
+        "lm_max_context_words": null,
+        "neural_score": "cosine_times_10_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    }
+  ],
+  "cohorts": [
+    {
+      "dataset": "pallier2025",
+      "subjects": 10,
+      "segments_per_seed": 1550,
+      "reference_words_per_seed": 13710,
+      "complete_k2_targets_per_seed": 10610,
+      "complete_k2_targets_sha256": "020c7d7f638e375a686e6f6756c8affbbcb934547a55a5d8bbca99a420a9f58b"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "subjects": 8,
+      "segments_per_seed": 948,
+      "reference_words_per_seed": 11152,
+      "complete_k2_targets_per_seed": 9272,
+      "complete_k2_targets_sha256": "0371eb68dcc7135cbe02f7159d96ceb8f625da7ef541ff666a14a00facfee462"
+    }
+  ],
+  "exports": [
+    {
+      "path": "reports/exports/publication_suite_diagnostics_participants.csv",
+      "sha256": "27f7a17ab3481b89eca757ef5ec3a31ceb8a62cabaa7f783b616f35e123285d9",
+      "rows": 108
+    },
+    {
+      "path": "reports/exports/publication_suite_diagnostics_horizons.csv",
+      "sha256": "599a575c8cdcbdea40d447e58c1cf670c0d36be07e2001c0a911d420023b4fe4",
+      "rows": 18
+    },
+    {
+      "path": "reports/exports/publication_suite_diagnostics_compute.csv",
+      "sha256": "5842a8c0fd660ac58f9caaa08c919ddbde9174191b14090250a35f703de42c37",
+      "rows": 12
+    },
+    {
+      "path": "reports/exports/publication_suite_diagnostics_compute_ecdf.csv",
+      "sha256": "d3ec6776a7ad8f8a1357d21c0752a15fd18e5e328bff6fdb28b36af1f3eef99d",
+      "rows": 114823
+    }
+  ],
+  "participant_contract": "Rolling final minus the separate frozen K0 path on all annotated reference positions. BLEU-1 is mean clipped unigram precision per subject-segment; word accuracy requires correct annotated positions. Three seed estimates and their arithmetic mean are shown; no participant confidence intervals are inferred.",
+  "signal_time_contract": "Fixed common target events with both future arrivals available inside their replay segment; same targets at d=0,1,2 and across seeds. Signal availability = trace[i+d].input_window_end_seconds minus target onset[i]. Reported quantiles use each annotated target once per seed and are identical across seeds; seed copies are not pooled as independent targets. The initial signal already spans approximately 1 s after annotated target onset. Percentile spans describe targets, not uncertainty in accuracy.",
+  "compute_contract": "Saved positive k0_decoder_seconds and k2_decoder_seconds per arrival, all evaluated steps, pooled across three seeds for the descriptive ECDF only. Hardware/implementation-specific offline replay costs; these are distinct from neural signal waiting. No end-to-end online latency claim and no sum of these distributions."
+}

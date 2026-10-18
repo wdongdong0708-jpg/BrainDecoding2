@@ -1,0 +1,16 @@
+% Shared presentation for every main-text and supplementary table.
+% Keep small-size superscripts legible and use the same math fonts throughout.
+\DeclareMathSizes{10}{10}{8}{6}
+\newcommand{\papertablestyle}{%
+    \small
+    \setlength{\tabcolsep}{3.5pt}%
+    \renewcommand{\arraystretch}{1.22}%
+    \setlength{\heavyrulewidth}{0.7pt}%
+    \setlength{\lightrulewidth}{0.4pt}%
+    \setlength{\cmidrulewidth}{0.3pt}%
+    \setlength{\defaultaddspace}{3pt}%
+    \setlength{\abovetopsep}{4pt}%
+    \setlength{\abovecaptionskip}{6pt}%
+    \setlength{\belowcaptionskip}{6pt}%
+}
+\newcommand{\papertablehead}[2]{\shortstack[c]{#1\\#2}}

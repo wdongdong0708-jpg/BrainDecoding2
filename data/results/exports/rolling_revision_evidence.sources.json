@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "split": "val",
+  "target_set": "common_delay2",
+  "metric": "macro_top10",
+  "vocabulary_size": 50,
+  "replicate_unit": "training_seed",
+  "metric_source": "canonical_evaluation",
+  "checkpoint_selection_split": "val",
+  "checkpoint_selection_metric": "common_delay2_macro_top10_at_delay2",
+  "raw_event_count_definition": "Neural events with both future events available, before filtering query words to the frozen 50-candidate vocabulary; not the Top-10 event denominator.",
+  "per_subject_metrics_available": false,
+  "datasets": [
+    {
+      "dataset": "Pallier2025",
+      "experiment": "local_window_rolling_revision_k2_d2",
+      "fingerprint": {
+        "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+        "subjects": [
+          "sub-01",
+          "sub-02",
+          "sub-03",
+          "sub-04",
+          "sub-05",
+          "sub-06",
+          "sub-07",
+          "sub-08",
+          "sub-09",
+          "sub-10"
+        ],
+        "vocabulary_manifest_sha256": "6e9d12c345b28cd695f6971216e0c90f3a306b0a0e0f16fc05c3de802be11505",
+        "warm_start_sha256": "fee17f5d7c935d0e0efd1ff30e62ba8945e8e3f3cb2e041b0182bc3e45d7f9de",
+        "effective_query_count": 8260
+      },
+      "common_cohort": {
+        "common_raw_event_count": 13160,
+        "supported_candidate_count": 49,
+        "missing_words": [
+          "planète"
+        ],
+        "vocabulary_manifest_sha256": "6e9d12c345b28cd695f6971216e0c90f3a306b0a0e0f16fc05c3de802be11505"
+      },
+      "sources": [
+        {
+          "experiment": "local_window_rolling_revision_k2_d2",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-000/evaluation/val.json",
+          "evaluation_sha256": "d2f50e85e1eff299fa55c7622f5a716287764ff0f420276a585be0be2488752c",
+          "checkpoint_sha256": "b591d8f93d2e9844aa00827a42b5e7caa9e258191b795ada8c625ead60bc6502",
+          "resolved_config": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-000/resolved_config.yaml",
+          "resolved_config_sha256": "a4a85210f8e407bbef298fae3cdbc817ba846538ddec409c21c9a249c64b3321"
+        },
+        {
+          "experiment": "local_window_rolling_revision_k2_d2",
+          "seed": 1,
+          "evaluation": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-001/evaluation/val.json",
+          "evaluation_sha256": "d908b3f0e91f3aec299ab36460283f4e3c8cfaab34c13233125558fb7a76dd5e",
+          "checkpoint_sha256": "bebbb149b8b14903ebe5937e073dc99f33894822605b93d99fbdf251237dc486",
+          "resolved_config": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-001/resolved_config.yaml",
+          "resolved_config_sha256": "4ddab916806456fa010c44befd4e386bd54946c526797be5f9c5d0166cf195d6"
+        },
+        {
+          "experiment": "local_window_rolling_revision_k2_d2",
+          "seed": 2,
+          "evaluation": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-002/evaluation/val.json",
+          "evaluation_sha256": "1535e1d7831510c5b50d4aba6509bc0bd732f1810d59ce51a1d2835c81ba5287",
+          "checkpoint_sha256": "ecdc163aff8f1633b0fab9aa16af51cdee0fd40dff3bcbea3b121ea52e74b06f",
+          "resolved_config": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-002/resolved_config.yaml",
+          "resolved_config_sha256": "268c1ed063b4433be15b849ccc282ad98404e0cee94ab38fe70c53a81454cba4"
+        }
+      ]
+    },
+    {
+      "dataset": "ChineseEEG2",
+      "experiment": "local_window_rolling_revision_k2_d2_full_coverage",
+      "fingerprint": {
+        "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+        "subjects": [
+          "sub-01",
+          "sub-02",
+          "sub-03",
+          "sub-04",
+          "sub-05",
+          "sub-06",
+          "sub-07",
+          "sub-08"
+        ],
+        "vocabulary_manifest_sha256": "3fcd20c7fbf37e6ce4f53d4a55452fd2815154c6595aa7e9df7c6b6ac1411eac",
+        "effective_query_count": 6160,
+        "supported_candidate_count": 47
+      },
+      "common_cohort": {
+        "common_raw_event_count": 11780,
+        "supported_candidate_count": 46,
+        "missing_words": [
+          "国王",
+          "她",
+          "星星",
+          "花儿"
+        ],
+        "vocabulary_manifest_sha256": "3fcd20c7fbf37e6ce4f53d4a55452fd2815154c6595aa7e9df7c6b6ac1411eac"
+      },
+      "sources": [
+        {
+          "experiment": "local_window_rolling_revision_k2_d2_full_coverage",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/rolling_revision/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000/evaluation/val.json",
+          "evaluation_sha256": "9dd9629f7791541e00d6d9814d4beb7d1242479ea5fc5aa980ffece27b9488b4",
+          "checkpoint_sha256": "5c2349df66e8b5e15a3d7804f602a1a644014652b8ab57fbef66139eb6d45810",
+          "resolved_config": "outputs/word_decoding/chineseeeg2_littleprince/rolling_revision/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000/resolved_config.yaml",
+          "resolved_config_sha256": "43138bd8e6409f92a6acca3e95d3cc3268b2160507364943d96fbea210a98a5d"
+        },
+        {
+          "experiment": "local_window_rolling_revision_k2_d2_full_coverage",
+          "seed": 1,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/rolling_revision/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-001/evaluation/val.json",
+          "evaluation_sha256": "13a57f48c0d893c1a6867c8a6b7f20e126aff9c6b58e8ac51b9c7da015a385f5",
+          "checkpoint_sha256": "1d6c8525ceda68e98e869cbd5f4a87fc062110ee6f83d8c51eaf6c9874b041fb",
+          "resolved_config": "outputs/word_decoding/chineseeeg2_littleprince/rolling_revision/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-001/resolved_config.yaml",
+          "resolved_config_sha256": "cd7d164665b6cfc90364e9499b3116bbae7ee93f7ad0236d0747d5d2da3d6e9f"
+        },
+        {
+          "experiment": "local_window_rolling_revision_k2_d2_full_coverage",
+          "seed": 2,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/rolling_revision/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-002/evaluation/val.json",
+          "evaluation_sha256": "5c641ce134edf4e825ce62a6f02eb998d843e44448fb46ca26b2391d3ffc9451",
+          "checkpoint_sha256": "1a34b965f2308f29bd66d276be114c93a6be1ed23a09b0ea0d76dd3579fe2359",
+          "resolved_config": "outputs/word_decoding/chineseeeg2_littleprince/rolling_revision/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-002/resolved_config.yaml",
+          "resolved_config_sha256": "8da740904d8f0417381393ab814fe3405b6f777a6b02c01adca98067a2c98cc8"
+        }
+      ]
+    }
+  ]
+}

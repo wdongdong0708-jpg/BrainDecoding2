@@ -1,0 +1,17 @@
+﻿dataset,condition,control,metric,improvement,ci_lower,ci_upper,interpretation
+pallier2025,LM_C1,LM_A,sentence_bleu1_mean,-0.03154852940636191,-0.04973044276406161,-0.012102370955847723,within_selected_prompt_search_comparison
+pallier2025,LM_C1,LM_A,wer,-0.001626016260162566,-0.012698490241235899,0.011271589146464788,within_selected_prompt_search_comparison
+pallier2025,LM_C1,LM_A,bleu1,-0.030894308943089435,-0.04660122707225889,-0.017070263125528826,within_selected_prompt_search_comparison
+pallier2025,LM_C1,LM_A,aligned_word_accuracy,0.0010840108401083993,-0.00847008999470619,0.011933352331421648,within_selected_prompt_search_comparison
+pallier2025,LM_R,LM_A,sentence_bleu1_mean,-0.02047822317834446,-0.04242695632815399,0.0023579679431028496,within_selected_prompt_search_comparison
+pallier2025,LM_R,LM_A,wer,0.003794037940379247,-0.009037777494510357,0.019678229487887226,within_selected_prompt_search_comparison
+pallier2025,LM_R,LM_A,bleu1,-0.02872628726287263,-0.04688259498345651,-0.008890894607010452,within_selected_prompt_search_comparison
+pallier2025,LM_R,LM_A,aligned_word_accuracy,0.007046070460704608,-0.004878319783197836,0.02166308072971329,within_selected_prompt_search_comparison
+chineseeeg2_littleprince,LM_C1,LM_A,sentence_bleu1_mean,-0.00025211587092775073,-0.0047360734551643675,0.004096107063437421,within_selected_prompt_search_comparison
+chineseeeg2_littleprince,LM_C1,LM_A,wer,-0.006603867623604431,-0.011340843044296847,-0.0019332932811729655,within_selected_prompt_search_comparison
+chineseeeg2_littleprince,LM_C1,LM_A,bleu1,-0.0004699248120300925,-0.006475619271342433,0.0054200814631277655,within_selected_prompt_search_comparison
+chineseeeg2_littleprince,LM_C1,LM_A,aligned_word_accuracy,-0.00613394281157439,-0.010857223403499771,-0.0015390782910839748,within_selected_prompt_search_comparison
+chineseeeg2_littleprince,LM_R,LM_A,sentence_bleu1_mean,-0.0007783351311690251,-0.007694150355990917,0.0056721259029167475,within_selected_prompt_search_comparison
+chineseeeg2_littleprince,LM_R,LM_A,wer,-0.006133942811574422,-0.010464116135118768,-0.0023311286554371746,within_selected_prompt_search_comparison
+chineseeeg2_littleprince,LM_R,LM_A,bleu1,-0.0047170483025746335,-0.013340403228743115,0.00309302412448039,within_selected_prompt_search_comparison
+chineseeeg2_littleprince,LM_R,LM_A,aligned_word_accuracy,-0.005664017999544315,-0.009986462816231226,-0.0019723146430785836,within_selected_prompt_search_comparison

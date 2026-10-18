@@ -1,0 +1,698 @@
+{
+  "schema_version": 1,
+  "protocol": "unified_rolling_v2",
+  "snapshot_utc": "2026-09-29T15:16:44+00:00",
+  "queue_updated_utc": "2026-09-27T02:17:28+00:00",
+  "queue_status": "completed",
+  "included_completed_jobs": 12,
+  "planned_jobs": 12,
+  "pending_jobs": [],
+  "split": "val",
+  "test_evaluated": false,
+  "checkpoint_selection": "best.legacy50 / best.pt",
+  "contract": {
+    "rates": "fractions in [0,1]; multiply by 100 for percent or percentage points",
+    "strict50_macro": "word-type macro recall over observed target types; all 50 candidates retained",
+    "delay_gain": "paired K2 minus K0 within the common_targets population and the same seed/checkpoint",
+    "all_targets": "all frozen-vocabulary validation queries; not the population used for delay gains",
+    "full_vocab_secondary": "same primary checkpoint, separate full-training-vocabulary common-reference population; subject-equal-weight Top-10; OOV references retained as errors",
+    "missing": "uncompleted logical slots have blank outcomes; no provisional best checkpoints read",
+    "summary": "mean and sample SD across completed seeds only; actual n reported; no significance inference"
+  },
+  "included_runs": [
+    {
+      "dataset": "pallier2025",
+      "dataset_label": "Pallier2025",
+      "seed": 0,
+      "stage": "word",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "reused",
+      "best_epoch": 11,
+      "completed_epochs": 21,
+      "checkpoint": "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/main_word/seed-000/best.pt",
+      "summary_source": "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/main_word/seed-000/training_summary.json",
+      "checkpoint_sha256": "02f52178d41041c3c97f0e8d8fd01144bb2197d228ce199c898068758d7e42f4",
+      "manifest_source": "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/main_word/seed-000/run_manifest.json",
+      "config_source": "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/main_word/seed-000/resolved_config.yaml"
+    },
+    {
+      "dataset": "pallier2025",
+      "dataset_label": "Pallier2025",
+      "seed": 0,
+      "stage": "revision",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "reused",
+      "best_epoch": 7,
+      "completed_epochs": 17,
+      "checkpoint": "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/local_window_rolling_revision_k2_d2/seed-000/best.pt",
+      "summary_source": "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/local_window_rolling_revision_k2_d2/seed-000/training_summary.json",
+      "checkpoint_sha256": "5ec1df75ed99178191df9563652dc2c2d02c1906c6c535eee4b53db8cf8057f1",
+      "manifest_source": "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/local_window_rolling_revision_k2_d2/seed-000/run_manifest.json",
+      "config_source": "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/local_window_rolling_revision_k2_d2/seed-000/resolved_config.yaml"
+    },
+    {
+      "dataset": "pallier2025",
+      "dataset_label": "Pallier2025",
+      "seed": 1,
+      "stage": "word",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "trained",
+      "best_epoch": 9,
+      "completed_epochs": 19,
+      "checkpoint": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-001/best.pt",
+      "summary_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-001/training_summary.json",
+      "checkpoint_sha256": "bdc86e273ff63b1d0a0ca8dccffeecba924ee03591c9d107d6147dda975036df",
+      "manifest_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-001/run_manifest.json",
+      "config_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-001/resolved_config.yaml"
+    },
+    {
+      "dataset": "pallier2025",
+      "dataset_label": "Pallier2025",
+      "seed": 1,
+      "stage": "revision",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "trained",
+      "best_epoch": 6,
+      "completed_epochs": 16,
+      "checkpoint": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-001/best.pt",
+      "summary_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-001/training_summary.json",
+      "checkpoint_sha256": "aff58c5cd609570bfce731f5bf5f33f7a8d6b602eedb03bfa750c29437033ec7",
+      "manifest_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-001/run_manifest.json",
+      "config_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-001/resolved_config.yaml"
+    },
+    {
+      "dataset": "pallier2025",
+      "dataset_label": "Pallier2025",
+      "seed": 2,
+      "stage": "word",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "trained",
+      "best_epoch": 12,
+      "completed_epochs": 22,
+      "checkpoint": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-002/best.pt",
+      "summary_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-002/training_summary.json",
+      "checkpoint_sha256": "a4ded097910eec26d024ca610666f0d38526486d1f4d86c3f961f55cfffec825",
+      "manifest_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-002/run_manifest.json",
+      "config_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-002/resolved_config.yaml"
+    },
+    {
+      "dataset": "pallier2025",
+      "dataset_label": "Pallier2025",
+      "seed": 2,
+      "stage": "revision",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "trained",
+      "best_epoch": 5,
+      "completed_epochs": 15,
+      "checkpoint": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-002/best.pt",
+      "summary_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-002/training_summary.json",
+      "checkpoint_sha256": "4cb69a66ca916e75de67fc02e98d7e31a09065ab9fd1fbca53cda7a9561724da",
+      "manifest_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-002/run_manifest.json",
+      "config_source": "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-002/resolved_config.yaml"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "dataset_label": "ChineseEEG-2",
+      "seed": 0,
+      "stage": "word",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "reused",
+      "best_epoch": 3,
+      "completed_epochs": 13,
+      "checkpoint": "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/main_word/seed-000/best.pt",
+      "summary_source": "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/main_word/seed-000/training_summary.json",
+      "checkpoint_sha256": "0eca3eff15d3afe366fa9cf559bdfbe9d044c5fc6ebf424b8ace751088561431",
+      "manifest_source": "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/main_word/seed-000/run_manifest.json",
+      "config_source": "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/main_word/seed-000/resolved_config.yaml"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "dataset_label": "ChineseEEG-2",
+      "seed": 0,
+      "stage": "revision",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "reused",
+      "best_epoch": 13,
+      "completed_epochs": 23,
+      "checkpoint": "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000/best.pt",
+      "summary_source": "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000/training_summary.json",
+      "checkpoint_sha256": "e7ef991a2fd42c6848f9c9cd8e0eb145720f12eb0af28b6b080b7bd96430cdf8",
+      "manifest_source": "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000/run_manifest.json",
+      "config_source": "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000/resolved_config.yaml"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "dataset_label": "ChineseEEG-2",
+      "seed": 1,
+      "stage": "word",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "trained",
+      "best_epoch": 6,
+      "completed_epochs": 16,
+      "checkpoint": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-001/best.pt",
+      "summary_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-001/training_summary.json",
+      "checkpoint_sha256": "bcb19980dab0e85bb44555e964dbc819aaa5f469e921f3276bc2aed5317941d4",
+      "manifest_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-001/run_manifest.json",
+      "config_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-001/resolved_config.yaml"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "dataset_label": "ChineseEEG-2",
+      "seed": 1,
+      "stage": "revision",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "trained",
+      "best_epoch": 9,
+      "completed_epochs": 19,
+      "checkpoint": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-001/best.pt",
+      "summary_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-001/training_summary.json",
+      "checkpoint_sha256": "f12e64d1c092e74b6983e3fb80f743a3bd3fdc61ec774b6a5ba8702960e17e10",
+      "manifest_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-001/run_manifest.json",
+      "config_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-001/resolved_config.yaml"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "dataset_label": "ChineseEEG-2",
+      "seed": 2,
+      "stage": "word",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "trained",
+      "best_epoch": 6,
+      "completed_epochs": 16,
+      "checkpoint": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-002/best.pt",
+      "summary_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-002/training_summary.json",
+      "checkpoint_sha256": "37c6535a5a7a21ab73ae81f121642162e556ae00febe586f91d54eb7de6b1db7",
+      "manifest_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-002/run_manifest.json",
+      "config_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-002/resolved_config.yaml"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "dataset_label": "ChineseEEG-2",
+      "seed": 2,
+      "stage": "revision",
+      "status": "completed",
+      "status_label": "完成",
+      "action": "trained",
+      "best_epoch": 7,
+      "completed_epochs": 17,
+      "checkpoint": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-002/best.pt",
+      "summary_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-002/training_summary.json",
+      "checkpoint_sha256": "046b8490d36ae958a6d5b140212766c21f967436f05ea7a7f713b473a5836e0b",
+      "manifest_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-002/run_manifest.json",
+      "config_source": "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-002/resolved_config.yaml"
+    }
+  ],
+  "sources": {
+    ".cache/runs/unified_rolling_v2/status.json": {
+      "sha256": "fffa47082146a7e8dab05ba97d9a32be94f3047fec01af3697a93a707fbe57e3",
+      "role": "completion_inclusion_snapshot",
+      "bytes": 8707
+    },
+    "configs/unified_rolling/v2.yaml": {
+      "sha256": "b7b5b7c7f7c239722b795fad0d6a311daface9c167e48287156e63e9e55ea497",
+      "role": "unified_protocol_configuration",
+      "bytes": 7949
+    },
+    "experiments/manifests/rolling_sentence/unified_protocol_v2.md": {
+      "sha256": "a07fb9d981418913b3b94df17c254579ef827967e9d554a4d8b5ca2e183fc730",
+      "role": "scientific_protocol",
+      "bytes": 9744
+    },
+    "braindecoding/unified_rolling_v2_paper_exports.py": {
+      "sha256": "ae201d710feed48df61645ef7cf516a2eb6c8787695359ab3079eca1b1e1445c",
+      "role": "exporter_implementation",
+      "bytes": 19836
+    },
+    "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/main_word/seed-000/training_summary.json": {
+      "sha256": "6a24c7a8cb4c08b29d4c0c45993dc76192205c8f2f30b2599e9be78520bc1b92",
+      "role": "completed_canonical_training_summary",
+      "bytes": 88145
+    },
+    "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/main_word/seed-000/run_manifest.json": {
+      "sha256": "0c141e223992455d242d833d97a6372dc01671c0cc88b17185d86c1e03e6104b",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 9238
+    },
+    "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/main_word/seed-000/resolved_config.yaml": {
+      "sha256": "19293b0afd79bca1fd6550f250fa854fe589265b47b568f879c2d9cf88126bc7",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 5668
+    },
+    "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/main_word/seed-000/best.pt": {
+      "sha256": "02f52178d41041c3c97f0e8d8fd01144bb2197d228ce199c898068758d7e42f4",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 41863644
+    },
+    "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/local_window_rolling_revision_k2_d2/seed-000/training_summary.json": {
+      "sha256": "1d06e17ddeece23c0c5fea7155d15b043e1bcf533c0c29e86fa8c417bb6db63f",
+      "role": "completed_canonical_training_summary",
+      "bytes": 1058796
+    },
+    "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/local_window_rolling_revision_k2_d2/seed-000/run_manifest.json": {
+      "sha256": "ff2d31de342160f156eca27fde8dab199c32dbf46f98454aa945afe3e09b0303",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 11266
+    },
+    "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/local_window_rolling_revision_k2_d2/seed-000/resolved_config.yaml": {
+      "sha256": "8f62175b6396a038790fe90388f03dbf0c77a8e2d0fc8588c474e27064c721ab",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 7061
+    },
+    "outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/local_window_rolling_revision_k2_d2/seed-000/best.pt": {
+      "sha256": "5ec1df75ed99178191df9563652dc2c2d02c1906c6c535eee4b53db8cf8057f1",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 847720801
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-001/training_summary.json": {
+      "sha256": "dc33a8139e9abf5ae15de785ef7dcbd9398213902d39b8f2848a3202dd56d9ed",
+      "role": "completed_canonical_training_summary",
+      "bytes": 366690
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-001/run_manifest.json": {
+      "sha256": "ddfebdf634e48aa49c5379e942c0c6648a71987037d698a57fefb92bdd45dada",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 12863
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-001/resolved_config.yaml": {
+      "sha256": "4f2fca28e94d43d7121f02dc18d73e47587e17adc738a0aaea06c33169cbea38",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 4903
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-001/best.pt": {
+      "sha256": "bdc86e273ff63b1d0a0ca8dccffeecba924ee03591c9d107d6147dda975036df",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 41877532
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-001/training_summary.json": {
+      "sha256": "5488db3be5e012cdb57ce485cbe2bcbf2432efc1b1f18ffa9d2e93eeaf7273a9",
+      "role": "completed_canonical_training_summary",
+      "bytes": 998559
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-001/run_manifest.json": {
+      "sha256": "2c1b24c0e3b960c6504e2913ee2d5c43099d0e34635fa3890c1f1ba179be8f95",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 14725
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-001/resolved_config.yaml": {
+      "sha256": "1c54da2e75237298fd0fd9af24e174a95dc1bb17f8f8fda3499c5295926417b5",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 5952
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-001/best.pt": {
+      "sha256": "aff58c5cd609570bfce731f5bf5f33f7a8d6b602eedb03bfa750c29437033ec7",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 847727905
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-002/training_summary.json": {
+      "sha256": "c58afd68c6ea266830fede1da3067b1888ace5fa722aad1ec6e7f1f10b492139",
+      "role": "completed_canonical_training_summary",
+      "bytes": 418990
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-002/run_manifest.json": {
+      "sha256": "551e73fcfab273a22ad53ffdba9d6e6560d51c6dc5acd7c9464ee1f362473573",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 12863
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-002/resolved_config.yaml": {
+      "sha256": "b00ef62a84522c7630e2cb19cfb65ff8fd15f150ceac2e782af6c16b4b88919c",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 4903
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/main_word/seed-002/best.pt": {
+      "sha256": "a4ded097910eec26d024ca610666f0d38526486d1f4d86c3f961f55cfffec825",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 41877532
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-002/training_summary.json": {
+      "sha256": "b4e35654b96c372f460aa4d682efcb9573b475b35ed98c7cbaf6debf6b504848",
+      "role": "completed_canonical_training_summary",
+      "bytes": 943420
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-002/run_manifest.json": {
+      "sha256": "7a61e8bcda698a7cd824ee9d3af7868fb2df35acefdfbe806cd30146ea37d65d",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 14726
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-002/resolved_config.yaml": {
+      "sha256": "94acda0eb728f53a464f8848372e50a683a577652a2a40ceacf2b546ff52ef9f",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 5952
+    },
+    "outputs/word_decoding/pallier2025/unified_rolling_v2/sub01-10/local_window_rolling_revision_k2_d2/seed-002/best.pt": {
+      "sha256": "4cb69a66ca916e75de67fc02e98d7e31a09065ab9fd1fbca53cda7a9561724da",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 847727905
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/main_word/seed-000/training_summary.json": {
+      "sha256": "d1e9b5f34e3d966177f67257fa10fe55049e0da5dd246d2ef68f2434ed049f51",
+      "role": "completed_canonical_training_summary",
+      "bytes": 220896
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/main_word/seed-000/run_manifest.json": {
+      "sha256": "1ca48bd3cf1f68b1fb16449a918e68b3fa26da90831daa471ca2327dc5b05d56",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 13901
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/main_word/seed-000/resolved_config.yaml": {
+      "sha256": "7fbdbc84a8e8e2498dfd29fe8585c5275c4c0cb2f83b735b1bd4dc2e6b427506",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 6756
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/main_word/seed-000/best.pt": {
+      "sha256": "0eca3eff15d3afe366fa9cf559bdfbe9d044c5fc6ebf424b8ace751088561431",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 33892124
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000/training_summary.json": {
+      "sha256": "10ddbfee57b89c60af96327cb08a61af25c9e35edbf490f56cfef5bbb7dff679",
+      "role": "completed_canonical_training_summary",
+      "bytes": 1192737
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000/run_manifest.json": {
+      "sha256": "bf2de6b5aa979b6161cb9ab2467fc61e984d40f6ed3d3134e7df21c1deaf3d09",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 15843
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000/resolved_config.yaml": {
+      "sha256": "96d87d36ee4665fd049ca84d85e625e5a55c8676cc1a92531b4c52b3156ec4c3",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 8090
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000/best.pt": {
+      "sha256": "e7ef991a2fd42c6848f9c9cd8e0eb145720f12eb0af28b6b080b7bd96430cdf8",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 839740321
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-001/training_summary.json": {
+      "sha256": "8bdba46cca25955f5e29a60a00a0647e88582458680813294e2fef12e459a22e",
+      "role": "completed_canonical_training_summary",
+      "bytes": 266836
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-001/run_manifest.json": {
+      "sha256": "d992f85b3b69fe424feee049aa2ceb55f13e74aa2529b77d99ef961b80bc54c5",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 13169
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-001/resolved_config.yaml": {
+      "sha256": "f23c2223657cb20c846b4e01afac5c8b40f9b8f84121b6c562c7278f363e61ef",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 5775
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-001/best.pt": {
+      "sha256": "bcb19980dab0e85bb44555e964dbc819aaa5f469e921f3276bc2aed5317941d4",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 33891036
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-001/training_summary.json": {
+      "sha256": "309571a763002f108e1e858813e04052ee7b9665e48741236721e0b2d7a13d86",
+      "role": "completed_canonical_training_summary",
+      "bytes": 1004932
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-001/run_manifest.json": {
+      "sha256": "f2ea512a1002df8d6e11e6fa1421f992589d81270ba75576a114cac9b3b5dbbc",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 15074
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-001/resolved_config.yaml": {
+      "sha256": "d58b7bf1b4601e0454ad865f57a4cb9bb81c8c659add3c860d38b747aa86de8a",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 6850
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-001/best.pt": {
+      "sha256": "f12e64d1c092e74b6983e3fb80f743a3bd3fdc61ec774b6a5ba8702960e17e10",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 839739169
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-002/training_summary.json": {
+      "sha256": "3c962340d38c657cadf8c11ebafcf5a8116ac7398d5494df75e84619695c6517",
+      "role": "completed_canonical_training_summary",
+      "bytes": 266876
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-002/run_manifest.json": {
+      "sha256": "47840202868e88cbab42c1fca202b2f8845d34edc137b959fcd52cd3c140fef4",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 13169
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-002/resolved_config.yaml": {
+      "sha256": "c94b8faacaf83558d2d9ee87cad21b7ca0bad7c584182fceb3c6a47d56b6e9ff",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 5775
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/main_word/seed-002/best.pt": {
+      "sha256": "37c6535a5a7a21ab73ae81f121642162e556ae00febe586f91d54eb7de6b1db7",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 33891036
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-002/training_summary.json": {
+      "sha256": "1764579751a8eceb0a166e49412e983da401bcb37470414c308bef77be2ab13d",
+      "role": "completed_canonical_training_summary",
+      "bytes": 909071
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-002/run_manifest.json": {
+      "sha256": "b137d7f225dcab2372a834e52eb6dff3bd6d38cf9ea83eb33aaa861655785a0a",
+      "role": "completed_canonical_run_manifest",
+      "bytes": 15074
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-002/resolved_config.yaml": {
+      "sha256": "d485b16e402bf7eb754e5b1ba7cf8faffb35ede87f50fbb723084eeb1ef54f02",
+      "role": "completed_canonical_resolved_config",
+      "bytes": 6850
+    },
+    "outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-002/best.pt": {
+      "sha256": "046b8490d36ae958a6d5b140212766c21f967436f05ea7a7f713b473a5836e0b",
+      "role": "primary_checkpoint_verified_without_model_loading",
+      "bytes": 839739169
+    }
+  },
+  "exports": [
+    {
+      "path": "reports/exports/unified_rolling_v2_paper_seed_status.csv",
+      "sha256": "a6d18a9152277e3afb910953736d7f4beae6501f6763a51a36911916ab53ebf1",
+      "rows": 12,
+      "columns": [
+        "dataset",
+        "dataset_label",
+        "seed",
+        "stage",
+        "status",
+        "status_label",
+        "action",
+        "best_epoch",
+        "completed_epochs",
+        "checkpoint",
+        "summary_source"
+      ]
+    },
+    {
+      "path": "reports/exports/unified_rolling_v2_paper_datasets.csv",
+      "sha256": "b3fe3334dcada65294ad3f660e73b81aa229063fa3872653d97adc360ea34df5",
+      "rows": 2,
+      "columns": [
+        "dataset",
+        "dataset_label",
+        "language",
+        "subjects",
+        "train_events",
+        "validation_events",
+        "common_validation_events",
+        "train_vocabulary",
+        "strict50_candidates",
+        "strict50_all_queries",
+        "strict50_common_queries",
+        "completed_revision_seeds",
+        "planned_seeds"
+      ]
+    },
+    {
+      "path": "reports/exports/unified_rolling_v2_paper_revision_by_seed.csv",
+      "sha256": "c957769fc7ccc971127b78414001860e451794273e25fd428bb06e01a1ff7daf",
+      "rows": 36,
+      "columns": [
+        "dataset",
+        "dataset_label",
+        "seed",
+        "status",
+        "status_label",
+        "best_epoch",
+        "n_seeds_planned",
+        "checkpoint",
+        "summary_source",
+        "population",
+        "horizon",
+        "candidate_count",
+        "query_count",
+        "target_count",
+        "macro_recall_at_1",
+        "macro_recall_at_10",
+        "micro_recall_at_1",
+        "micro_recall_at_10",
+        "random_recall_at_1",
+        "random_recall_at_10"
+      ]
+    },
+    {
+      "path": "reports/exports/unified_rolling_v2_paper_revision_by_subject.csv",
+      "sha256": "2507c452e5e91262bdd3bd38659cd67a2d8c9ae70808919f7b8ec5d9961ccaa1",
+      "rows": 324,
+      "columns": [
+        "dataset",
+        "dataset_label",
+        "seed",
+        "status",
+        "status_label",
+        "best_epoch",
+        "n_seeds_planned",
+        "checkpoint",
+        "summary_source",
+        "population",
+        "horizon",
+        "subject",
+        "candidate_count",
+        "query_count",
+        "macro_recall_at_1",
+        "macro_recall_at_10",
+        "micro_recall_at_1",
+        "micro_recall_at_10",
+        "random_recall_at_1",
+        "random_recall_at_10"
+      ]
+    },
+    {
+      "path": "reports/exports/unified_rolling_v2_paper_revision_summary.csv",
+      "sha256": "ff47426dbd4aac18cf5117d8d3376e8c40b15a54230b059e86cc505833be1f8c",
+      "rows": 12,
+      "columns": [
+        "dataset",
+        "dataset_label",
+        "population",
+        "horizon",
+        "candidate_count",
+        "query_count",
+        "n_seeds",
+        "n_seeds_planned",
+        "completed_seeds",
+        "pending_seeds",
+        "status",
+        "dispersion",
+        "macro_recall_at_1_mean",
+        "macro_recall_at_1_sd",
+        "macro_recall_at_10_mean",
+        "macro_recall_at_10_sd",
+        "micro_recall_at_1_mean",
+        "micro_recall_at_1_sd",
+        "micro_recall_at_10_mean",
+        "micro_recall_at_10_sd",
+        "random_recall_at_1_mean",
+        "random_recall_at_1_sd",
+        "random_recall_at_10_mean",
+        "random_recall_at_10_sd"
+      ]
+    },
+    {
+      "path": "reports/exports/unified_rolling_v2_paper_delay_gain_by_seed.csv",
+      "sha256": "588b865dccfb1939a72eb11cbebc523e27b50c3f9ba9b0ed2db039d8b195e684",
+      "rows": 6,
+      "columns": [
+        "dataset",
+        "dataset_label",
+        "seed",
+        "status",
+        "status_label",
+        "best_epoch",
+        "n_seeds_planned",
+        "checkpoint",
+        "summary_source",
+        "population",
+        "candidate_count",
+        "query_count",
+        "gain_macro_top1",
+        "gain_macro_top10",
+        "gain_micro_top1",
+        "gain_micro_top10"
+      ]
+    },
+    {
+      "path": "reports/exports/unified_rolling_v2_paper_delay_gain_summary.csv",
+      "sha256": "018afef32b0eeca6c0703448f2f5e762010e80bfd3a8f77a2ec00be82a594af6",
+      "rows": 2,
+      "columns": [
+        "dataset",
+        "dataset_label",
+        "population",
+        "candidate_count",
+        "query_count",
+        "n_seeds",
+        "n_seeds_planned",
+        "completed_seeds",
+        "pending_seeds",
+        "status",
+        "dispersion",
+        "gain_macro_top1_mean",
+        "gain_macro_top1_sd",
+        "gain_macro_top10_mean",
+        "gain_macro_top10_sd",
+        "gain_micro_top1_mean",
+        "gain_micro_top1_sd",
+        "gain_micro_top10_mean",
+        "gain_micro_top10_sd"
+      ]
+    },
+    {
+      "path": "reports/exports/unified_rolling_v2_paper_full_vocab_secondary_by_seed.csv",
+      "sha256": "658ee7d388fc31f0e78d6d0b72c1819646ce38f6f0e319813dcfc6c16530cd01",
+      "rows": 18,
+      "columns": [
+        "dataset",
+        "dataset_label",
+        "seed",
+        "status",
+        "status_label",
+        "best_epoch",
+        "n_seeds_planned",
+        "checkpoint",
+        "summary_source",
+        "population",
+        "horizon",
+        "candidate_count",
+        "query_count",
+        "aggregation",
+        "oov_policy",
+        "subject_macro_top10"
+      ]
+    },
+    {
+      "path": "reports/exports/unified_rolling_v2_paper_full_vocab_secondary_summary.csv",
+      "sha256": "570826037668879b4b710af3a41b94eefb468ae841b36a318bf071857495894f",
+      "rows": 6,
+      "columns": [
+        "dataset",
+        "dataset_label",
+        "population",
+        "horizon",
+        "candidate_count",
+        "query_count",
+        "aggregation",
+        "oov_policy",
+        "n_seeds",
+        "n_seeds_planned",
+        "completed_seeds",
+        "pending_seeds",
+        "status",
+        "dispersion",
+        "subject_macro_top10_mean",
+        "subject_macro_top10_sd"
+      ]
+    }
+  ]
+}

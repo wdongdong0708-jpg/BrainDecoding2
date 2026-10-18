@@ -1,0 +1,33 @@
+protocol:
+  id: synthetic_timing_v1
+  dataset: pallier2025
+  conditions: [shared, independent]
+  seeds: [0, 1, 2]
+  history_radius: 2
+  horizons: [0, 1, 2]
+  stages: [word, revision]
+  selection_split: val
+  reporting_split: test
+  test_selection_allowed: false
+  language_model_allowed: false
+  expand_context_automatically: false
+synthetic:
+  generator: smooth_pulses_50hz_v1
+  sample_rate_hz: 50
+  window_seconds: 1.0
+  pulse_rate_per_process_hz: 1.0
+  gaussian_sigma_ms: [60, 120, 240]
+  padding_seconds: 1.0
+  normalization: padded_stream_population_std_then_original_window_baseline_and_clamp
+  independent_stream_length: match_shared_segment_span
+  training_refresh: epoch
+  validation_seed: 20261008
+  test_seed: 20261009
+execution:
+  existing_gpu_task: .cache/runs/fixed_k0_rolling_search_test_v2/status.json
+  minimum_free_gpu_mib: 12000
+  poll_seconds: 60
+  job_order: seed_then_condition_then_stage
+  real_results: data/results/exports/unified_heldout_test_v2_word_by_seed.csv
+  existing_training_results: data/results/protocols/unified_rolling_v2_queue_results.json
+  output_group_prefix: synthetic_timing_v1

@@ -1,0 +1,528 @@
+{
+  "protocol": "synthetic_timing_v2",
+  "settings": {
+    "protocol": {
+      "id": "synthetic_timing_v2",
+      "parent": "synthetic_timing_v1",
+      "datasets": [
+        "pallier2025",
+        "chineseeeg2_littleprince"
+      ],
+      "conditions": [
+        "shared",
+        "independent"
+      ],
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "stages": [
+        "word",
+        "revision"
+      ],
+      "history_radius": 2,
+      "horizons": [
+        0,
+        1,
+        2
+      ],
+      "selection_split": "val",
+      "reporting_split": "test",
+      "test_selection_allowed": false,
+      "language_model_allowed": false,
+      "expand_context_automatically": false
+    },
+    "synthetic_from": "configs/unified_rolling/synthetic_timing_v1.yaml",
+    "execution": {
+      "output_group_prefix": "synthetic_timing_v2",
+      "reuse_completed_pallier_v1": true,
+      "dataset_order": [
+        "pallier2025",
+        "chineseeeg2_littleprince"
+      ],
+      "job_order": "dataset_then_seed_then_condition_then_stage",
+      "existing_gpu_task": ".cache/runs/fixed_k0_rolling_search_test_v2/status.json",
+      "minimum_free_gpu_mib": 12000,
+      "poll_seconds": 30,
+      "resume_boundary": "epoch",
+      "automatic_unclean_exit_retries": 2,
+      "keep_completed_resume_checkpoint": false,
+      "real_results": "reports/exports/unified_heldout_test_v2_word_by_seed.csv",
+      "existing_training_results": "reports/protocols/unified_rolling_v2_queue_results.json"
+    }
+  },
+  "frozen_unix": 1791595320.9014974,
+  "parent_manifest_sha256": "0765ae70eb9682ac63823e662e5ec5f8973e9c569e5c9de8efe51bf32df744ab",
+  "jobs": [
+    {
+      "dataset": "pallier2025",
+      "condition": "shared",
+      "seed": 0,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-000",
+      "reuse": true,
+      "checkpoint_sha256": "f57397e45ecbc0b5d2470f21f39a54713da67fd85272ad4650dfcf32ab74ee68"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "shared",
+      "seed": 0,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000",
+      "reuse": true,
+      "checkpoint_sha256": "88dab8d40c989079559d503acd39bbd6b563ea16531add43a710469484adc94b"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "independent",
+      "seed": 0,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\main_word\\seed-000",
+      "reuse": true,
+      "checkpoint_sha256": "9cb62d37a347b9334948d97f3a7b5098294fa0034ff29fb3451c51ffe35b332c"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "independent",
+      "seed": 0,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000",
+      "reuse": true,
+      "checkpoint_sha256": "a05f001d3b7d4758e8935afb5792b8a2e3e0a78ebee48c1fc54f2142e41be56a"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "shared",
+      "seed": 1,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-001",
+      "reuse": true,
+      "checkpoint_sha256": "527f2b3032082ad2309a7d889704a62eafae7338adcf3c0fa4f09db15c82cf80"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "shared",
+      "seed": 1,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001",
+      "reuse": true,
+      "checkpoint_sha256": "1dab7d86f7b0e8ba4b632a8bef130cf437c4f84a610b34e89613dba876af2224"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "independent",
+      "seed": 1,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\main_word\\seed-001",
+      "reuse": true,
+      "checkpoint_sha256": "38d33ebc5fa466f845819ae93aee4feadd6f2072a91862b0893111b83aab0ea3"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "independent",
+      "seed": 1,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001",
+      "reuse": true,
+      "checkpoint_sha256": "8df44846c7299b0bbaa14534858b763ca5eccade7da38fb642d5806662d1c595"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "shared",
+      "seed": 2,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-002",
+      "reuse": true,
+      "checkpoint_sha256": "6e5faed1ade515385b1c955ee4b1ece3b2611c2e8b06bc61ee8674c623342373"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "shared",
+      "seed": 2,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v2_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002",
+      "reuse": false
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "independent",
+      "seed": 2,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v2_independent\\sub01-10\\main_word\\seed-002",
+      "reuse": false
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "independent",
+      "seed": 2,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v2_independent\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "shared",
+      "seed": 0,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_shared\\sub01-08\\main_word\\seed-000",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "shared",
+      "seed": 0,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_shared\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-000",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "independent",
+      "seed": 0,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_independent\\sub01-08\\main_word\\seed-000",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "independent",
+      "seed": 0,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_independent\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-000",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "shared",
+      "seed": 1,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_shared\\sub01-08\\main_word\\seed-001",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "shared",
+      "seed": 1,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_shared\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-001",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "independent",
+      "seed": 1,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_independent\\sub01-08\\main_word\\seed-001",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "independent",
+      "seed": 1,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_independent\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-001",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "shared",
+      "seed": 2,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_shared\\sub01-08\\main_word\\seed-002",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "shared",
+      "seed": 2,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_shared\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-002",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "independent",
+      "seed": 2,
+      "stage": "word",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_independent\\sub01-08\\main_word\\seed-002",
+      "reuse": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "independent",
+      "seed": 2,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\synthetic_timing_v2_independent\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-002",
+      "reuse": false
+    }
+  ],
+  "reused_training_stages": 9,
+  "total_training_stages": 24,
+  "new_training_stages": 15,
+  "pipeline_count": 12,
+  "population": {
+    "pallier2025": {
+      "expected_all_vocab50_queries": 8260,
+      "expected_common_vocab50_queries": 6760,
+      "expected_common_rows": 13160,
+      "expected_legacy_word_candidates": 50,
+      "expected_legacy_common_candidates": 49
+    },
+    "chineseeeg2_littleprince": {
+      "expected_all_vocab50_queries": 6160,
+      "expected_common_vocab50_queries": 5280,
+      "expected_common_rows": 11780,
+      "expected_legacy_word_candidates": 47,
+      "expected_legacy_common_candidates": 46
+    }
+  },
+  "test_population": {
+    "pallier2025": {
+      "rows": 18450,
+      "all_targets": 8930,
+      "common_targets": 7440,
+      "candidate_count": 50,
+      "event_ids_sha256": "cb24fa9fed4351337d9d94a4f031ee7c79966bf0a071f10c8880b54d70aa2d9b",
+      "candidates_sha256": "d3a752ba6c9d1fec5132147d96015e6f090989f83fb656749ddeb56c61a08073"
+    },
+    "chineseeeg2_littleprince": {
+      "rows": 8480,
+      "all_targets": 3444,
+      "common_targets": 2872,
+      "candidate_count": 50,
+      "event_ids_sha256": "b3354f212b63f7cb3f1332d6209b275eff1d526c6edf92d62a6975eafd96ffd2",
+      "candidates_sha256": "1174772cbc0279859a007c94bba6cb1bfeec52058d1b01e261edffc004e4e13f"
+    }
+  },
+  "real_references": [
+    {
+      "dataset": "pallier2025",
+      "seed": 0,
+      "stage": "revision",
+      "path": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\baseline_alignment_bge_v1_retry1\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000",
+      "checkpoint": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\baseline_alignment_bge_v1_retry1\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000\\best.pt",
+      "checkpoint_sha256": "5ec1df75ed99178191df9563652dc2c2d02c1906c6c535eee4b53db8cf8057f1",
+      "best_epoch": 7,
+      "completed_epochs": 17,
+      "verification": "config_inputs_manifest_and_checkpoint",
+      "test_evaluated": false,
+      "action": "reused"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 0,
+      "stage": "revision",
+      "path": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\baseline_alignment_bge_16x16_v1\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-000",
+      "checkpoint": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\baseline_alignment_bge_16x16_v1\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-000\\best.pt",
+      "checkpoint_sha256": "e7ef991a2fd42c6848f9c9cd8e0eb145720f12eb0af28b6b080b7bd96430cdf8",
+      "best_epoch": 13,
+      "completed_epochs": 23,
+      "verification": "config_inputs_manifest_and_checkpoint",
+      "test_evaluated": false,
+      "action": "reused"
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 1,
+      "stage": "revision",
+      "path": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\unified_rolling_v2\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001",
+      "checkpoint": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\unified_rolling_v2\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001\\best.pt",
+      "checkpoint_sha256": "aff58c5cd609570bfce731f5bf5f33f7a8d6b602eedb03bfa750c29437033ec7",
+      "best_epoch": 6,
+      "completed_epochs": 16,
+      "verification": "config_inputs_manifest_and_checkpoint",
+      "test_evaluated": false,
+      "action": "trained"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 1,
+      "stage": "revision",
+      "path": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\unified_rolling_v2\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-001",
+      "checkpoint": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\unified_rolling_v2\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-001\\best.pt",
+      "checkpoint_sha256": "f12e64d1c092e74b6983e3fb80f743a3bd3fdc61ec774b6a5ba8702960e17e10",
+      "best_epoch": 9,
+      "completed_epochs": 19,
+      "verification": "config_inputs_manifest_and_checkpoint",
+      "test_evaluated": false,
+      "action": "trained"
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 2,
+      "stage": "revision",
+      "path": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\unified_rolling_v2\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002",
+      "checkpoint": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\unified_rolling_v2\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002\\best.pt",
+      "checkpoint_sha256": "4cb69a66ca916e75de67fc02e98d7e31a09065ab9fd1fbca53cda7a9561724da",
+      "best_epoch": 5,
+      "completed_epochs": 15,
+      "verification": "config_inputs_manifest_and_checkpoint",
+      "test_evaluated": false,
+      "action": "trained"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 2,
+      "stage": "revision",
+      "path": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\unified_rolling_v2\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-002",
+      "checkpoint": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\unified_rolling_v2\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-002\\best.pt",
+      "checkpoint_sha256": "046b8490d36ae958a6d5b140212766c21f967436f05ea7a7f713b473a5836e0b",
+      "best_epoch": 7,
+      "completed_epochs": 17,
+      "verification": "config_inputs_manifest_and_checkpoint",
+      "test_evaluated": false,
+      "action": "trained"
+    }
+  ],
+  "source_sha256": {
+    "D:\\code\\BrainDecoding\\braindecoding\\config.py": "d6b9e71b1cc3c61c828fb47f8fce1bdb176e717dd5a71174ba29e8e3e5b93186",
+    "D:\\code\\BrainDecoding\\braindecoding\\data\\pallier2025.py": "bbdc848ebeeb7514026ba37c21e5016512dd1aaeae8385199efbaa3ecf7eaa2d",
+    "D:\\code\\BrainDecoding\\braindecoding\\data\\text.py": "3274cf75697bcf8fbbec256749dceb0167b7b0cde7d240d248fe62a98a39e4f6",
+    "D:\\code\\BrainDecoding\\braindecoding\\evaluation\\retrieval.py": "5b6472a2a6f9f303fb61d242a0ddba758a65361faa0525c7c75a8edce33db503",
+    "D:\\code\\BrainDecoding\\braindecoding\\experiment.py": "e1cbd8b56b6793db2d2c854615c84be0c977802aae333238763f08a2e1fadfdb",
+    "D:\\code\\BrainDecoding\\braindecoding\\losses.py": "174b9b219dcea647be6cad55c935c483c370aa6c5a8281a2f0e3a12bf71a51ad",
+    "D:\\code\\BrainDecoding\\braindecoding\\models.py": "d64a01b5455890d7d81a24760fb8082218799ad0fd1dcd305b81dd66324065fe",
+    "D:\\code\\BrainDecoding\\braindecoding\\optimizers.py": "5c69feac47d56ea4acfe755871422b405ab3475c78b0bd81909e93db2ab3eb2d",
+    "D:\\code\\BrainDecoding\\braindecoding\\pallier_alignment_trial.py": "9d49956557050d5b1b98d86a2a8cf8460bc7c95454f489f82eaea6a7c344f786",
+    "D:\\code\\BrainDecoding\\braindecoding\\pallier_bge_trial.py": "31b65c9668915d18c81b22414defaa914ba0517c7d04c16d53c66b6da23670e6",
+    "D:\\code\\BrainDecoding\\braindecoding\\results.py": "334f8fcb421ab17c32aa118f9101eb08e6c7cbd424c4169fd45a5bebcc3e1a9e",
+    "D:\\code\\BrainDecoding\\braindecoding\\tasks\\word_decoding\\pallier2025\\train.py": "84c8292aa2674b73c709ff73075ba27614de79f8047faa5002490d14eb9d7301",
+    "D:\\code\\BrainDecoding\\braindecoding\\training\\runtime.py": "1998ee3463c91839beb8890e28c938168ae31c66d7b1bd65d01886162ee324c0",
+    "D:\\code\\BrainDecoding\\braindecoding\\training\\word.py": "31f28f9da3ccdc74320c85869d9a863916d67b0b69c04ca84e61acd991ee8af3",
+    "D:\\code\\BrainDecoding\\braindecoding\\unified_rolling_training.py": "7fb872aefbda01d248ff8b709adad076756a4f117069ef83e8c1d02d05c89e4b",
+    "D:\\code\\BrainDecoding\\braindecoding\\unified_rolling_v2_training.py": "8d64327b5257fe74a6ccfe26886e420478e9c989b0d1d58274bd4d2e26e28ae3",
+    "D:\\code\\BrainDecoding\\configs\\unified_rolling\\v2.yaml": "b7b5b7c7f7c239722b795fad0d6a311daface9c167e48287156e63e9e55ea497",
+    "D:\\code\\BrainDecoding\\configs\\word_decoding\\pallier2025\\base.yaml": "db31cdb14ae849ae7c000dae6aff02c655d720cbe97a9d028f95936bbac8d62d",
+    "D:\\code\\BrainDecoding\\configs\\word_decoding\\pallier2025\\rolling_revision\\k2_d2.yaml": "f0cdcc63ef4a2670be7a24ae76db02002051a8e1f298d46ad19da69cb2ebdc50",
+    "D:\\code\\BrainDecoding\\configs\\word_decoding\\pallier2025\\sub01-10\\main_word.yaml": "7a921115e9e236a3e6665ae1641aea84dacb4d1788f124ebc3bbde592b766c7e",
+    "D:\\code\\BrainDecoding\\derived\\pallier2025\\events\\events.csv": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+    "D:\\code\\BrainDecoding\\derived\\pallier2025\\events\\manifest.json": "c19e93b588f4ca233655863675252b5a7727910b983251293c67fd3bc58113de",
+    "D:\\code\\BrainDecoding\\derived\\pallier2025\\text\\unified_bge_m3_v1\\embeddings.json": "45c47978644f7447be6cec7dd282143377d61b575a88449836951e175cdcc388",
+    "D:\\code\\BrainDecoding\\derived\\pallier2025\\text\\unified_bge_m3_v1\\embeddings.npz": "bb684a6a5b9ef2363d4045ec470b7027159d229af5a2efea5cd3900db3fc1619",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\pallier2025\\implementation_diagnostics.json": "97a5247f0d243b38b151b841c1a1641b3b71aad60489e11366579805418b2298",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\pallier2025\\run_split.json": "a3865ba36f6fc852534e9d39089208ecd34005ae15f89aa302346b04665d6150",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\pallier2025\\vocabulary_N100.json": "ab01eb94fadc8c439c297d29c0fd889dea2b8cf825840361e522c6dcd9b2c336",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\pallier2025\\vocabulary_N150.json": "e96ea595b966704c9983ee4e2d4fa2c4bec0297d9da7b3b022ac8cf4b3b28b99",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\pallier2025\\vocabulary_N20.json": "c36b32db6b339c614356674f50d9779d3ef6fbf8b6f29d2a19611f9c521de05b",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\pallier2025\\vocabulary_N50.json": "7878a040d46a87f977a97f50956a97933d52ba23b857f51a617a5858045afbd2",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\pallier2025\\vocabulary_support.json": "673f217e53974b824ba1f7e65e80d2faca43245552c9feccf60f416ebcfe6ad6",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\rolling_sentence\\pallier2025_train_vocabulary.json": "1f00369c384a126e980e853868c1f9019a694a269f22dea9a205e34b90644875",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-000\\best.pt": "f57397e45ecbc0b5d2470f21f39a54713da67fd85272ad4650dfcf32ab74ee68",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-000\\training_summary.json": "842ecb32d7a3633c43424c67ac1895ea5a1252ac6e4bdfdae82836cb08b0dcdc",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-000\\run_manifest.json": "ceaa295ecff1e15dd00070a82282fad6fbbd538999acbf16d2c81f51147e562c",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000\\best.pt": "88dab8d40c989079559d503acd39bbd6b563ea16531add43a710469484adc94b",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000\\training_summary.json": "307f3136a0a2a2ee5f867e860e07805514b89e7907d1c2ea1e50d52e45702706",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000\\run_manifest.json": "fd896a68c85ae1689a181bff4bb59f4163edcdf40168036ac4ea31f67a528681",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000\\evaluation\\synthetic_test.json": "56cb614f6efee7e7e809decf7b80da0d52de60e6e3e4cf49808ae51c022be881",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\main_word\\seed-000\\best.pt": "9cb62d37a347b9334948d97f3a7b5098294fa0034ff29fb3451c51ffe35b332c",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\main_word\\seed-000\\training_summary.json": "e669262f4963f39a99fd0efab2b1fbe333cf744227aa94ae04c9d0d4a3e0ad7d",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\main_word\\seed-000\\run_manifest.json": "0feb48b67cad80743f93bc6a24bce0e454601f480b05268567f098877ea6e9b3",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000\\best.pt": "a05f001d3b7d4758e8935afb5792b8a2e3e0a78ebee48c1fc54f2142e41be56a",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000\\training_summary.json": "f14241c8d2ac6e5a34da0bd6dd3a87e773f194ed2770f76acf27fb36d45ff89e",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000\\run_manifest.json": "27a43aab17a327c92bd2fcaf1b66b9ed4242ea742a2605f356074da06cadb03e",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000\\evaluation\\synthetic_test.json": "68b6471338b9442377c38d2eccf2011ab413232d39000e3fc6110607efd08b9d",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-001\\best.pt": "527f2b3032082ad2309a7d889704a62eafae7338adcf3c0fa4f09db15c82cf80",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-001\\training_summary.json": "219a65e42fac274d87e24fe7dbb0737fc5431f620359f53948a40a3c0fbc1b41",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-001\\run_manifest.json": "49962a7f515f76bac95b5ce5c300d1f10069fcce5e321c69ce8c60a7d9038d91",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001\\best.pt": "1dab7d86f7b0e8ba4b632a8bef130cf437c4f84a610b34e89613dba876af2224",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001\\training_summary.json": "893acebffcdf3af0fc02cabf74af8f6aa1cf84d7be584f5d05c694414ca159d8",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001\\run_manifest.json": "79f54c6c756d24bd249e161b2c51499b3260c4915cbd634cca9b3373aefc8217",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001\\evaluation\\synthetic_test.json": "3e0886a737631208d5870f83684f8b9935412008a274664fefb082385c563be6",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\main_word\\seed-001\\best.pt": "38d33ebc5fa466f845819ae93aee4feadd6f2072a91862b0893111b83aab0ea3",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\main_word\\seed-001\\training_summary.json": "3b31ab6cc03e9c70a610bc9359c65e67d7a872a0d827e8d7896586de3cc535a8",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\main_word\\seed-001\\run_manifest.json": "ae53fcba372dcac5fb706015e8d1250d3e8f1d84ce933f2023cd11be5a00ef1d",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001\\best.pt": "8df44846c7299b0bbaa14534858b763ca5eccade7da38fb642d5806662d1c595",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001\\training_summary.json": "a31932ed93c0096c9e69ceae96b6dfd6b7d9f8f1509361be39eb1ef7c2b99fbd",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001\\run_manifest.json": "522aff4c66ca19b51d7bccd79a51db9d7fd5fa0c002e8010530dbb657dfd7952",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_independent\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001\\evaluation\\synthetic_test.json": "747b6bdafecc68a2091e3d47d696318ebbc6431a1fa0ea306a53d17287e5232e",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-002\\best.pt": "6e5faed1ade515385b1c955ee4b1ece3b2611c2e8b06bc61ee8674c623342373",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-002\\training_summary.json": "98f29b8349385d798510382e6f4e6b5a92529270c8d3f4b108eb3bff5da4d9b7",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\main_word\\seed-002\\run_manifest.json": "b7f3789e17291dfaeec811f8c8158dd89255b48b2f57738989f476081ddb044a",
+    "D:\\code\\BrainDecoding\\derived\\pallier2025\\text\\unified_heldout_test_v2\\embeddings.npz": "b12a8ecb352266abfa676112fbf53d5bfcbad01a208b5f9060523e1284ee4bb6",
+    "D:\\code\\BrainDecoding\\derived\\pallier2025\\text\\unified_heldout_test_v2\\embeddings.json": "551d40ed779060dc301ed07972ad795d3a617e02aa6e5a79894fe4b4e0b045e7",
+    "D:\\code\\BrainDecoding\\braindecoding\\data\\chineseeeg2.py": "bb6df69262cda79e6c39e2307ba5abab2077cb53e7707c5df7504441ba1c8225",
+    "D:\\code\\BrainDecoding\\braindecoding\\tasks\\word_decoding\\chineseeeg2_littleprince\\train.py": "a611b7c50e93f802fe061db93c56238b96571a4776a5ea482f98978d6b8d1d8f",
+    "D:\\code\\BrainDecoding\\configs\\word_decoding\\chineseeeg2_littleprince\\base.yaml": "039d5fe71d634915d66d58a610b876e0c09b5cf4b0b9511ed5d0edf3c21a0512",
+    "D:\\code\\BrainDecoding\\configs\\word_decoding\\chineseeeg2_littleprince\\rolling_revision\\k2_d2_full_coverage.yaml": "26d2753dcad96a6e4a034c5c6498f8a6867d0b42d52cecd5ec4082fb8b631ba0",
+    "D:\\code\\BrainDecoding\\configs\\word_decoding\\chineseeeg2_littleprince\\sub01-08\\main_word.yaml": "7fa1257b757b93e36410b534be40599cdbfbeeb8acc8272e6679685c00628881",
+    "D:\\code\\BrainDecoding\\derived\\chineseeeg2_littleprince\\events\\events.csv": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+    "D:\\code\\BrainDecoding\\derived\\chineseeeg2_littleprince\\events\\manifest.json": "a4938a1ed2183f2432516afa3cbde0d9a697727c4e53991052cc84f6bf3ede5f",
+    "D:\\code\\BrainDecoding\\derived\\chineseeeg2_littleprince\\text\\unified_bge_m3_v1\\embeddings.json": "e82faf75256731a5ee42ecf6cb33cd8f3b87606022504f825cba33e0f03d1f0c",
+    "D:\\code\\BrainDecoding\\derived\\chineseeeg2_littleprince\\text\\unified_bge_m3_v1\\embeddings.npz": "8e07384b187a892790ecad53c75ada3cefbf0d4bc9ad9113751072bd728a656e",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\rolling_sentence\\chineseeeg2_littleprince_train_vocabulary.json": "4dee010c46a8643706cd9d56bba9ac1512baa0fa9aa715b802a52118acaf4ce6",
+    "D:\\code\\BrainDecoding\\derived\\chineseeeg2_littleprince\\text\\unified_heldout_test_v2\\embeddings.npz": "81d54859e5e7a1596bc11e77ffa3a6396421123643cdc6ab6d172ff5b6ae8773",
+    "D:\\code\\BrainDecoding\\derived\\chineseeeg2_littleprince\\text\\unified_heldout_test_v2\\embeddings.json": "23a05687288015808e0f95c272786ba16862bf19a3df6612882fbbdc2dff1220",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\baseline_alignment_bge_v1_retry1\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-000\\best.pt": "5ec1df75ed99178191df9563652dc2c2d02c1906c6c535eee4b53db8cf8057f1",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\baseline_alignment_bge_16x16_v1\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-000\\best.pt": "e7ef991a2fd42c6848f9c9cd8e0eb145720f12eb0af28b6b080b7bd96430cdf8",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\unified_rolling_v2\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-001\\best.pt": "aff58c5cd609570bfce731f5bf5f33f7a8d6b602eedb03bfa750c29437033ec7",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\unified_rolling_v2\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-001\\best.pt": "f12e64d1c092e74b6983e3fb80f743a3bd3fdc61ec774b6a5ba8702960e17e10",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\unified_rolling_v2\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002\\best.pt": "4cb69a66ca916e75de67fc02e98d7e31a09065ab9fd1fbca53cda7a9561724da",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\unified_rolling_v2\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-002\\best.pt": "046b8490d36ae958a6d5b140212766c21f967436f05ea7a7f713b473a5836e0b",
+    "D:\\code\\BrainDecoding\\configs\\unified_rolling\\synthetic_timing_v2.yaml": "a605e2a97740a2e16401709540f95f942e74b49a29e634050b92547642fbe1a1",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\rolling_sentence\\synthetic_timing_v2.md": "956af63b4da2b4c61ca200fdcd72d1a27621320b095f65bd928a20402b0f9867",
+    "D:\\code\\BrainDecoding\\braindecoding\\synthetic_timing_recovery.py": "8e00681c87b58ff9e7d0eb1eba85ec5a8ff121cab1ab5d481f2cc9f5cb495a15",
+    "D:\\code\\BrainDecoding\\braindecoding\\training\\epoch_recovery.py": "df82103201c111660a8a20fa725fcc0ae01ea9c006cf6a80bd6437a0c77ea531",
+    "D:\\code\\BrainDecoding\\braindecoding\\synthetic_timing_queue_entry.py": "1cc9a3fe865e57b71c1b4fe844e4ea0737b868d30bdfc5597ec1be56b3f92775",
+    "D:\\code\\BrainDecoding\\configs\\unified_rolling\\synthetic_timing_v1.yaml": "14c7265f019a682272c2158aa39eefe33bbf225176009cec162b1fc56771158e",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\rolling_sentence\\synthetic_timing_v1.md": "0f0560c2026d5a0a05643fc64711d82228b5879c121ec313c801d8f7afb3d1fa",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\rolling_sentence\\synthetic_timing_v1.json": "b6e41437fd5212095edff04c357720cdffbcbd373197de77482f89aa6ebac40b",
+    "D:\\code\\BrainDecoding\\braindecoding\\synthetic_timing_control.py": "a18854f47c5cb3f23b5659226db5c8a966e8fbc96b4077a51c80f03e533dbc71",
+    "D:\\code\\BrainDecoding\\braindecoding\\data\\synthetic_timing.py": "ff147d51c2d883860ccceee7e2b577801d998d26ff8b512ea5bf5ae20705a4a6",
+    "D:\\code\\BrainDecoding\\reports\\exports\\unified_heldout_test_v2_word_by_seed.csv": "f4e0b5b272842be1b0d4f5a120cb65b20dd0ad3fddddf9c2ae5caa23dd0e55b6",
+    "D:\\code\\BrainDecoding\\experiments\\manifests\\rolling_sentence\\heldout_test_v2.json": "09428686d438794c48a6b28c41b672dc2da987a9299715bae8a8fd2e148710f6"
+  },
+  "recovery": {
+    "observed_unix": 1791595320.890497,
+    "prior_output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002",
+    "prior_worker_status": {
+      "dataset": "pallier2025",
+      "seed": 2,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002",
+      "started_unix": 1791503763.771009,
+      "test_evaluated": false,
+      "status": "training",
+      "pid": 2332,
+      "updated_unix": 1791506489.3112507,
+      "epoch": 7,
+      "completed_epochs": 6,
+      "completed_batches": 550,
+      "max_epochs": 30,
+      "brain_encoder_frozen": false,
+      "best_epoch": 5,
+      "best_selection_score": 0.2945118156185614,
+      "epoch_seconds": 428.98625740013085
+    },
+    "prior_queue_status": {
+      "state": "training",
+      "pid": 8760,
+      "started_unix": 1791452621.0801933,
+      "manifest_sha256": "0765ae70eb9682ac63823e662e5ec5f8973e9c569e5c9de8efe51bf32df744ab",
+      "completed_stages": 9,
+      "total_stages": 12,
+      "current": {
+        "condition": "shared",
+        "seed": 2,
+        "stage": "revision",
+        "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002"
+      },
+      "updated_unix": 1791503759.7936873
+    },
+    "completed_epochs": 6,
+    "python_traceback_recorded": false,
+    "full_resume_checkpoint_existed": false,
+    "cause": "unclean_process_exit_without_recorded_python_exception; external cause unconfirmed",
+    "action": "restart_only_interrupted_revision_from_completed_matching_synthetic_CNN",
+    "user_scope": "2026-10-10: fix third seed and add chineseeeg2_littleprince",
+    "evidence_sha256": {
+      "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002\\status.json": "47c8bbacef3b3cbc0ceda858dfa134678d8191f3fa1d2a494730ba8d8923195f",
+      "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002\\progress.json": "68febe3958f6d2bc68009cd21024843ca75d94e59ecfc54b0316e38f51d294cc",
+      "D:\\code\\BrainDecoding\\.cache\\runs\\synthetic_timing_v1\\queue.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "D:\\code\\BrainDecoding\\.cache\\runs\\synthetic_timing_v1\\shared_seed2_revision.log": "efc6b7e7d64240eb720e11540ab187ab1c06dcb76554a2a2938791a9913a415b"
+    }
+  },
+  "test_selection_allowed": false,
+  "test_evaluation_authorized": true,
+  "manifest_sha256": "a4adea9fdb93facca8a6a0ed2a45727bfd7bb2b3f2d50fd1a3a0e3204dfa1307"
+}

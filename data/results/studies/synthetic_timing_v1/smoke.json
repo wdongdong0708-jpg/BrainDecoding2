@@ -1,0 +1,56 @@
+{
+  "passed": true,
+  "device": "cpu",
+  "formal_performance_estimate": false,
+  "full_model_capacity": true,
+  "records": [
+    {
+      "condition": "shared",
+      "stage": "word",
+      "train_loss": 9.905876159667969,
+      "updates": 1,
+      "seconds": 0.20551959984004498,
+      "parameters": 9830913,
+      "delay_counts": {},
+      "passed": true
+    },
+    {
+      "condition": "shared",
+      "stage": "revision",
+      "train_loss": 9.924355506896973,
+      "updates": 1,
+      "seconds": 1.5262690000236034,
+      "parameters": 211272226,
+      "delay_counts": {
+        "0": 3,
+        "1": 2,
+        "2": 1
+      },
+      "passed": true
+    },
+    {
+      "condition": "independent",
+      "stage": "word",
+      "train_loss": 9.817435264587402,
+      "updates": 1,
+      "seconds": 0.08424660004675388,
+      "parameters": 9830913,
+      "delay_counts": {},
+      "passed": true
+    },
+    {
+      "condition": "independent",
+      "stage": "revision",
+      "train_loss": 9.928380012512207,
+      "updates": 1,
+      "seconds": 1.1057879000436515,
+      "parameters": 211272226,
+      "delay_counts": {
+        "0": 3,
+        "1": 2,
+        "2": 1
+      },
+      "passed": true
+    }
+  ]
+}

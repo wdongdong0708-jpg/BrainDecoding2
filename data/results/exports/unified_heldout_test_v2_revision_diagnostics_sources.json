@@ -1,0 +1,47 @@
+{
+  "status": "verified_descriptive_saved_test_diagnostics",
+  "split": "test",
+  "manifest_sha256": "90934e139ee62e1fedf89ebf57370f38ac0ca73930ed02d951e11a64e6d2f278",
+  "sources": {
+    "experiments/manifests/rolling_sentence/heldout_test_v2.json": "09428686d438794c48a6b28c41b672dc2da987a9299715bae8a8fd2e148710f6",
+    "reports/exports/unified_heldout_test_v2_sentence_summary.json": "14773dd40d6044eccff99ac0bcfa51bab8752a8955266038153f7ae31ef06a80",
+    "reports/exports/unified_heldout_test_v2_sentence_by_subject_seed.csv": "deb1dc7b5ae9c20719af4bcecd1a54ec376db5ebf853b83d7ff365ace297fa45",
+    "reports/exports/unified_heldout_test_v2_sentence_repairs.csv": "34d409260cb24c480b4e15526f4039c0ff8113766ea755c3694c8e7e1d0fdb84",
+    "reports/studies/unified_heldout_test_v2/audit.json": "ded9bf64a8311f31d05f6cffa0381a7bbd1657e11f2bdcec89f76f3d66aafb78",
+    "outputs/heldout_test/unified_heldout_test_v2/pallier2025/seed-000/main.json": "1c9933ec7a10775e3a2b6a8b1056405d2a4906c393d2578f943dd60862589e20",
+    "outputs/heldout_test/unified_heldout_test_v2/pallier2025/seed-001/main.json": "1d4787f467fb8ab0f5699253cd804803dcf36946a133f0c49b73bb077c7a64bb",
+    "outputs/heldout_test/unified_heldout_test_v2/pallier2025/seed-002/main.json": "f01aab02035c08e6f7ed52485f22384b5563865de5a77c85faa6abdc3bcebbe3",
+    "outputs/heldout_test/unified_heldout_test_v2/chineseeeg2_littleprince/seed-000/main.json": "be9c761d4ee11faabda7ec77ed49c8bdc03bbaabc89a8c65dbc712e8940a2c29",
+    "outputs/heldout_test/unified_heldout_test_v2/chineseeeg2_littleprince/seed-001/main.json": "df77d548414a92d6ac4df47c3dd37b0932a486534fd7e928882f0a127cdd71c8",
+    "outputs/heldout_test/unified_heldout_test_v2/chineseeeg2_littleprince/seed-002/main.json": "6bb881e4cc3d97aa7c18be3d6f638d9adee7e1b7a25afa2f9ef2b0d04088dbb3"
+  },
+  "exports": {
+    "reports/exports/unified_heldout_test_v2_revision_diagnostics_display_edits_by_group.csv": "c7f080dfc4afb3f93cdf12340bc55bd39a4cd21a43b917e4eaed84069f467d9e",
+    "reports/exports/unified_heldout_test_v2_revision_diagnostics_display_edits_by_subject_seed.csv": "83feed067abafd36e4e047fa9f9be471a346ef87df3f086b852e3d21760dc6c7",
+    "reports/exports/unified_heldout_test_v2_revision_diagnostics_display_edits_by_seed.csv": "a099b3b2281461ac81415ec610fd385b0d3b9a0f0ceac93e6d2b6b26688ff049",
+    "reports/exports/unified_heldout_test_v2_revision_diagnostics_display_edits_summary.csv": "90b988e4dc47ba6568116cc92c9ac50ba78f82ece6e8bb7ccbfc6aafec086e52",
+    "reports/exports/unified_heldout_test_v2_revision_diagnostics_participant_gains.csv": "b75344556781f84f8200f9be36a689bded3e7662d1f398c6f10b50acb1579bba"
+  },
+  "stages": {
+    "1": "K0_to_K1",
+    "2": "K1_to_K2"
+  },
+  "outcomes": [
+    "wrong_to_correct",
+    "correct_to_wrong",
+    "wrong_to_different_wrong"
+  ],
+  "edit_unit": "changed_displayed_target_update_seed_event",
+  "edit_denominator": "changed target updates within the dataset and revision stage; pooled across three seeds",
+  "excluded_from_edits": [
+    "first display of a new target",
+    "unchanged predictions"
+  ],
+  "same_target_can_contribute_two_edit_events": true,
+  "stage_eligibility": "all available within-segment updates; the second stage has fewer eligible targets",
+  "participant_gain": "C minus A in mean segment BLEU-1 times 100 for the same participant and seed",
+  "participant_order": "subject ID; no selection by gain",
+  "statistics": "descriptive; no new hypothesis test or confidence interval",
+  "net_correctness_reconciles_with_existing_initial_to_final_counts": true,
+  "training_inference_or_parameter_selection_performed": false
+}

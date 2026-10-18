@@ -1,0 +1,32 @@
+{
+  "profile": "unified_sentence_v2_revision_gain_full",
+  "config": "configs/unified_rolling/sentence_v2_revision_gain_full.yaml",
+  "config_sha256": "a939645b4adc646fc3e0f93c58a80a750f326d43a2bd9c275cd58baf5df0c0f5",
+  "manifest": "experiments/manifests/rolling_sentence/unified_sentence_v2_revision_gain_full.json",
+  "manifest_sha256": "880fc0e6f0f15c83b31b718c6e03df578671ddb8b27ee456c6da73f22b8953fb",
+  "conditions": [
+    "A",
+    "C"
+  ],
+  "comparison": "C_minus_A",
+  "branch": "open",
+  "alignment": "real",
+  "controls": [],
+  "ablations": [],
+  "scope": "all_frozen_evaluation_materials",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "entry": "python -m braindecoding.unified_sentence_v2_complete --full",
+  "current_action": "completed_full_AC_evaluation",
+  "progress": "reports/studies/unified_sentence_v2_revision_gain_full/progress.md",
+  "report": "reports/studies/unified_sentence_v2_revision_gain_full/results.md",
+  "full_population_authorized": true,
+  "full_run_requires_new_user_decision": false,
+  "parent_manifest_sha256": "6be90d2a1ea630f41a19faf7513d24528465e70d5c8d1af2ba0210cc0ea9ceea",
+  "source_preview_sha256": "315819db3b5f4eba89509a55425e8125eefba17aabdee4bab7e0ee0a70f58d2d",
+  "updated_unix": 1790620795.6203585,
+  "worker_pid": 27740
+}

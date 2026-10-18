@@ -1,0 +1,258 @@
+{
+  "status": "completed_word_test",
+  "manifest_sha256": "90934e139ee62e1fedf89ebf57370f38ac0ca73930ed02d951e11a64e6d2f278",
+  "split": "test",
+  "test_evaluated": true,
+  "summary": [
+    {
+      "dataset": "pallier2025",
+      "population": "all_targets",
+      "horizon": 0,
+      "n_seeds": 3,
+      "query_count": 8930,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.112250492448002,
+      "macro_recall_at_1_sd": 0.0059146788535131825,
+      "macro_recall_at_10_mean": 0.5171832558461074,
+      "macro_recall_at_10_sd": 0.01025649368592843,
+      "micro_recall_at_1_mean": 0.13426651735722284,
+      "micro_recall_at_1_sd": 0.003121469174639726,
+      "micro_recall_at_10_mean": 0.5159761104889884,
+      "micro_recall_at_10_sd": 0.007296329509739787
+    },
+    {
+      "dataset": "pallier2025",
+      "population": "all_targets",
+      "horizon": 1,
+      "n_seeds": 3,
+      "query_count": 8930,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.1865353757176055,
+      "macro_recall_at_1_sd": 0.008250557848390344,
+      "macro_recall_at_10_mean": 0.660457547862288,
+      "macro_recall_at_10_sd": 0.015484660909624963,
+      "micro_recall_at_1_mean": 0.21347517730496454,
+      "micro_recall_at_1_sd": 0.008558635602725788,
+      "micro_recall_at_10_mean": 0.6737961926091826,
+      "micro_recall_at_10_sd": 0.012067595770255825
+    },
+    {
+      "dataset": "pallier2025",
+      "population": "all_targets",
+      "horizon": 2,
+      "n_seeds": 3,
+      "query_count": 8930,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.2176652792440098,
+      "macro_recall_at_1_sd": 0.012570541729365546,
+      "macro_recall_at_10_mean": 0.6956312870171565,
+      "macro_recall_at_10_sd": 0.016246400126855434,
+      "micro_recall_at_1_mean": 0.243150429264651,
+      "micro_recall_at_1_sd": 0.011134383248419416,
+      "micro_recall_at_10_mean": 0.7109742441209407,
+      "micro_recall_at_10_sd": 0.014474306921479312
+    },
+    {
+      "dataset": "pallier2025",
+      "population": "common_targets",
+      "horizon": 0,
+      "n_seeds": 3,
+      "query_count": 7440,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.11300460771736258,
+      "macro_recall_at_1_sd": 0.0059435407531859665,
+      "macro_recall_at_10_mean": 0.5235282308622692,
+      "macro_recall_at_10_sd": 0.011477777321772834,
+      "micro_recall_at_1_mean": 0.12759856630824373,
+      "micro_recall_at_1_sd": 0.0032712229993318745,
+      "micro_recall_at_10_mean": 0.5109767025089607,
+      "micro_recall_at_10_sd": 0.007107576361265603
+    },
+    {
+      "dataset": "pallier2025",
+      "population": "common_targets",
+      "horizon": 1,
+      "n_seeds": 3,
+      "query_count": 7440,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.1944119448594185,
+      "macro_recall_at_1_sd": 0.008045713050055338,
+      "macro_recall_at_10_mean": 0.6743851328682481,
+      "macro_recall_at_10_sd": 0.015819251806037604,
+      "micro_recall_at_1_mean": 0.20810931899641574,
+      "micro_recall_at_1_sd": 0.008569887975966048,
+      "micro_recall_at_10_mean": 0.6690860215053763,
+      "micro_recall_at_10_sd": 0.012043640776531094
+    },
+    {
+      "dataset": "pallier2025",
+      "population": "common_targets",
+      "horizon": 2,
+      "n_seeds": 3,
+      "query_count": 7440,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.23018507009884828,
+      "macro_recall_at_1_sd": 0.013554196630865616,
+      "macro_recall_at_10_mean": 0.714138682090665,
+      "macro_recall_at_10_sd": 0.018214497206416595,
+      "micro_recall_at_1_mean": 0.24372759856630824,
+      "micro_recall_at_1_sd": 0.011957330501692752,
+      "micro_recall_at_10_mean": 0.7137096774193549,
+      "micro_recall_at_10_sd": 0.014929038802302142
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "population": "all_targets",
+      "horizon": 0,
+      "n_seeds": 3,
+      "query_count": 3444,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.04212274182027983,
+      "macro_recall_at_1_sd": 0.0033696927298223723,
+      "macro_recall_at_10_mean": 0.33955108967750985,
+      "macro_recall_at_10_sd": 0.00927723333664127,
+      "micro_recall_at_1_mean": 0.056329849012775844,
+      "micro_recall_at_1_sd": 0.024823661366424506,
+      "micro_recall_at_10_mean": 0.3914053426248549,
+      "micro_recall_at_10_sd": 0.012646505075715781
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "population": "all_targets",
+      "horizon": 1,
+      "n_seeds": 3,
+      "query_count": 3444,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.08109022507683675,
+      "macro_recall_at_1_sd": 0.004579418443022524,
+      "macro_recall_at_10_mean": 0.44598364966767745,
+      "macro_recall_at_10_sd": 0.010269038370226965,
+      "micro_recall_at_1_mean": 0.09204413472706156,
+      "micro_recall_at_1_sd": 0.019046822311316172,
+      "micro_recall_at_10_mean": 0.4838366240805265,
+      "micro_recall_at_10_sd": 0.020012387332228262
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "population": "all_targets",
+      "horizon": 2,
+      "n_seeds": 3,
+      "query_count": 3444,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.09051749511682149,
+      "macro_recall_at_1_sd": 0.0031218300578031615,
+      "macro_recall_at_10_mean": 0.468276777683388,
+      "macro_recall_at_10_sd": 0.015797286071478202,
+      "micro_recall_at_1_mean": 0.1084010840108401,
+      "micro_recall_at_1_sd": 0.008673620481314188,
+      "micro_recall_at_10_mean": 0.4953542392566783,
+      "micro_recall_at_10_sd": 0.02038112433267757
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "population": "common_targets",
+      "horizon": 0,
+      "n_seeds": 3,
+      "query_count": 2872,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.037239630663736784,
+      "macro_recall_at_1_sd": 0.00514565978788047,
+      "macro_recall_at_10_mean": 0.333950478702689,
+      "macro_recall_at_10_sd": 0.007349857202118255,
+      "micro_recall_at_1_mean": 0.060933147632311974,
+      "micro_recall_at_1_sd": 0.026905378129458906,
+      "micro_recall_at_10_mean": 0.39159702878365826,
+      "micro_recall_at_10_sd": 0.015696869026988608
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "population": "common_targets",
+      "horizon": 1,
+      "n_seeds": 3,
+      "query_count": 2872,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.08474992439810843,
+      "macro_recall_at_1_sd": 0.0026910065023621394,
+      "macro_recall_at_10_mean": 0.4544106022234488,
+      "macro_recall_at_10_sd": 0.010857195670205811,
+      "micro_recall_at_1_mean": 0.09772516248839369,
+      "micro_recall_at_1_sd": 0.019709899426990533,
+      "micro_recall_at_10_mean": 0.49558960074280406,
+      "micro_recall_at_10_sd": 0.020045350607666292
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "population": "common_targets",
+      "horizon": 2,
+      "n_seeds": 3,
+      "query_count": 2872,
+      "candidate_count": 50,
+      "macro_recall_at_1_mean": 0.09496877187816456,
+      "macro_recall_at_1_sd": 0.004137354210316109,
+      "macro_recall_at_10_mean": 0.47926223578732197,
+      "macro_recall_at_10_sd": 0.014928097802363455,
+      "micro_recall_at_1_mean": 0.11733983286908078,
+      "micro_recall_at_1_sd": 0.008031032447542334,
+      "micro_recall_at_10_mean": 0.5094011142061281,
+      "micro_recall_at_10_sd": 0.02082452166337839
+    }
+  ],
+  "gains": [
+    {
+      "dataset": "pallier2025",
+      "seed": 0,
+      "macro_top10_k2_minus_k0": 0.18246073659054207
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 1,
+      "macro_top10_k2_minus_k0": 0.20156830992924002
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 2,
+      "macro_top10_k2_minus_k0": 0.18780230716540558
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 0,
+      "macro_top10_k2_minus_k0": 0.14292804880438137
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 1,
+      "macro_top10_k2_minus_k0": 0.13920609829237374
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 2,
+      "macro_top10_k2_minus_k0": 0.1538011241571436
+    }
+  ],
+  "sources": [
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\pallier2025\\seed-000\\word_metrics.json",
+      "sha256": "87c669f9e8d4fbff73890a6f434a5276649d1f05b9ba0473e9b207301ae2f8c4"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\pallier2025\\seed-001\\word_metrics.json",
+      "sha256": "9cc4740ec1678151e068289b835d1918e9686e4377683f3ef869fc4246bf184d"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\pallier2025\\seed-002\\word_metrics.json",
+      "sha256": "6623ec5058fa1b0ddfb1b0da157802675b0a34a69d7a49f3ab2486e04c1de884"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\chineseeeg2_littleprince\\seed-000\\word_metrics.json",
+      "sha256": "be9ae9d906ce3b03805131a996c8c828a84526c33067b4413f3728d068e99259"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\chineseeeg2_littleprince\\seed-001\\word_metrics.json",
+      "sha256": "99106db8c5ebab4298bf995f94b77ce491d54116c22498fa7bc0d5ae4958bcfe"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\chineseeeg2_littleprince\\seed-002\\word_metrics.json",
+      "sha256": "c69ab523a857e18aaca406868dd30f5ec206a431ee9774b7f8d7d7f569f7268f"
+    }
+  ]
+}

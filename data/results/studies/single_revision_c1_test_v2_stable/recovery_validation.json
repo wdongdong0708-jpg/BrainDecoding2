@@ -1,0 +1,119 @@
+{
+  "status": "verified_resumed",
+  "checked_unix": 1791550332.239792,
+  "scientific_protocol_manifest_sha256": "f87d270739efd28264e7b0375efef06e2da12621cd1725d74192ea482eb7e030",
+  "scientific_execution_manifest_sha256": "a244e11a60edbed7f5b27592c433c44e7ee759e060ad719dde068c2116250a2b",
+  "execution_io_manifest_sha256": "4fbbf8ef2f7d6d309374ff5d977f6b4069820883f75d1811612255749c962a14",
+  "preserved_units": 4232,
+  "preserved_old_chunks": 266,
+  "original_chunks_hashes_unchanged": true,
+  "adopted_record_content_unchanged": true,
+  "adoption": [
+    {
+      "dataset": "pallier2025",
+      "seed": 0,
+      "preserved_units": 1940
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 1,
+      "preserved_units": 1940
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 2,
+      "preserved_units": 352
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 0,
+      "preserved_units": 0
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 1,
+      "preserved_units": 0
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 2,
+      "preserved_units": 0
+    }
+  ],
+  "recomputed_chunks": [
+    {
+      "chunk": 22,
+      "units": 16,
+      "path": "outputs/heldout_test/single_revision_c1_test_v2_stable/pallier2025/seed-002/chunks/chunk-0022.json",
+      "sha256": "ead98c2a6cb603ce8ae08288977a201e4915f788ca2db3b48ec7c06b079cc1d9",
+      "seconds": 27.000615800032392,
+      "initial_agreement_verified": true,
+      "single_revision_and_one_window_verified": true
+    },
+    {
+      "chunk": 23,
+      "units": 16,
+      "path": "outputs/heldout_test/single_revision_c1_test_v2_stable/pallier2025/seed-002/chunks/chunk-0023.json",
+      "sha256": "2568c4f8743d4b44d72bc7947a12ee20f45982e2caa5ab7bb79ca383ccf23c7e",
+      "seconds": 27.001358199864626,
+      "initial_agreement_verified": true,
+      "single_revision_and_one_window_verified": true
+    }
+  ],
+  "formerly_failed_example": {
+    "group": "pallier2025|sub-02|run-06|pallier2025|run-06|sequence-168",
+    "first_K1_output": [
+      "j",
+      "étais"
+    ],
+    "matches_original_C": true
+  },
+  "tests": {
+    "passed": 26,
+    "command": "pytest tests/test_single_revision_c1_test_v2_io_guard.py tests/test_single_revision_c1_test_v2_stable.py tests/test_single_revision_c1_test_v2.py tests/test_fixed_k0_rolling_search_test_v2.py -q"
+  },
+  "numerical_diagnostic": {
+    "path": ".cache/runs/single_revision_c1_test_v2/recovery/chunk-0022-two-arrival-diagnostic.json",
+    "current_cache_differences": 1,
+    "restored_original_short_scores_differences": 0,
+    "top_two_margin": 0.0003582561127313255,
+    "current_words": [
+      "tu",
+      "étais"
+    ],
+    "original_words": [
+      "j",
+      "étais"
+    ]
+  },
+  "decoding_constraints": {
+    "method": "reuse_authenticated_arrivals_0_1_before_policy_divergence",
+    "use_reference_words": false,
+    "use_C_final": false,
+    "use_K2": false,
+    "first_independent_arrival": 2,
+    "preserved_record_content": true,
+    "diagnostic": ".cache/runs/single_revision_c1_test_v2/recovery/chunk-0022-two-arrival-diagnostic.json"
+  },
+  "progress_snapshot": {
+    "pid": 17516,
+    "updated_unix": 1791550317.9659219,
+    "manifest_sha256": "a244e11a60edbed7f5b27592c433c44e7ee759e060ad719dde068c2116250a2b",
+    "total_segment_seed_units": 8244,
+    "adopted_segment_seed_units": 4232,
+    "state": "running",
+    "stage": "C1_decoding",
+    "error": null,
+    "completed_segment_seed_units": 4264,
+    "started_unix": 1791550241.7496402,
+    "completed_datasets": [],
+    "dataset": "pallier2025",
+    "seed": 2,
+    "chunk": 24,
+    "arrival": 2,
+    "execution_io_manifest_sha256": "4fbbf8ef2f7d6d309374ff5d977f6b4069820883f75d1811612255749c962a14",
+    "longest_segment": 20,
+    "chunk_seconds": 2.2326913999859244
+  },
+  "complete_C1_results_pending": true
+}

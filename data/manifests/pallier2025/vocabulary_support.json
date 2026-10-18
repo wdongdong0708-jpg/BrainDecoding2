@@ -1,0 +1,193 @@
+{
+  "asset_type": "evaluation_vocabulary_support",
+  "dataset": "pallier2025",
+  "generator": "braindecoding.data.pallier2025.build_protocol_assets",
+  "generator_sha256": "2cb2cfc7132ad5b7e7a3332a5b432464a73a19a6025c3cda9ed577d47192dd33",
+  "manifest_sha256": "457291885d8f3801e0d20103ddf3aba090d4a6c0fc94226b2668f42022ba8093",
+  "status": "frozen_support_audit",
+  "support_audit_used_for_vocabulary_selection": false,
+  "test_labels_used_for_support_audit_only": true,
+  "test_metrics_inspected": false,
+  "test_model_evaluation": "not_run",
+  "test_predictions_generated": false,
+  "vocabularies": {
+    "N100": {
+      "candidate_manifest_sha256": "54d2f40107ca73186b4e898629f0687476816dba529bfd307f76cdd9ef20e866",
+      "splits": {
+        "test": {
+          "candidate_count": 100,
+          "missing_candidate_count": 10,
+          "missing_words": [
+            "mon",
+            "m",
+            "mouton",
+            "roi",
+            "te",
+            "soleil",
+            "peut",
+            "dessin",
+            "-là",
+            "quoi"
+          ],
+          "support_fraction": 0.9,
+          "supported_candidate_count": 90,
+          "token_count": 1845,
+          "token_coverage": 0.586449864498645
+        },
+        "val": {
+          "candidate_count": 100,
+          "missing_candidate_count": 10,
+          "missing_words": [
+            "étoiles",
+            "mouton",
+            "roi",
+            "avais",
+            "fois",
+            "soleil",
+            "dessin",
+            "grandes",
+            "personnes",
+            "quoi"
+          ],
+          "support_fraction": 0.9,
+          "supported_candidate_count": 90,
+          "token_count": 1696,
+          "token_coverage": 0.5902122641509434
+        }
+      }
+    },
+    "N150": {
+      "candidate_manifest_sha256": "87222410a35cc1593a8a5f5b342b1f48ca7d0aa172de00f3f326f4cfdefb6edc",
+      "splits": {
+        "test": {
+          "candidate_count": 150,
+          "missing_candidate_count": 32,
+          "missing_words": [
+            "mon",
+            "m",
+            "mouton",
+            "roi",
+            "te",
+            "soleil",
+            "peut",
+            "dessin",
+            "-là",
+            "quoi",
+            "sans",
+            "étais",
+            "-même",
+            "faut",
+            "ni",
+            "sérieux",
+            "tellement",
+            "toutes",
+            "ainsi",
+            "ami",
+            "autre",
+            "oui",
+            "ses",
+            "bonhomme",
+            "dis",
+            "doucement",
+            "sera",
+            "veux",
+            "-moi",
+            "celui",
+            "chose",
+            "sais"
+          ],
+          "support_fraction": 0.7866666666666666,
+          "supported_candidate_count": 118,
+          "token_count": 1845,
+          "token_coverage": 0.6254742547425475
+        },
+        "val": {
+          "candidate_count": 150,
+          "missing_candidate_count": 28,
+          "missing_words": [
+            "étoiles",
+            "mouton",
+            "roi",
+            "avais",
+            "fois",
+            "soleil",
+            "dessin",
+            "grandes",
+            "personnes",
+            "quoi",
+            "sans",
+            "étais",
+            "-même",
+            "baobabs",
+            "millions",
+            "nuit",
+            "ni",
+            "sérieux",
+            "pourquoi",
+            "ses",
+            "bonhomme",
+            "dis",
+            "doucement",
+            "allumeur",
+            "celui",
+            "eau",
+            "fleurs",
+            "sais"
+          ],
+          "support_fraction": 0.8133333333333334,
+          "supported_candidate_count": 122,
+          "token_count": 1696,
+          "token_coverage": 0.6397405660377359
+        }
+      }
+    },
+    "N20": {
+      "candidate_manifest_sha256": "c591538c310d0a0edf538759e4bb807334afc34a217e0c969de1089257406644",
+      "splits": {
+        "test": {
+          "candidate_count": 20,
+          "missing_candidate_count": 0,
+          "missing_words": [],
+          "support_fraction": 1.0,
+          "supported_candidate_count": 20,
+          "token_count": 1845,
+          "token_coverage": 0.3024390243902439
+        },
+        "val": {
+          "candidate_count": 20,
+          "missing_candidate_count": 0,
+          "missing_words": [],
+          "support_fraction": 1.0,
+          "supported_candidate_count": 20,
+          "token_count": 1696,
+          "token_coverage": 0.3001179245283019
+        }
+      }
+    },
+    "N50": {
+      "candidate_manifest_sha256": "6e9d12c345b28cd695f6971216e0c90f3a306b0a0e0f16fc05c3de802be11505",
+      "splits": {
+        "test": {
+          "candidate_count": 50,
+          "missing_candidate_count": 1,
+          "missing_words": [
+            "mon"
+          ],
+          "support_fraction": 0.98,
+          "supported_candidate_count": 49,
+          "token_count": 1845,
+          "token_coverage": 0.48401084010840106
+        },
+        "val": {
+          "candidate_count": 50,
+          "missing_candidate_count": 0,
+          "missing_words": [],
+          "support_fraction": 1.0,
+          "supported_candidate_count": 50,
+          "token_count": 1696,
+          "token_coverage": 0.48702830188679247
+        }
+      }
+    }
+  }
+}

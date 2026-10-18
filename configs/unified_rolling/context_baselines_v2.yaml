@@ -1,0 +1,30 @@
+protocol:
+  id: unified_context_baselines_v2
+  parent: unified_rolling_v2
+  datasets: [pallier2025, chineseeeg2_littleprince]
+  seeds: [0, 1, 2]
+  splits_allowed: [train, val]
+  test_evaluated: false
+  unique_trainings: 48
+  conditions:
+    local_r2: [2, 2]
+    independent_k0: [2, 0]
+    independent_k1: [2, 1]
+    local_r0: [0, 0]
+    local_r1: [1, 1]
+    local_r4: [4, 4]
+    local_r8: [8, 8]
+    full_context: null
+  aliases:
+    independent_k2: local_r2
+  training_targets: every_training_word_once_per_epoch_with_boundary_clipping
+  selection: legacy_common_query_word_type_macro_top10
+  selection_tie: earlier_epoch
+  reporting: strict50_all_and_common_queries
+  primary_checkpoint: best.pt
+  secondary_full_vocabulary: metrics_only_at_primary_checkpoint
+execution:
+  output_root: outputs/word_decoding/unified_context_baselines_v2
+  minimum_free_gib: 3.0
+  incomplete_run_policy: stop_without_overwrite
+  job_order: independent_delays_all_seeds_then_remaining_context

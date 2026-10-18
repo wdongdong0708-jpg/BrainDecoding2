@@ -1,0 +1,51 @@
+{
+  "status": "verified_complete",
+  "presentation_only": true,
+  "conditions": [
+    "A",
+    "C1",
+    "C",
+    "F"
+  ],
+  "sources": {
+    "reports/exports/full_context_sentence_test_v2_summary.json": "a9be6811a70923b3c043866791d712053fb3827b515887cb8f46817bc555f830",
+    "reports/exports/full_context_sentence_test_v2_by_group.csv": "2957983b9c71720cc5b23cdef737d4fe2fd3b0feec6c5abbf4d3f64b7dda9cb4",
+    "reports/exports/full_context_sentence_test_v2_by_subject_seed.csv": "9c709b3eb164bf3ee0650444bbe04890355714cd7014ab1bfc5038717843635d",
+    "reports/exports/full_context_sentence_test_v2_input_wait_by_event.csv": "44212cb4ed11cab688524dd74bc96be03e81a301877132cf6ac3ed1dd7b57c53",
+    "reports/exports/full_context_sentence_test_v2_input_wait_summary.csv": "f733b263522cb5928aac1befc8f9061b097181e8ff98f8723ebd0ff04115a323",
+    "experiments/manifests/rolling_sentence/full_context_sentence_test_v2.json": "f6cbaf0c5a4bad5b216b651bc40589bddb6d842bcf5e12731e66a57d55ea9d9a",
+    "reports/exports/single_revision_c1_test_v2_stable_summary.json": "3701d3afebec94f0f6a054c5557f3d63a80eb595d54838a39afc124347a172ea",
+    "reports/exports/single_revision_c1_test_v2_stable_by_group.csv": "0a6638e3750e0f14e93101958a32267e829b3fb8a09ddad33309a518447e7d62",
+    "reports/exports/single_revision_c1_test_v2_stable_by_subject_seed.csv": "a9c4c11ae188403655dbd9860cfdd98f0f55c66c3a1aecf779052d77ec12aa8c",
+    "reports/exports/single_revision_c1_test_v2_stable_by_seed.csv": "35eec8648edd11d3084938b89ab54224db61745f05e2215d3463378e9b3319ef",
+    "reports/exports/single_revision_c1_test_v2_stable_gain_by_seed.csv": "69b139b0551bed902f66d653e360fab0ef7508b1ff7824259c5727a3ee53d216",
+    "reports/exports/single_revision_c1_test_v2_stable_transitions_by_group.csv": "3e4865c0e08b194e07bc9384baa55d1ba4dda340d6b39fc52e43eacee322e5d8",
+    "reports/exports/single_revision_c1_test_v2_stable_transitions_by_subject_seed.csv": "48f6f0ecb40ceeba890bcb11cad5292bfbba8524613a406b365421a2196728e6",
+    "reports/exports/single_revision_c1_test_v2_stable_latency_by_word.csv": "8682072e59fe438229ffd2cb52bcc3d64aa2a6c9cb009e1ed64258920e0c12b2",
+    "experiments/manifests/rolling_sentence/single_revision_c1_test_v2_stable.json": "f044c72025bb3dc32b4b69e5d1ac5236e51916020e5205ce12f3509ce5c1fb5c",
+    "reports/exports/fixed_k0_rolling_search_test_v2_stable_summary.json": "ab593ec8431af2dd124aee75635bceca1f2ff07ea8e02a355c4278580d4764db",
+    "reports/exports/fixed_k0_rolling_search_test_v2_stable_by_group.csv": "254f09b09956299154c150cc97bc8b628a50786f7e38b3dbfa9cf2594483a22d",
+    "reports/exports/fixed_k0_rolling_search_test_v2_stable_by_subject_seed.csv": "efa02882183f2fd4cce886f1a743e48f2cb23327ddbc66cfa77a788779e23229",
+    "reports/exports/fixed_k0_rolling_search_test_v2_stable_by_seed.csv": "4a81748a739bc6641fd598bc7cd7eb60c06a1f2a83d34a7e27d4d7dc48db76bc",
+    "reports/exports/fixed_k0_rolling_search_test_v2_stable_gain_by_seed.csv": "26151ac358096b7bd44c80f0f4bd884725abda63ef089c511787f1c17adbff48",
+    "reports/exports/fixed_k0_rolling_search_test_v2_stable_transitions_by_group.csv": "30cb7219780aefb7757360d5ff943d93fff63cb629dae027196052cb15675a6c",
+    "reports/exports/fixed_k0_rolling_search_test_v2_stable_transitions_by_subject_seed.csv": "d53664417d304534cddf5f19f8892f3ed8d40f4f03ad5530d23c56807cb1ab06",
+    "experiments/manifests/rolling_sentence/fixed_k0_rolling_search_test_v2_stable.json": "c2782243ea403d6ebba25c68ba39c68083af109a90edc0081f53b7b0e39fd758",
+    "reports/studies/single_revision_c1_input_wait_test_v2/by_word.csv": "50b5f2042f0215300608c4a8ccab3546bf85590d58d48b8c349e1b46ece70b67",
+    "reports/studies/single_revision_c1_input_wait_test_v2/by_subject.csv": "06b91c0fbc5ea01a3bc35c8093e5b49c89f90f4f6835e28319904df008513bbc",
+    "reports/studies/single_revision_c1_input_wait_test_v2/results.json": "c8b9e69fda9f7570e74ac02f8bdcf00e423d0032d0514d72836846abb1acec69",
+    "reports/studies/single_revision_c1_input_wait_test_v2/results.md": "3ca5101defcac51d0df60bd635edd6851fa4f8a3c97d3c2cb90b4c6b9e12ff6e"
+  },
+  "exports": {
+    "reports/exports/sentence_wait_budget_test_v2_by_seed.csv": "106298ded1f241636f748a7a11398b3f4002b069152c6e73c6f410f760cdba39",
+    "reports/exports/sentence_wait_budget_test_v2_summary.csv": "4336cb040947d967e12ee75b62db7d4f4b82273dcb00dc8bcbc57f8982a4dd14",
+    "reports/exports/sentence_wait_budget_test_v2_supplementary_comparisons.csv": "2ef429098b7f16f2b150aab4295f3ec49928d1779ade48e565c28e53d7003ab5"
+  },
+  "waiting_population": "all_events_without_seed_duplication",
+  "timing_contract": "nominal_onset_plus_one_second",
+  "timing_note": "All four strategies use the same onset+1s definition. The audited 50Hz endpoint sensitivity is retained in its original report.",
+  "new_training_decoding_or_statistical_tests": false,
+  "C1_statistics": "existing_post_results_supplementary_family",
+  "B_statistics": "existing_post_results_supplementary_family",
+  "original_AC_statistics_unchanged": true
+}

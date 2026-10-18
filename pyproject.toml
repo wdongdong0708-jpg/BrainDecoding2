@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "braindecoding"
+version = "0.1.0"
+description = "可复现的 EEG/MEG 语言解码数据与实验工具"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "h5py",
+  "jieba==0.42.1",
+  "matplotlib",
+  "mne",
+  "numpy",
+  "openpyxl",
+  "pandas",
+  "PyYAML",
+  "scikit-learn",
+  "scipy",
+  "torch",
+  "transformers",
+]
+
+[project.scripts]
+brain-decoding = "braindecoding.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--basetemp=.cache/pytest_tmp"
+cache_dir = ".cache/pytest_cache"
+markers = [
+  "current_protocol: 当前主协议与两个补充实验的索引、训练及执行合同",
+  "legacy_compatibility: 保留的历史配置与检查器兼容性，不代表当前研究计划",
+]
+
+[tool.setuptools.packages.find]
+include = ["braindecoding*"]

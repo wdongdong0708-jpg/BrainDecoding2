@@ -1,0 +1,135 @@
+dataset:
+  name: ChineseEEG2_LittlePrince
+  root: ${BRAINDATA_ROOT}/ChineseEEG-2/PassiveListening
+  alignment_path: data/cache/artifacts/alignments/chineseeeg2_littleprince/f1/女声一_小王子_实际朗读时间戳.xlsx
+  event_source_type: actual_reading_workbook
+  actual_reading_sheet_name: 词级时间戳
+  expected_source_event_count: 14106
+  timestamp_to_eeg_offset_seconds: 0.0
+  preprocessed_dir: derivatives/preprocessed
+  subjects: [sub-01, sub-02, sub-03, sub-04, sub-05, sub-06, sub-07, sub-08]
+  actual_reading_sources:
+    - alignment_path: data/cache/artifacts/alignments/chineseeeg2_littleprince/f1/女声一_小王子_实际朗读时间戳.xlsx
+      expected_source_event_count: 14106
+      voice_version: f1
+      subjects: [sub-01, sub-02, sub-03, sub-04]
+    - alignment_path: data/cache/artifacts/alignments/chineseeeg2_littleprince/m1/男声一_小王子_实际朗读时间戳.xlsx
+      expected_source_event_count: 14017
+      voice_version: m1
+      subjects: [sub-05, sub-06, sub-07, sub-08]
+  excluded_chapters: [14, 27]
+  excluded_chapter_reason: sub-05对应EEG记录被截断，八名受试者共同剔除第14和27章
+  split:
+    seed: 42
+    train_chapters: [1, 4, 6, 7, 8, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26, 27]
+    val_chapters: [3, 5, 25]
+    test_chapters: [2, 9, 14]
+  vocabulary_size: 50
+  training_vocabulary_policy: all_primary_complete_window_words
+  evaluation_vocabulary_policy: frozen_train_chapter_top50_unique_voice_word_events
+  source_sampling_rate_hz: 250
+  target_sampling_rate_hz: 50
+  window_start_offset_seconds: 0.0
+  window_seconds: 1.0
+  eligibility_window_seconds: 1.0
+  source_preprocessed_filter_hz: [1.0, 40.0]
+  additional_filter: null
+  scaler: RobustScaler
+  clamp: 5.0
+  materialization_channel_chunk: 32
+  context_grouping: bounded_semantic_v1 # 上下文分组
+  semantic_context:
+    actual_reading_line_sheet_name: 逐行对照
+    preferred_words: 16
+    maximum_words: 32
+    maximum_seconds: 15.0
+  max_context_words: 128
+  expected_trainable_counts:
+    train: 81620
+    val: 14132
+    test: 8480
+
+cache:
+  event_table: data/cache/derived/chineseeeg2_littleprince/events/events.csv
+  eeg_dir: data/cache/derived/chineseeeg2_littleprince/signals/eeg_50hz
+  text_embeddings: data/cache/derived/chineseeeg2_littleprince/text/mengzi_t5_layer_0_5/embeddings.npz
+
+text_embedding:
+  model_name: ${BRAINDECODING_MODEL_ROOT}/mengzi-t5-base
+  layer_fraction: 0.5
+  token_aggregation: mean
+  embedding_dimension: 768
+  batch_size: 32
+  device: cpu
+  local_files_only: true
+
+model:
+  embedding_dimension: 768
+  use_transformer: true
+  context_mode: grouped
+  conv:
+    merger_channels: 270
+    merger_position_dimension: 2048
+    merger_per_subject: true
+    merger_dropout: 0.2
+    initial_linear: 512
+    hidden: 160
+    depth: 5
+    kernel_size: 3
+    dilation_growth: 2
+    dilation_period: 5
+    dropout_input: 0.1
+    convolution_dropout: 0.0
+    batch_norm: true
+    gelu: true
+    skip: true
+    glu_every: 2
+    glu_context: 1
+    temporal_attention_hidden: 256
+  transformer:
+    depth: 4
+    heads: 8
+    attention_dropout: 0.2
+    feedforward_dropout: 0.1
+    use_scalenorm: true
+    use_rmsnorm: false
+    rotary_position_embedding: true
+    residual_attention: false
+    scale_residual: true
+
+loss:
+  name: SigLip
+  initial_temperature: 10.0
+  initial_bias: -10.0
+  identical_candidates_threshold: 0.999
+
+training:
+  seed: 0
+  device: auto
+  batch_size: 128
+  num_workers: 0
+  epochs: 30
+  patience: 10
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  minimum_learning_rate: 0.0
+  max_grad_norm: 0.0
+  amp: true
+  top_ks: [1, 10]
+  smoke_rows: 64
+
+evaluation:
+  default_split: val
+  zero_eeg_control: false
+
+provenance:
+  dataset: ChineseEEG2 PassiveListening Little Prince
+  timing_status: actual_reading_audio_clock_used_as_eeg_clock
+  hardware_delay_corrected: false
+  source_preprocessing: preprocessed_brainvision_1_40hz_250hz
+  implementation: functional_reimplementation_not_checkpoint_compatible
+  subject_scope: sub-01_to_sub-08_f1_m1_stimuli
+  event_source: two_actual_reading_workbook_word_timestamps
+  timestamp_interpretation: audio_file_seconds_used_directly_as_preprocessed_eeg_seconds
+  timestamp_quality: model_estimated_not_full_book_human_verified
+  event_retention: f1_m1_audio_1_to_27_events_audited_chapters_14_and_27_explicitly_excluded

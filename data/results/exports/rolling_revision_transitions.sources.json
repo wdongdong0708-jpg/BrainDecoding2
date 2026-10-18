@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "event_definition": "paired Top-10 retrieval hit",
+  "target_set": "common_delay2",
+  "vocabulary_size": 50,
+  "curve_metric_source": "canonical_evaluation",
+  "transition_source": "checkpoint_reinference",
+  "maximum_allowed_recomputed_metric_drift": 0.001,
+  "fingerprint": {
+    "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+    "subjects": [
+      "sub-01",
+      "sub-02",
+      "sub-03",
+      "sub-04",
+      "sub-05",
+      "sub-06",
+      "sub-07",
+      "sub-08",
+      "sub-09",
+      "sub-10"
+    ],
+    "vocabulary_manifest_sha256": "6e9d12c345b28cd695f6971216e0c90f3a306b0a0e0f16fc05c3de802be11505",
+    "warm_start_sha256": "fee17f5d7c935d0e0efd1ff30e62ba8945e8e3f3cb2e041b0182bc3e45d7f9de",
+    "effective_query_count": 8260
+  },
+  "sources": [
+    {
+      "experiment": "local_window_rolling_revision_k2_d2",
+      "seed": 0,
+      "evaluation": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-000/evaluation/val.json",
+      "evaluation_sha256": "d2f50e85e1eff299fa55c7622f5a716287764ff0f420276a585be0be2488752c",
+      "checkpoint_sha256": "b591d8f93d2e9844aa00827a42b5e7caa9e258191b795ada8c625ead60bc6502"
+    },
+    {
+      "experiment": "local_window_rolling_revision_k2_d2",
+      "seed": 1,
+      "evaluation": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-001/evaluation/val.json",
+      "evaluation_sha256": "d908b3f0e91f3aec299ab36460283f4e3c8cfaab34c13233125558fb7a76dd5e",
+      "checkpoint_sha256": "bebbb149b8b14903ebe5937e073dc99f33894822605b93d99fbdf251237dc486"
+    },
+    {
+      "experiment": "local_window_rolling_revision_k2_d2",
+      "seed": 2,
+      "evaluation": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-002/evaluation/val.json",
+      "evaluation_sha256": "1535e1d7831510c5b50d4aba6509bc0bd732f1810d59ce51a1d2835c81ba5287",
+      "checkpoint_sha256": "ecdc163aff8f1633b0fab9aa16af51cdee0fd40dff3bcbea3b121ea52e74b06f"
+    }
+  ]
+}

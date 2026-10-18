@@ -1,0 +1,31 @@
+{
+  "context_plan_sha256": "367015d68cfa73fae3e2b2f3f477bd0ccce683e71e5cb4393f378cffcc0c93b9",
+  "sentence_manifest_sha256": "880fc0e6f0f15c83b31b718c6e03df578671ddb8b27ee456c6da73f22b8953fb",
+  "files": {
+    "reports\\exports\\unified_context_baselines_v2_context_by_seed.csv": {
+      "source": "reports\\studies\\unified_context_baselines_v2\\context_by_seed.csv",
+      "sha256": "10b1f5a8bff146de212e93b429581446221ead657a0821dcfdff5885411c0bc8"
+    },
+    "reports\\exports\\unified_context_baselines_v2_context_summary.csv": {
+      "source": "reports\\studies\\unified_context_baselines_v2\\context_summary.csv",
+      "sha256": "fd54afe144d0d2655807ef815d61b4e5f942cafb348693e31edc638ad4ada002"
+    },
+    "reports\\exports\\unified_context_baselines_v2_independent_vs_rolling_by_seed.csv": {
+      "source": "reports\\studies\\unified_context_baselines_v2\\independent_vs_rolling_by_seed.csv",
+      "sha256": "d91735c17c7dbba9684d271a48ff9b61aa5c3c2c1167eb07f44c394fc8d94b33"
+    },
+    "reports\\exports\\unified_context_baselines_v2_delay_gain_by_seed.csv": {
+      "source": "reports\\studies\\unified_context_baselines_v2\\delay_gain_by_seed.csv",
+      "sha256": "ab241abc35a5020d4abeb0c6343e5bdf684d066d5c7892b727d0eaa97524232d"
+    },
+    "reports\\exports\\unified_context_baselines_v2_run_status.csv": {
+      "source": "reports\\studies\\unified_context_baselines_v2\\run_status.csv",
+      "sha256": "eed1e525067e1e2e59a9aed4c1b915d30408f3d616ebb09427f2e4b7c878bedf"
+    },
+    "reports\\exports\\unified_sentence_v2_revision_gain_full_summary.json": {
+      "source": "reports\\studies\\unified_sentence_v2_revision_gain_full\\results.json",
+      "sha256": "b010ed2dd168a2b43d72e3c177de0367e06ea9bf9f22480c38cb5e5da7730fc4"
+    }
+  },
+  "test_evaluated": false
+}

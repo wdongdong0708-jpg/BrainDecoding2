@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "artifact_id": "pallier2025_sub-09_run-03_annotation_qc_v1",
+  "dataset": "pallier2025",
+  "raw_dataset_name": "LittlePrince_MEG_French_Listen_Pallier2025",
+  "openneuro_id": "ds007523",
+  "recording": {
+    "subject": "sub-09",
+    "session": "ses-01",
+    "run": "run-03"
+  },
+  "decision": "exclude_recording",
+  "annotation_error_confirmed": true,
+  "bids_source_modified": false,
+  "bids_field_correction_applied": false,
+  "reason": "两个源刺激开头词没有可用的记录内神经时间；BIDS 中同名词被错误放入后续位置，不能据此恢复缺失脑窗口。",
+  "correction": {
+    "type": "recording_level_exclusion",
+    "corrected_onset_values": null,
+    "reason_no_numeric_correction": "两个缺失刺激词的推定时间早于 FIF 起点；不存在可由当前 recording 恢复的神经窗口。"
+  },
+  "source_files": [
+    {
+      "role": "bids_events",
+      "path": "sub-09/ses-01/meg/sub-09_ses-01_task-listen_run-03_events.tsv",
+      "sha256": "7786aa76a1c0e4a763469bb7d3d4108c9d9ca0db74b4c33de8bfebac755fd7cc"
+    },
+    {
+      "role": "raw_meg",
+      "path": "sub-09/ses-01/meg/sub-09_ses-01_task-listen_run-03_meg.fif",
+      "sha256": "e89311200b012da97d3a90cf402f3420296eb9a11e2e8491935a45d661e090c2"
+    },
+    {
+      "role": "public_extra_info",
+      "path": "sourcedata/task-listen_run-03_extra_info.tsv",
+      "sha256": "a54e4b6c198f996420b43b2115d9ae0fe2febd3944d91460336c9b07aaa923af"
+    }
+  ],
+  "evidence": {
+    "cross_subject_reference_subjects": ["sub-01", "sub-02", "sub-03", "sub-04", "sub-05", "sub-06", "sub-07", "sub-08", "sub-10"],
+    "reference_word_count": 1860,
+    "reference_fingerprint": "bf63ae1ac1c15dc53729c5f0836f1a3086c3b5bcbe6ff66290a1f9223841ac3f",
+    "observed_bids_word_count": 1860,
+    "observed_bids_fingerprint": "cb1b204441b3a50ae2fd3cd7d3b7ba3442f24cb24e7a66b041901f851a3ee6a0",
+    "alignment": {
+      "matches": 1858,
+      "substitutions": 0,
+      "insertions": 2,
+      "deletions": 2,
+      "edit_distance": 4
+    },
+    "raw_header": {
+      "sampling_rate_hz": 1000.0,
+      "first_sample": 152000,
+      "first_time_seconds": 152.0,
+      "last_sample": 855999,
+      "last_time_seconds": 855.999
+    },
+    "word_trigger": {
+      "channel": "STI008",
+      "edge": "falling",
+      "count": 1859,
+      "bids_events_with_matching_trigger": 1858,
+      "tolerance_seconds": 0.002
+    },
+    "anomalous_words": [
+      {
+        "word": "le",
+        "extra_word_index": 0,
+        "extra_info_onset_seconds": 3.06,
+        "expected_recording_onset_seconds": 151.726,
+        "inside_recording": false,
+        "bids_event_row": 7,
+        "original_bids_onset_seconds": 155.06,
+        "nearest_word_trigger_distance_seconds": 0.175
+      },
+      {
+        "word": "cinquième",
+        "extra_word_index": 1,
+        "extra_info_onset_seconds": 3.27,
+        "expected_recording_onset_seconds": 151.936,
+        "inside_recording": false,
+        "bids_event_row": 9,
+        "original_bids_onset_seconds": 155.27,
+        "nearest_word_trigger_distance_seconds": 0.035
+      }
+    ],
+    "source_to_recording_offset_seconds": 148.666,
+    "other_subjects_and_public_stimulus_agree": true,
+    "onset_duration_are_subject_specific": true
+  },
+  "metadata_mapping_overrides": [
+    {"bids_event_row": 7, "extra_word_index": 0},
+    {"bids_event_row": 9, "extra_word_index": 1}
+  ],
+  "application": {
+    "preserve_all_bids_rows": true,
+    "preserve_original_bids_onset_duration": true,
+    "apply_extra_info_metadata_mapping_only": true,
+    "exclude_entire_recording": true,
+    "exclusion_reason": "sub-09/run-03 的 BIDS annotation 与源刺激及 word trigger 不一致；开头两个刺激词发生在 FIF 起始前，无可靠神经时间可修正，整条 recording 排除"
+  },
+  "provenance": {
+    "decision_date": "2026-09-12",
+    "mne_version": "1.12.1",
+    "inspection_mode": "header_events_triggers_and_public_stimulus_only",
+    "raw_data_modified": false,
+    "model_loaded": false,
+    "model_evaluation_run": false
+  },
+  "artifact_sha256": "adbe52dc7d711758d670b8910791d03fdad9cd97feb022e840db81701af651ca"
+}

@@ -1,0 +1,4257 @@
+{
+  "status": "completed_revision_gain_preview",
+  "profile": "unified_sentence_v2_revision_gain",
+  "profile_sha256": "6df54ae50ded1e6ae113288a50cd5ed9c344450cbf8407b08254c13c10f70df4",
+  "preview_sha256": "315819db3b5f4eba89509a55425e8125eefba17aabdee4bab7e0ee0a70f58d2d",
+  "parent_manifest_sha256": "6be90d2a1ea630f41a19faf7513d24528465e70d5c8d1af2ba0210cc0ea9ceea",
+  "conditions": [
+    "A",
+    "C"
+  ],
+  "branch": "open",
+  "alignment": "real",
+  "comparison": "C_minus_A",
+  "evidence": "descriptive_development_preview",
+  "seeds": [
+    0
+  ],
+  "datasets": {
+    "pallier2025": {
+      "scope": {
+        "segments": 60,
+        "words": 690,
+        "subjects": 10,
+        "materials": 6,
+        "blocks": 6,
+        "scopes": [
+          "run-07"
+        ]
+      },
+      "selected_weight": 0.1,
+      "summary": [
+        {
+          "condition": "A",
+          "sentence_bleu1_mean": 0.06832674571805006,
+          "wer": 0.9275362318840579,
+          "bleu1": 0.11014492753623188,
+          "aligned_word_accuracy": 0.07246376811594202
+        },
+        {
+          "condition": "C",
+          "sentence_bleu1_mean": 0.16413702239789196,
+          "wer": 0.8420289855072465,
+          "bleu1": 0.18840579710144928,
+          "aligned_word_accuracy": 0.15797101449275364
+        }
+      ],
+      "gains": {
+        "sentence_bleu1": 0.0958102766798419,
+        "aligned_word_accuracy": 0.08550724637681162,
+        "wer_reduction": 0.0855072463768114
+      },
+      "revisions": {
+        "words": 690,
+        "eligible": 630,
+        "paired_repaired": 63,
+        "paired_harmed": 4,
+        "rolling_repaired": 66,
+        "rolling_harmed": 4,
+        "paired_repaired_rate": 0.09130434782608696,
+        "paired_harmed_rate": 0.005797101449275362,
+        "rolling_repaired_rate": 0.10476190476190476,
+        "rolling_harmed_rate": 0.006349206349206349,
+        "net_correct_words": 59
+      },
+      "by_subject": [
+        {
+          "subject": "sub-01",
+          "condition": "A",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.07065217391304347,
+          "wer": 0.927536231884058,
+          "bleu1": 0.13043478260869565,
+          "aligned_word_accuracy": 0.07246376811594203
+        },
+        {
+          "subject": "sub-01",
+          "condition": "C",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.15802591128678087,
+          "wer": 0.8260869565217391,
+          "bleu1": 0.2028985507246377,
+          "aligned_word_accuracy": 0.17391304347826086
+        },
+        {
+          "subject": "sub-02",
+          "condition": "A",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.11509661835748791,
+          "wer": 0.9130434782608695,
+          "bleu1": 0.13043478260869565,
+          "aligned_word_accuracy": 0.08695652173913043
+        },
+        {
+          "subject": "sub-02",
+          "condition": "C",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.13749451032059729,
+          "wer": 0.8695652173913043,
+          "bleu1": 0.15942028985507245,
+          "aligned_word_accuracy": 0.13043478260869565
+        },
+        {
+          "subject": "sub-03",
+          "condition": "A",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.09118357487922706,
+          "wer": 0.9130434782608695,
+          "bleu1": 0.13043478260869565,
+          "aligned_word_accuracy": 0.08695652173913043
+        },
+        {
+          "subject": "sub-03",
+          "condition": "C",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.21466842336407554,
+          "wer": 0.8405797101449275,
+          "bleu1": 0.21739130434782608,
+          "aligned_word_accuracy": 0.15942028985507245
+        },
+        {
+          "subject": "sub-04",
+          "condition": "A",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.04565217391304347,
+          "wer": 0.9565217391304348,
+          "bleu1": 0.08695652173913043,
+          "aligned_word_accuracy": 0.043478260869565216
+        },
+        {
+          "subject": "sub-04",
+          "condition": "C",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.12873298199385155,
+          "wer": 0.8405797101449275,
+          "bleu1": 0.17391304347826086,
+          "aligned_word_accuracy": 0.15942028985507245
+        },
+        {
+          "subject": "sub-05",
+          "condition": "A",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.04565217391304347,
+          "wer": 0.9565217391304348,
+          "bleu1": 0.08695652173913043,
+          "aligned_word_accuracy": 0.043478260869565216
+        },
+        {
+          "subject": "sub-05",
+          "condition": "C",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.21635924462011416,
+          "wer": 0.8260869565217391,
+          "bleu1": 0.2028985507246377,
+          "aligned_word_accuracy": 0.17391304347826086
+        },
+        {
+          "subject": "sub-06",
+          "condition": "A",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.03797760210803689,
+          "wer": 0.9565217391304348,
+          "bleu1": 0.057971014492753624,
+          "aligned_word_accuracy": 0.043478260869565216
+        },
+        {
+          "subject": "sub-06",
+          "condition": "C",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.11206631532718488,
+          "wer": 0.8695652173913043,
+          "bleu1": 0.14492753623188406,
+          "aligned_word_accuracy": 0.13043478260869565
+        },
+        {
+          "subject": "sub-07",
+          "condition": "A",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.06002415458937197,
+          "wer": 0.9420289855072463,
+          "bleu1": 0.07246376811594203,
+          "aligned_word_accuracy": 0.057971014492753624
+        },
+        {
+          "subject": "sub-07",
+          "condition": "C",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.14891304347826087,
+          "wer": 0.855072463768116,
+          "bleu1": 0.15942028985507245,
+          "aligned_word_accuracy": 0.14492753623188406
+        },
+        {
+          "subject": "sub-08",
+          "condition": "A",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.05289855072463768,
+          "wer": 0.9420289855072463,
+          "bleu1": 0.10144927536231885,
+          "aligned_word_accuracy": 0.057971014492753624
+        },
+        {
+          "subject": "sub-08",
+          "condition": "C",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.161231884057971,
+          "wer": 0.8405797101449275,
+          "bleu1": 0.18840579710144928,
+          "aligned_word_accuracy": 0.15942028985507245
+        },
+        {
+          "subject": "sub-09",
+          "condition": "A",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.08623188405797101,
+          "wer": 0.8840579710144928,
+          "bleu1": 0.15942028985507245,
+          "aligned_word_accuracy": 0.11594202898550725
+        },
+        {
+          "subject": "sub-09",
+          "condition": "C",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.18345410628019324,
+          "wer": 0.8405797101449275,
+          "bleu1": 0.2028985507246377,
+          "aligned_word_accuracy": 0.15942028985507245
+        },
+        {
+          "subject": "sub-10",
+          "condition": "A",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.07789855072463768,
+          "wer": 0.8840579710144928,
+          "bleu1": 0.14492753623188406,
+          "aligned_word_accuracy": 0.11594202898550725
+        },
+        {
+          "subject": "sub-10",
+          "condition": "C",
+          "segments": 6,
+          "words": 69,
+          "sentence_bleu1_mean": 0.18042380324989019,
+          "wer": 0.8115942028985508,
+          "bleu1": 0.2318840579710145,
+          "aligned_word_accuracy": 0.18840579710144928
+        }
+      ],
+      "examples": [
+        {
+          "selection": "first_group",
+          "group": "pallier2025|sub-01|run-07|pallier2025|run-07|sequence-000",
+          "subject": "sub-01",
+          "reference": [
+            "mais",
+            "il",
+            "arriva",
+            "que",
+            "le",
+            "petit",
+            "prince",
+            "ayant",
+            "longtemps",
+            "marché",
+            "à",
+            "travers",
+            "les",
+            "sables",
+            "les",
+            "rocs",
+            "et",
+            "les",
+            "neiges",
+            "découvrit",
+            "enfin",
+            "une",
+            "route"
+          ],
+          "final": {
+            "A": [
+              "et",
+              "il",
+              "crois",
+              "de",
+              "mon",
+              "métier",
+              "bien",
+              "qui",
+              "une",
+              "très",
+              "très",
+              "feuille",
+              "des",
+              "larmes",
+              "et",
+              "mille",
+              "de",
+              "bouteilles",
+              "larmes",
+              "mais",
+              "personne",
+              "ne",
+              "yeux"
+            ],
+            "C": [
+              "et",
+              "il",
+              "regarda",
+              "dans",
+              "un",
+              "petit",
+              "prince",
+              "était",
+              "magnifique",
+              "avec",
+              "de",
+              "fleur",
+              "son",
+              "silence",
+              "la",
+              "découverte",
+              "de",
+              "mon",
+              "coeur",
+              "sans",
+              "personne",
+              "ses",
+              "yeux"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "et"
+              ],
+              "C": [
+                "et"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "et",
+                "il"
+              ],
+              "C": [
+                "et",
+                "il"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "et",
+                "il",
+                "crois"
+              ],
+              "C": [
+                "et",
+                "il",
+                "crois"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de"
+              ],
+              "C": [
+                "et",
+                "il",
+                "remis",
+                "de"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "mon"
+              ]
+            },
+            {
+              "arrival": 5,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "l",
+                "air"
+              ]
+            },
+            {
+              "arrival": 6,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "objet",
+                "bien"
+              ]
+            },
+            {
+              "arrival": 7,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "qui"
+              ]
+            },
+            {
+              "arrival": 8,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "avec",
+                "une"
+              ]
+            },
+            {
+              "arrival": 9,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec"
+              ]
+            },
+            {
+              "arrival": 10,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "très",
+                "très"
+              ]
+            },
+            {
+              "arrival": 11,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "verre"
+              ]
+            },
+            {
+              "arrival": 12,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille",
+                "des"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "mille",
+                "des"
+              ]
+            },
+            {
+              "arrival": 13,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille",
+                "des",
+                "larmes"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "fleur",
+                "des",
+                "larmes"
+              ]
+            },
+            {
+              "arrival": 14,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille",
+                "des",
+                "larmes",
+                "et"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "fleur",
+                "son",
+                "silence",
+                "et"
+              ]
+            },
+            {
+              "arrival": 15,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille",
+                "des",
+                "larmes",
+                "et",
+                "mille"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "fleur",
+                "son",
+                "silence",
+                "la",
+                "mille"
+              ]
+            },
+            {
+              "arrival": 16,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille",
+                "des",
+                "larmes",
+                "et",
+                "mille",
+                "de"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "fleur",
+                "son",
+                "silence",
+                "la",
+                "lumière",
+                "de"
+              ]
+            },
+            {
+              "arrival": 17,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille",
+                "des",
+                "larmes",
+                "et",
+                "mille",
+                "de",
+                "bouteilles"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "fleur",
+                "son",
+                "silence",
+                "la",
+                "découverte",
+                "de",
+                "bouteilles"
+              ]
+            },
+            {
+              "arrival": 18,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille",
+                "des",
+                "larmes",
+                "et",
+                "mille",
+                "de",
+                "bouteilles",
+                "larmes"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "fleur",
+                "son",
+                "silence",
+                "la",
+                "découverte",
+                "de",
+                "la",
+                "réputation"
+              ]
+            },
+            {
+              "arrival": 19,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille",
+                "des",
+                "larmes",
+                "et",
+                "mille",
+                "de",
+                "bouteilles",
+                "larmes",
+                "mais"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "fleur",
+                "son",
+                "silence",
+                "la",
+                "découverte",
+                "de",
+                "mon",
+                "coeur",
+                "mais"
+              ]
+            },
+            {
+              "arrival": 20,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille",
+                "des",
+                "larmes",
+                "et",
+                "mille",
+                "de",
+                "bouteilles",
+                "larmes",
+                "mais",
+                "personne"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "fleur",
+                "son",
+                "silence",
+                "la",
+                "découverte",
+                "de",
+                "mon",
+                "coeur",
+                "ayant",
+                "été"
+              ]
+            },
+            {
+              "arrival": 21,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille",
+                "des",
+                "larmes",
+                "et",
+                "mille",
+                "de",
+                "bouteilles",
+                "larmes",
+                "mais",
+                "personne",
+                "ne"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "fleur",
+                "son",
+                "silence",
+                "la",
+                "découverte",
+                "de",
+                "mon",
+                "coeur",
+                "sans",
+                "personne",
+                "se"
+              ]
+            },
+            {
+              "arrival": 22,
+              "A": [
+                "et",
+                "il",
+                "crois",
+                "de",
+                "mon",
+                "métier",
+                "bien",
+                "qui",
+                "une",
+                "très",
+                "très",
+                "feuille",
+                "des",
+                "larmes",
+                "et",
+                "mille",
+                "de",
+                "bouteilles",
+                "larmes",
+                "mais",
+                "personne",
+                "ne",
+                "yeux"
+              ],
+              "C": [
+                "et",
+                "il",
+                "regarda",
+                "dans",
+                "un",
+                "petit",
+                "prince",
+                "était",
+                "magnifique",
+                "avec",
+                "de",
+                "fleur",
+                "son",
+                "silence",
+                "la",
+                "découverte",
+                "de",
+                "mon",
+                "coeur",
+                "sans",
+                "personne",
+                "ses",
+                "yeux"
+              ]
+            }
+          ],
+          "initial_C": [
+            "et",
+            "il",
+            "crois",
+            "de",
+            "mon",
+            "air",
+            "bien",
+            "qui",
+            "une",
+            "avec",
+            "très",
+            "verre",
+            "des",
+            "larmes",
+            "et",
+            "mille",
+            "de",
+            "bouteilles",
+            "réputation",
+            "mais",
+            "été",
+            "se",
+            "yeux"
+          ],
+          "repaired_C": [
+            5,
+            6
+          ],
+          "harmed_C": []
+        },
+        {
+          "selection": "most_C_repairs",
+          "group": "pallier2025|sub-07|run-07|pallier2025|run-07|sequence-035",
+          "subject": "sub-07",
+          "reference": [
+            "tu",
+            "n",
+            "es",
+            "pas",
+            "d",
+            "ici",
+            "dit",
+            "le",
+            "renard",
+            "que",
+            "cherches",
+            "tu",
+            "je",
+            "cherche",
+            "les",
+            "hommes",
+            "dit",
+            "le",
+            "petit",
+            "prince"
+          ],
+          "final": {
+            "A": [
+              "c",
+              "ne",
+              "fait",
+              "pas",
+              "peur",
+              "eau",
+              "et",
+              "le",
+              "astéroïde",
+              "ça",
+              "est",
+              "du",
+              "ses",
+              "celle",
+              "de",
+              "la",
+              "de",
+              "une",
+              "roi",
+              "prince"
+            ],
+            "C": [
+              "ça",
+              "n",
+              "est",
+              "pas",
+              "d",
+              "elles",
+              "dit",
+              "l",
+              "astéroïde",
+              "au",
+              "serpent",
+              "heureux",
+              "de",
+              "sortir",
+              "du",
+              "tiroir",
+              "comme",
+              "le",
+              "petit",
+              "prince"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "c"
+              ],
+              "C": [
+                "c"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "c",
+                "ne"
+              ],
+              "C": [
+                "ça",
+                "ne"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "c",
+                "ne",
+                "fait"
+              ],
+              "C": [
+                "ça",
+                "ne",
+                "sert"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "peur"
+              ]
+            },
+            {
+              "arrival": 5,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "eau"
+              ]
+            },
+            {
+              "arrival": 6,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "occupe",
+                "et"
+              ]
+            },
+            {
+              "arrival": 7,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "le"
+              ]
+            },
+            {
+              "arrival": 8,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde"
+              ]
+            },
+            {
+              "arrival": 9,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde",
+                "ça"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde",
+                "dit"
+              ]
+            },
+            {
+              "arrival": 10,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde",
+                "ça",
+                "est"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde",
+                "c",
+                "est"
+              ]
+            },
+            {
+              "arrival": 11,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde",
+                "ça",
+                "est",
+                "du"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde",
+                "au",
+                "centre",
+                "de"
+              ]
+            },
+            {
+              "arrival": 12,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde",
+                "ça",
+                "est",
+                "du",
+                "ses"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde",
+                "au",
+                "serpent",
+                "toujours",
+                "ses"
+              ]
+            },
+            {
+              "arrival": 13,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde",
+                "ça",
+                "est",
+                "du",
+                "ses",
+                "celle"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde",
+                "au",
+                "serpent",
+                "heureux",
+                "que",
+                "celle"
+              ]
+            },
+            {
+              "arrival": 14,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde",
+                "ça",
+                "est",
+                "du",
+                "ses",
+                "celle",
+                "de"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde",
+                "au",
+                "serpent",
+                "heureux",
+                "de",
+                "serpent",
+                "de"
+              ]
+            },
+            {
+              "arrival": 15,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde",
+                "ça",
+                "est",
+                "du",
+                "ses",
+                "celle",
+                "de",
+                "la"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde",
+                "au",
+                "serpent",
+                "heureux",
+                "de",
+                "sortir",
+                "de",
+                "l"
+              ]
+            },
+            {
+              "arrival": 16,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde",
+                "ça",
+                "est",
+                "du",
+                "ses",
+                "celle",
+                "de",
+                "la",
+                "de"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde",
+                "au",
+                "serpent",
+                "heureux",
+                "de",
+                "sortir",
+                "du",
+                "tiroir",
+                "de"
+              ]
+            },
+            {
+              "arrival": 17,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde",
+                "ça",
+                "est",
+                "du",
+                "ses",
+                "celle",
+                "de",
+                "la",
+                "de",
+                "une"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde",
+                "au",
+                "serpent",
+                "heureux",
+                "de",
+                "sortir",
+                "du",
+                "tiroir",
+                "comme",
+                "une"
+              ]
+            },
+            {
+              "arrival": 18,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde",
+                "ça",
+                "est",
+                "du",
+                "ses",
+                "celle",
+                "de",
+                "la",
+                "de",
+                "une",
+                "roi"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde",
+                "au",
+                "serpent",
+                "heureux",
+                "de",
+                "sortir",
+                "du",
+                "tiroir",
+                "comme",
+                "le",
+                "roi"
+              ]
+            },
+            {
+              "arrival": 19,
+              "A": [
+                "c",
+                "ne",
+                "fait",
+                "pas",
+                "peur",
+                "eau",
+                "et",
+                "le",
+                "astéroïde",
+                "ça",
+                "est",
+                "du",
+                "ses",
+                "celle",
+                "de",
+                "la",
+                "de",
+                "une",
+                "roi",
+                "prince"
+              ],
+              "C": [
+                "ça",
+                "n",
+                "est",
+                "pas",
+                "d",
+                "elles",
+                "dit",
+                "l",
+                "astéroïde",
+                "au",
+                "serpent",
+                "heureux",
+                "de",
+                "sortir",
+                "du",
+                "tiroir",
+                "comme",
+                "le",
+                "petit",
+                "prince"
+              ]
+            }
+          ],
+          "initial_C": [
+            "c",
+            "ne",
+            "sert",
+            "pas",
+            "peur",
+            "eau",
+            "et",
+            "le",
+            "astéroïde",
+            "dit",
+            "est",
+            "de",
+            "ses",
+            "celle",
+            "de",
+            "l",
+            "de",
+            "une",
+            "roi",
+            "prince"
+          ],
+          "repaired_C": [
+            1,
+            4,
+            6,
+            17,
+            18
+          ],
+          "harmed_C": [
+            7
+          ]
+        },
+        {
+          "selection": "most_C_harms",
+          "group": "pallier2025|sub-09|run-07|pallier2025|run-07|sequence-035",
+          "subject": "sub-09",
+          "reference": [
+            "tu",
+            "n",
+            "es",
+            "pas",
+            "d",
+            "ici",
+            "dit",
+            "le",
+            "renard",
+            "que",
+            "cherches",
+            "tu",
+            "je",
+            "cherche",
+            "les",
+            "hommes",
+            "dit",
+            "le",
+            "petit",
+            "prince"
+          ],
+          "final": {
+            "A": [
+              "c",
+              "n",
+              "est",
+              "pas",
+              "dangereux",
+              "personne",
+              "dit",
+              "l",
+              "apprenais",
+              "avec",
+              "l",
+              "donc",
+              "je",
+              "n",
+              "donc",
+              "avais",
+              "pour",
+              "le",
+              "on",
+              "ici"
+            ],
+            "C": [
+              "ce",
+              "n",
+              "est",
+              "pas",
+              "a",
+              "entendre",
+              "dit",
+              "me",
+              "rencontre",
+              "au",
+              "comprenait",
+              "donc",
+              "je",
+              "marchait",
+              "le",
+              "bruit",
+              "pas",
+              "l",
+              "avoir",
+              "ici"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "c"
+              ],
+              "C": [
+                "c"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "c",
+                "n"
+              ],
+              "C": [
+                "je",
+                "n"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "c",
+                "n",
+                "est"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "chose"
+              ]
+            },
+            {
+              "arrival": 5,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "personne"
+              ]
+            },
+            {
+              "arrival": 6,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit"
+              ]
+            },
+            {
+              "arrival": 7,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "pour",
+                "l"
+              ]
+            },
+            {
+              "arrival": 8,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "trouves"
+              ]
+            },
+            {
+              "arrival": 9,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais",
+                "avec"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "rencontre",
+                "avec"
+              ]
+            },
+            {
+              "arrival": 10,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais",
+                "avec",
+                "l"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "rencontre",
+                "ou",
+                "l"
+              ]
+            },
+            {
+              "arrival": 11,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais",
+                "avec",
+                "l",
+                "donc"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "rencontre",
+                "au",
+                "comprenait",
+                "donc"
+              ]
+            },
+            {
+              "arrival": 12,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais",
+                "avec",
+                "l",
+                "donc",
+                "je"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "rencontre",
+                "au",
+                "comprenait",
+                "donc",
+                "je"
+              ]
+            },
+            {
+              "arrival": 13,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais",
+                "avec",
+                "l",
+                "donc",
+                "je",
+                "n"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "rencontre",
+                "au",
+                "comprenait",
+                "donc",
+                "je",
+                "n"
+              ]
+            },
+            {
+              "arrival": 14,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais",
+                "avec",
+                "l",
+                "donc",
+                "je",
+                "n",
+                "donc"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "rencontre",
+                "au",
+                "comprenait",
+                "donc",
+                "je",
+                "disais",
+                "donc"
+              ]
+            },
+            {
+              "arrival": 15,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais",
+                "avec",
+                "l",
+                "donc",
+                "je",
+                "n",
+                "donc",
+                "avais"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "rencontre",
+                "au",
+                "comprenait",
+                "donc",
+                "je",
+                "marchait",
+                "vers",
+                "lui"
+              ]
+            },
+            {
+              "arrival": 16,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais",
+                "avec",
+                "l",
+                "donc",
+                "je",
+                "n",
+                "donc",
+                "avais",
+                "pour"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "rencontre",
+                "au",
+                "comprenait",
+                "donc",
+                "je",
+                "marchait",
+                "le",
+                "bruit",
+                "par"
+              ]
+            },
+            {
+              "arrival": 17,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais",
+                "avec",
+                "l",
+                "donc",
+                "je",
+                "n",
+                "donc",
+                "avais",
+                "pour",
+                "le"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "rencontre",
+                "au",
+                "comprenait",
+                "donc",
+                "je",
+                "marchait",
+                "le",
+                "bruit",
+                "par",
+                "le"
+              ]
+            },
+            {
+              "arrival": 18,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais",
+                "avec",
+                "l",
+                "donc",
+                "je",
+                "n",
+                "donc",
+                "avais",
+                "pour",
+                "le",
+                "on"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "rencontre",
+                "au",
+                "comprenait",
+                "donc",
+                "je",
+                "marchait",
+                "le",
+                "bruit",
+                "pas",
+                "l",
+                "on"
+              ]
+            },
+            {
+              "arrival": 19,
+              "A": [
+                "c",
+                "n",
+                "est",
+                "pas",
+                "dangereux",
+                "personne",
+                "dit",
+                "l",
+                "apprenais",
+                "avec",
+                "l",
+                "donc",
+                "je",
+                "n",
+                "donc",
+                "avais",
+                "pour",
+                "le",
+                "on",
+                "ici"
+              ],
+              "C": [
+                "ce",
+                "n",
+                "est",
+                "pas",
+                "a",
+                "entendre",
+                "dit",
+                "me",
+                "rencontre",
+                "au",
+                "comprenait",
+                "donc",
+                "je",
+                "marchait",
+                "le",
+                "bruit",
+                "pas",
+                "l",
+                "avoir",
+                "ici"
+              ]
+            }
+          ],
+          "initial_C": [
+            "c",
+            "n",
+            "est",
+            "pas",
+            "chose",
+            "personne",
+            "dit",
+            "l",
+            "trouves",
+            "avec",
+            "l",
+            "donc",
+            "je",
+            "n",
+            "donc",
+            "lui",
+            "par",
+            "le",
+            "on",
+            "ici"
+          ],
+          "repaired_C": [],
+          "harmed_C": [
+            17
+          ]
+        }
+      ]
+    },
+    "chineseeeg2_littleprince": {
+      "scope": {
+        "segments": 48,
+        "words": 528,
+        "subjects": 8,
+        "materials": 6,
+        "blocks": 6,
+        "scopes": [
+          "chapter-03",
+          "chapter-05",
+          "chapter-25"
+        ]
+      },
+      "selected_weight": 0.1,
+      "summary": [
+        {
+          "condition": "A",
+          "sentence_bleu1_mean": 0.02148838004101162,
+          "wer": 0.9981060606060606,
+          "bleu1": 0.030303030303030304,
+          "aligned_word_accuracy": 0.001893939393939394
+        },
+        {
+          "condition": "C",
+          "sentence_bleu1_mean": 0.06163847117794486,
+          "wer": 0.9696969696969697,
+          "bleu1": 0.07765151515151517,
+          "aligned_word_accuracy": 0.030303030303030304
+        }
+      ],
+      "gains": {
+        "sentence_bleu1": 0.04015009113693324,
+        "aligned_word_accuracy": 0.02840909090909091,
+        "wer_reduction": 0.02840909090909083
+      },
+      "revisions": {
+        "words": 528,
+        "eligible": 480,
+        "paired_repaired": 15,
+        "paired_harmed": 0,
+        "rolling_repaired": 16,
+        "rolling_harmed": 2,
+        "paired_repaired_rate": 0.028409090909090908,
+        "paired_harmed_rate": 0.0,
+        "rolling_repaired_rate": 0.03333333333333334,
+        "rolling_harmed_rate": 0.004166666666666667,
+        "net_correct_words": 15
+      },
+      "by_subject": [
+        {
+          "subject": "sub-01",
+          "condition": "A",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.03258145363408521,
+          "wer": 1.0,
+          "bleu1": 0.045454545454545456,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "subject": "sub-01",
+          "condition": "C",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.041353383458646614,
+          "wer": 0.9848484848484849,
+          "bleu1": 0.045454545454545456,
+          "aligned_word_accuracy": 0.015151515151515152
+        },
+        {
+          "subject": "sub-02",
+          "condition": "A",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.017543859649122806,
+          "wer": 1.0,
+          "bleu1": 0.030303030303030304,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "subject": "sub-02",
+          "condition": "C",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.07080200501253132,
+          "wer": 0.9545454545454546,
+          "bleu1": 0.09090909090909091,
+          "aligned_word_accuracy": 0.045454545454545456
+        },
+        {
+          "subject": "sub-03",
+          "condition": "A",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.027056277056277056,
+          "wer": 1.0,
+          "bleu1": 0.030303030303030304,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "subject": "sub-03",
+          "condition": "C",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.05639097744360902,
+          "wer": 0.9696969696969697,
+          "bleu1": 0.045454545454545456,
+          "aligned_word_accuracy": 0.030303030303030304
+        },
+        {
+          "subject": "sub-04",
+          "condition": "A",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.017543859649122806,
+          "wer": 1.0,
+          "bleu1": 0.030303030303030304,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "subject": "sub-04",
+          "condition": "C",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.10338345864661654,
+          "wer": 0.9545454545454546,
+          "bleu1": 0.12121212121212122,
+          "aligned_word_accuracy": 0.045454545454545456
+        },
+        {
+          "subject": "sub-05",
+          "condition": "A",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.02944862155388471,
+          "wer": 1.0,
+          "bleu1": 0.045454545454545456,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "subject": "sub-05",
+          "condition": "C",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.041353383458646614,
+          "wer": 0.9848484848484849,
+          "bleu1": 0.06060606060606061,
+          "aligned_word_accuracy": 0.015151515151515152
+        },
+        {
+          "subject": "sub-06",
+          "condition": "A",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.008771929824561403,
+          "wer": 0.9848484848484849,
+          "bleu1": 0.015151515151515152,
+          "aligned_word_accuracy": 0.015151515151515152
+        },
+        {
+          "subject": "sub-06",
+          "condition": "C",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.05889724310776942,
+          "wer": 0.9696969696969697,
+          "bleu1": 0.09090909090909091,
+          "aligned_word_accuracy": 0.030303030303030304
+        },
+        {
+          "subject": "sub-07",
+          "condition": "A",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.023809523809523808,
+          "wer": 1.0,
+          "bleu1": 0.030303030303030304,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "subject": "sub-07",
+          "condition": "C",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.02631578947368421,
+          "wer": 0.9848484848484849,
+          "bleu1": 0.045454545454545456,
+          "aligned_word_accuracy": 0.015151515151515152
+        },
+        {
+          "subject": "sub-08",
+          "condition": "A",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.015151515151515152,
+          "wer": 1.0,
+          "bleu1": 0.015151515151515152,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "subject": "sub-08",
+          "condition": "C",
+          "segments": 6,
+          "words": 66,
+          "sentence_bleu1_mean": 0.09461152882205513,
+          "wer": 0.9545454545454546,
+          "bleu1": 0.12121212121212122,
+          "aligned_word_accuracy": 0.045454545454545456
+        }
+      ],
+      "examples": [
+        {
+          "selection": "first_group",
+          "group": "sub-01|run-13|chapter-3|semantic-4",
+          "subject": "sub-01",
+          "reference": [
+            "这样",
+            "的",
+            "画",
+            "实在",
+            "太",
+            "复杂",
+            "了",
+            "就",
+            "问",
+            "我",
+            "这",
+            "是",
+            "什么",
+            "东西"
+          ],
+          "final": {
+            "A": [
+              "我",
+              "加",
+              "了",
+              "帽子",
+              "和",
+              "围巾",
+              "帽子",
+              "更是",
+              "把",
+              "身子",
+              "除了",
+              "等",
+              "命令",
+              "用"
+            ],
+            "C": [
+              "于是",
+              "大人",
+              "一个",
+              "丑陋",
+              "地",
+              "很",
+              "通情达理",
+              "而",
+              "对",
+              "小东西",
+              "给",
+              "不",
+              "作",
+              "事"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "我"
+              ],
+              "C": [
+                "我"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "我",
+                "加"
+              ],
+              "C": [
+                "如果",
+                "大人"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "我",
+                "加",
+                "了"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "难"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "我",
+                "加",
+                "了",
+                "帽子"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "总",
+                "难"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "我",
+                "加",
+                "了",
+                "帽子",
+                "和"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "一个",
+                "丑陋",
+                "地"
+              ]
+            },
+            {
+              "arrival": 5,
+              "A": [
+                "我",
+                "加",
+                "了",
+                "帽子",
+                "和",
+                "围巾"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "一个",
+                "丑陋",
+                "地",
+                "吞"
+              ]
+            },
+            {
+              "arrival": 6,
+              "A": [
+                "我",
+                "加",
+                "了",
+                "帽子",
+                "和",
+                "围巾",
+                "帽子"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "一个",
+                "丑陋",
+                "地",
+                "挺",
+                "着"
+              ]
+            },
+            {
+              "arrival": 7,
+              "A": [
+                "我",
+                "加",
+                "了",
+                "帽子",
+                "和",
+                "围巾",
+                "帽子",
+                "更是"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "一个",
+                "丑陋",
+                "地",
+                "很",
+                "丑陋",
+                "而"
+              ]
+            },
+            {
+              "arrival": 8,
+              "A": [
+                "我",
+                "加",
+                "了",
+                "帽子",
+                "和",
+                "围巾",
+                "帽子",
+                "更是",
+                "把"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "一个",
+                "丑陋",
+                "地",
+                "很",
+                "通情达理",
+                "而",
+                "把"
+              ]
+            },
+            {
+              "arrival": 9,
+              "A": [
+                "我",
+                "加",
+                "了",
+                "帽子",
+                "和",
+                "围巾",
+                "帽子",
+                "更是",
+                "把",
+                "身子"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "一个",
+                "丑陋",
+                "地",
+                "很",
+                "通情达理",
+                "而",
+                "对",
+                "命令"
+              ]
+            },
+            {
+              "arrival": 10,
+              "A": [
+                "我",
+                "加",
+                "了",
+                "帽子",
+                "和",
+                "围巾",
+                "帽子",
+                "更是",
+                "把",
+                "身子",
+                "除了"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "一个",
+                "丑陋",
+                "地",
+                "很",
+                "通情达理",
+                "而",
+                "对",
+                "小东西",
+                "除了"
+              ]
+            },
+            {
+              "arrival": 11,
+              "A": [
+                "我",
+                "加",
+                "了",
+                "帽子",
+                "和",
+                "围巾",
+                "帽子",
+                "更是",
+                "把",
+                "身子",
+                "除了",
+                "等"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "一个",
+                "丑陋",
+                "地",
+                "很",
+                "通情达理",
+                "而",
+                "对",
+                "小东西",
+                "只",
+                "等"
+              ]
+            },
+            {
+              "arrival": 12,
+              "A": [
+                "我",
+                "加",
+                "了",
+                "帽子",
+                "和",
+                "围巾",
+                "帽子",
+                "更是",
+                "把",
+                "身子",
+                "除了",
+                "等",
+                "命令"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "一个",
+                "丑陋",
+                "地",
+                "很",
+                "通情达理",
+                "而",
+                "对",
+                "小东西",
+                "给",
+                "个",
+                "命令"
+              ]
+            },
+            {
+              "arrival": 13,
+              "A": [
+                "我",
+                "加",
+                "了",
+                "帽子",
+                "和",
+                "围巾",
+                "帽子",
+                "更是",
+                "把",
+                "身子",
+                "除了",
+                "等",
+                "命令",
+                "用"
+              ],
+              "C": [
+                "于是",
+                "大人",
+                "一个",
+                "丑陋",
+                "地",
+                "很",
+                "通情达理",
+                "而",
+                "对",
+                "小东西",
+                "给",
+                "不",
+                "作",
+                "事"
+              ]
+            }
+          ],
+          "initial_C": [
+            "我",
+            "大人",
+            "难",
+            "难",
+            "地",
+            "吞",
+            "着",
+            "而",
+            "把",
+            "命令",
+            "除了",
+            "等",
+            "命令",
+            "事"
+          ],
+          "repaired_C": [],
+          "harmed_C": []
+        },
+        {
+          "selection": "most_C_repairs",
+          "group": "sub-02|run-211|chapter-25|semantic-14",
+          "subject": "sub-02",
+          "reference": [
+            "我",
+            "想",
+            "喝水",
+            "小王子",
+            "说",
+            "给",
+            "我",
+            "喝",
+            "吧",
+            "我",
+            "这时",
+            "明白",
+            "了",
+            "他",
+            "在",
+            "寻找",
+            "的",
+            "是",
+            "什么"
+          ],
+          "final": {
+            "A": [
+              "你好",
+              "可以",
+              "帮",
+              "你",
+              "工",
+              "就",
+              "像",
+              "明白",
+              "远",
+              "而是",
+              "像",
+              "远",
+              "的",
+              "场",
+              "意思",
+              "像",
+              "近",
+              "事",
+              "发现"
+            ],
+            "C": [
+              "现在",
+              "是",
+              "说",
+              "小王子",
+              "说",
+              "你",
+              "给",
+              "一起",
+              "朋友",
+              "而",
+              "感到",
+              "孤独",
+              "也",
+              "时光",
+              "和",
+              "目光",
+              "也",
+              "为",
+              "朋友"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "你好"
+              ],
+              "C": [
+                "你好"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "你好",
+                "可以"
+              ],
+              "C": [
+                "当然",
+                "可以"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "你好",
+                "可以",
+                "帮"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "世界"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "快车",
+                "或者"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "现在",
+                "工"
+              ]
+            },
+            {
+              "arrival": 5,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "狐狸"
+              ]
+            },
+            {
+              "arrival": 6,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "他",
+                "像"
+              ]
+            },
+            {
+              "arrival": 7,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "像",
+                "一棵树"
+              ]
+            },
+            {
+              "arrival": 8,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白",
+                "远"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "给",
+                "一起",
+                "玩吧"
+              ]
+            },
+            {
+              "arrival": 9,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白",
+                "远",
+                "而是"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "给",
+                "一起",
+                "朋友",
+                "还"
+              ]
+            },
+            {
+              "arrival": 10,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白",
+                "远",
+                "而是",
+                "像"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "给",
+                "一起",
+                "朋友",
+                "也",
+                "像"
+              ]
+            },
+            {
+              "arrival": 11,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白",
+                "远",
+                "而是",
+                "像",
+                "远"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "给",
+                "一起",
+                "朋友",
+                "而",
+                "感到",
+                "痛苦"
+              ]
+            },
+            {
+              "arrival": 12,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白",
+                "远",
+                "而是",
+                "像",
+                "远",
+                "的"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "给",
+                "一起",
+                "朋友",
+                "而",
+                "感到",
+                "孤独",
+                "的"
+              ]
+            },
+            {
+              "arrival": 13,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白",
+                "远",
+                "而是",
+                "像",
+                "远",
+                "的",
+                "场"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "给",
+                "一起",
+                "朋友",
+                "而",
+                "感到",
+                "孤独",
+                "在",
+                "沙漠"
+              ]
+            },
+            {
+              "arrival": 14,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白",
+                "远",
+                "而是",
+                "像",
+                "远",
+                "的",
+                "场",
+                "意思"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "给",
+                "一起",
+                "朋友",
+                "而",
+                "感到",
+                "孤独",
+                "也",
+                "和",
+                "朋友"
+              ]
+            },
+            {
+              "arrival": 15,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白",
+                "远",
+                "而是",
+                "像",
+                "远",
+                "的",
+                "场",
+                "意思",
+                "像"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "给",
+                "一起",
+                "朋友",
+                "而",
+                "感到",
+                "孤独",
+                "也",
+                "时光",
+                "和",
+                "目光"
+              ]
+            },
+            {
+              "arrival": 16,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白",
+                "远",
+                "而是",
+                "像",
+                "远",
+                "的",
+                "场",
+                "意思",
+                "像",
+                "近"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "给",
+                "一起",
+                "朋友",
+                "而",
+                "感到",
+                "孤独",
+                "也",
+                "时光",
+                "和",
+                "玫瑰",
+                "给"
+              ]
+            },
+            {
+              "arrival": 17,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白",
+                "远",
+                "而是",
+                "像",
+                "远",
+                "的",
+                "场",
+                "意思",
+                "像",
+                "近",
+                "事"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "给",
+                "一起",
+                "朋友",
+                "而",
+                "感到",
+                "孤独",
+                "也",
+                "时光",
+                "和",
+                "目光",
+                "和",
+                "声音"
+              ]
+            },
+            {
+              "arrival": 18,
+              "A": [
+                "你好",
+                "可以",
+                "帮",
+                "你",
+                "工",
+                "就",
+                "像",
+                "明白",
+                "远",
+                "而是",
+                "像",
+                "远",
+                "的",
+                "场",
+                "意思",
+                "像",
+                "近",
+                "事",
+                "发现"
+              ],
+              "C": [
+                "现在",
+                "是",
+                "说",
+                "小王子",
+                "说",
+                "你",
+                "给",
+                "一起",
+                "朋友",
+                "而",
+                "感到",
+                "孤独",
+                "也",
+                "时光",
+                "和",
+                "目光",
+                "也",
+                "为",
+                "朋友"
+              ]
+            }
+          ],
+          "initial_C": [
+            "你好",
+            "可以",
+            "世界",
+            "或者",
+            "工",
+            "狐狸",
+            "像",
+            "一棵树",
+            "玩吧",
+            "还",
+            "像",
+            "痛苦",
+            "的",
+            "沙漠",
+            "朋友",
+            "目光",
+            "给",
+            "声音",
+            "朋友"
+          ],
+          "repaired_C": [
+            3,
+            4
+          ],
+          "harmed_C": []
+        },
+        {
+          "selection": "most_C_harms",
+          "group": "sub-01|run-211|chapter-25|semantic-14",
+          "subject": "sub-01",
+          "reference": [
+            "我",
+            "想",
+            "喝水",
+            "小王子",
+            "说",
+            "给",
+            "我",
+            "喝",
+            "吧",
+            "我",
+            "这时",
+            "明白",
+            "了",
+            "他",
+            "在",
+            "寻找",
+            "的",
+            "是",
+            "什么"
+          ],
+          "final": {
+            "A": [
+              "你好",
+              "问",
+              "世界",
+              "中",
+              "一",
+              "而",
+              "像",
+              "明白",
+              "远",
+              "或",
+              "像",
+              "痛苦",
+              "中",
+              "去",
+              "意思",
+              "像",
+              "近",
+              "声音",
+              "心跳"
+            ],
+            "C": [
+              "尽管",
+              "是",
+              "地球",
+              "上",
+              "独一无二",
+              "但",
+              "会",
+              "咬",
+              "人",
+              "而",
+              "像",
+              "驯养",
+              "着",
+              "时光",
+              "和",
+              "目光",
+              "也",
+              "的",
+              "动物"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "你好"
+              ],
+              "C": [
+                "你好"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "你好",
+                "问"
+              ],
+              "C": [
+                "你好",
+                "问"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "你好",
+                "问",
+                "世界"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "世界"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "中"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "另一边",
+                "的"
+              ]
+            },
+            {
+              "arrival": 5,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "的"
+              ]
+            },
+            {
+              "arrival": 6,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "的",
+                "沙漠"
+              ]
+            },
+            {
+              "arrival": 7,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "听懂"
+              ]
+            },
+            {
+              "arrival": 8,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白",
+                "远"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "咬",
+                "人"
+              ]
+            },
+            {
+              "arrival": 9,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白",
+                "远",
+                "或"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "咬",
+                "人",
+                "或者"
+              ]
+            },
+            {
+              "arrival": 10,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白",
+                "远",
+                "或",
+                "像"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "咬",
+                "人",
+                "和",
+                "像"
+              ]
+            },
+            {
+              "arrival": 11,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白",
+                "远",
+                "或",
+                "像",
+                "痛苦"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "咬",
+                "人",
+                "而",
+                "像",
+                "痛苦"
+              ]
+            },
+            {
+              "arrival": 12,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白",
+                "远",
+                "或",
+                "像",
+                "痛苦",
+                "中"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "咬",
+                "人",
+                "而",
+                "像",
+                "狗",
+                "的"
+              ]
+            },
+            {
+              "arrival": 13,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白",
+                "远",
+                "或",
+                "像",
+                "痛苦",
+                "中",
+                "去"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "咬",
+                "人",
+                "而",
+                "像",
+                "驯养",
+                "过",
+                "成千上万"
+              ]
+            },
+            {
+              "arrival": 14,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白",
+                "远",
+                "或",
+                "像",
+                "痛苦",
+                "中",
+                "去",
+                "意思"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "咬",
+                "人",
+                "而",
+                "像",
+                "驯养",
+                "着",
+                "的",
+                "箱子"
+              ]
+            },
+            {
+              "arrival": 15,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白",
+                "远",
+                "或",
+                "像",
+                "痛苦",
+                "中",
+                "去",
+                "意思",
+                "像"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "咬",
+                "人",
+                "而",
+                "像",
+                "驯养",
+                "着",
+                "时光",
+                "和",
+                "目光"
+              ]
+            },
+            {
+              "arrival": 16,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白",
+                "远",
+                "或",
+                "像",
+                "痛苦",
+                "中",
+                "去",
+                "意思",
+                "像",
+                "近"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "咬",
+                "人",
+                "而",
+                "像",
+                "驯养",
+                "着",
+                "时光",
+                "和",
+                "目光",
+                "的"
+              ]
+            },
+            {
+              "arrival": 17,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白",
+                "远",
+                "或",
+                "像",
+                "痛苦",
+                "中",
+                "去",
+                "意思",
+                "像",
+                "近",
+                "声音"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "咬",
+                "人",
+                "而",
+                "像",
+                "驯养",
+                "着",
+                "时光",
+                "和",
+                "目光",
+                "的",
+                "动物"
+              ]
+            },
+            {
+              "arrival": 18,
+              "A": [
+                "你好",
+                "问",
+                "世界",
+                "中",
+                "一",
+                "而",
+                "像",
+                "明白",
+                "远",
+                "或",
+                "像",
+                "痛苦",
+                "中",
+                "去",
+                "意思",
+                "像",
+                "近",
+                "声音",
+                "心跳"
+              ],
+              "C": [
+                "尽管",
+                "是",
+                "地球",
+                "上",
+                "独一无二",
+                "但",
+                "会",
+                "咬",
+                "人",
+                "而",
+                "像",
+                "驯养",
+                "着",
+                "时光",
+                "和",
+                "目光",
+                "也",
+                "的",
+                "动物"
+              ]
+            }
+          ],
+          "initial_C": [
+            "你好",
+            "问",
+            "世界",
+            "中",
+            "的",
+            "的",
+            "沙漠",
+            "听懂",
+            "人",
+            "或者",
+            "像",
+            "痛苦",
+            "的",
+            "成千上万",
+            "箱子",
+            "目光",
+            "的",
+            "动物",
+            "动物"
+          ],
+          "repaired_C": [],
+          "harmed_C": [
+            16
+          ]
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2_preview/pallier2025/main.json",
+      "sha256": "1bf7f7b7e44bf5f185effed27a82cbeb06b37df53ef8e8887f53416336fde995"
+    },
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2_preview/chineseeeg2_littleprince/main.json",
+      "sha256": "00152bf41af8881bb8c8bac04d3853eb5ec131156dadb400fcec61b4dddefc62"
+    }
+  ],
+  "test_evaluated": false,
+  "full_experiment_completed": false,
+  "metric_contract": "BLEU1: within-subject segment mean then equal subjects; word accuracy/WER pool words within subjects before equal subjects.",
+  "interpretation": "Overall delayed rolling improvement, with first-to-final online repair counts."
+}

@@ -1,0 +1,239 @@
+protocol:
+  id: unified_rolling_v2
+  status: ready_for_development_training
+  splits_allowed:
+  - train
+  - val
+  seeds:
+  - 0
+  - 1
+  - 2
+  history_radius: 2
+  horizons:
+  - 0
+  - 1
+  - 2
+  grouping: supplied_language_segment_within_recording_break_at_excluded_event
+  vocabulary: all_eligible_training_words
+  selection: legacy_word_macro_top10_and_revision_common_k2_word_macro_top10
+  stages:
+  - word
+  - revision
+  run_count: 12
+  neural_rules: accepted_pallier_bge_16x16_full_coverage
+  sentence_status: pending_development_calibration_and_statistical_freeze
+  test_evaluation_allowed: false
+text_embedding:
+  model_name: BAAI/bge-m3
+  revision: 5617a9f61b028005a4858fdac845db406aefb181
+  backend: auto_model
+  layer_fraction: 1.0
+  token_aggregation: first
+  add_special_tokens: true
+  normalize_embeddings: true
+  embedding_dimension: 1024
+  max_length: 64
+  batch_size: 64
+  dtype: float16
+  device: cuda
+  local_files_only: true
+  word_normalization: canonical_standard_word
+language_model:
+  model_name: Qwen/Qwen2.5-1.5B
+  revision: 8faed761d45a263340a0528343f099c05c9a4323
+  local_path: data/cache/derived/models/qwen2_5_1_5b
+  dtype: float16
+  context_tokens: 32768
+  language_prompt_template: 'Language: {language}.
+
+    Text:
+
+    '
+  score: sum_all_word_subtokens
+  score_batch_size: 32
+  neural_scale: 10.0
+  candidate_count: 20
+  beam_width: 5
+  proposal_count: 5
+  proposal_max_new_tokens: 16
+  language_weight_grid:
+  - 0.0
+  - 0.025
+  - 0.1
+  - 0.5
+  - 1.5
+  calibration_condition: A
+model:
+  embedding_dimension: 1024
+  use_transformer: true
+  context_mode: grouped
+  conv:
+    merger_channels: 270
+    merger_position_dimension: 2048
+    merger_per_subject: true
+    merger_dropout: 0.2
+    initial_linear: 512
+    hidden: 160
+    depth: 5
+    kernel_size: 3
+    dilation_growth: 2
+    dilation_period: 5
+    dropout_input: 0.1
+    convolution_dropout: 0.0
+    batch_norm: true
+    gelu: true
+    skip: true
+    glu_every: 2
+    glu_context: 1
+    temporal_attention_hidden: 256
+  transformer:
+    depth: 16
+    heads: 16
+    attention_dropout: 0.1
+    feedforward_dropout: 0.0
+    use_scalenorm: true
+    use_rmsnorm: false
+    rotary_position_embedding: true
+    residual_attention: false
+    scale_residual: true
+  local_window_revision:
+    enabled: true
+    history_radius: 2
+    horizons:
+    - 0
+    - 1
+    - 2
+    validation_query_batch_size: 128
+loss:
+  name: SigLip
+  initial_temperature: 10.0
+  initial_bias: -10.0
+  identical_candidates_threshold: 0.999
+training:
+  seed: 0
+  device: auto
+  batch_size: 128
+  num_workers: 0
+  word_epochs: 30
+  revision_epochs: 30
+  freeze_brain_encoder_epochs: 1
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  minimum_learning_rate: 0.0
+  max_grad_norm: 0.0
+  amp: true
+  amp_dtype: float16
+  preserve_complete_groups: true
+  revision_cutoff_policy: all
+  loss_normalization: per_batch_independent_horizon_mean
+  track_revision_coverage: true
+  save_last_checkpoint: false
+  patience: 10
+  scheduler: cosine_annealing_per_epoch
+  record_amp_skipped_updates: true
+  primary_checkpoint: best.pt
+  secondary_checkpoint: best_full_vocab.pt
+  warm_start_source: same_dataset_same_seed_word_best_pt
+  top_ks:
+  - 1
+  - 10
+  word_sampling: legacy_word_sampler
+  revision_only_fields:
+  - freeze_brain_encoder_epochs
+  - preserve_complete_groups
+  - revision_cutoff_policy
+  - loss_normalization
+  - track_revision_coverage
+adapters:
+  pallier2025:
+    source_config: configs/word_decoding/pallier2025/base.yaml
+    subject_scope: sub01-10
+    language: fr
+    group_column: runtime_context_uid
+    alignment_config: configs/unified_rolling/pallier_seed0_bge_alignment_retry1.yaml
+    word_source_config: configs/word_decoding/pallier2025/sub01-10/main_word.yaml
+    embedding_cache: data/cache/derived/pallier2025/text/unified_bge_m3_v1/embeddings.npz
+    vocabulary_manifest: data/manifests/rolling_sentence/pallier2025_train_vocabulary.json
+    revision_source_config: configs/word_decoding/pallier2025/rolling_revision/k2_d2.yaml
+    main_selection_metric_word: retrieval_acc10_vocab=pallier2025_50_macro
+    main_selection_metric_revision: revision_common_delay2_retrieval_acc10_vocab=pallier2025_50_macro
+    expected_train_rows: 115290
+    expected_validation_rows: 16960
+    expected_train_vocabulary: 2020
+    expected_all_vocab50_queries: 8260
+    expected_common_vocab50_queries: 6760
+    expected_legacy_word_candidates: 50
+    expected_legacy_common_candidates: 49
+    expected_common_rows: 13160
+  chineseeeg2_littleprince:
+    source_config: configs/word_decoding/chineseeeg2_littleprince/base.yaml
+    subject_scope: sub01-08
+    language: zh
+    group_column: sentence_uid
+    alignment_config: configs/unified_rolling/chineseeeg2_seed0_bge_16x16_v1.yaml
+    word_source_config: configs/word_decoding/chineseeeg2_littleprince/sub01-08/main_word.yaml
+    embedding_cache: data/cache/derived/chineseeeg2_littleprince/text/unified_bge_m3_v1/embeddings.npz
+    vocabulary_manifest: data/manifests/rolling_sentence/chineseeeg2_littleprince_train_vocabulary.json
+    revision_source_config: configs/word_decoding/chineseeeg2_littleprince/rolling_revision/k2_d2_full_coverage.yaml
+    main_selection_metric_word: retrieval_acc10_vocab=chineseeeg2_littleprince50_macro
+    main_selection_metric_revision: revision_common_delay2_retrieval_acc10_vocab=chineseeeg2_littleprince50_macro
+    expected_train_rows: 81620
+    expected_validation_rows: 14132
+    expected_train_vocabulary: 2180
+    expected_all_vocab50_queries: 6160
+    expected_common_vocab50_queries: 5280
+    expected_legacy_word_candidates: 47
+    expected_legacy_common_candidates: 46
+    expected_common_rows: 11780
+evaluation:
+  default_split: val
+  primary_selection:
+    word: legacy_frozen_vocabulary_word_type_macro_top10
+    revision: legacy_common_k2_word_type_macro_top10
+    candidate_filter: drop_candidates_absent_from_evaluation_targets
+    tie_break: earlier_epoch
+  strict_vocab50:
+    candidate_count: 50
+    retain_absent_candidates: true
+    populations:
+    - all_validation_queries_in_vocab50
+    - common_k0_k1_k2_queries_in_vocab50
+    delay_gain: common_k2_minus_k0_only
+  secondary_selection:
+    word: full_train_vocabulary_subject_macro_top10
+    revision: full_train_vocabulary_common_targets_subject_macro_top10_horizon_mean
+    oov_policy: retain_as_errors
+    checkpoint: best_full_vocab.pt
+  primary_downstream_checkpoint: best.pt
+  test_evaluation_allowed: false
+execution:
+  output_group: unified_rolling_v2
+  reuse_policy: completed_compatible_verified_runs_only
+  incomplete_run_policy: stop_without_overwrite_or_implicit_restart
+  reuse_runs:
+  - dataset: pallier2025
+    seed: 0
+    stage: word
+    path: outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/main_word/seed-000
+  - dataset: pallier2025
+    seed: 0
+    stage: revision
+    path: outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/local_window_rolling_revision_k2_d2/seed-000
+  - dataset: chineseeeg2_littleprince
+    seed: 0
+    stage: word
+    path: outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/main_word/seed-000
+  - dataset: chineseeeg2_littleprince
+    seed: 0
+    stage: revision
+    path: outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000
+  entrypoint: scripts/replications/run_unified_rolling_v2.py
+  worker: braindecoding.unified_rolling_v2_training
+  external_wait:
+    runtime_status: .cache/runs/chineseeeg2_seed0_bge_16x16_v1/status.json
+    expected_module: braindecoding.chineseeeg_bge_trial
+    dataset: chineseeeg2_littleprince
+    seed: 0
+    required_stages:
+    - word
+    - revision

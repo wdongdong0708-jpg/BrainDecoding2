@@ -1,0 +1,28 @@
+protocol:
+  id: synthetic_timing_v2
+  parent: synthetic_timing_v1
+  datasets: [pallier2025, chineseeeg2_littleprince]
+  conditions: [shared, independent]
+  seeds: [0, 1, 2]
+  stages: [word, revision]
+  history_radius: 2
+  horizons: [0, 1, 2]
+  selection_split: val
+  reporting_split: test
+  test_selection_allowed: false
+  language_model_allowed: false
+  expand_context_automatically: false
+synthetic_from: configs/unified_rolling/synthetic_timing_v1.yaml
+execution:
+  output_group_prefix: synthetic_timing_v2
+  reuse_completed_pallier_v1: true
+  dataset_order: [pallier2025, chineseeeg2_littleprince]
+  job_order: dataset_then_seed_then_condition_then_stage
+  existing_gpu_task: .cache/runs/fixed_k0_rolling_search_test_v2/status.json
+  minimum_free_gpu_mib: 12000
+  poll_seconds: 30
+  resume_boundary: epoch
+  automatic_unclean_exit_retries: 2
+  keep_completed_resume_checkpoint: false
+  real_results: data/results/exports/unified_heldout_test_v2_word_by_seed.csv
+  existing_training_results: data/results/protocols/unified_rolling_v2_queue_results.json

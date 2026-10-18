@@ -1,0 +1,72 @@
+{
+  "status": "completed",
+  "manifest_sha256": "880fc0e6f0f15c83b31b718c6e03df578671ddb8b27ee456c6da73f22b8953fb",
+  "updated_unix": 1790620795.5897746,
+  "completed_segment_seed_units": 7452,
+  "total_segment_seed_units": 7452,
+  "fraction": 1.0,
+  "datasets": [
+    {
+      "dataset": "pallier2025",
+      "seed": 0,
+      "completed_groups": 1500,
+      "total_groups": 1500,
+      "completed_words": 13060,
+      "total_words": 13060,
+      "new_chunks": 87,
+      "seed_completed": true
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 1,
+      "completed_groups": 1500,
+      "total_groups": 1500,
+      "completed_words": 13060,
+      "total_words": 13060,
+      "new_chunks": 94,
+      "seed_completed": true
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 2,
+      "completed_groups": 1500,
+      "total_groups": 1500,
+      "completed_words": 13060,
+      "total_words": 13060,
+      "new_chunks": 94,
+      "seed_completed": true
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 0,
+      "completed_groups": 984,
+      "total_groups": 984,
+      "completed_words": 11400,
+      "total_words": 11400,
+      "new_chunks": 59,
+      "seed_completed": true
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 1,
+      "completed_groups": 984,
+      "total_groups": 984,
+      "completed_words": 11400,
+      "total_words": 11400,
+      "new_chunks": 62,
+      "seed_completed": true
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 2,
+      "completed_groups": 984,
+      "total_groups": 984,
+      "completed_words": 11400,
+      "total_words": 11400,
+      "new_chunks": 62,
+      "seed_completed": true
+    }
+  ],
+  "full_experiment_completed": true,
+  "test_evaluated": false
+}

@@ -1,0 +1,21 @@
+% Rendered only from verified manuscript_text_stage3_v1 exports.
+% Presentation only: verified reports/exports; polish_main_assets_test_v2.py.
+\begingroup
+\papertablestyle
+\begin{tabular}{@{}lrrrrrrrr@{}}
+\toprule
+策略 & \multicolumn{4}{c}{\textbf{Pallier2025}} & \multicolumn{4}{c}{\textbf{ChineseEEG-2}} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-9}
+ & \papertablehead{BLEU-1 $\uparrow$}{(\%)} & \papertablehead{WER $\downarrow$}{(\%)} & \shortstack{词位\\准确率 $\uparrow$\\(\%)} & \papertablehead{输入等待}{(s)} & \papertablehead{BLEU-1 $\uparrow$}{(\%)} & \papertablehead{WER $\downarrow$}{(\%)} & \shortstack{词位\\准确率 $\uparrow$\\(\%)} & \papertablehead{输入等待}{(s)} \\
+\midrule
+A 固定输出 & 8.37 & 94.94 & 5.02 & 1.000 & 9.25 & 97.54 & 2.31 & 1.000 \\
+B 固定表示重搜 & 8.94 & 94.35 & 5.62 & 1.502 & 8.91 & 97.97 & 1.90 & 1.542 \\
+\addlinespace
+\textbf{C1 一次回修} & 12.17 & 90.58 & 9.38 & 1.265 & 9.74 & 97.00 & 2.90 & 1.285 \\
+\textbf{C 滚动修正} & 13.46 & 89.11 & 10.86 & 1.502 & 9.76 & 95.97 & 3.98 & 1.542 \\
+\addlinespace
+F-local 局部整段 & 13.72 & 88.85 & 11.11 & 3.311 & 10.05 & 95.87 & 4.06 & 3.057 \\
+F 完整片段 & 15.51 & 88.21 & 11.75 & 3.311 & 9.96 & 96.10 & 3.77 & 3.057 \\
+\bottomrule
+\end{tabular}
+\endgroup

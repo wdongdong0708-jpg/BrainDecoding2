@@ -1,0 +1,17 @@
+% Presentation only: simplify_appendix_tables_test_v2.py; verified frozen sources.
+\begingroup
+\papertablestyle
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+数据集 & 策略 & 词位数 & 均值 (s) & 中位 (s) & P90 (s) & \papertablehead{输入等待节省}{较 F (s)} \\
+\midrule
+Pallier2025 & A / K0 & 18450 & 1.000 & 1.000 & 1.000 & 2.311 \\
+ & C / K2 & 18450 & 1.502 & 1.446 & 2.000 & 1.808 \\
+ & F & 18450 & 3.311 & 2.342 & 6.670 & 0.000 \\
+\addlinespace
+ChineseEEG-2 & A / K0 & 8480 & 1.000 & 1.000 & 1.000 & 2.057 \\
+ & C / K2 & 8480 & 1.542 & 1.480 & 2.120 & 1.514 \\
+ & F & 8480 & 3.057 & 2.440 & 5.960 & 0.000 \\
+\bottomrule
+\end{tabular}
+\endgroup

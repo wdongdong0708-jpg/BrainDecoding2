@@ -1,0 +1,298 @@
+{
+  "schema_version": 1,
+  "split": "val",
+  "metric": "macro_top10",
+  "vocabulary_size": 50,
+  "datasets": [
+    {
+      "schema_version": 1,
+      "dataset": "Pallier2025",
+      "split": "val",
+      "metric": "macro_top10",
+      "vocabulary_size": 50,
+      "target_set": "all_target",
+      "fingerprint": {
+        "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+        "subjects": [
+          "sub-01",
+          "sub-02",
+          "sub-03",
+          "sub-04",
+          "sub-05",
+          "sub-06",
+          "sub-07",
+          "sub-08",
+          "sub-09",
+          "sub-10"
+        ],
+        "vocabulary_manifest_sha256": "6e9d12c345b28cd695f6971216e0c90f3a306b0a0e0f16fc05c3de802be11505",
+        "warm_start_sha256": "fee17f5d7c935d0e0efd1ff30e62ba8945e8e3f3cb2e041b0182bc3e45d7f9de",
+        "effective_query_count": 8260
+      },
+      "sources": [
+        {
+          "experiment": "local_window_r0",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r0/seed-000/evaluation/val.json",
+          "evaluation_sha256": "738a11329af1e995c131b3ce33b51273dc8275dae06fefce88c6ffc4eeaa6d28",
+          "checkpoint_sha256": "32bb9a1a41154415a928748781ae943ae113730ae42cf9c008c211c025962390"
+        },
+        {
+          "experiment": "local_window_r0",
+          "seed": 1,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r0/seed-001/evaluation/val.json",
+          "evaluation_sha256": "0594ec7b22de6714a4c3a2306e1c0be73adf5cff0c24752f5d0c8e9138b41831",
+          "checkpoint_sha256": "d1a33c0cdca5a13deedf1ad2c21d2c7eac0220767553559c001018129f1a2dfa"
+        },
+        {
+          "experiment": "local_window_r0",
+          "seed": 2,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r0/seed-002/evaluation/val.json",
+          "evaluation_sha256": "beb794b4aa276618d297f513610377d78060174a626aefadbf3173b15a6d2c7e",
+          "checkpoint_sha256": "1f70b96e55c555fc45798e3fc029a42a8d92a71ba2ae9122e374945041a238a6"
+        },
+        {
+          "experiment": "local_window_r1",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r1/seed-000/evaluation/val.json",
+          "evaluation_sha256": "3e018ec452bf7a9a9ea60025d6e71f251f293dedcfe85d15bad66092f31c79eb",
+          "checkpoint_sha256": "a727480ac1b927cd496dc4bc0e8de6524266810f340b9b59d94d2f06a631d03f"
+        },
+        {
+          "experiment": "local_window_r1",
+          "seed": 1,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r1/seed-001/evaluation/val.json",
+          "evaluation_sha256": "e3d0aefcf57ad76d81bcd3f0a4a7e76b61f670af9c2f16fcdd16113bdbc74cca",
+          "checkpoint_sha256": "d7ce3647c6819f73459a23f6df4a011efb5f3811e7bc837564edbae35149613f"
+        },
+        {
+          "experiment": "local_window_r1",
+          "seed": 2,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r1/seed-002/evaluation/val.json",
+          "evaluation_sha256": "c2df9c94dec34b23bdc84d3b68c65cb0a204e5afa22b246c50d4604e3032d130",
+          "checkpoint_sha256": "24624ef96426acfd3daa5c5ecdc6f2688588d2122c706f8f9f0cae59b81b7189"
+        },
+        {
+          "experiment": "local_window_r2",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r2/seed-000/evaluation/val.json",
+          "evaluation_sha256": "d2dbb273489e49c48b222b9d67c1aa2de704e09c48ff345fdaba1c015c9f76ff",
+          "checkpoint_sha256": "c0e08ad8ab60a932ed00d9c13ce87da49f9e0947800b4372954853e76f3db6f6"
+        },
+        {
+          "experiment": "local_window_r2",
+          "seed": 1,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r2/seed-001/evaluation/val.json",
+          "evaluation_sha256": "3385581e1f7fc25c7927e4d2a0d2567cbb376bc6b1c499907f0eaf5f64f045f9",
+          "checkpoint_sha256": "d5b8d08749a1f88667dddaf67012bdc15c5b3c19dff50c237fd44f661ff0e51a"
+        },
+        {
+          "experiment": "local_window_r2",
+          "seed": 2,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r2/seed-002/evaluation/val.json",
+          "evaluation_sha256": "be38cbb5e3852459f05c33743c1aba3919668b4bb807c152fa947a6bbd886547",
+          "checkpoint_sha256": "7790d406d2bb3f560dfc2beca250a8d0b6c96e16ce024340bea4b8e2dab5d622"
+        },
+        {
+          "experiment": "local_window_r4",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r4/seed-000/evaluation/val.json",
+          "evaluation_sha256": "8a488426d5c7e44c94ada450d87085885588fddbd45069774d4ce58ef54ad812",
+          "checkpoint_sha256": "4585486a60d5316f2f614a46f50e33fe2a3ae198fb56818b107a2c502a5741b6"
+        },
+        {
+          "experiment": "local_window_r4",
+          "seed": 1,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r4/seed-001/evaluation/val.json",
+          "evaluation_sha256": "fde733dec5fdbc02d93bc341c38939649768936a05aee857787f791351624196",
+          "checkpoint_sha256": "dcc719fdeacc72513784f0f7f2fcd3b9d790095ca0d0227cfc18aa4a2c4383b5"
+        },
+        {
+          "experiment": "local_window_r4",
+          "seed": 2,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r4/seed-002/evaluation/val.json",
+          "evaluation_sha256": "b98601f26e78963b6e4d0f8278882b2a2bb2a5ab79f8e1f90940891d76b8bf97",
+          "checkpoint_sha256": "f9a1bbfadceb4180cb6a4400aeba57162f227be7e74c1c950bca2fe7f6e3407f"
+        },
+        {
+          "experiment": "local_window_r8",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r8/seed-000/evaluation/val.json",
+          "evaluation_sha256": "33e9b820c58f0863f502129cfeb80fa28eb7588b03919cff7e7abf9b1591efdf",
+          "checkpoint_sha256": "5def59b5103b092bb7dbdcbaff658401e7c7612a054f8e8eae3be7cc00d70428"
+        },
+        {
+          "experiment": "local_window_r8",
+          "seed": 1,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r8/seed-001/evaluation/val.json",
+          "evaluation_sha256": "c847af75acc9d7e8bb4de6a4a1e9440034220c05713de692d2627f7cfaad958c",
+          "checkpoint_sha256": "940098909638d2dc6db686d45a474b1d5697471009ac32a89056577bf8abe502"
+        },
+        {
+          "experiment": "local_window_r8",
+          "seed": 2,
+          "evaluation": "outputs/word_decoding/pallier2025/local_window/sub01-10/local_window_r8/seed-002/evaluation/val.json",
+          "evaluation_sha256": "08cb4d8a02996a8bc6f6cd34e666f9b62d3da3c2a8379de5b737e64232f06c1f",
+          "checkpoint_sha256": "52a38aa61243fa322a2f84fc08f6f34abffd820d9c8850b3833b515707e7f60b"
+        },
+        {
+          "experiment": "main_context_warmstart",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/pallier2025/sub01-10/main_context_warmstart/seed-000/evaluation/val.json",
+          "evaluation_sha256": "8ad0e300af5385802fc44f5a0a61a571b37db1bfa25dadabba03efbf5628f0a1",
+          "checkpoint_sha256": "4159a216dd5e1b419335c137caeffe8ecd7a574a248e56f6ef4bbfb15be1a751"
+        },
+        {
+          "experiment": "main_context_warmstart",
+          "seed": 1,
+          "evaluation": "outputs/word_decoding/pallier2025/sub01-10/main_context_warmstart/seed-001/evaluation/val.json",
+          "evaluation_sha256": "c8923f5c6dde40b025e28836442640628f11e532ab693a56705af71ff22e37d4",
+          "checkpoint_sha256": "46adf116f999d1feda0e2433f067d038ee659d537a9fe61ca2757200b69bf279"
+        },
+        {
+          "experiment": "main_context_warmstart",
+          "seed": 2,
+          "evaluation": "outputs/word_decoding/pallier2025/sub01-10/main_context_warmstart/seed-002/evaluation/val.json",
+          "evaluation_sha256": "730ad3aae27f014c974484f10fffaddebf546f9b6ab23752fc1ac61c18759fa4",
+          "checkpoint_sha256": "7000a85c3d02c2a2bdcaceb2e2051bfb3ba4a33c5f99e3edbac309ba27750d52"
+        },
+        {
+          "experiment": "local_window_m2_p0",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/pallier2025/directed_local_window/sub01-10/local_window_m2_p0/seed-000/evaluation/val.json",
+          "evaluation_sha256": "425d8b620d97a5db23a4e90531f57f401d69e62cbb63ddd9481218667f1c58f8",
+          "checkpoint_sha256": "472663258541f0b2dcd109189d938e87df24c2c6120e804646cec07911a59b7a"
+        },
+        {
+          "experiment": "local_window_m2_p1",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/pallier2025/directed_local_window/sub01-10/local_window_m2_p1/seed-000/evaluation/val.json",
+          "evaluation_sha256": "6a121322ece58d260c92f0efad22867e9c9afde324e55f1bd48b74cf7e92203d",
+          "checkpoint_sha256": "cc624b9bdfb2b0dae589526cd4e1f0bdef35d3b8f6151a5cd8464b5c083e1ff0"
+        },
+        {
+          "experiment": "local_window_rolling_revision_k2_d2",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-000/evaluation/val.json",
+          "evaluation_sha256": "d2f50e85e1eff299fa55c7622f5a716287764ff0f420276a585be0be2488752c",
+          "checkpoint_sha256": "b591d8f93d2e9844aa00827a42b5e7caa9e258191b795ada8c625ead60bc6502"
+        },
+        {
+          "experiment": "local_window_rolling_revision_k2_d2",
+          "seed": 1,
+          "evaluation": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-001/evaluation/val.json",
+          "evaluation_sha256": "d908b3f0e91f3aec299ab36460283f4e3c8cfaab34c13233125558fb7a76dd5e",
+          "checkpoint_sha256": "bebbb149b8b14903ebe5937e073dc99f33894822605b93d99fbdf251237dc486"
+        },
+        {
+          "experiment": "local_window_rolling_revision_k2_d2",
+          "seed": 2,
+          "evaluation": "outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-002/evaluation/val.json",
+          "evaluation_sha256": "1535e1d7831510c5b50d4aba6509bc0bd732f1810d59ce51a1d2835c81ba5287",
+          "checkpoint_sha256": "ecdc163aff8f1633b0fab9aa16af51cdee0fd40dff3bcbea3b121ea52e74b06f"
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "dataset": "ChineseEEG2",
+      "split": "val",
+      "rolling_experiment": "local_window_rolling_revision_k2_d2_full_coverage",
+      "fingerprint": {
+        "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+        "subjects": [
+          "sub-01",
+          "sub-02",
+          "sub-03",
+          "sub-04",
+          "sub-05",
+          "sub-06",
+          "sub-07",
+          "sub-08"
+        ],
+        "vocabulary_manifest_sha256": "3fcd20c7fbf37e6ce4f53d4a55452fd2815154c6595aa7e9df7c6b6ac1411eac",
+        "effective_query_count": 6160,
+        "supported_candidate_count": 47
+      },
+      "sources": [
+        {
+          "experiment": "local_window_r0",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/local_window/sub01-08/local_window_r0/seed-000/evaluation/val.json",
+          "evaluation_sha256": "0c2849d4b14e5c63b3dd72f814cc99757e9c5e8d454a792b546284b3d5ace7df",
+          "checkpoint_sha256": "a330036cc2d2805e960d304e8b45981d052a121eb1a6f79fcfa00e43f6b9c9b5"
+        },
+        {
+          "experiment": "local_window_r1",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/local_window/sub01-08/local_window_r1/seed-000/evaluation/val.json",
+          "evaluation_sha256": "6ecbd3430a9d65da7e27364d2cad32506236040588b2f17126f847384d0aeb29",
+          "checkpoint_sha256": "98c6b3bf720f0659e34b11fa5b45236111e9579906dde96c68b5c01c8e3e0247"
+        },
+        {
+          "experiment": "local_window_r2",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/local_window/sub01-08/local_window_r2/seed-000/evaluation/val.json",
+          "evaluation_sha256": "d00f1192383e990e3a530ef106cb03b658c1fab06f7351ad0c2ce521248f5f98",
+          "checkpoint_sha256": "3c6eb27b6354fcdd45c29ec9bccf2fb72c86f13bbd36ea18f7641bd7ad0c5816"
+        },
+        {
+          "experiment": "local_window_r4",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/local_window/sub01-08/local_window_r4/seed-000/evaluation/val.json",
+          "evaluation_sha256": "ab5374cc0cae4d430b61bb46b2d999158d28b8776cf4612994e9b9ca74360087",
+          "checkpoint_sha256": "6f69126af8152a231ff0c3a7f94c8fd0fb50ac7554bd916c028abc2fb796d088"
+        },
+        {
+          "experiment": "local_window_r8",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/local_window/sub01-08/local_window_r8/seed-000/evaluation/val.json",
+          "evaluation_sha256": "2f3b5e37770a95287611c5b6600fd74ba1e5f132db1ce768e36f3a8a741ac4b7",
+          "checkpoint_sha256": "347af3705bed960076c5914cb004173085fed96f1d79f3d1c4ec6e554c7868ab"
+        },
+        {
+          "experiment": "main_context_warmstart",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart/seed-000/evaluation/val.json",
+          "evaluation_sha256": "eba9595e3306f5ce4b3d6f332b18ebac1dc6577dd464ebf36bd207184da95557",
+          "checkpoint_sha256": "3e242a1fe2d426c979a6f12ce7ef2767a81c68fab5a17339903fdebb0d56245e"
+        },
+        {
+          "experiment": "local_window_m2_p0",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/directed_local_window/sub01-08/local_window_m2_p0/seed-000/evaluation/val.json",
+          "evaluation_sha256": "49e32c7a460c1e23500460e3c6981617612473035684c46bee3bcbefc41cde77",
+          "checkpoint_sha256": "0bd09bd0fdc497cf100fac1d96a8872e427fa91b831cea5f225b57dbb85e70e2"
+        },
+        {
+          "experiment": "local_window_m2_p1",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/directed_local_window/sub01-08/local_window_m2_p1/seed-000/evaluation/val.json",
+          "evaluation_sha256": "3198469c09ba11ae3443dfce1893c43321ae4a7fa4b8a7a00861e80af5cc9f4a",
+          "checkpoint_sha256": "f9abb4548f977d207cddfe09e4bdab9aa2459d1ac43c726b161353edf7c2fe79"
+        },
+        {
+          "experiment": "local_window_rolling_revision_k2_d2_full_coverage",
+          "seed": 0,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/rolling_revision/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000/evaluation/val.json",
+          "evaluation_sha256": "9dd9629f7791541e00d6d9814d4beb7d1242479ea5fc5aa980ffece27b9488b4",
+          "checkpoint_sha256": "5c2349df66e8b5e15a3d7804f602a1a644014652b8ab57fbef66139eb6d45810"
+        },
+        {
+          "experiment": "local_window_rolling_revision_k2_d2_full_coverage",
+          "seed": 1,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/rolling_revision/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-001/evaluation/val.json",
+          "evaluation_sha256": "13a57f48c0d893c1a6867c8a6b7f20e126aff9c6b58e8ac51b9c7da015a385f5",
+          "checkpoint_sha256": "1d6c8525ceda68e98e869cbd5f4a87fc062110ee6f83d8c51eaf6c9874b041fb"
+        },
+        {
+          "experiment": "local_window_rolling_revision_k2_d2_full_coverage",
+          "seed": 2,
+          "evaluation": "outputs/word_decoding/chineseeeg2_littleprince/rolling_revision/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-002/evaluation/val.json",
+          "evaluation_sha256": "5c641ce134edf4e825ce62a6f02eb998d843e44448fb46ca26b2391d3ffc9451",
+          "checkpoint_sha256": "1a34b965f2308f29bd66d276be114c93a6be1ed23a09b0ea0d76dd3579fe2359"
+        }
+      ]
+    }
+  ]
+}

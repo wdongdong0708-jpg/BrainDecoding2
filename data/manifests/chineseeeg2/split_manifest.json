@@ -1,0 +1,121 @@
+{
+  "asset_type": "split_and_subject_manifest",
+  "confirmatory_status": "exploratory_or_replication_only",
+  "context_contract": {
+    "neural_context": "bounded_semantic_v1",
+    "row": "historical_structure_prior_control",
+    "word": {
+      "model.use_transformer": false
+    }
+  },
+  "dataset": "ChineseEEG2",
+  "event_table": "derived/chineseeeg2_littleprince/events/events.csv",
+  "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+  "generator": "braindecoding.protocols",
+  "generator_sha256": "f76d12721baee4a0d746e3851210252fbbffd62239a1660e49861bffaed86e79",
+  "manifest_sha256": "fd785da924a11fce3fe51b89f66aa7eff36171574c62070cc7dae3a5c66a2be4",
+  "shared_excluded_units": {
+    "ChineseEEG2|littleprince|chapter-14": {
+      "configured_split": "test",
+      "reason": "sub-05_recording_truncated_shared_eight_subject_exclusion",
+      "row_count": 4820,
+      "trainable_event_count": 0
+    },
+    "ChineseEEG2|littleprince|chapter-27": {
+      "configured_split": "train",
+      "reason": "sub-05_recording_truncated_shared_eight_subject_exclusion",
+      "row_count": 3440,
+      "trainable_event_count": 0
+    }
+  },
+  "split_units": {
+    "test": [
+      "ChineseEEG2|littleprince|chapter-02",
+      "ChineseEEG2|littleprince|chapter-09",
+      "ChineseEEG2|littleprince|chapter-14"
+    ],
+    "train": [
+      "ChineseEEG2|littleprince|chapter-01",
+      "ChineseEEG2|littleprince|chapter-04",
+      "ChineseEEG2|littleprince|chapter-06",
+      "ChineseEEG2|littleprince|chapter-07",
+      "ChineseEEG2|littleprince|chapter-08",
+      "ChineseEEG2|littleprince|chapter-10",
+      "ChineseEEG2|littleprince|chapter-11",
+      "ChineseEEG2|littleprince|chapter-12",
+      "ChineseEEG2|littleprince|chapter-13",
+      "ChineseEEG2|littleprince|chapter-15",
+      "ChineseEEG2|littleprince|chapter-16",
+      "ChineseEEG2|littleprince|chapter-17",
+      "ChineseEEG2|littleprince|chapter-18",
+      "ChineseEEG2|littleprince|chapter-19",
+      "ChineseEEG2|littleprince|chapter-20",
+      "ChineseEEG2|littleprince|chapter-21",
+      "ChineseEEG2|littleprince|chapter-22",
+      "ChineseEEG2|littleprince|chapter-23",
+      "ChineseEEG2|littleprince|chapter-24",
+      "ChineseEEG2|littleprince|chapter-26",
+      "ChineseEEG2|littleprince|chapter-27"
+    ],
+    "val": [
+      "ChineseEEG2|littleprince|chapter-03",
+      "ChineseEEG2|littleprince|chapter-05",
+      "ChineseEEG2|littleprince|chapter-25"
+    ]
+  },
+  "status": "frozen",
+  "subject_order": [
+    "sub-01",
+    "sub-02",
+    "sub-03",
+    "sub-04",
+    "sub-05",
+    "sub-06",
+    "sub-07",
+    "sub-08"
+  ],
+  "subjects": [
+    "sub-01",
+    "sub-02",
+    "sub-03",
+    "sub-04",
+    "sub-05",
+    "sub-06",
+    "sub-07",
+    "sub-08"
+  ],
+  "test_status": "previously_used_for_exploratory_analysis",
+  "trainable_split_units": {
+    "test": [
+      "ChineseEEG2|littleprince|chapter-02",
+      "ChineseEEG2|littleprince|chapter-09"
+    ],
+    "train": [
+      "ChineseEEG2|littleprince|chapter-01",
+      "ChineseEEG2|littleprince|chapter-04",
+      "ChineseEEG2|littleprince|chapter-06",
+      "ChineseEEG2|littleprince|chapter-07",
+      "ChineseEEG2|littleprince|chapter-08",
+      "ChineseEEG2|littleprince|chapter-10",
+      "ChineseEEG2|littleprince|chapter-11",
+      "ChineseEEG2|littleprince|chapter-12",
+      "ChineseEEG2|littleprince|chapter-13",
+      "ChineseEEG2|littleprince|chapter-15",
+      "ChineseEEG2|littleprince|chapter-16",
+      "ChineseEEG2|littleprince|chapter-17",
+      "ChineseEEG2|littleprince|chapter-18",
+      "ChineseEEG2|littleprince|chapter-19",
+      "ChineseEEG2|littleprince|chapter-20",
+      "ChineseEEG2|littleprince|chapter-21",
+      "ChineseEEG2|littleprince|chapter-22",
+      "ChineseEEG2|littleprince|chapter-23",
+      "ChineseEEG2|littleprince|chapter-24",
+      "ChineseEEG2|littleprince|chapter-26"
+    ],
+    "val": [
+      "ChineseEEG2|littleprince|chapter-03",
+      "ChineseEEG2|littleprince|chapter-05",
+      "ChineseEEG2|littleprince|chapter-25"
+    ]
+  }
+}

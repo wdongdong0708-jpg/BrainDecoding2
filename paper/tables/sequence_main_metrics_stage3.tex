@@ -1,0 +1,16 @@
+% Presentation only: canonical manuscript_text_stage3_v1 exports.
+\begingroup
+\papertablestyle
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+策略 & \multicolumn{2}{c}{Pallier2025} & \multicolumn{2}{c}{ChineseEEG-2} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+ & BLEU-1 $\uparrow$ & WER $\downarrow$ & BLEU-1 $\uparrow$ & WER $\downarrow$ \\
+\midrule
+A 固定输出 & 8.37 & 94.94 & 9.25 & 97.54 \\
+C1 一次回修 & 12.17 & 90.58 & 9.74 & 97.00 \\
+C 滚动修正 & 13.46 & 89.11 & 9.76 & 95.97 \\
+F 完整片段 & 15.51 & 88.21 & 9.96 & 96.10 \\
+\bottomrule
+\end{tabular}
+\endgroup

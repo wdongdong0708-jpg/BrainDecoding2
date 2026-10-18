@@ -1,0 +1,18 @@
+{
+  "status": "analysis_validated_with_preexisting_navigation_test_failure",
+  "targeted_statistics_tests": {
+    "passed": 9,
+    "failed": 0,
+    "command": "python -m pytest tests/test_material_block_length_sensitivity_test_v2.py -q"
+  },
+  "combined_statistics_and_navigation_suite": {
+    "passed": 27,
+    "failed": 1,
+    "failed_test": "test_current_scope_is_one_primary_and_two_named_supplements",
+    "reason": "Existing staged index already registers synthetic_timing_v2; old test asserts only two supplement entries. This analysis adds only two report/protocol links; staged and current protocol roles are identical.",
+    "staged_and_current_roles_identical": true
+  },
+  "independent_export_identity_and_point_estimand_checks_passed": true,
+  "figure_visually_verified": true,
+  "audit_sha256": "14dc0881e59ef27e28c44b1c79ad6d38092dc0c9896fdbe4c609e365dcc409eb"
+}

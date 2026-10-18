@@ -1,0 +1,17 @@
+{
+  "completed_jobs": 48,
+  "planned_jobs": 48,
+  "test_evaluated": false,
+  "updated_unix": 1790948701.1507454,
+  "plan_sha256": "367015d68cfa73fae3e2b2f3f477bd0ccce683e71e5cb4393f378cffcc0c93b9",
+  "rolling_export": {
+    "path": "D:\\code\\BrainDecoding\\reports\\exports\\unified_rolling_v2_paper_revision_by_seed.csv",
+    "sha256": "c957769fc7ccc971127b78414001860e451794273e25fd428bb06e01a1ff7daf"
+  },
+  "sentence_report": {
+    "path": "D:\\code\\BrainDecoding\\reports\\studies\\unified_sentence_v2_revision_gain_full\\results.md",
+    "sha256": "b611782faa275cd8e64e8e584eab29bae07fdc5f1d44a7f67d86dfd0f3accd16"
+  },
+  "aggregation": "completed seeds only; sample SD; alias K2 is not an independent replicate",
+  "manuscript_modified": false
+}

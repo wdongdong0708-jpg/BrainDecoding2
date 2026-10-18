@@ -1,0 +1,26 @@
+{
+  "protocol": "single_revision_c1_test_v2_io_guard",
+  "frozen_unix": 1791550181.7646585,
+  "scientific_execution_manifest_sha256": "a244e11a60edbed7f5b27592c433c44e7ee759e060ad719dde068c2116250a2b",
+  "scientific_protocol_manifest_sha256": "f87d270739efd28264e7b0375efef06e2da12621cd1725d74192ea482eb7e030",
+  "source_sha256": {
+    "braindecoding/single_revision_c1_test_v2_io_guard.py": "6823278be7fbca58ac8577659a5b1ca22063949e1e314188c80d3e5c06278831",
+    "tests/test_single_revision_c1_test_v2_io_guard.py": "609a6defaa7f1d63a74fe28bd293eba01377299d53e53b4e1b7511d14af81cd2",
+    "experiments/manifests/rolling_sentence/single_revision_c1_test_v2_stable.json": "f044c72025bb3dc32b4b69e5d1ac5236e51916020e5205ce12f3509ce5c1fb5c",
+    ".cache/runs/single_revision_c1_test_v2_stable/windows_progress_failure.json": "f05fe7b8a182bda7eed625dc14e59a55cf9f781c8b0b23fc350de89cb8424a16",
+    ".cache/runs/single_revision_c1_test_v2_stable/stderr.log": "d3894ffb87b37b8a8c7523c4c8171066a55a406ca4623fe0c328d98cf4cf0abb"
+  },
+  "changes": {
+    "atomic_temporary_replace_retry_windows_errors": [
+      5,
+      32,
+      33
+    ],
+    "maximum_replace_attempts": 12,
+    "optional_progress_refresh_seconds": 5,
+    "optional_progress_failure_is_nonfatal": true,
+    "experiment_state_and_result_writes_required": true,
+    "neural_inputs_search_and_statistics_unchanged": true
+  },
+  "manifest_sha256": "4fbbf8ef2f7d6d309374ff5d977f6b4069820883f75d1811612255749c962a14"
+}

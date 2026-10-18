@@ -1,0 +1,21 @@
+{
+  "user_authorization": "2026-10-10 修复第三个种子并加入 chineseeeg2_littleprince",
+  "pipeline_count": 12,
+  "new_training_stages": 15,
+  "reuse_completed_stages": 9,
+  "serial_gpu_execution": true,
+  "shared_and_independent_architecture_equal": true,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "history_radius": 2,
+  "horizons": [
+    0,
+    1,
+    2
+  ],
+  "created_unix": 1791595495.778192,
+  "manifest_sha256": "a4adea9fdb93facca8a6a0ed2a45727bfd7bb2b3f2d50fd1a3a0e3204dfa1307"
+}

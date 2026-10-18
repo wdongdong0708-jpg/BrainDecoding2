@@ -1,0 +1,2750 @@
+{
+  "status": "completed",
+  "protocol": "pure_language_prompt_sensitivity_test_v2",
+  "split": "test",
+  "test_evaluated": true,
+  "manifest_sha256": "7f8a5d5c23848cd5a9119e632602fb925e60f4bc75d1d617d1b969c368f4f242",
+  "parent_manifest_sha256": "90934e139ee62e1fedf89ebf57370f38ac0ca73930ed02d951e11a64e6d2f278",
+  "original_language_manifest_sha256": "e59079f7c2647ea973433f036aa621e1a1b5e64ddab3e875f2fb230a17d06239",
+  "changed_factor": "fixed_language_prompt_only",
+  "original_pure_language_metrics_reproduced": true,
+  "independent_language_replicates_per_prompt": 1,
+  "neural_input_in_baseline": false,
+  "reference_text_in_prompt": false,
+  "test_metrics_used_for_prompt_selection": false,
+  "neural_reference_has_same_prompt": false,
+  "neural_reference_comparisons": "descriptive_cross_prompt_only",
+  "datasets": {
+    "pallier2025": {
+      "counts": {
+        "events": 18450,
+        "groups": 1940,
+        "subjects": 10,
+        "materials": 194,
+        "blocks": 39,
+        "common_events": 14590,
+        "strict50_all": 8930,
+        "strict50_common": 7440
+      },
+      "summary": [
+        {
+          "prompt_version": "original_prompt",
+          "condition": "LM_A",
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "condition": "LM_C1",
+          "sentence_bleu1_mean": 0.035599744161151255,
+          "wer": 0.9848238482384823,
+          "bleu1": 0.05853658536585367,
+          "aligned_word_accuracy": 0.008130081300813009
+        },
+        {
+          "prompt_version": "original_prompt",
+          "condition": "LM_R",
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "condition": "LM_A",
+          "sentence_bleu1_mean": 0.07926407230319317,
+          "wer": 0.9804878048780488,
+          "bleu1": 0.0981029810298103,
+          "aligned_word_accuracy": 0.015718157181571817
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "condition": "LM_C1",
+          "sentence_bleu1_mean": 0.04771554289683126,
+          "wer": 0.9821138211382113,
+          "bleu1": 0.06720867208672086,
+          "aligned_word_accuracy": 0.016802168021680216
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "condition": "LM_R",
+          "sentence_bleu1_mean": 0.0587858491248487,
+          "wer": 0.9766937669376695,
+          "bleu1": 0.06937669376693767,
+          "aligned_word_accuracy": 0.022764227642276424
+        }
+      ],
+      "by_subject": [
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-01",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-01",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.035599744161151255,
+          "wer": 0.9848238482384823,
+          "bleu1": 0.05853658536585366,
+          "aligned_word_accuracy": 0.008130081300813009
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-01",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-02",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-02",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.035599744161151255,
+          "wer": 0.9848238482384823,
+          "bleu1": 0.05853658536585366,
+          "aligned_word_accuracy": 0.008130081300813009
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-02",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-03",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-03",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.035599744161151255,
+          "wer": 0.9848238482384823,
+          "bleu1": 0.05853658536585366,
+          "aligned_word_accuracy": 0.008130081300813009
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-03",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-04",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-04",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.035599744161151255,
+          "wer": 0.9848238482384823,
+          "bleu1": 0.05853658536585366,
+          "aligned_word_accuracy": 0.008130081300813009
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-04",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-05",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-05",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.035599744161151255,
+          "wer": 0.9848238482384823,
+          "bleu1": 0.05853658536585366,
+          "aligned_word_accuracy": 0.008130081300813009
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-05",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-06",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-06",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.035599744161151255,
+          "wer": 0.9848238482384823,
+          "bleu1": 0.05853658536585366,
+          "aligned_word_accuracy": 0.008130081300813009
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-06",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-07",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-07",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.035599744161151255,
+          "wer": 0.9848238482384823,
+          "bleu1": 0.05853658536585366,
+          "aligned_word_accuracy": 0.008130081300813009
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-07",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-08",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-08",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.035599744161151255,
+          "wer": 0.9848238482384823,
+          "bleu1": 0.05853658536585366,
+          "aligned_word_accuracy": 0.008130081300813009
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-08",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-09",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-09",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.035599744161151255,
+          "wer": 0.9848238482384823,
+          "bleu1": 0.05853658536585366,
+          "aligned_word_accuracy": 0.008130081300813009
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-09",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-10",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-10",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.035599744161151255,
+          "wer": 0.9848238482384823,
+          "bleu1": 0.05853658536585366,
+          "aligned_word_accuracy": 0.008130081300813009
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-10",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.0,
+          "wer": 1.0,
+          "bleu1": 0.0,
+          "aligned_word_accuracy": 0.0
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-01",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.07926407230319316,
+          "wer": 0.9804878048780488,
+          "bleu1": 0.0981029810298103,
+          "aligned_word_accuracy": 0.015718157181571817
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-01",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.04771554289683126,
+          "wer": 0.9821138211382113,
+          "bleu1": 0.06720867208672086,
+          "aligned_word_accuracy": 0.016802168021680216
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-01",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.05878584912484869,
+          "wer": 0.9766937669376694,
+          "bleu1": 0.06937669376693767,
+          "aligned_word_accuracy": 0.022764227642276424
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-02",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.07926407230319316,
+          "wer": 0.9804878048780488,
+          "bleu1": 0.0981029810298103,
+          "aligned_word_accuracy": 0.015718157181571817
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-02",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.04771554289683126,
+          "wer": 0.9821138211382113,
+          "bleu1": 0.06720867208672086,
+          "aligned_word_accuracy": 0.016802168021680216
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-02",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.05878584912484869,
+          "wer": 0.9766937669376694,
+          "bleu1": 0.06937669376693767,
+          "aligned_word_accuracy": 0.022764227642276424
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-03",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.07926407230319316,
+          "wer": 0.9804878048780488,
+          "bleu1": 0.0981029810298103,
+          "aligned_word_accuracy": 0.015718157181571817
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-03",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.04771554289683126,
+          "wer": 0.9821138211382113,
+          "bleu1": 0.06720867208672086,
+          "aligned_word_accuracy": 0.016802168021680216
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-03",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.05878584912484869,
+          "wer": 0.9766937669376694,
+          "bleu1": 0.06937669376693767,
+          "aligned_word_accuracy": 0.022764227642276424
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-04",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.07926407230319316,
+          "wer": 0.9804878048780488,
+          "bleu1": 0.0981029810298103,
+          "aligned_word_accuracy": 0.015718157181571817
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-04",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.04771554289683126,
+          "wer": 0.9821138211382113,
+          "bleu1": 0.06720867208672086,
+          "aligned_word_accuracy": 0.016802168021680216
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-04",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.05878584912484869,
+          "wer": 0.9766937669376694,
+          "bleu1": 0.06937669376693767,
+          "aligned_word_accuracy": 0.022764227642276424
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-05",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.07926407230319316,
+          "wer": 0.9804878048780488,
+          "bleu1": 0.0981029810298103,
+          "aligned_word_accuracy": 0.015718157181571817
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-05",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.04771554289683126,
+          "wer": 0.9821138211382113,
+          "bleu1": 0.06720867208672086,
+          "aligned_word_accuracy": 0.016802168021680216
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-05",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.05878584912484869,
+          "wer": 0.9766937669376694,
+          "bleu1": 0.06937669376693767,
+          "aligned_word_accuracy": 0.022764227642276424
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-06",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.07926407230319316,
+          "wer": 0.9804878048780488,
+          "bleu1": 0.0981029810298103,
+          "aligned_word_accuracy": 0.015718157181571817
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-06",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.04771554289683126,
+          "wer": 0.9821138211382113,
+          "bleu1": 0.06720867208672086,
+          "aligned_word_accuracy": 0.016802168021680216
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-06",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.05878584912484869,
+          "wer": 0.9766937669376694,
+          "bleu1": 0.06937669376693767,
+          "aligned_word_accuracy": 0.022764227642276424
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-07",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.07926407230319316,
+          "wer": 0.9804878048780488,
+          "bleu1": 0.0981029810298103,
+          "aligned_word_accuracy": 0.015718157181571817
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-07",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.04771554289683126,
+          "wer": 0.9821138211382113,
+          "bleu1": 0.06720867208672086,
+          "aligned_word_accuracy": 0.016802168021680216
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-07",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.05878584912484869,
+          "wer": 0.9766937669376694,
+          "bleu1": 0.06937669376693767,
+          "aligned_word_accuracy": 0.022764227642276424
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-08",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.07926407230319316,
+          "wer": 0.9804878048780488,
+          "bleu1": 0.0981029810298103,
+          "aligned_word_accuracy": 0.015718157181571817
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-08",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.04771554289683126,
+          "wer": 0.9821138211382113,
+          "bleu1": 0.06720867208672086,
+          "aligned_word_accuracy": 0.016802168021680216
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-08",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.05878584912484869,
+          "wer": 0.9766937669376694,
+          "bleu1": 0.06937669376693767,
+          "aligned_word_accuracy": 0.022764227642276424
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-09",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.07926407230319316,
+          "wer": 0.9804878048780488,
+          "bleu1": 0.0981029810298103,
+          "aligned_word_accuracy": 0.015718157181571817
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-09",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.04771554289683126,
+          "wer": 0.9821138211382113,
+          "bleu1": 0.06720867208672086,
+          "aligned_word_accuracy": 0.016802168021680216
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-09",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.05878584912484869,
+          "wer": 0.9766937669376694,
+          "bleu1": 0.06937669376693767,
+          "aligned_word_accuracy": 0.022764227642276424
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-10",
+          "condition": "LM_A",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.07926407230319316,
+          "wer": 0.9804878048780488,
+          "bleu1": 0.0981029810298103,
+          "aligned_word_accuracy": 0.015718157181571817
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-10",
+          "condition": "LM_C1",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.04771554289683126,
+          "wer": 0.9821138211382113,
+          "bleu1": 0.06720867208672086,
+          "aligned_word_accuracy": 0.016802168021680216
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-10",
+          "condition": "LM_R",
+          "groups": 194,
+          "words": 1845,
+          "sentence_bleu1_mean": 0.05878584912484869,
+          "wer": 0.9766937669376694,
+          "bleu1": 0.06937669376693767,
+          "aligned_word_accuracy": 0.022764227642276424
+        }
+      ],
+      "selected_prompt": {
+        "prompt_id": "native_prose",
+        "prompt_template": "Écrivez un paragraphe de récit en français. Donnez seulement le texte, sans titre ni liste.\n\n",
+        "prompt_template_sha256": "2e1597ce788f94c449c85dc78b2f89ce82256c191a101a630181db69e2cb87eb"
+      },
+      "output_diagnostics": {
+        "original_prompt": {
+          "LM_A": {
+            "total_words": 18450,
+            "unique_words": 2,
+            "digit_words": 18450,
+            "most_common": [
+              [
+                "1",
+                9690
+              ],
+              [
+                "2",
+                8760
+              ]
+            ]
+          },
+          "LM_C1": {
+            "total_words": 18450,
+            "unique_words": 15,
+            "digit_words": 6440,
+            "most_common": [
+              [
+                "1",
+                6380
+              ],
+              [
+                "de",
+                3610
+              ],
+              [
+                "à",
+                1860
+              ],
+              [
+                "la",
+                1730
+              ],
+              [
+                "sur",
+                1080
+              ],
+              [
+                "en",
+                820
+              ],
+              [
+                "français",
+                820
+              ],
+              [
+                "ville",
+                710
+              ],
+              [
+                "collection",
+                510
+              ],
+              [
+                "bibliothèque",
+                340
+              ]
+            ]
+          },
+          "LM_R": {
+            "total_words": 18450,
+            "unique_words": 3,
+            "digit_words": 18300,
+            "most_common": [
+              [
+                "1",
+                18240
+              ],
+              [
+                "à",
+                150
+              ],
+              [
+                "2",
+                60
+              ]
+            ]
+          }
+        },
+        "selected_prompt": {
+          "LM_A": {
+            "total_words": 18450,
+            "unique_words": 11,
+            "digit_words": 1940,
+            "most_common": [
+              [
+                "de",
+                3110
+              ],
+              [
+                "1",
+                1940
+              ],
+              [
+                "comment",
+                1920
+              ],
+              [
+                "on",
+                1860
+              ],
+              [
+                "le",
+                1710
+              ],
+              [
+                "l",
+                1640
+              ],
+              [
+                "par",
+                1500
+              ],
+              [
+                "a",
+                1440
+              ],
+              [
+                "la",
+                1190
+              ],
+              [
+                "récit",
+                1080
+              ]
+            ]
+          },
+          "LM_C1": {
+            "total_words": 18450,
+            "unique_words": 42,
+            "digit_words": 20,
+            "most_common": [
+              [
+                "de",
+                2260
+              ],
+              [
+                "je",
+                2100
+              ],
+              [
+                "me",
+                2030
+              ],
+              [
+                "souviens",
+                1860
+              ],
+              [
+                "encore",
+                1500
+              ],
+              [
+                "la",
+                1270
+              ],
+              [
+                "mon",
+                1170
+              ],
+              [
+                "premier",
+                1080
+              ],
+              [
+                "voyage",
+                930
+              ],
+              [
+                "à",
+                750
+              ]
+            ]
+          },
+          "LM_R": {
+            "total_words": 18450,
+            "unique_words": 45,
+            "digit_words": 20,
+            "most_common": [
+              [
+                "je",
+                3340
+              ],
+              [
+                "ne",
+                1890
+              ],
+              [
+                "pas",
+                1890
+              ],
+              [
+                "sais",
+                1710
+              ],
+              [
+                "ce",
+                1300
+              ],
+              [
+                "que",
+                1300
+              ],
+              [
+                "vais",
+                930
+              ],
+              [
+                "faire",
+                820
+              ],
+              [
+                "de",
+                770
+              ],
+              [
+                "mon",
+                460
+              ]
+            ]
+          }
+        }
+      },
+      "neural_original_prompt_reference": [
+        {
+          "condition": "A",
+          "sentence_bleu1_mean": 0.08562478429187224,
+          "wer": 0.9482746160794941,
+          "bleu1": 0.10240289069557362,
+          "aligned_word_accuracy": 0.05129177958446251
+        },
+        {
+          "condition": "B",
+          "sentence_bleu1_mean": 0.09063217445680329,
+          "wer": 0.9439927732610659,
+          "bleu1": 0.10500451671183379,
+          "aligned_word_accuracy": 0.05559168925022584
+        },
+        {
+          "condition": "C1",
+          "sentence_bleu1_mean": 0.123192329386487,
+          "wer": 0.9046973803071364,
+          "bleu1": 0.14363143631436312,
+          "aligned_word_accuracy": 0.0949412827461608
+        },
+        {
+          "condition": "C",
+          "sentence_bleu1_mean": 0.13556522495887816,
+          "wer": 0.8909304426377597,
+          "bleu1": 0.15324299909665764,
+          "aligned_word_accuracy": 0.1087985546522132
+        }
+      ]
+    },
+    "chineseeeg2_littleprince": {
+      "counts": {
+        "events": 8480,
+        "groups": 808,
+        "subjects": 8,
+        "materials": 101,
+        "blocks": 21,
+        "common_events": 6872,
+        "strict50_all": 3444,
+        "strict50_common": 2872
+      },
+      "summary": [
+        {
+          "prompt_version": "original_prompt",
+          "condition": "LM_A",
+          "sentence_bleu1_mean": 0.012316699108303191,
+          "wer": 0.99764325586694,
+          "bleu1": 0.01462106971975393,
+          "aligned_word_accuracy": 0.0023567441330599225
+        },
+        {
+          "prompt_version": "original_prompt",
+          "condition": "LM_C1",
+          "sentence_bleu1_mean": 0.014972334124849222,
+          "wer": 0.9971697710184553,
+          "bleu1": 0.016981373889268625,
+          "aligned_word_accuracy": 0.002830228981544771
+        },
+        {
+          "prompt_version": "original_prompt",
+          "condition": "LM_R",
+          "sentence_bleu1_mean": 0.02407499229266081,
+          "wer": 0.9910358282068807,
+          "bleu1": 0.03773638642059694,
+          "aligned_word_accuracy": 0.00896417179311916
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "condition": "LM_A",
+          "sentence_bleu1_mean": 0.060050613692676044,
+          "wer": 0.987735674413306,
+          "bleu1": 0.06980875484164958,
+          "aligned_word_accuracy": 0.011794400774663932
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "condition": "LM_C1",
+          "sentence_bleu1_mean": 0.05979849782174829,
+          "wer": 0.9943395420369104,
+          "bleu1": 0.06933883002961949,
+          "aligned_word_accuracy": 0.005660457963089542
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "condition": "LM_R",
+          "sentence_bleu1_mean": 0.05927227856150702,
+          "wer": 0.9938696172248804,
+          "bleu1": 0.06509170653907495,
+          "aligned_word_accuracy": 0.006130382775119617
+        }
+      ],
+      "by_subject": [
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-01",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.012864061508499482,
+          "wer": 0.9971804511278195,
+          "bleu1": 0.015037593984962405,
+          "aligned_word_accuracy": 0.002819548872180451
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-01",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.01490357724916165,
+          "wer": 0.9971804511278195,
+          "bleu1": 0.016917293233082706,
+          "aligned_word_accuracy": 0.002819548872180451
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-01",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.024099875733385834,
+          "wer": 0.9915413533834586,
+          "bleu1": 0.03759398496240601,
+          "aligned_word_accuracy": 0.008458646616541353
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-02",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.012864061508499482,
+          "wer": 0.9971804511278195,
+          "bleu1": 0.015037593984962405,
+          "aligned_word_accuracy": 0.002819548872180451
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-02",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.01490357724916165,
+          "wer": 0.9971804511278195,
+          "bleu1": 0.016917293233082706,
+          "aligned_word_accuracy": 0.002819548872180451
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-02",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.024099875733385834,
+          "wer": 0.9915413533834586,
+          "bleu1": 0.03759398496240601,
+          "aligned_word_accuracy": 0.008458646616541353
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-03",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.012864061508499482,
+          "wer": 0.9971804511278195,
+          "bleu1": 0.015037593984962405,
+          "aligned_word_accuracy": 0.002819548872180451
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-03",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.01490357724916165,
+          "wer": 0.9971804511278195,
+          "bleu1": 0.016917293233082706,
+          "aligned_word_accuracy": 0.002819548872180451
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-03",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.024099875733385834,
+          "wer": 0.9915413533834586,
+          "bleu1": 0.03759398496240601,
+          "aligned_word_accuracy": 0.008458646616541353
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-04",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.012864061508499482,
+          "wer": 0.9971804511278195,
+          "bleu1": 0.015037593984962405,
+          "aligned_word_accuracy": 0.002819548872180451
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-04",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.01490357724916165,
+          "wer": 0.9971804511278195,
+          "bleu1": 0.016917293233082706,
+          "aligned_word_accuracy": 0.002819548872180451
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-04",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.024099875733385834,
+          "wer": 0.9915413533834586,
+          "bleu1": 0.03759398496240601,
+          "aligned_word_accuracy": 0.008458646616541353
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-05",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.011769336708106901,
+          "wer": 0.9981060606060606,
+          "bleu1": 0.014204545454545454,
+          "aligned_word_accuracy": 0.001893939393939394
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-05",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.01504109100053679,
+          "wer": 0.9971590909090909,
+          "bleu1": 0.017045454545454544,
+          "aligned_word_accuracy": 0.002840909090909091
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-05",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.024050108851935783,
+          "wer": 0.990530303030303,
+          "bleu1": 0.03787878787878788,
+          "aligned_word_accuracy": 0.00946969696969697
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-06",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.011769336708106901,
+          "wer": 0.9981060606060606,
+          "bleu1": 0.014204545454545454,
+          "aligned_word_accuracy": 0.001893939393939394
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-06",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.01504109100053679,
+          "wer": 0.9971590909090909,
+          "bleu1": 0.017045454545454544,
+          "aligned_word_accuracy": 0.002840909090909091
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-06",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.024050108851935783,
+          "wer": 0.990530303030303,
+          "bleu1": 0.03787878787878788,
+          "aligned_word_accuracy": 0.00946969696969697
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-07",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.011769336708106901,
+          "wer": 0.9981060606060606,
+          "bleu1": 0.014204545454545454,
+          "aligned_word_accuracy": 0.001893939393939394
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-07",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.01504109100053679,
+          "wer": 0.9971590909090909,
+          "bleu1": 0.017045454545454544,
+          "aligned_word_accuracy": 0.002840909090909091
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-07",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.024050108851935783,
+          "wer": 0.990530303030303,
+          "bleu1": 0.03787878787878788,
+          "aligned_word_accuracy": 0.00946969696969697
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-08",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.011769336708106901,
+          "wer": 0.9981060606060606,
+          "bleu1": 0.014204545454545454,
+          "aligned_word_accuracy": 0.001893939393939394
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-08",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.01504109100053679,
+          "wer": 0.9971590909090909,
+          "bleu1": 0.017045454545454544,
+          "aligned_word_accuracy": 0.002840909090909091
+        },
+        {
+          "prompt_version": "original_prompt",
+          "subject": "sub-08",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.024050108851935783,
+          "wer": 0.990530303030303,
+          "bleu1": 0.03787878787878788,
+          "aligned_word_accuracy": 0.00946969696969697
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-01",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.06134609119742308,
+          "wer": 0.9877819548872181,
+          "bleu1": 0.07048872180451128,
+          "aligned_word_accuracy": 0.011278195488721804
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-01",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.060708634594619934,
+          "wer": 0.9943609022556391,
+          "bleu1": 0.06954887218045112,
+          "aligned_word_accuracy": 0.005639097744360902
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-01",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.06051000758906225,
+          "wer": 0.993421052631579,
+          "bleu1": 0.06578947368421052,
+          "aligned_word_accuracy": 0.006578947368421052
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-02",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.06134609119742308,
+          "wer": 0.9877819548872181,
+          "bleu1": 0.07048872180451128,
+          "aligned_word_accuracy": 0.011278195488721804
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-02",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.060708634594619934,
+          "wer": 0.9943609022556391,
+          "bleu1": 0.06954887218045112,
+          "aligned_word_accuracy": 0.005639097744360902
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-02",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.06051000758906225,
+          "wer": 0.993421052631579,
+          "bleu1": 0.06578947368421052,
+          "aligned_word_accuracy": 0.006578947368421052
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-03",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.06134609119742308,
+          "wer": 0.9877819548872181,
+          "bleu1": 0.07048872180451128,
+          "aligned_word_accuracy": 0.011278195488721804
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-03",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.060708634594619934,
+          "wer": 0.9943609022556391,
+          "bleu1": 0.06954887218045112,
+          "aligned_word_accuracy": 0.005639097744360902
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-03",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.06051000758906225,
+          "wer": 0.993421052631579,
+          "bleu1": 0.06578947368421052,
+          "aligned_word_accuracy": 0.006578947368421052
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-04",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.06134609119742308,
+          "wer": 0.9877819548872181,
+          "bleu1": 0.07048872180451128,
+          "aligned_word_accuracy": 0.011278195488721804
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-04",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.060708634594619934,
+          "wer": 0.9943609022556391,
+          "bleu1": 0.06954887218045112,
+          "aligned_word_accuracy": 0.005639097744360902
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-04",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1064,
+          "sentence_bleu1_mean": 0.06051000758906225,
+          "wer": 0.993421052631579,
+          "bleu1": 0.06578947368421052,
+          "aligned_word_accuracy": 0.006578947368421052
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-05",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05875513618792901,
+          "wer": 0.9876893939393939,
+          "bleu1": 0.06912878787878787,
+          "aligned_word_accuracy": 0.01231060606060606
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-05",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05888836104887663,
+          "wer": 0.9943181818181818,
+          "bleu1": 0.06912878787878787,
+          "aligned_word_accuracy": 0.005681818181818182
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-05",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05803454953395179,
+          "wer": 0.9943181818181818,
+          "bleu1": 0.06439393939393939,
+          "aligned_word_accuracy": 0.005681818181818182
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-06",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05875513618792901,
+          "wer": 0.9876893939393939,
+          "bleu1": 0.06912878787878787,
+          "aligned_word_accuracy": 0.01231060606060606
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-06",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05888836104887663,
+          "wer": 0.9943181818181818,
+          "bleu1": 0.06912878787878787,
+          "aligned_word_accuracy": 0.005681818181818182
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-06",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05803454953395179,
+          "wer": 0.9943181818181818,
+          "bleu1": 0.06439393939393939,
+          "aligned_word_accuracy": 0.005681818181818182
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-07",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05875513618792901,
+          "wer": 0.9876893939393939,
+          "bleu1": 0.06912878787878787,
+          "aligned_word_accuracy": 0.01231060606060606
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-07",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05888836104887663,
+          "wer": 0.9943181818181818,
+          "bleu1": 0.06912878787878787,
+          "aligned_word_accuracy": 0.005681818181818182
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-07",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05803454953395179,
+          "wer": 0.9943181818181818,
+          "bleu1": 0.06439393939393939,
+          "aligned_word_accuracy": 0.005681818181818182
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-08",
+          "condition": "LM_A",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05875513618792901,
+          "wer": 0.9876893939393939,
+          "bleu1": 0.06912878787878787,
+          "aligned_word_accuracy": 0.01231060606060606
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-08",
+          "condition": "LM_C1",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05888836104887663,
+          "wer": 0.9943181818181818,
+          "bleu1": 0.06912878787878787,
+          "aligned_word_accuracy": 0.005681818181818182
+        },
+        {
+          "prompt_version": "selected_prompt",
+          "subject": "sub-08",
+          "condition": "LM_R",
+          "groups": 101,
+          "words": 1056,
+          "sentence_bleu1_mean": 0.05803454953395179,
+          "wer": 0.9943181818181818,
+          "bleu1": 0.06439393939393939,
+          "aligned_word_accuracy": 0.005681818181818182
+        }
+      ],
+      "selected_prompt": {
+        "prompt_id": "native_prose",
+        "prompt_template": "请用中文写一段连续的叙述文字。只给出正文，不要标题或列表。\n\n",
+        "prompt_template_sha256": "1bdb79e2f91880f3eaa104a9800b2fdbe38089c3cd5dae6d66548be6dd66385a"
+      },
+      "output_diagnostics": {
+        "original_prompt": {
+          "LM_A": {
+            "total_words": 8480,
+            "unique_words": 7,
+            "digit_words": 0,
+            "most_common": [
+              [
+                "在",
+                1556
+              ],
+              [
+                "本",
+                1476
+              ],
+              [
+                "教程",
+                1336
+              ],
+              [
+                "中",
+                1188
+              ],
+              [
+                "我们",
+                1080
+              ],
+              [
+                "介绍",
+                996
+              ],
+              [
+                "如何",
+                848
+              ]
+            ]
+          },
+          "LM_C1": {
+            "total_words": 8480,
+            "unique_words": 14,
+            "digit_words": 0,
+            "most_common": [
+              [
+                "啊",
+                2424
+              ],
+              [
+                "小",
+                1552
+              ],
+              [
+                "明",
+                800
+              ],
+              [
+                "和",
+                752
+              ],
+              [
+                "红",
+                688
+              ],
+              [
+                "是",
+                572
+              ],
+              [
+                "好",
+                520
+              ],
+              [
+                "基",
+                484
+              ],
+              [
+                "友",
+                484
+              ],
+              [
+                "一起",
+                68
+              ]
+            ]
+          },
+          "LM_R": {
+            "total_words": 8480,
+            "unique_words": 23,
+            "digit_words": 0,
+            "most_common": [
+              [
+                "英文",
+                984
+              ],
+              [
+                "文本",
+                956
+              ],
+              [
+                "请",
+                792
+              ],
+              [
+                "将",
+                792
+              ],
+              [
+                "以下",
+                792
+              ],
+              [
+                "中文",
+                760
+              ],
+              [
+                "翻译成",
+                640
+              ],
+              [
+                "翻译",
+                580
+              ],
+              [
+                "并",
+                520
+              ],
+              [
+                "输出",
+                484
+              ]
+            ]
+          }
+        },
+        "selected_prompt": {
+          "LM_A": {
+            "total_words": 8480,
+            "unique_words": 19,
+            "digit_words": 0,
+            "most_common": [
+              [
+                "的",
+                1508
+              ],
+              [
+                "在",
+                808
+              ],
+              [
+                "一片",
+                800
+              ],
+              [
+                "宁静",
+                792
+              ],
+              [
+                "森林",
+                688
+              ],
+              [
+                "深处",
+                640
+              ],
+              [
+                "角落里",
+                520
+              ],
+              [
+                "住",
+                484
+              ],
+              [
+                "小",
+                396
+              ],
+              [
+                "着",
+                384
+              ]
+            ]
+          },
+          "LM_C1": {
+            "total_words": 8480,
+            "unique_words": 30,
+            "digit_words": 0,
+            "most_common": [
+              [
+                "的",
+                972
+              ],
+              [
+                "在",
+                808
+              ],
+              [
+                "一片",
+                800
+              ],
+              [
+                "宁静",
+                792
+              ],
+              [
+                "森林",
+                688
+              ],
+              [
+                "小",
+                572
+              ],
+              [
+                "径",
+                572
+              ],
+              [
+                "上",
+                520
+              ],
+              [
+                "走",
+                384
+              ],
+              [
+                "着",
+                384
+              ]
+            ]
+          },
+          "LM_R": {
+            "total_words": 8480,
+            "unique_words": 22,
+            "digit_words": 0,
+            "most_common": [
+              [
+                "在",
+                808
+              ],
+              [
+                "一片",
+                800
+              ],
+              [
+                "的",
+                752
+              ],
+              [
+                "小",
+                728
+              ],
+              [
+                "一只",
+                696
+              ],
+              [
+                "茂密",
+                688
+              ],
+              [
+                "森林",
+                688
+              ],
+              [
+                "里",
+                572
+              ],
+              [
+                "松",
+                552
+              ],
+              [
+                "着",
+                520
+              ]
+            ]
+          }
+        }
+      },
+      "neural_original_prompt_reference": [
+        {
+          "condition": "A",
+          "sentence_bleu1_mean": 0.04953828714999898,
+          "wer": 0.9816459353877117,
+          "bleu1": 0.05436116332497911,
+          "aligned_word_accuracy": 0.01792152018303334
+        },
+        {
+          "condition": "B",
+          "sentence_bleu1_mean": 0.049866853875043395,
+          "wer": 0.9828646545340624,
+          "bleu1": 0.05416743800789853,
+          "aligned_word_accuracy": 0.016545269423558894
+        },
+        {
+          "condition": "C1",
+          "sentence_bleu1_mean": 0.05727318653950491,
+          "wer": 0.9683400024682921,
+          "bleu1": 0.06797652274625958,
+          "aligned_word_accuracy": 0.031502465918584334
+        },
+        {
+          "condition": "C",
+          "sentence_bleu1_mean": 0.0688922702974235,
+          "wer": 0.9571318210298473,
+          "bleu1": 0.07683003673957621,
+          "aligned_word_accuracy": 0.04286817897015266
+        }
+      ]
+    }
+  },
+  "prompt_comparisons": [
+    {
+      "dataset": "pallier2025",
+      "condition": "LM_A",
+      "comparison": "LM_A_new_prompt_minus_original_prompt",
+      "groups": 1940,
+      "subjects": 10,
+      "blocks": 39,
+      "independent_language_replicates_per_prompt": 1,
+      "bootstrap_repetitions": 10000,
+      "sign_flip_repetitions": 10000,
+      "sign_flip_exact": false,
+      "metrics": {
+        "sentence_bleu1_mean": {
+          "original": 0.0,
+          "selected": 0.07926407230319317,
+          "improvement": 0.07926407230319317,
+          "ci_lower": 0.06579152625928306,
+          "ci_upper": 0.09335233588284676,
+          "p_two_sided": 9.999000099990002e-05,
+          "improvement_direction": "increase",
+          "p_holm": 0.0005999400059994001,
+          "significant_holm_05": true
+        },
+        "wer": {
+          "original": 1.0,
+          "selected": 0.9804878048780488,
+          "improvement": 0.019512195121951237,
+          "ci_lower": 0.010330341572522472,
+          "ci_upper": 0.028169014084507227,
+          "p_two_sided": 0.00019998000199980003,
+          "improvement_direction": "error_reduction"
+        },
+        "bleu1": {
+          "original": 0.0,
+          "selected": 0.0981029810298103,
+          "improvement": 0.0981029810298103,
+          "ci_lower": 0.08318052558294106,
+          "ci_upper": 0.11198825763002246,
+          "p_two_sided": 9.999000099990002e-05,
+          "improvement_direction": "increase"
+        },
+        "aligned_word_accuracy": {
+          "original": 0.0,
+          "selected": 0.015718157181571817,
+          "improvement": 0.015718157181571817,
+          "ci_lower": 0.008710557772806708,
+          "ci_upper": 0.022396468828169945,
+          "p_two_sided": 0.00019998000199980003,
+          "improvement_direction": "increase"
+        }
+      }
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "LM_C1",
+      "comparison": "LM_C1_new_prompt_minus_original_prompt",
+      "groups": 1940,
+      "subjects": 10,
+      "blocks": 39,
+      "independent_language_replicates_per_prompt": 1,
+      "bootstrap_repetitions": 10000,
+      "sign_flip_repetitions": 10000,
+      "sign_flip_exact": false,
+      "metrics": {
+        "sentence_bleu1_mean": {
+          "original": 0.035599744161151255,
+          "selected": 0.04771554289683126,
+          "improvement": 0.012115798735680007,
+          "ci_lower": 0.0009471385432215185,
+          "ci_upper": 0.02489594042084187,
+          "p_two_sided": 0.048995100489951,
+          "improvement_direction": "increase",
+          "p_holm": 0.048995100489951,
+          "significant_holm_05": true
+        },
+        "wer": {
+          "original": 0.9848238482384823,
+          "selected": 0.9821138211382113,
+          "improvement": 0.0027100271002710175,
+          "ci_lower": -0.007978955768474943,
+          "ci_upper": 0.014917333223385539,
+          "p_two_sided": 0.7359264073592641,
+          "improvement_direction": "error_reduction"
+        },
+        "bleu1": {
+          "original": 0.05853658536585367,
+          "selected": 0.06720867208672086,
+          "improvement": 0.008672086720867195,
+          "ci_lower": -0.00097323502403716,
+          "ci_upper": 0.01796842378371367,
+          "p_two_sided": 0.09559044095590441,
+          "improvement_direction": "increase"
+        },
+        "aligned_word_accuracy": {
+          "original": 0.008130081300813009,
+          "selected": 0.016802168021680216,
+          "improvement": 0.008672086720867207,
+          "ci_lower": 0.0005669544219397244,
+          "ci_upper": 0.017647318491846406,
+          "p_two_sided": 0.054394560543945605,
+          "improvement_direction": "increase"
+        }
+      }
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "LM_R",
+      "comparison": "LM_R_new_prompt_minus_original_prompt",
+      "groups": 1940,
+      "subjects": 10,
+      "blocks": 39,
+      "independent_language_replicates_per_prompt": 1,
+      "bootstrap_repetitions": 10000,
+      "sign_flip_repetitions": 10000,
+      "sign_flip_exact": false,
+      "metrics": {
+        "sentence_bleu1_mean": {
+          "original": 0.0,
+          "selected": 0.05878584912484871,
+          "improvement": 0.05878584912484871,
+          "ci_lower": 0.0436756067869557,
+          "ci_upper": 0.0755103307190933,
+          "p_two_sided": 9.999000099990002e-05,
+          "improvement_direction": "increase",
+          "p_holm": 0.0005999400059994001,
+          "significant_holm_05": true
+        },
+        "wer": {
+          "original": 1.0,
+          "selected": 0.9766937669376695,
+          "improvement": 0.023306233062330484,
+          "ci_lower": 0.014018585962718062,
+          "ci_upper": 0.034483216194450605,
+          "p_two_sided": 9.999000099990002e-05,
+          "improvement_direction": "error_reduction"
+        },
+        "bleu1": {
+          "original": 0.0,
+          "selected": 0.06937669376693767,
+          "improvement": 0.06937669376693767,
+          "ci_lower": 0.05488184273195636,
+          "ci_upper": 0.08448574275187179,
+          "p_two_sided": 9.999000099990002e-05,
+          "improvement_direction": "increase"
+        },
+        "aligned_word_accuracy": {
+          "original": 0.0,
+          "selected": 0.022764227642276424,
+          "improvement": 0.022764227642276424,
+          "ci_lower": 0.01343774464113684,
+          "ci_upper": 0.03416342083985687,
+          "p_two_sided": 9.999000099990002e-05,
+          "improvement_direction": "increase"
+        }
+      }
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "LM_A",
+      "comparison": "LM_A_new_prompt_minus_original_prompt",
+      "groups": 808,
+      "subjects": 8,
+      "blocks": 21,
+      "independent_language_replicates_per_prompt": 1,
+      "bootstrap_repetitions": 10000,
+      "sign_flip_repetitions": 10000,
+      "sign_flip_exact": false,
+      "metrics": {
+        "sentence_bleu1_mean": {
+          "original": 0.012316699108303191,
+          "selected": 0.060050613692676044,
+          "improvement": 0.04773391458437285,
+          "ci_lower": 0.039437500988983056,
+          "ci_upper": 0.055517160953757035,
+          "p_two_sided": 9.999000099990002e-05,
+          "improvement_direction": "increase",
+          "p_holm": 0.0005999400059994001,
+          "significant_holm_05": true
+        },
+        "wer": {
+          "original": 0.99764325586694,
+          "selected": 0.987735674413306,
+          "improvement": 0.009907581453634018,
+          "ci_lower": 0.004400597278574315,
+          "ci_upper": 0.015481633001189913,
+          "p_two_sided": 0.010998900109989001,
+          "improvement_direction": "error_reduction"
+        },
+        "bleu1": {
+          "original": 0.01462106971975393,
+          "selected": 0.06980875484164958,
+          "improvement": 0.055187685121895654,
+          "ci_lower": 0.04538703237675608,
+          "ci_upper": 0.06507050976884295,
+          "p_two_sided": 9.999000099990002e-05,
+          "improvement_direction": "increase"
+        },
+        "aligned_word_accuracy": {
+          "original": 0.0023567441330599225,
+          "selected": 0.011794400774663932,
+          "improvement": 0.009437656641604009,
+          "ci_lower": 0.003977698811338453,
+          "ci_upper": 0.015051966239663761,
+          "p_two_sided": 0.010998900109989001,
+          "improvement_direction": "increase"
+        }
+      }
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "LM_C1",
+      "comparison": "LM_C1_new_prompt_minus_original_prompt",
+      "groups": 808,
+      "subjects": 8,
+      "blocks": 21,
+      "independent_language_replicates_per_prompt": 1,
+      "bootstrap_repetitions": 10000,
+      "sign_flip_repetitions": 10000,
+      "sign_flip_exact": false,
+      "metrics": {
+        "sentence_bleu1_mean": {
+          "original": 0.014972334124849222,
+          "selected": 0.059798497821748293,
+          "improvement": 0.04482616369689907,
+          "ci_lower": 0.034089989449590866,
+          "ci_upper": 0.05486012769523217,
+          "p_two_sided": 9.999000099990002e-05,
+          "improvement_direction": "increase",
+          "p_holm": 0.0005999400059994001,
+          "significant_holm_05": true
+        },
+        "wer": {
+          "original": 0.9971697710184553,
+          "selected": 0.9943395420369104,
+          "improvement": 0.0028302289815448356,
+          "ci_lower": -0.002561177871837189,
+          "ci_upper": 0.008380098749022957,
+          "p_two_sided": 0.527947205279472,
+          "improvement_direction": "error_reduction"
+        },
+        "bleu1": {
+          "original": 0.016981373889268625,
+          "selected": 0.06933883002961949,
+          "improvement": 0.052357456140350866,
+          "ci_lower": 0.04104708636124104,
+          "ci_upper": 0.06295967525783612,
+          "p_two_sided": 9.999000099990002e-05,
+          "improvement_direction": "increase"
+        },
+        "aligned_word_accuracy": {
+          "original": 0.002830228981544771,
+          "selected": 0.005660457963089542,
+          "improvement": 0.002830228981544771,
+          "ci_lower": -0.0025611778718371554,
+          "ci_upper": 0.008380098749023032,
+          "p_two_sided": 0.527947205279472,
+          "improvement_direction": "increase"
+        }
+      }
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "LM_R",
+      "comparison": "LM_R_new_prompt_minus_original_prompt",
+      "groups": 808,
+      "subjects": 8,
+      "blocks": 21,
+      "independent_language_replicates_per_prompt": 1,
+      "bootstrap_repetitions": 10000,
+      "sign_flip_repetitions": 10000,
+      "sign_flip_exact": false,
+      "metrics": {
+        "sentence_bleu1_mean": {
+          "original": 0.02407499229266081,
+          "selected": 0.05927227856150702,
+          "improvement": 0.03519728626884621,
+          "ci_lower": 0.02097830812293717,
+          "ci_upper": 0.05064601914565515,
+          "p_two_sided": 9.999000099990002e-05,
+          "improvement_direction": "increase",
+          "p_holm": 0.0005999400059994001,
+          "significant_holm_05": true
+        },
+        "wer": {
+          "original": 0.9910358282068807,
+          "selected": 0.9938696172248804,
+          "improvement": -0.0028337890179996883,
+          "ci_lower": -0.009596986664242402,
+          "ci_upper": 0.004943185619501628,
+          "p_two_sided": 0.5094490550944906,
+          "improvement_direction": "error_reduction"
+        },
+        "bleu1": {
+          "original": 0.03773638642059694,
+          "selected": 0.06509170653907495,
+          "improvement": 0.027355320118478008,
+          "ci_lower": 0.013470758133285219,
+          "ci_upper": 0.04205495972391033,
+          "p_two_sided": 0.0012998700129987,
+          "improvement_direction": "increase"
+        },
+        "aligned_word_accuracy": {
+          "original": 0.00896417179311916,
+          "selected": 0.006130382775119617,
+          "improvement": -0.0028337890179995434,
+          "ci_lower": -0.009596986664242382,
+          "ci_upper": 0.004943185619501458,
+          "p_two_sided": 0.5094490550944906,
+          "improvement_direction": "increase"
+        }
+      }
+    }
+  ],
+  "within_prompt_search": [
+    {
+      "dataset": "pallier2025",
+      "condition": "LM_C1",
+      "control": "LM_A",
+      "metric": "sentence_bleu1_mean",
+      "improvement": -0.03154852940636191,
+      "ci_lower": -0.04973044276406161,
+      "ci_upper": -0.012102370955847723,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "LM_C1",
+      "control": "LM_A",
+      "metric": "wer",
+      "improvement": -0.001626016260162566,
+      "ci_lower": -0.012698490241235899,
+      "ci_upper": 0.011271589146464788,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "LM_C1",
+      "control": "LM_A",
+      "metric": "bleu1",
+      "improvement": -0.030894308943089435,
+      "ci_lower": -0.04660122707225889,
+      "ci_upper": -0.017070263125528826,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "LM_C1",
+      "control": "LM_A",
+      "metric": "aligned_word_accuracy",
+      "improvement": 0.0010840108401083993,
+      "ci_lower": -0.00847008999470619,
+      "ci_upper": 0.011933352331421648,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "LM_R",
+      "control": "LM_A",
+      "metric": "sentence_bleu1_mean",
+      "improvement": -0.02047822317834446,
+      "ci_lower": -0.04242695632815399,
+      "ci_upper": 0.0023579679431028496,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "LM_R",
+      "control": "LM_A",
+      "metric": "wer",
+      "improvement": 0.003794037940379247,
+      "ci_lower": -0.009037777494510357,
+      "ci_upper": 0.019678229487887226,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "LM_R",
+      "control": "LM_A",
+      "metric": "bleu1",
+      "improvement": -0.02872628726287263,
+      "ci_lower": -0.04688259498345651,
+      "ci_upper": -0.008890894607010452,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "LM_R",
+      "control": "LM_A",
+      "metric": "aligned_word_accuracy",
+      "improvement": 0.007046070460704608,
+      "ci_lower": -0.004878319783197836,
+      "ci_upper": 0.02166308072971329,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "LM_C1",
+      "control": "LM_A",
+      "metric": "sentence_bleu1_mean",
+      "improvement": -0.00025211587092775073,
+      "ci_lower": -0.0047360734551643675,
+      "ci_upper": 0.004096107063437421,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "LM_C1",
+      "control": "LM_A",
+      "metric": "wer",
+      "improvement": -0.006603867623604431,
+      "ci_lower": -0.011340843044296847,
+      "ci_upper": -0.0019332932811729655,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "LM_C1",
+      "control": "LM_A",
+      "metric": "bleu1",
+      "improvement": -0.0004699248120300925,
+      "ci_lower": -0.006475619271342433,
+      "ci_upper": 0.0054200814631277655,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "LM_C1",
+      "control": "LM_A",
+      "metric": "aligned_word_accuracy",
+      "improvement": -0.00613394281157439,
+      "ci_lower": -0.010857223403499771,
+      "ci_upper": -0.0015390782910839748,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "LM_R",
+      "control": "LM_A",
+      "metric": "sentence_bleu1_mean",
+      "improvement": -0.0007783351311690251,
+      "ci_lower": -0.007694150355990917,
+      "ci_upper": 0.0056721259029167475,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "LM_R",
+      "control": "LM_A",
+      "metric": "wer",
+      "improvement": -0.006133942811574422,
+      "ci_lower": -0.010464116135118768,
+      "ci_upper": -0.0023311286554371746,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "LM_R",
+      "control": "LM_A",
+      "metric": "bleu1",
+      "improvement": -0.0047170483025746335,
+      "ci_lower": -0.013340403228743115,
+      "ci_upper": 0.00309302412448039,
+      "interpretation": "within_selected_prompt_search_comparison"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "LM_R",
+      "control": "LM_A",
+      "metric": "aligned_word_accuracy",
+      "improvement": -0.005664017999544315,
+      "ci_lower": -0.009986462816231226,
+      "ci_upper": -0.0019723146430785836,
+      "interpretation": "within_selected_prompt_search_comparison"
+    }
+  ],
+  "cross_prompt_neural_descriptive": [
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "A",
+      "language_control": "LM_A",
+      "metric": "sentence_bleu1_mean",
+      "neural_original_prompt": 0.08562478429187224,
+      "language_selected_prompt": 0.07926407230319317,
+      "difference": 0.006360711988679074,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "A",
+      "language_control": "LM_A",
+      "metric": "wer",
+      "neural_original_prompt": 0.9482746160794941,
+      "language_selected_prompt": 0.9804878048780488,
+      "difference": 0.032213188798554615,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "A",
+      "language_control": "LM_A",
+      "metric": "bleu1",
+      "neural_original_prompt": 0.10240289069557362,
+      "language_selected_prompt": 0.0981029810298103,
+      "difference": 0.004299909665763324,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "A",
+      "language_control": "LM_A",
+      "metric": "aligned_word_accuracy",
+      "neural_original_prompt": 0.05129177958446251,
+      "language_selected_prompt": 0.015718157181571817,
+      "difference": 0.03557362240289069,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "B",
+      "language_control": "LM_R",
+      "metric": "sentence_bleu1_mean",
+      "neural_original_prompt": 0.09063217445680329,
+      "language_selected_prompt": 0.0587858491248487,
+      "difference": 0.031846325331954584,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "B",
+      "language_control": "LM_R",
+      "metric": "wer",
+      "neural_original_prompt": 0.9439927732610659,
+      "language_selected_prompt": 0.9766937669376695,
+      "difference": 0.03270099367660362,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "B",
+      "language_control": "LM_R",
+      "metric": "bleu1",
+      "neural_original_prompt": 0.10500451671183379,
+      "language_selected_prompt": 0.06937669376693767,
+      "difference": 0.03562782294489612,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "B",
+      "language_control": "LM_R",
+      "metric": "aligned_word_accuracy",
+      "neural_original_prompt": 0.05559168925022584,
+      "language_selected_prompt": 0.022764227642276424,
+      "difference": 0.032827461607949415,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "C1",
+      "language_control": "LM_C1",
+      "metric": "sentence_bleu1_mean",
+      "neural_original_prompt": 0.123192329386487,
+      "language_selected_prompt": 0.04771554289683126,
+      "difference": 0.07547678648965574,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "C1",
+      "language_control": "LM_C1",
+      "metric": "wer",
+      "neural_original_prompt": 0.9046973803071364,
+      "language_selected_prompt": 0.9821138211382113,
+      "difference": 0.0774164408310749,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "C1",
+      "language_control": "LM_C1",
+      "metric": "bleu1",
+      "neural_original_prompt": 0.14363143631436312,
+      "language_selected_prompt": 0.06720867208672086,
+      "difference": 0.07642276422764226,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "C1",
+      "language_control": "LM_C1",
+      "metric": "aligned_word_accuracy",
+      "neural_original_prompt": 0.0949412827461608,
+      "language_selected_prompt": 0.016802168021680216,
+      "difference": 0.07813911472448058,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "C",
+      "language_control": "LM_R",
+      "metric": "sentence_bleu1_mean",
+      "neural_original_prompt": 0.13556522495887816,
+      "language_selected_prompt": 0.0587858491248487,
+      "difference": 0.07677937583402945,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "C",
+      "language_control": "LM_R",
+      "metric": "wer",
+      "neural_original_prompt": 0.8909304426377597,
+      "language_selected_prompt": 0.9766937669376695,
+      "difference": 0.08576332429990985,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "C",
+      "language_control": "LM_R",
+      "metric": "bleu1",
+      "neural_original_prompt": 0.15324299909665764,
+      "language_selected_prompt": 0.06937669376693767,
+      "difference": 0.08386630532971998,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "pallier2025",
+      "neural_condition": "C",
+      "language_control": "LM_R",
+      "metric": "aligned_word_accuracy",
+      "neural_original_prompt": 0.1087985546522132,
+      "language_selected_prompt": 0.022764227642276424,
+      "difference": 0.08603432700993678,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "A",
+      "language_control": "LM_A",
+      "metric": "sentence_bleu1_mean",
+      "neural_original_prompt": 0.04953828714999898,
+      "language_selected_prompt": 0.060050613692676044,
+      "difference": -0.010512326542677065,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "A",
+      "language_control": "LM_A",
+      "metric": "wer",
+      "neural_original_prompt": 0.9816459353877117,
+      "language_selected_prompt": 0.987735674413306,
+      "difference": 0.006089739025594287,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "A",
+      "language_control": "LM_A",
+      "metric": "bleu1",
+      "neural_original_prompt": 0.05436116332497911,
+      "language_selected_prompt": 0.06980875484164958,
+      "difference": -0.015447591516670474,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "A",
+      "language_control": "LM_A",
+      "metric": "aligned_word_accuracy",
+      "neural_original_prompt": 0.01792152018303334,
+      "language_selected_prompt": 0.011794400774663932,
+      "difference": 0.006127119408369406,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "B",
+      "language_control": "LM_R",
+      "metric": "sentence_bleu1_mean",
+      "neural_original_prompt": 0.049866853875043395,
+      "language_selected_prompt": 0.05927227856150702,
+      "difference": -0.009405424686463625,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "B",
+      "language_control": "LM_R",
+      "metric": "wer",
+      "neural_original_prompt": 0.9828646545340624,
+      "language_selected_prompt": 0.9938696172248804,
+      "difference": 0.011004962690818076,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "B",
+      "language_control": "LM_R",
+      "metric": "bleu1",
+      "neural_original_prompt": 0.05416743800789853,
+      "language_selected_prompt": 0.06509170653907495,
+      "difference": -0.010924268531176423,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "B",
+      "language_control": "LM_R",
+      "metric": "aligned_word_accuracy",
+      "neural_original_prompt": 0.016545269423558894,
+      "language_selected_prompt": 0.006130382775119617,
+      "difference": 0.010414886648439276,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "C1",
+      "language_control": "LM_C1",
+      "metric": "sentence_bleu1_mean",
+      "neural_original_prompt": 0.05727318653950491,
+      "language_selected_prompt": 0.05979849782174829,
+      "difference": -0.002525311282243377,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "C1",
+      "language_control": "LM_C1",
+      "metric": "wer",
+      "neural_original_prompt": 0.9683400024682921,
+      "language_selected_prompt": 0.9943395420369104,
+      "difference": 0.025999539568618335,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "C1",
+      "language_control": "LM_C1",
+      "metric": "bleu1",
+      "neural_original_prompt": 0.06797652274625958,
+      "language_selected_prompt": 0.06933883002961949,
+      "difference": -0.001362307283359912,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "C1",
+      "language_control": "LM_C1",
+      "metric": "aligned_word_accuracy",
+      "neural_original_prompt": 0.031502465918584334,
+      "language_selected_prompt": 0.005660457963089542,
+      "difference": 0.02584200795549479,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "C",
+      "language_control": "LM_R",
+      "metric": "sentence_bleu1_mean",
+      "neural_original_prompt": 0.0688922702974235,
+      "language_selected_prompt": 0.05927227856150702,
+      "difference": 0.009619991735916475,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "C",
+      "language_control": "LM_R",
+      "metric": "wer",
+      "neural_original_prompt": 0.9571318210298473,
+      "language_selected_prompt": 0.9938696172248804,
+      "difference": 0.036737796195033146,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "C",
+      "language_control": "LM_R",
+      "metric": "bleu1",
+      "neural_original_prompt": 0.07683003673957621,
+      "language_selected_prompt": 0.06509170653907495,
+      "difference": 0.01173833020050126,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "neural_condition": "C",
+      "language_control": "LM_R",
+      "metric": "aligned_word_accuracy",
+      "neural_original_prompt": 0.04286817897015266,
+      "language_selected_prompt": 0.006130382775119617,
+      "difference": 0.03673779619503304,
+      "interpretation": "cross_prompt_descriptive_not_matched_neural_ablation",
+      "causal_attribution_allowed": false
+    }
+  ],
+  "source_sha256": {
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_prompt_sensitivity_test_v2\\by_group.csv": "7978d4a816b57102bec6d0aafd20da02a5333156d974e145a5e134f589961b8d",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_prompt_sensitivity_test_v2\\by_subject.csv": "bd5a44b01c1b48de4b59c18a58b5286ac7bc038fc844694f02221b92c49dc9ed",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_prompt_sensitivity_test_v2\\summary.csv": "5ae4fc5db47c778be23df35a9fe4a64af61a16c61fddcceb7fd44b80d21ad451",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_prompt_sensitivity_test_v2\\within_prompt_search.csv": "f7d4822d72b8cbbc2126a0f6317eec9ad03680bd8dd714814f9883d24b2144ca",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_prompt_sensitivity_test_v2\\cross_prompt_neural_descriptive.csv": "d8ab7d65da10df91f8fba8bda9f3aecf6307a67db43feb0a565cf1c42f3c19bf",
+    "D:\\code\\BrainDecoding\\outputs\\heldout_test\\pure_language_prompt_sensitivity_test_v2\\pallier2025\\main.json": "249549b4792ef5745f372cb5cafd301bd81099e6409376cd3c87304906ad92a8",
+    "D:\\code\\BrainDecoding\\outputs\\heldout_test\\pure_language_prompt_sensitivity_test_v2\\chineseeeg2_littleprince\\main.json": "3abc0504c13a6c57cffbf11fdf77c90ee0d8b44cad13b8e3ddcb248a5901fd71"
+  },
+  "elapsed_cpu_seconds": 18.790824300000168,
+  "completed_unix": 1791719047.607778
+}

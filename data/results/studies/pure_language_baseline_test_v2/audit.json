@@ -1,0 +1,23 @@
+{
+  "status": "passed",
+  "manifest_sha256": "e59079f7c2647ea973433f036aa621e1a1b5e64ddab3e875f2fb230a17d06239",
+  "results_sha256": "f9dbd72a1fcaa25aa2ab3c6129d2e9264bfe7a61ab6a4e2d8cc0c701812e584d",
+  "original_outputs_unchanged": true,
+  "original_metrics_reproduced": true,
+  "identical_known_word_counts_and_boundaries": true,
+  "full_training_vocabulary_scored_by_LM": true,
+  "baseline_neural_array_reads": 0,
+  "baseline_embedding_model_loads": 0,
+  "reference_words_enter_decoder": false,
+  "paired_material_draws_shared_by_conditions_subjects_and_seeds": true,
+  "deterministic_language_predictions_not_counted_as_independent_seeds": true,
+  "source_sha256": {
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_baseline_test_v2\\by_group.csv": "f4117c2447a3cb693c391aeae3ece96efc33ecfa449ae410187bcc8ffa74a166",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_baseline_test_v2\\by_seed.csv": "e9762b1193e5536383036b1e80b66c9b1af62f93fd8bdb283fced0db2ee81c39",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_baseline_test_v2\\by_subject_seed.csv": "0d1f759e4af2dc361e240601d501d5e404b22f993cbaffaf538458779d6b27f9",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_baseline_test_v2\\summary.csv": "16d757b412d668b683a36fee6ff95f9ab017c1ace7bffec68989859907bcdfa3",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_baseline_test_v2\\decomposition.csv": "f2e4b7930a0f40362bca99f8f6ff1c9739438cc397e60e709a8ffb3f55d3664b",
+    "D:\\code\\BrainDecoding\\outputs\\heldout_test\\pure_language_baseline_test_v2\\pallier2025\\main.json": "7147989a82bfb29b3d5858d6088c4fd338061b87c5264bd67a74b45f5b62e481",
+    "D:\\code\\BrainDecoding\\outputs\\heldout_test\\pure_language_baseline_test_v2\\chineseeeg2_littleprince\\main.json": "64a8afe508427e9394475713b205f2d4c1c1a4a219bddf84d28b91358c4e5b87"
+  }
+}

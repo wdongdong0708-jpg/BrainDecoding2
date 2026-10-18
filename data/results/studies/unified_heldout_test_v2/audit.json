@@ -1,0 +1,33 @@
+{
+  "status": "verified",
+  "manifest_sha256": "90934e139ee62e1fedf89ebf57370f38ac0ca73930ed02d951e11a64e6d2f278",
+  "report_sha256": "14773dd40d6044eccff99ac0bcfa51bab8752a8955266038153f7ae31ef06a80",
+  "sources": [
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\pallier2025\\seed-000\\main.json",
+      "sha256": "1c9933ec7a10775e3a2b6a8b1056405d2a4906c393d2578f943dd60862589e20"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\pallier2025\\seed-001\\main.json",
+      "sha256": "1d4787f467fb8ab0f5699253cd804803dcf36946a133f0c49b73bb077c7a64bb"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\pallier2025\\seed-002\\main.json",
+      "sha256": "f01aab02035c08e6f7ed52485f22384b5563865de5a77c85faa6abdc3bcebbe3"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\chineseeeg2_littleprince\\seed-000\\main.json",
+      "sha256": "be9c761d4ee11faabda7ec77ed49c8bdc03bbaabc89a8c65dbc712e8940a2c29"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\chineseeeg2_littleprince\\seed-001\\main.json",
+      "sha256": "df77d548414a92d6ac4df47c3dd37b0932a486534fd7e928882f0a127cdd71c8"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_heldout_test_v2\\chineseeeg2_littleprince\\seed-002\\main.json",
+      "sha256": "6bb881e4cc3d97aa7c18be3d6f638d9adee7e1b7a25afa2f9ef2b0d04088dbb3"
+    }
+  ],
+  "segment_seed_units": 8244,
+  "test_evaluated": true
+}

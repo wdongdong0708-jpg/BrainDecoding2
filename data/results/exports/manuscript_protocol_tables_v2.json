@@ -1,0 +1,93 @@
+{
+  "status": "verified_frozen_settings",
+  "sources": {
+    "reports/exports/unified_context_heldout_test_v2_context_by_seed.csv": "7633ccd0314fb3dbb270ecbda9d5f4eb0f240f548f91251c7417a3920fe5d033",
+    "reports/exports/unified_context_heldout_test_v2_context_summary.csv": "19cba2df8ac4390a57fbfd1477b1775599b81d7196196e5ae09f96f4cbf1599d",
+    "reports/exports/unified_context_heldout_test_v2_independent_vs_rolling_by_seed.csv": "645fe29d527499717a9a61658cb651bc3fcfe8312bdcbeb250247859d7178405",
+    "reports/exports/unified_heldout_test_v2_sentence_summary.json": "14773dd40d6044eccff99ac0bcfa51bab8752a8955266038153f7ae31ef06a80",
+    "reports/exports/unified_heldout_test_v2_sentence_by_group.csv": "28a1ab9385a82c4ae65a63e024baef3ab98fb5fa429c42469ae294126a921fd0",
+    "reports/exports/unified_heldout_test_v2_sentence_by_subject_seed.csv": "deb1dc7b5ae9c20719af4bcecd1a54ec376db5ebf853b83d7ff365ace297fa45",
+    "reports/exports/unified_heldout_test_v2_sentence_repairs.csv": "34d409260cb24c480b4e15526f4039c0ff8113766ea755c3694c8e7e1d0fdb84",
+    "reports/exports/unified_heldout_test_v2_word_by_seed.csv": "f4e0b5b272842be1b0d4f5a120cb65b20dd0ad3fddddf9c2ae5caa23dd0e55b6",
+    "reports/exports/unified_heldout_test_v2_word_summary.csv": "7e1fb8d181dbbb8ae21a888b303cb3473e816c6a2fb21131bfcfe749a28aa2bb",
+    "reports/exports/unified_heldout_test_v2_word_gain.csv": "3771e0a94453224f138a3939f5c2eab52ecb24e2f94ab679c27ff89145aa51e1",
+    "experiments/manifests/rolling_sentence/heldout_test_v2.json": "09428686d438794c48a6b28c41b672dc2da987a9299715bae8a8fd2e148710f6",
+    "configs/unified_rolling/v2.yaml": "b7b5b7c7f7c239722b795fad0d6a311daface9c167e48287156e63e9e55ea497",
+    "reports/audits/handwritten_revision_20261004/assets.json": "13cd560e916c003722880eea805fcbb25db06d26a13314c4387329c4b2545a94"
+  },
+  "model_settings": [
+    [
+      "词模型",
+      "目标词神经窗",
+      "单词映射",
+      "不含上下文网络"
+    ],
+    [
+      "局部窗口",
+      "$[-k,k]$",
+      "各词每轮一次",
+      "各半径分别训练"
+    ],
+    [
+      "完整上下文",
+      "片段内全部词",
+      "各词每轮一次",
+      "单独训练"
+    ],
+    [
+      "独立可见状态",
+      "$[-2,r]$",
+      "各词每轮一次",
+      "各状态分别训练"
+    ],
+    [
+      "共享滚动模型",
+      "$[-2,r]$",
+      "遍历到达时刻，监督 K0/K1/K2",
+      "三个状态共享参数"
+    ]
+  ],
+  "sentence_decoder_settings": [
+    [
+      "语言模型",
+      "Qwen2.5-1.5B 基础版"
+    ],
+    [
+      "神经检索候选／词位",
+      "20"
+    ],
+    [
+      "神经相似度缩放系数",
+      "10"
+    ],
+    [
+      "束搜索保留序列数",
+      "5"
+    ],
+    [
+      "每个前缀的候选续写数",
+      "5"
+    ],
+    [
+      "每条续写的最大新 token 数",
+      "16"
+    ],
+    [
+      "近期重搜词位数（B/C）",
+      "3"
+    ],
+    [
+      "语言模型上下文上限",
+      "32768 token"
+    ],
+    [
+      "验证语言权重候选",
+      "0, 0.025, 0.1, 0.5, 1.5"
+    ],
+    [
+      "测试固定语言权重",
+      "0.1"
+    ]
+  ],
+  "new_training_decoding_or_resampling": false
+}

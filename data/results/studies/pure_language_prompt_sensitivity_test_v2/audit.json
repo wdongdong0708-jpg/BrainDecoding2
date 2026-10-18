@@ -1,0 +1,25 @@
+{
+  "status": "verified_complete",
+  "manifest_sha256": "7f8a5d5c23848cd5a9119e632602fb925e60f4bc75d1d617d1b969c368f4f242",
+  "result_sha256": "8e2c0802ca31227bf28da075242863bef6c2689b20efd45b04467166c7ff5f0a",
+  "report_sha256": "e0d15f8737ba40e2037f70e3f900f5b91b1584fa1d05f88ba826115a5ae07edd",
+  "source_sha256": {
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_prompt_sensitivity_test_v2\\by_group.csv": "7978d4a816b57102bec6d0aafd20da02a5333156d974e145a5e134f589961b8d",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_prompt_sensitivity_test_v2\\by_subject.csv": "bd5a44b01c1b48de4b59c18a58b5286ac7bc038fc844694f02221b92c49dc9ed",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_prompt_sensitivity_test_v2\\summary.csv": "5ae4fc5db47c778be23df35a9fe4a64af61a16c61fddcceb7fd44b80d21ad451",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_prompt_sensitivity_test_v2\\within_prompt_search.csv": "f7d4822d72b8cbbc2126a0f6317eec9ad03680bd8dd714814f9883d24b2144ca",
+    "D:\\code\\BrainDecoding\\reports\\studies\\pure_language_prompt_sensitivity_test_v2\\cross_prompt_neural_descriptive.csv": "d8ab7d65da10df91f8fba8bda9f3aecf6307a67db43feb0a565cf1c42f3c19bf",
+    "D:\\code\\BrainDecoding\\outputs\\heldout_test\\pure_language_prompt_sensitivity_test_v2\\pallier2025\\main.json": "249549b4792ef5745f372cb5cafd301bd81099e6409376cd3c87304906ad92a8",
+    "D:\\code\\BrainDecoding\\outputs\\heldout_test\\pure_language_prompt_sensitivity_test_v2\\chineseeeg2_littleprince\\main.json": "3abc0504c13a6c57cffbf11fdf77c90ee0d8b44cad13b8e3ddcb248a5901fd71"
+  },
+  "pre_diagnostic_policy_sha256": "5feb369d9e1758245cbad53fa7ef835b8b035f593aae23e1e498bc890db66965",
+  "original_sources_unchanged": true,
+  "original_pure_language_metrics_reproduced": true,
+  "identical_word_count_boundaries_vocabulary_and_search": true,
+  "prompt_bound_private_cache": true,
+  "test_metrics_used_for_prompt_selection": false,
+  "reference_words_enter_decoder": false,
+  "baseline_neural_array_reads": 0,
+  "independent_language_replicates_per_prompt": 1,
+  "neural_references_cross_prompt_only": true
+}

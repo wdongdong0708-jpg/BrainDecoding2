@@ -1,0 +1,15 @@
+% Presentation only: simplify_appendix_tables_test_v2.py; verified frozen sources.
+\begingroup
+\papertablestyle
+\begin{tabular}{@{}llll@{}}
+\toprule
+模型 & 输入范围 & 训练目标 & 参数关系 \\
+\midrule
+词模型 & 目标词神经窗 & 单词映射 & 不含上下文网络 \\
+局部窗口 & $[-k,k]$ & 各词每轮一次 & 各半径分别训练 \\
+完整上下文 & 片段内全部词 & 各词每轮一次 & 单独训练 \\
+独立可见状态 & $[-2,r]$ & 各词每轮一次 & 各状态分别训练 \\
+共享滚动模型 & $[-2,r]$ & \shortstack[l]{遍历到达时刻\\监督 K0/K1/K2} & 三个状态共享参数 \\
+\bottomrule
+\end{tabular}
+\endgroup

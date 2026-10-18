@@ -1,0 +1,2449 @@
+{
+  "status": "completed",
+  "stage": "word",
+  "best": {
+    "legacy50": {
+      "epoch": 11,
+      "train_loss": 5.226302366623162,
+      "seconds": 61.147755299985874,
+      "optimizer_updates": 13007,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 5.226302366623162,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 15.0,
+          "mean_reciprocal_rank": 0.1793358126012725,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07832929782082325,
+          "macro_recall_at_1": 0.05783682104918886,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3829297820823245,
+          "macro_recall_at_10": 0.3686323426389524,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07832929782082325,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05783682104918886,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3829297820823245,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.3686323426389524
+        },
+        "full_vocabulary": {
+          "selection_score": 0.08183962264150943,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.08183962264150943,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.02122641509433962,
+                  "top10": 0.09080188679245282
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.021816037735849055,
+                  "top10": 0.07016509433962265
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.020047169811320754,
+                  "top10": 0.07783018867924528
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.01768867924528302,
+                  "top10": 0.07016509433962265
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.018867924528301886,
+                  "top10": 0.07429245283018868
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.03419811320754717,
+                  "top10": 0.10731132075471699
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.02240566037735849,
+                  "top10": 0.07547169811320754
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.02830188679245283,
+                  "top10": 0.08608490566037735
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.01768867924528302,
+                  "top10": 0.06308962264150944
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.031839622641509434,
+                  "top10": 0.10318396226415094
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    "full_vocab": {
+      "epoch": 18,
+      "train_loss": 4.827713542093024,
+      "seconds": 61.51888020001934,
+      "optimizer_updates": 21264,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 4.827713542093024,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 17.0,
+          "mean_reciprocal_rank": 0.17387507615645775,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07893462469733656,
+          "macro_recall_at_1": 0.05819518320741406,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3588377723970944,
+          "macro_recall_at_10": 0.3400435403152884,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07893462469733656,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05819518320741406,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3588377723970944,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.3400435403152884
+        },
+        "full_vocabulary": {
+          "selection_score": 0.08360849056603772,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.08360849056603772,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.025943396226415096,
+                  "top10": 0.09316037735849056
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.030070754716981132,
+                  "top10": 0.07900943396226415
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.02830188679245283,
+                  "top10": 0.08549528301886793
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.017099056603773585,
+                  "top10": 0.06898584905660378
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.027712264150943397,
+                  "top10": 0.08490566037735849
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.03773584905660377,
+                  "top10": 0.09905660377358491
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.024174528301886794,
+                  "top10": 0.08313679245283019
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.02240566037735849,
+                  "top10": 0.08313679245283019
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.017099056603773585,
+                  "top10": 0.06662735849056604
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.030660377358490566,
+                  "top10": 0.09257075471698113
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    }
+  },
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 5.629517859860031,
+      "seconds": 67.6099957000115,
+      "optimizer_updates": 1183,
+      "amp_skipped_updates": 3,
+      "training_diagnostics": {
+        "word_loss": 5.629517859860031,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 23.0,
+          "mean_reciprocal_rank": 0.09764126888908052,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.023486682808716706,
+          "macro_recall_at_1": 0.028123229711465005,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.2179176755447942,
+          "macro_recall_at_10": 0.254441186785052,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.023486682808716706,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.028123229711465005,
+          "retrieval_acc10_vocab=pallier2025_50": 0.2179176755447942,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.254441186785052
+        },
+        "full_vocabulary": {
+          "selection_score": 0.017452830188679245,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.017452830188679245,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.004127358490566038,
+                  "top10": 0.02535377358490566
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.0023584905660377358,
+                  "top10": 0.009433962264150943
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.0011792452830188679,
+                  "top10": 0.018867924528301886
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.0,
+                  "top10": 0.01768867924528302
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.00884433962264151,
+                  "top10": 0.028891509433962265
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.0,
+                  "top10": 0.0011792452830188679
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.0,
+                  "top10": 0.009433962264150943
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.003537735849056604,
+                  "top10": 0.025943396226415096
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.001768867924528302,
+                  "top10": 0.015919811320754717
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.0,
+                  "top10": 0.021816037735849055
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 2,
+      "train_loss": 5.553352740969225,
+      "seconds": 63.417388000001665,
+      "optimizer_updates": 2365,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 5.553352740969225,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 20.0,
+          "mean_reciprocal_rank": 0.1333530131426109,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.04915254237288136,
+          "macro_recall_at_1": 0.03687565179918121,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.2984261501210654,
+          "macro_recall_at_10": 0.3013923847213859,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.04915254237288136,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.03687565179918121,
+          "retrieval_acc10_vocab=pallier2025_50": 0.2984261501210654,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.3013923847213859
+        },
+        "full_vocabulary": {
+          "selection_score": 0.045931603773584906,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.045931603773584906,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.012382075471698114,
+                  "top10": 0.061910377358490566
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.01061320754716981,
+                  "top10": 0.047759433962264154
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.010023584905660377,
+                  "top10": 0.04363207547169811
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.01061320754716981,
+                  "top10": 0.03773584905660377
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.00884433962264151,
+                  "top10": 0.04834905660377359
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.00884433962264151,
+                  "top10": 0.03537735849056604
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.011202830188679245,
+                  "top10": 0.04481132075471698
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.010023584905660377,
+                  "top10": 0.05306603773584906
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.006485849056603774,
+                  "top10": 0.03714622641509434
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.010023584905660377,
+                  "top10": 0.049528301886792456
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 3,
+      "train_loss": 5.523686898456752,
+      "seconds": 61.00496890000068,
+      "optimizer_updates": 3532,
+      "amp_skipped_updates": 1,
+      "training_diagnostics": {
+        "word_loss": 5.523686898456752,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 19.0,
+          "mean_reciprocal_rank": 0.1353654550203986,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.044915254237288135,
+          "macro_recall_at_1": 0.04351372052141334,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3072639225181598,
+          "macro_recall_at_10": 0.32074158648649065,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.044915254237288135,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.04351372052141334,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3072639225181598,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.32074158648649065
+        },
+        "full_vocabulary": {
+          "selection_score": 0.05766509433962265,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.05766509433962265,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.01474056603773585,
+                  "top10": 0.06898584905660378
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.008254716981132075,
+                  "top10": 0.0660377358490566
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.012971698113207548,
+                  "top10": 0.05129716981132076
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.008254716981132075,
+                  "top10": 0.05129716981132076
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.01061320754716981,
+                  "top10": 0.0625
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.005306603773584905,
+                  "top10": 0.04068396226415094
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.0076650943396226415,
+                  "top10": 0.05483490566037736
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.011202830188679245,
+                  "top10": 0.06544811320754718
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.0076650943396226415,
+                  "top10": 0.047759433962264154
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.008254716981132075,
+                  "top10": 0.06780660377358491
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 4,
+      "train_loss": 5.471304446007478,
+      "seconds": 62.41492310000467,
+      "optimizer_updates": 4728,
+      "amp_skipped_updates": 1,
+      "training_diagnostics": {
+        "word_loss": 5.471304446007478,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 18.0,
+          "mean_reciprocal_rank": 0.1486108918634053,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.05738498789346247,
+          "macro_recall_at_1": 0.04410580999667687,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3352300242130751,
+          "macro_recall_at_10": 0.31989581542294565,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.05738498789346247,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.04410580999667687,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3352300242130751,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.31989581542294565
+        },
+        "full_vocabulary": {
+          "selection_score": 0.05589622641509434,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.05589622641509434,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.015919811320754717,
+                  "top10": 0.061910377358490566
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.01768867924528302,
+                  "top10": 0.06780660377358491
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.012382075471698114,
+                  "top10": 0.05188679245283019
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.013561320754716982,
+                  "top10": 0.05365566037735849
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.012971698113207548,
+                  "top10": 0.05070754716981132
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.00884433962264151,
+                  "top10": 0.05601415094339623
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.012382075471698114,
+                  "top10": 0.06132075471698113
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.017099056603773585,
+                  "top10": 0.06308962264150944
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.003537735849056604,
+                  "top10": 0.02830188679245283
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.009433962264150943,
+                  "top10": 0.06426886792452831
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 5,
+      "train_loss": 5.453352800469436,
+      "seconds": 61.46201160000055,
+      "optimizer_updates": 5902,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 5.453352800469436,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 17.0,
+          "mean_reciprocal_rank": 0.15471732756232515,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.059322033898305086,
+          "macro_recall_at_1": 0.0523681488872026,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3337772397094431,
+          "macro_recall_at_10": 0.32421147280086,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.059322033898305086,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.0523681488872026,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3337772397094431,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.32421147280086
+        },
+        "full_vocabulary": {
+          "selection_score": 0.05831367924528302,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.05831367924528302,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.021816037735849055,
+                  "top10": 0.07016509433962265
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.02122641509433962,
+                  "top10": 0.06898584905660378
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.018278301886792452,
+                  "top10": 0.055424528301886794
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.01474056603773585,
+                  "top10": 0.04893867924528302
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.013561320754716982,
+                  "top10": 0.0589622641509434
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.01474056603773585,
+                  "top10": 0.05601415094339623
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.015330188679245283,
+                  "top10": 0.0589622641509434
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.015330188679245283,
+                  "top10": 0.06308962264150944
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.008254716981132075,
+                  "top10": 0.038325471698113206
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.01650943396226415,
+                  "top10": 0.06426886792452831
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 6,
+      "train_loss": 5.419064602412213,
+      "seconds": 61.363175500009675,
+      "optimizer_updates": 7094,
+      "amp_skipped_updates": 1,
+      "training_diagnostics": {
+        "word_loss": 5.419064602412213,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 17.0,
+          "mean_reciprocal_rank": 0.1634065882055691,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.06779661016949153,
+          "macro_recall_at_1": 0.05436828701054707,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3487893462469734,
+          "macro_recall_at_10": 0.342081004022084,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.06779661016949153,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05436828701054707,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3487893462469734,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.342081004022084
+        },
+        "full_vocabulary": {
+          "selection_score": 0.06821933962264151,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.06821933962264151,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.021816037735849055,
+                  "top10": 0.07665094339622641
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.01945754716981132,
+                  "top10": 0.07606132075471699
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.01945754716981132,
+                  "top10": 0.07252358490566038
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.01650943396226415,
+                  "top10": 0.057193396226415096
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.01650943396226415,
+                  "top10": 0.0660377358490566
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.024174528301886794,
+                  "top10": 0.07547169811320754
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.020047169811320754,
+                  "top10": 0.06485849056603774
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.027122641509433963,
+                  "top10": 0.07252358490566038
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.011202830188679245,
+                  "top10": 0.04304245283018868
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.02240566037735849,
+                  "top10": 0.07783018867924528
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 7,
+      "train_loss": 5.391193385030733,
+      "seconds": 62.04409130002023,
+      "optimizer_updates": 8278,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 5.391193385030733,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 16.0,
+          "mean_reciprocal_rank": 0.1689972168305062,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07215496368038742,
+          "macro_recall_at_1": 0.053596316328188044,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.35714285714285715,
+          "macro_recall_at_10": 0.3485395131255577,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07215496368038742,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.053596316328188044,
+          "retrieval_acc10_vocab=pallier2025_50": 0.35714285714285715,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.3485395131255577
+        },
+        "full_vocabulary": {
+          "selection_score": 0.07163915094339623,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.07163915094339623,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.02240566037735849,
+                  "top10": 0.08549528301886793
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.01179245283018868,
+                  "top10": 0.07429245283018868
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.021816037735849055,
+                  "top10": 0.0695754716981132
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.017099056603773585,
+                  "top10": 0.0660377358490566
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.014150943396226415,
+                  "top10": 0.0695754716981132
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.024174528301886794,
+                  "top10": 0.0866745283018868
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.018278301886792452,
+                  "top10": 0.06662735849056604
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.02535377358490566,
+                  "top10": 0.07370283018867925
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.01061320754716981,
+                  "top10": 0.05483490566037736
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.020636792452830188,
+                  "top10": 0.0695754716981132
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 8,
+      "train_loss": 5.362568895905106,
+      "seconds": 61.467171600001166,
+      "optimizer_updates": 9460,
+      "amp_skipped_updates": 1,
+      "training_diagnostics": {
+        "word_loss": 5.362568895905106,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 16.0,
+          "mean_reciprocal_rank": 0.17245561072406937,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07518159806295399,
+          "macro_recall_at_1": 0.05359291772823878,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.36319612590799033,
+          "macro_recall_at_10": 0.34998075584156774,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07518159806295399,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05359291772823878,
+          "retrieval_acc10_vocab=pallier2025_50": 0.36319612590799033,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.34998075584156774
+        },
+        "full_vocabulary": {
+          "selection_score": 0.07281839622641509,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.07281839622641509,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.02240566037735849,
+                  "top10": 0.08313679245283019
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.021816037735849055,
+                  "top10": 0.07311320754716981
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.01768867924528302,
+                  "top10": 0.07193396226415094
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.02122641509433962,
+                  "top10": 0.061910377358490566
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.01945754716981132,
+                  "top10": 0.07311320754716981
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.031839622641509434,
+                  "top10": 0.09375
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.017099056603773585,
+                  "top10": 0.06780660377358491
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.024174528301886794,
+                  "top10": 0.07547169811320754
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.01474056603773585,
+                  "top10": 0.052476415094339625
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.02122641509433962,
+                  "top10": 0.07547169811320754
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 9,
+      "train_loss": 5.315065359409586,
+      "seconds": 61.9091868000105,
+      "optimizer_updates": 10649,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 5.315065359409586,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 16.0,
+          "mean_reciprocal_rank": 0.17155659325813316,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07409200968523003,
+          "macro_recall_at_1": 0.05469364486838432,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3659806295399516,
+          "macro_recall_at_10": 0.35598265452427424,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07409200968523003,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05469364486838432,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3659806295399516,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.35598265452427424
+        },
+        "full_vocabulary": {
+          "selection_score": 0.07541273584905661,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.07541273584905661,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.02122641509433962,
+                  "top10": 0.09257075471698113
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.021816037735849055,
+                  "top10": 0.07252358490566038
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.02240566037735849,
+                  "top10": 0.07488207547169812
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.01650943396226415,
+                  "top10": 0.06662735849056604
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.018278301886792452,
+                  "top10": 0.0660377358490566
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.027122641509433963,
+                  "top10": 0.09316037735849056
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.01768867924528302,
+                  "top10": 0.07606132075471699
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.024174528301886794,
+                  "top10": 0.07841981132075472
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.012971698113207548,
+                  "top10": 0.05070754716981132
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.024764150943396228,
+                  "top10": 0.08313679245283019
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 10,
+      "train_loss": 5.277168287671712,
+      "seconds": 61.28803650001646,
+      "optimizer_updates": 11822,
+      "amp_skipped_updates": 1,
+      "training_diagnostics": {
+        "word_loss": 5.277168287671712,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 15.0,
+          "mean_reciprocal_rank": 0.18257271419193477,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.0841404358353511,
+          "macro_recall_at_1": 0.0648857295776238,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.38171912832929783,
+          "macro_recall_at_10": 0.36751902175312784,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.0841404358353511,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.0648857295776238,
+          "retrieval_acc10_vocab=pallier2025_50": 0.38171912832929783,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.36751902175312784
+        },
+        "full_vocabulary": {
+          "selection_score": 0.08060141509433963,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.08060141509433963,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.02535377358490566,
+                  "top10": 0.09433962264150944
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.025943396226415096,
+                  "top10": 0.08313679245283019
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.024764150943396228,
+                  "top10": 0.07959905660377359
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.025943396226415096,
+                  "top10": 0.07900943396226415
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.02122641509433962,
+                  "top10": 0.07724056603773585
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.028891509433962265,
+                  "top10": 0.10436320754716981
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.022995283018867923,
+                  "top10": 0.07193396226415094
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.02830188679245283,
+                  "top10": 0.07606132075471699
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.017099056603773585,
+                  "top10": 0.06132075471698113
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.0330188679245283,
+                  "top10": 0.07900943396226415
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 11,
+      "train_loss": 5.226302366623162,
+      "seconds": 61.147755299985874,
+      "optimizer_updates": 13007,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 5.226302366623162,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 15.0,
+          "mean_reciprocal_rank": 0.1793358126012725,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07832929782082325,
+          "macro_recall_at_1": 0.05783682104918886,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3829297820823245,
+          "macro_recall_at_10": 0.3686323426389524,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07832929782082325,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05783682104918886,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3829297820823245,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.3686323426389524
+        },
+        "full_vocabulary": {
+          "selection_score": 0.08183962264150943,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.08183962264150943,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.02122641509433962,
+                  "top10": 0.09080188679245282
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.021816037735849055,
+                  "top10": 0.07016509433962265
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.020047169811320754,
+                  "top10": 0.07783018867924528
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.01768867924528302,
+                  "top10": 0.07016509433962265
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.018867924528301886,
+                  "top10": 0.07429245283018868
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.03419811320754717,
+                  "top10": 0.10731132075471699
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.02240566037735849,
+                  "top10": 0.07547169811320754
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.02830188679245283,
+                  "top10": 0.08608490566037735
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.01768867924528302,
+                  "top10": 0.06308962264150944
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.031839622641509434,
+                  "top10": 0.10318396226415094
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 12,
+      "train_loss": 5.183403603684634,
+      "seconds": 61.93530430001556,
+      "optimizer_updates": 14186,
+      "amp_skipped_updates": 1,
+      "training_diagnostics": {
+        "word_loss": 5.183403603684634,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 16.0,
+          "mean_reciprocal_rank": 0.1815303499849875,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.08292978208232446,
+          "macro_recall_at_1": 0.06148520398618713,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.37796610169491524,
+          "macro_recall_at_10": 0.35757269479865483,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.08292978208232446,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.06148520398618713,
+          "retrieval_acc10_vocab=pallier2025_50": 0.37796610169491524,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.35757269479865483
+        },
+        "full_vocabulary": {
+          "selection_score": 0.0834316037735849,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.0834316037735849,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.022995283018867923,
+                  "top10": 0.0902122641509434
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.02653301886792453,
+                  "top10": 0.08490566037735849
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.027712264150943397,
+                  "top10": 0.08785377358490566
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.01768867924528302,
+                  "top10": 0.07665094339622641
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.01945754716981132,
+                  "top10": 0.08608490566037735
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.039504716981132074,
+                  "top10": 0.11084905660377359
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.02653301886792453,
+                  "top10": 0.07547169811320754
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.027712264150943397,
+                  "top10": 0.08372641509433962
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.017099056603773585,
+                  "top10": 0.057193396226415096
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.027712264150943397,
+                  "top10": 0.08136792452830188
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 13,
+      "train_loss": 5.125228553896135,
+      "seconds": 61.3309622000088,
+      "optimizer_updates": 15363,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 5.125228553896135,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 15.0,
+          "mean_reciprocal_rank": 0.17858864048985704,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07869249394673124,
+          "macro_recall_at_1": 0.0586463652402005,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.38147699757869247,
+          "macro_recall_at_10": 0.35503895786180273,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07869249394673124,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.0586463652402005,
+          "retrieval_acc10_vocab=pallier2025_50": 0.38147699757869247,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.35503895786180273
+        },
+        "full_vocabulary": {
+          "selection_score": 0.08295990566037735,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.08295990566037735,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.02358490566037736,
+                  "top10": 0.09316037735849056
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.027122641509433963,
+                  "top10": 0.08195754716981132
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.024764150943396228,
+                  "top10": 0.08903301886792453
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.02240566037735849,
+                  "top10": 0.08254716981132075
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.02122641509433962,
+                  "top10": 0.0866745283018868
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.04068396226415094,
+                  "top10": 0.10377358490566038
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.02122641509433962,
+                  "top10": 0.07665094339622641
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.024174528301886794,
+                  "top10": 0.08254716981132075
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.013561320754716982,
+                  "top10": 0.04834905660377359
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.02653301886792453,
+                  "top10": 0.08490566037735849
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 14,
+      "train_loss": 5.0670340329219945,
+      "seconds": 61.955347400013125,
+      "optimizer_updates": 16542,
+      "amp_skipped_updates": 1,
+      "training_diagnostics": {
+        "word_loss": 5.0670340329219945,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 17.0,
+          "mean_reciprocal_rank": 0.17543183594607334,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07893462469733656,
+          "macro_recall_at_1": 0.05806829343939707,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.36234866828087164,
+          "macro_recall_at_10": 0.3524071940514429,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07893462469733656,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05806829343939707,
+          "retrieval_acc10_vocab=pallier2025_50": 0.36234866828087164,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.3524071940514429
+        },
+        "full_vocabulary": {
+          "selection_score": 0.08048349056603774,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.08048349056603774,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.027122641509433963,
+                  "top10": 0.09257075471698113
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.0294811320754717,
+                  "top10": 0.07488207547169812
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.024174528301886794,
+                  "top10": 0.07959905660377359
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.017099056603773585,
+                  "top10": 0.0695754716981132
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.025943396226415096,
+                  "top10": 0.07841981132075472
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.033608490566037735,
+                  "top10": 0.09846698113207547
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.02535377358490566,
+                  "top10": 0.07547169811320754
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.02358490566037736,
+                  "top10": 0.08431603773584906
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.015330188679245283,
+                  "top10": 0.061910377358490566
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.02830188679245283,
+                  "top10": 0.08962264150943396
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 15,
+      "train_loss": 5.014762149495919,
+      "seconds": 61.782944000005955,
+      "optimizer_updates": 17720,
+      "amp_skipped_updates": 1,
+      "training_diagnostics": {
+        "word_loss": 5.014762149495919,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 17.0,
+          "mean_reciprocal_rank": 0.1738501055951306,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07639225181598062,
+          "macro_recall_at_1": 0.05631745358452091,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3657384987893462,
+          "macro_recall_at_10": 0.34870757569464766,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07639225181598062,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05631745358452091,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3657384987893462,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.34870757569464766
+        },
+        "full_vocabulary": {
+          "selection_score": 0.07924528301886793,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.07924528301886793,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.027712264150943397,
+                  "top10": 0.08726415094339622
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.028891509433962265,
+                  "top10": 0.07959905660377359
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.022995283018867923,
+                  "top10": 0.08195754716981132
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.015919811320754717,
+                  "top10": 0.06898584905660378
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.02240566037735849,
+                  "top10": 0.07841981132075472
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.03537735849056604,
+                  "top10": 0.08903301886792453
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.025943396226415096,
+                  "top10": 0.07370283018867925
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.02653301886792453,
+                  "top10": 0.07724056603773585
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.012971698113207548,
+                  "top10": 0.05837264150943396
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.0294811320754717,
+                  "top10": 0.09787735849056604
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 16,
+      "train_loss": 4.948138869008307,
+      "seconds": 61.762480200006394,
+      "optimizer_updates": 18905,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 4.948138869008307,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 17.0,
+          "mean_reciprocal_rank": 0.16942946289159277,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07360774818401937,
+          "macro_recall_at_1": 0.05592042137915244,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3561743341404358,
+          "macro_recall_at_10": 0.34159139077381406,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07360774818401937,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05592042137915244,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3561743341404358,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.34159139077381406
+        },
+        "full_vocabulary": {
+          "selection_score": 0.08077830188679246,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.08077830188679246,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.024174528301886794,
+                  "top10": 0.09198113207547169
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.02240566037735849,
+                  "top10": 0.07606132075471699
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.02830188679245283,
+                  "top10": 0.08608490566037735
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.015919811320754717,
+                  "top10": 0.0695754716981132
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.021816037735849055,
+                  "top10": 0.08490566037735849
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.033608490566037735,
+                  "top10": 0.09375
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.025943396226415096,
+                  "top10": 0.07606132075471699
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.022995283018867923,
+                  "top10": 0.07606132075471699
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.015330188679245283,
+                  "top10": 0.06132075471698113
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.03242924528301887,
+                  "top10": 0.09198113207547169
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 17,
+      "train_loss": 4.892652152416784,
+      "seconds": 61.44911069999216,
+      "optimizer_updates": 20080,
+      "amp_skipped_updates": 1,
+      "training_diagnostics": {
+        "word_loss": 4.892652152416784,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 17.0,
+          "mean_reciprocal_rank": 0.17103705105796044,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07542372881355933,
+          "macro_recall_at_1": 0.05770001646113509,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3538740920096852,
+          "macro_recall_at_10": 0.3409523873296624,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07542372881355933,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05770001646113509,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3538740920096852,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.3409523873296624
+        },
+        "full_vocabulary": {
+          "selection_score": 0.078125,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.078125,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.02653301886792453,
+                  "top10": 0.08962264150943396
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.02830188679245283,
+                  "top10": 0.07075471698113207
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.027712264150943397,
+                  "top10": 0.08313679245283019
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.020047169811320754,
+                  "top10": 0.06839622641509434
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.024764150943396228,
+                  "top10": 0.07783018867924528
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.03714622641509434,
+                  "top10": 0.10141509433962265
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.025943396226415096,
+                  "top10": 0.07547169811320754
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.024764150943396228,
+                  "top10": 0.07959905660377359
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.015919811320754717,
+                  "top10": 0.047759433962264154
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.033608490566037735,
+                  "top10": 0.08726415094339622
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 18,
+      "train_loss": 4.827713542093024,
+      "seconds": 61.51888020001934,
+      "optimizer_updates": 21264,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 4.827713542093024,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 17.0,
+          "mean_reciprocal_rank": 0.17387507615645775,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07893462469733656,
+          "macro_recall_at_1": 0.05819518320741406,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3588377723970944,
+          "macro_recall_at_10": 0.3400435403152884,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07893462469733656,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05819518320741406,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3588377723970944,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.3400435403152884
+        },
+        "full_vocabulary": {
+          "selection_score": 0.08360849056603772,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.08360849056603772,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.025943396226415096,
+                  "top10": 0.09316037735849056
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.030070754716981132,
+                  "top10": 0.07900943396226415
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.02830188679245283,
+                  "top10": 0.08549528301886793
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.017099056603773585,
+                  "top10": 0.06898584905660378
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.027712264150943397,
+                  "top10": 0.08490566037735849
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.03773584905660377,
+                  "top10": 0.09905660377358491
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.024174528301886794,
+                  "top10": 0.08313679245283019
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.02240566037735849,
+                  "top10": 0.08313679245283019
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.017099056603773585,
+                  "top10": 0.06662735849056604
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.030660377358490566,
+                  "top10": 0.09257075471698113
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 19,
+      "train_loss": 4.770531329025326,
+      "seconds": 61.88818259999971,
+      "optimizer_updates": 22450,
+      "amp_skipped_updates": 1,
+      "training_diagnostics": {
+        "word_loss": 4.770531329025326,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 17.0,
+          "mean_reciprocal_rank": 0.16967992451335726,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.074818401937046,
+          "macro_recall_at_1": 0.05960663702808537,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.35811138014527844,
+          "macro_recall_at_10": 0.3412024713553916,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.074818401937046,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.05960663702808537,
+          "retrieval_acc10_vocab=pallier2025_50": 0.35811138014527844,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.3412024713553916
+        },
+        "full_vocabulary": {
+          "selection_score": 0.07877358490566037,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.07877358490566037,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.024174528301886794,
+                  "top10": 0.08608490566037735
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.02653301886792453,
+                  "top10": 0.06780660377358491
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.02535377358490566,
+                  "top10": 0.07783018867924528
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.015919811320754717,
+                  "top10": 0.06426886792452831
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.021816037735849055,
+                  "top10": 0.07959905660377359
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.036556603773584904,
+                  "top10": 0.09846698113207547
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.027712264150943397,
+                  "top10": 0.08490566037735849
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.022995283018867923,
+                  "top10": 0.08254716981132075
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.012971698113207548,
+                  "top10": 0.060141509433962265
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.027122641509433963,
+                  "top10": 0.08608490566037735
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 20,
+      "train_loss": 4.71414409951248,
+      "seconds": 64.4714736000169,
+      "optimizer_updates": 23629,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 4.71414409951248,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 17.5,
+          "mean_reciprocal_rank": 0.1710153443419613,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.07602905569007264,
+          "macro_recall_at_1": 0.058886216078203144,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.35072639225181595,
+          "macro_recall_at_10": 0.33591430260908134,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.07602905569007264,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.058886216078203144,
+          "retrieval_acc10_vocab=pallier2025_50": 0.35072639225181595,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.33591430260908134
+        },
+        "full_vocabulary": {
+          "selection_score": 0.08007075471698114,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.08007075471698114,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.02535377358490566,
+                  "top10": 0.08431603773584906
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.030070754716981132,
+                  "top10": 0.07075471698113207
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.02358490566037736,
+                  "top10": 0.08431603773584906
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.01768867924528302,
+                  "top10": 0.0660377358490566
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.024764150943396228,
+                  "top10": 0.08136792452830188
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.03596698113207547,
+                  "top10": 0.09551886792452831
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.027712264150943397,
+                  "top10": 0.08018867924528301
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.02653301886792453,
+                  "top10": 0.08608490566037735
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.01650943396226415,
+                  "top10": 0.05778301886792453
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.0294811320754717,
+                  "top10": 0.09433962264150944
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    },
+    {
+      "epoch": 21,
+      "train_loss": 4.669367503725404,
+      "seconds": 65.18666539998958,
+      "optimizer_updates": 24812,
+      "amp_skipped_updates": 0,
+      "training_diagnostics": {
+        "word_loss": 4.669367503725404,
+        "relation_loss": null,
+        "relation_pairwise_accuracy": null,
+        "relation_mean_margin": null,
+        "relation_pair_count": 0,
+        "relation_weight": null,
+        "prefix_revision_loss": null,
+        "prefix_revision_supervision_count": 0,
+        "prefix_revision_delay_counts": {},
+        "prefix_revision_delay_losses": {}
+      },
+      "validation": {
+        "legacy": {
+          "query_count": 8260,
+          "candidate_count": 50,
+          "target_count": 50,
+          "median_rank": 18.0,
+          "mean_reciprocal_rank": 0.1657735972195812,
+          "random_recall_at_1": 0.02,
+          "micro_recall_at_1": 0.0734866828087167,
+          "macro_recall_at_1": 0.0579214743207278,
+          "random_recall_at_10": 0.2,
+          "micro_recall_at_10": 0.3450363196125908,
+          "macro_recall_at_10": 0.33304678764260454,
+          "vocabulary_size": 50,
+          "observed_vocabulary_size": 50,
+          "missing_vocabulary_words": [],
+          "retrieval_acc1_vocab=pallier2025_50": 0.0734866828087167,
+          "retrieval_acc1_vocab=pallier2025_50_macro": 0.0579214743207278,
+          "retrieval_acc10_vocab=pallier2025_50": 0.3450363196125908,
+          "retrieval_acc10_vocab=pallier2025_50_macro": 0.33304678764260454
+        },
+        "full_vocabulary": {
+          "selection_score": 0.07747641509433963,
+          "horizons": {
+            "k0": {
+              "subject_macro_top10": 0.07747641509433963,
+              "per_subject": {
+                "sub-01": {
+                  "n": 1696,
+                  "top1": 0.028891509433962265,
+                  "top10": 0.08726415094339622
+                },
+                "sub-02": {
+                  "n": 1696,
+                  "top1": 0.02830188679245283,
+                  "top10": 0.07370283018867925
+                },
+                "sub-03": {
+                  "n": 1696,
+                  "top1": 0.025943396226415096,
+                  "top10": 0.08018867924528301
+                },
+                "sub-04": {
+                  "n": 1696,
+                  "top1": 0.01945754716981132,
+                  "top10": 0.0625
+                },
+                "sub-05": {
+                  "n": 1696,
+                  "top1": 0.022995283018867923,
+                  "top10": 0.07783018867924528
+                },
+                "sub-06": {
+                  "n": 1696,
+                  "top1": 0.036556603773584904,
+                  "top10": 0.09492924528301887
+                },
+                "sub-07": {
+                  "n": 1696,
+                  "top1": 0.02653301886792453,
+                  "top10": 0.07841981132075472
+                },
+                "sub-08": {
+                  "n": 1696,
+                  "top1": 0.024174528301886794,
+                  "top10": 0.07900943396226415
+                },
+                "sub-09": {
+                  "n": 1696,
+                  "top1": 0.01650943396226415,
+                  "top10": 0.05601415094339623
+                },
+                "sub-10": {
+                  "n": 1696,
+                  "top1": 0.025943396226415096,
+                  "top10": 0.08490566037735849
+                }
+              }
+            }
+          },
+          "candidate_count": 2020,
+          "all_reference_words_retained": true,
+          "reference_count": 16960,
+          "common_count": 16960,
+          "reference_in_vocabulary": 0.8637971698113207
+        }
+      }
+    }
+  ],
+  "test_evaluated": false,
+  "full_queue_started": false,
+  "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\baseline_alignment_bge_v1_retry1\\sub01-10\\main_word\\seed-000"
+}

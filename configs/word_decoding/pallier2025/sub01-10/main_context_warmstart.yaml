@@ -1,0 +1,23 @@
+extends: ../base.yaml
+
+experiment:
+  task: word_decoding
+  dataset: pallier2025
+  subject_scope: sub01-10
+  id: main_context_warmstart
+  category: main
+
+dataset:
+  runtime_context_grouping: recording_id_plus_canonical_context_v1
+
+model:
+  use_transformer: true
+  context_mode: grouped
+
+training:
+  warm_start_from: main_word
+  freeze_brain_encoder_epochs: 1
+
+provenance:
+  context_condition: frozen_sequence_grouped_transformer
+  initialization: main_word_brain_encoder_only_freeze_epoch_1_then_joint_training

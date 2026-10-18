@@ -1,0 +1,7 @@
+﻿dataset,dataset_label,population,horizon,candidate_count,query_count,aggregation,oov_policy,n_seeds,n_seeds_planned,completed_seeds,pending_seeds,status,dispersion,subject_macro_top10_mean,subject_macro_top10_sd
+pallier2025,Pallier2025,common_all_reference_words,K0,2020,13160,subject_equal_weight,retain_as_errors,3,3,0;1;2,,complete,sample_standard_deviation_across_completed_seeds,0.1346757852077001,0.001107269148652213
+pallier2025,Pallier2025,common_all_reference_words,K1,2020,13160,subject_equal_weight,retain_as_errors,3,3,0;1;2,,complete,sample_standard_deviation_across_completed_seeds,0.2927811550151976,0.008122172616425536
+pallier2025,Pallier2025,common_all_reference_words,K2,2020,13160,subject_equal_weight,retain_as_errors,3,3,0;1;2,,complete,sample_standard_deviation_across_completed_seeds,0.3274062816616008,0.011255524079624738
+chineseeeg2_littleprince,ChineseEEG-2,common_all_reference_words,K0,2180,11780,subject_equal_weight,retain_as_errors,3,3,0;1;2,,complete,sample_standard_deviation_across_completed_seeds,0.03222989659277625,0.009503366280247501
+chineseeeg2_littleprince,ChineseEEG-2,common_all_reference_words,K1,2180,11780,subject_equal_weight,retain_as_errors,3,3,0;1;2,,complete,sample_standard_deviation_across_completed_seeds,0.13073502390861597,0.00205834370842584
+chineseeeg2_littleprince,ChineseEEG-2,common_all_reference_words,K2,2180,11780,subject_equal_weight,retain_as_errors,3,3,0;1;2,,complete,sample_standard_deviation_across_completed_seeds,0.13763938237305312,0.004663506439290977

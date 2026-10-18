@@ -1,0 +1,519 @@
+{
+  "passed": true,
+  "audits": [
+    {
+      "condition": "shared",
+      "split": "train",
+      "passed": true,
+      "epoch_changed_signal": true,
+      "checks": [
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0000",
+          "sample_offset": 18,
+          "overlap_samples": 32,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0025",
+          "sample_offset": 16,
+          "overlap_samples": 34,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0034",
+          "sample_offset": 21,
+          "overlap_samples": 29,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0039",
+          "sample_offset": 3,
+          "overlap_samples": 47,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0044",
+          "sample_offset": 10,
+          "overlap_samples": 40,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0055",
+          "sample_offset": 26,
+          "overlap_samples": 24,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0071",
+          "sample_offset": 8,
+          "overlap_samples": 42,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0099",
+          "sample_offset": 11,
+          "overlap_samples": 39,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0103",
+          "sample_offset": 8,
+          "overlap_samples": 42,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0107",
+          "sample_offset": 4,
+          "overlap_samples": 46,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0128",
+          "sample_offset": 10,
+          "overlap_samples": 40,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0132",
+          "sample_offset": 24,
+          "overlap_samples": 26,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0138",
+          "sample_offset": 8,
+          "overlap_samples": 42,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0145",
+          "sample_offset": 7,
+          "overlap_samples": 43,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0154",
+          "sample_offset": 6,
+          "overlap_samples": 44,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0170",
+          "sample_offset": 18,
+          "overlap_samples": 32,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0176",
+          "sample_offset": 11,
+          "overlap_samples": 39,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0183",
+          "sample_offset": 9,
+          "overlap_samples": 41,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0218",
+          "sample_offset": 7,
+          "overlap_samples": 43,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0236",
+          "sample_offset": 11,
+          "overlap_samples": 39,
+          "raw_overlap_equal": true
+        }
+      ]
+    },
+    {
+      "condition": "shared",
+      "split": "val",
+      "passed": true,
+      "epoch_changed_signal": false,
+      "checks": [
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0000",
+          "sample_offset": 9,
+          "overlap_samples": 41,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0023",
+          "sample_offset": 3,
+          "overlap_samples": 47,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0031",
+          "sample_offset": 40,
+          "overlap_samples": 10,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0034",
+          "sample_offset": 8,
+          "overlap_samples": 42,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0042",
+          "sample_offset": 11,
+          "overlap_samples": 39,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0045",
+          "sample_offset": 10,
+          "overlap_samples": 40,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0050",
+          "sample_offset": 6,
+          "overlap_samples": 44,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0056",
+          "sample_offset": 16,
+          "overlap_samples": 34,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0059",
+          "sample_offset": 12,
+          "overlap_samples": 38,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0064",
+          "sample_offset": 10,
+          "overlap_samples": 40,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0071",
+          "sample_offset": 42,
+          "overlap_samples": 8,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0076",
+          "sample_offset": 6,
+          "overlap_samples": 44,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0082",
+          "sample_offset": 13,
+          "overlap_samples": 37,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0097",
+          "sample_offset": 7,
+          "overlap_samples": 43,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0111",
+          "sample_offset": 17,
+          "overlap_samples": 33,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0122",
+          "sample_offset": 10,
+          "overlap_samples": 40,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0134",
+          "sample_offset": 2,
+          "overlap_samples": 48,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0157",
+          "sample_offset": 17,
+          "overlap_samples": 33,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0162",
+          "sample_offset": 11,
+          "overlap_samples": 39,
+          "raw_overlap_equal": true
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0178",
+          "sample_offset": 25,
+          "overlap_samples": 25,
+          "raw_overlap_equal": true
+        }
+      ]
+    },
+    {
+      "condition": "independent",
+      "split": "train",
+      "passed": true,
+      "epoch_changed_signal": true,
+      "checks": [
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0000",
+          "sample_offset": 18,
+          "overlap_samples": 32,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0025",
+          "sample_offset": 16,
+          "overlap_samples": 34,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0034",
+          "sample_offset": 21,
+          "overlap_samples": 29,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0039",
+          "sample_offset": 3,
+          "overlap_samples": 47,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0044",
+          "sample_offset": 10,
+          "overlap_samples": 40,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0055",
+          "sample_offset": 26,
+          "overlap_samples": 24,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0071",
+          "sample_offset": 8,
+          "overlap_samples": 42,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0099",
+          "sample_offset": 11,
+          "overlap_samples": 39,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0103",
+          "sample_offset": 8,
+          "overlap_samples": 42,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0107",
+          "sample_offset": 4,
+          "overlap_samples": 46,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0128",
+          "sample_offset": 10,
+          "overlap_samples": 40,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0132",
+          "sample_offset": 24,
+          "overlap_samples": 26,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0138",
+          "sample_offset": 8,
+          "overlap_samples": 42,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0145",
+          "sample_offset": 7,
+          "overlap_samples": 43,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0154",
+          "sample_offset": 6,
+          "overlap_samples": 44,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0170",
+          "sample_offset": 18,
+          "overlap_samples": 32,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0176",
+          "sample_offset": 11,
+          "overlap_samples": 39,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0183",
+          "sample_offset": 9,
+          "overlap_samples": 41,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0218",
+          "sample_offset": 7,
+          "overlap_samples": 43,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-01|event-0236",
+          "sample_offset": 11,
+          "overlap_samples": 39,
+          "raw_overlap_equal": false
+        }
+      ]
+    },
+    {
+      "condition": "independent",
+      "split": "val",
+      "passed": true,
+      "epoch_changed_signal": false,
+      "checks": [
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0000",
+          "sample_offset": 9,
+          "overlap_samples": 41,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0023",
+          "sample_offset": 3,
+          "overlap_samples": 47,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0031",
+          "sample_offset": 40,
+          "overlap_samples": 10,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0034",
+          "sample_offset": 8,
+          "overlap_samples": 42,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0042",
+          "sample_offset": 11,
+          "overlap_samples": 39,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0045",
+          "sample_offset": 10,
+          "overlap_samples": 40,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0050",
+          "sample_offset": 6,
+          "overlap_samples": 44,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0056",
+          "sample_offset": 16,
+          "overlap_samples": 34,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0059",
+          "sample_offset": 12,
+          "overlap_samples": 38,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0064",
+          "sample_offset": 10,
+          "overlap_samples": 40,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0071",
+          "sample_offset": 42,
+          "overlap_samples": 8,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0076",
+          "sample_offset": 6,
+          "overlap_samples": 44,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0082",
+          "sample_offset": 13,
+          "overlap_samples": 37,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0097",
+          "sample_offset": 7,
+          "overlap_samples": 43,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0111",
+          "sample_offset": 17,
+          "overlap_samples": 33,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0122",
+          "sample_offset": 10,
+          "overlap_samples": 40,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0134",
+          "sample_offset": 2,
+          "overlap_samples": 48,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0157",
+          "sample_offset": 17,
+          "overlap_samples": 33,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0162",
+          "sample_offset": 11,
+          "overlap_samples": 39,
+          "raw_overlap_equal": false
+        },
+        {
+          "left_event": "pallier2025|sub-01|run-07|event-0178",
+          "sample_offset": 25,
+          "overlap_samples": 25,
+          "raw_overlap_equal": false
+        }
+      ]
+    }
+  ],
+  "identity_checked_before_baseline": true,
+  "baseline_note": "Window-specific baseline shifts shared samples by a channel-wise constant; clipping can alter this further."
+}

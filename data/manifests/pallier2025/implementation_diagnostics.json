@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "manifest_sha256": "6109e5a45d6a8f32cc3e93236ee352bd6cd11fdb9388bd5208a7bce0d0d7ad6c",
+  "dataset": "pallier2025",
+  "diagnostics": [
+    {
+      "experiment": "pallier2025/sub01-10/main_context",
+      "seed": 0,
+      "status": "implementation_diagnostic",
+      "scientific_result_eligible": false,
+      "reason": "cross_subject_context_mixing",
+      "affected_scientific_config_sha256": "54d4ffc8536d1679fcc951a4e492a76302fa45b203b623ef2aa2361cb3272899",
+      "run_path": "outputs/word_decoding/pallier2025/sub01-10/main_context/seed-000",
+      "evidence": {
+        "train_cross_subject_groups": 1191,
+        "train_rows_in_cross_subject_chunks": 114523,
+        "train_rows": 115290,
+        "validation_cross_subject_groups": 190,
+        "validation_rows_in_cross_subject_chunks": 16882,
+        "validation_rows": 16960,
+        "legacy_runtime_group_maximum_words": 540,
+        "configured_max_context_words": 128
+      },
+      "preserved_artifacts": {
+        "best.pt": "e0175a1cb4b4aa9418da3589fe9ad8f1510976470e7b5c5e1a0e6e5540ae9798",
+        "last.pt": "9c1af60bde75ced5dc7c5bff24e8dbd0dd41b8c6396b81b87181e2676cfb14ff",
+        "resolved_config.yaml": "8f244487e8a579ca6259bf95eb8b58ffdbed0269d172602592264f8c211bcb12",
+        "run_manifest.json": "cb0087a8e9edb78ae247ed879261fde818ef66f9c4d75b20ac02fd35fed9805a",
+        "training_summary.json": "c767f7d23b711805b2b8af731ab9e48b06fc8c63ef1bc90ef78f242f0e662b24",
+        "evaluation/val.json": "361e3e7172283c3402d09f6c402190d9c7a0f1397a39de711bcba8e2a1b7e735"
+      },
+      "replacement_runtime_context": "recording_id_plus_canonical_context_v1",
+      "main_word_affected": false,
+      "test_model_evaluation_run": false
+    }
+  ]
+}

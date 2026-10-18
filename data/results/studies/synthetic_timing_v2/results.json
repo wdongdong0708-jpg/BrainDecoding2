@@ -1,0 +1,200 @@
+{
+  "status": "completed",
+  "datasets": {
+    "pallier2025": "completed",
+    "chineseeeg2_littleprince": "completed"
+  },
+  "split": "test",
+  "population": "common_targets",
+  "summaries": [
+    {
+      "dataset": "pallier2025",
+      "condition": "real",
+      "horizon": 0,
+      "n_seeds": 3,
+      "mean": 0.5235282308622692,
+      "sample_sd": 0.011477777321772834
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "real",
+      "horizon": 1,
+      "n_seeds": 3,
+      "mean": 0.6743851328682481,
+      "sample_sd": 0.015819251806037604
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "real",
+      "horizon": 2,
+      "n_seeds": 3,
+      "mean": 0.714138682090665,
+      "sample_sd": 0.018214497206416595
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "shared",
+      "horizon": 0,
+      "n_seeds": 3,
+      "mean": 0.31741933443252446,
+      "sample_sd": 0.010641109622348056
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "shared",
+      "horizon": 1,
+      "n_seeds": 3,
+      "mean": 0.3571169087602076,
+      "sample_sd": 0.0072786844895466815
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "shared",
+      "horizon": 2,
+      "n_seeds": 3,
+      "mean": 0.36469422498515275,
+      "sample_sd": 0.00926683869232792
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "independent",
+      "horizon": 0,
+      "n_seeds": 3,
+      "mean": 0.31786731124884743,
+      "sample_sd": 0.021594694307710167
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "independent",
+      "horizon": 1,
+      "n_seeds": 3,
+      "mean": 0.34448211876790263,
+      "sample_sd": 0.014407828922656192
+    },
+    {
+      "dataset": "pallier2025",
+      "condition": "independent",
+      "horizon": 2,
+      "n_seeds": 3,
+      "mean": 0.34927570609720654,
+      "sample_sd": 0.00963728649394752
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "real",
+      "horizon": 0,
+      "n_seeds": 3,
+      "mean": 0.333950478702689,
+      "sample_sd": 0.007349857202118234
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "real",
+      "horizon": 1,
+      "n_seeds": 3,
+      "mean": 0.4544106022234487,
+      "sample_sd": 0.010857195670205844
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "real",
+      "horizon": 2,
+      "n_seeds": 3,
+      "mean": 0.4792622357873219,
+      "sample_sd": 0.014928097802363425
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "shared",
+      "horizon": 0,
+      "n_seeds": 3,
+      "mean": 0.28285206135322233,
+      "sample_sd": 0.05461456206628931
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "shared",
+      "horizon": 1,
+      "n_seeds": 3,
+      "mean": 0.33117693272801524,
+      "sample_sd": 0.08851018222036112
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "shared",
+      "horizon": 2,
+      "n_seeds": 3,
+      "mean": 0.33052614204626146,
+      "sample_sd": 0.10365667595380725
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "independent",
+      "horizon": 0,
+      "n_seeds": 3,
+      "mean": 0.26430032039237866,
+      "sample_sd": 0.01684601655600943
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "independent",
+      "horizon": 1,
+      "n_seeds": 3,
+      "mean": 0.29654552991251276,
+      "sample_sd": 0.005708581482371252
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "independent",
+      "horizon": 2,
+      "n_seeds": 3,
+      "mean": 0.29178745570973946,
+      "sample_sd": 0.010269783405822618
+    }
+  ],
+  "shared_minus_independent_by_seed": {
+    "pallier2025": [
+      {
+        "seed": 0,
+        "0": 0.020590372983085525,
+        "1": 0.03462626726020157,
+        "2": 0.03527576578569258
+      },
+      {
+        "seed": 1,
+        "0": 0.005061808630834996,
+        "1": 0.00692857634147781,
+        "2": 0.007131792772763879
+      },
+      {
+        "seed": 2,
+        "0": -0.026996112062889432,
+        "1": -0.0036504736247646163,
+        "2": 0.003847998105382
+      }
+    ],
+    "chineseeeg2_littleprince": [
+      {
+        "seed": 0,
+        "0": -0.001299221307435261,
+        "1": -0.023984686047408166,
+        "2": -0.02763310533726493
+      },
+      {
+        "seed": 1,
+        "0": -0.007591865569067491,
+        "1": -0.0016402754920813445,
+        "2": -0.002410127456401845
+      },
+      {
+        "seed": 2,
+        "0": 0.0645463097590338,
+        "1": 0.12951916998599688,
+        "2": 0.14625929180323283
+      }
+    ]
+  },
+  "manifest_sha256": "a4adea9fdb93facca8a6a0ed2a45727bfd7bb2b3f2d50fd1a3a0e3204dfa1307",
+  "context_experiment_B_started": false,
+  "language_model_started": false
+}

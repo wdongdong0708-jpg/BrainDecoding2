@@ -1,0 +1,26 @@
+{
+  "status": "verified_complete",
+  "analysis": "real_word_onset_window_overlap_descriptive_statistics",
+  "original_overlap_reproduced_from_frozen_event_tables": true,
+  "sources": {
+    "experiments/manifests/rolling_sentence/synthetic_timing_v2.json": "01afe757995c39205543bf08aaccb0e207f84a9dea3b7f428e3310ec469c29f5",
+    "reports/studies/synthetic_timing_v2/overlap.json": "4a0d66111c91e00cb013d7b215add6bb13a395174663ee80de13c893a3436705",
+    "braindecoding/data/synthetic_timing.py": "ff147d51c2d883860ccceee7e2b577801d998d26ff8b512ea5bf5ae20705a4a6",
+    "derived/pallier2025/events/events.csv": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+    "derived/chineseeeg2_littleprince/events/events.csv": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0"
+  },
+  "exports": {
+    "reports/exports/word_window_overlap_v2_summary.csv": "bdad518a117767443735403c203c16f2af3c0f104884f5785445caaa274cd7c8",
+    "reports/exports/word_window_overlap_v2_by_subject_split.csv": "31d3c7f0ded6c8d168213e0640e83a3b7998ea03b556542859f9575a658e4e45"
+  },
+  "scope": "train_val_test_eligible_adjacent_pairs_subject_repetitions_retained_no_segment_joins",
+  "time_definition": "physical_onset_times; nominal_one_second_window",
+  "shared_fraction": "max(0,1-(next_onset-current_onset)/window_seconds)",
+  "mean_shared_fraction_denominator": "all_eligible_adjacent_pairs",
+  "no_neural_signals_or_synthetic_predictions_read": true,
+  "no_training_decoding_or_inferential_tests_run": true,
+  "generator": {
+    "path": "scripts/paper/word_window_overlap_export_v2.py",
+    "sha256": "40de1fc8719ff9ac27f79bfa4e297ad703be167ed0105be37ac89617e7aa121b"
+  }
+}

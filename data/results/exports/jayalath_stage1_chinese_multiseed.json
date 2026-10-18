@@ -1,0 +1,173 @@
+{
+  "sources": [
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\rolling_revision\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-000\\sequence_decoding\\jayalath_stage1_val.json",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\rolling_revision\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-001\\sequence_decoding\\jayalath_stage1_val.json",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\chineseeeg2_littleprince\\rolling_revision\\sub01-08\\local_window_rolling_revision_k2_d2_full_coverage\\seed-002\\sequence_decoding\\jayalath_stage1_val.json"
+  ],
+  "common_groups": 948,
+  "method": "real_signal_lm_beam",
+  "per_seed_metrics": {
+    "0": {
+      "real_signal_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.9480810616929699,
+        "cer": 0.9768813399386648,
+        "bleu1": 0.12069583931133429,
+        "rouge1_f1": 0.12069583931133429,
+        "exact_word_accuracy": 0.05164992826398852
+      },
+      "within_subject_shift_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.990674318507891,
+        "cer": 1.0195800896437839,
+        "bleu1": 0.08769727403156384,
+        "rouge1_f1": 0.08769727403156384,
+        "exact_word_accuracy": 0.008518651362984218
+      },
+      "zero_signal_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.9984756097560976,
+        "cer": 1.3010143901863647,
+        "bleu1": 0.0017037302725968436,
+        "rouge1_f1": 0.0017037302725968436,
+        "exact_word_accuracy": 0.001524390243902439
+      },
+      "language_only_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.9300573888091822,
+        "cer": 0.9263977353149327,
+        "bleu1": 0.10688665710186514,
+        "rouge1_f1": 0.10688665710186514,
+        "exact_word_accuracy": 0.06169296987087518
+      }
+    },
+    "1": {
+      "real_signal_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.9482604017216643,
+        "cer": 0.9772351969804199,
+        "bleu1": 0.12222022955523673,
+        "rouge1_f1": 0.12222022955523673,
+        "exact_word_accuracy": 0.050932568149210905
+      },
+      "within_subject_shift_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.9891499282639885,
+        "cer": 1.0171620665251238,
+        "bleu1": 0.09648493543758967,
+        "rouge1_f1": 0.09648493543758967,
+        "exact_word_accuracy": 0.010132711621233859
+      },
+      "zero_signal_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.992467718794835,
+        "cer": 1.236553432413305,
+        "bleu1": 0.007890961262553802,
+        "rouge1_f1": 0.007890961262553802,
+        "exact_word_accuracy": 0.007532281205164993
+      },
+      "language_only_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.9300573888091822,
+        "cer": 0.9263977353149327,
+        "bleu1": 0.10688665710186514,
+        "rouge1_f1": 0.10688665710186514,
+        "exact_word_accuracy": 0.06169296987087518
+      }
+    },
+    "2": {
+      "real_signal_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.9497847919655668,
+        "cer": 0.9749941023826374,
+        "bleu1": 0.12159253945480632,
+        "rouge1_f1": 0.12159253945480632,
+        "exact_word_accuracy": 0.04949784791965567
+      },
+      "within_subject_shift_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.9874461979913917,
+        "cer": 1.0160415192262326,
+        "bleu1": 0.10347919655667145,
+        "rouge1_f1": 0.10347919655667145,
+        "exact_word_accuracy": 0.011388091822094692
+      },
+      "zero_signal_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.9946197991391679,
+        "cer": 1.0316112290634583,
+        "bleu1": 0.019368723098995694,
+        "rouge1_f1": 0.019368723098995694,
+        "exact_word_accuracy": 0.005380200860832138
+      },
+      "language_only_lm_beam": {
+        "groups": 948,
+        "reference_words": 11152,
+        "wer": 0.9300573888091822,
+        "cer": 0.9263977353149327,
+        "bleu1": 0.10688665710186514,
+        "rouge1_f1": 0.10688665710186514,
+        "exact_word_accuracy": 0.06169296987087518
+      }
+    }
+  },
+  "combined_cluster_analysis": {
+    "within_subject_shift_lm_beam": {
+      "unique_stimulus_clusters": 141,
+      "reference_words": 33456,
+      "real_bleu1": 0.12150286944045911,
+      "control_bleu1": 0.09588713534194165,
+      "delta_bleu1": 0.025615734098517456,
+      "ci95_cluster_bootstrap": [
+        0.018650858377293234,
+        0.032546108186947975
+      ],
+      "one_sided_sign_flip_p": 4.999750012499375e-05,
+      "permutations": 20000,
+      "bootstraps": 5000,
+      "holm_adjusted_p": 0.00014999250037498125
+    },
+    "zero_signal_lm_beam": {
+      "unique_stimulus_clusters": 141,
+      "reference_words": 33456,
+      "real_bleu1": 0.12150286944045911,
+      "control_bleu1": 0.009654471544715448,
+      "delta_bleu1": 0.11184839789574366,
+      "ci95_cluster_bootstrap": [
+        0.10102992180051258,
+        0.12232001738580685
+      ],
+      "one_sided_sign_flip_p": 4.999750012499375e-05,
+      "permutations": 20000,
+      "bootstraps": 5000,
+      "holm_adjusted_p": 0.00014999250037498125
+    },
+    "language_only_lm_beam": {
+      "unique_stimulus_clusters": 141,
+      "reference_words": 33456,
+      "real_bleu1": 0.12150286944045911,
+      "control_bleu1": 0.10688665710186514,
+      "delta_bleu1": 0.014616212338593974,
+      "ci95_cluster_bootstrap": [
+        0.003166590993108157,
+        0.025393973848260188
+      ],
+      "one_sided_sign_flip_p": 0.00759962001899905,
+      "permutations": 20000,
+      "bootstraps": 5000,
+      "holm_adjusted_p": 0.00759962001899905
+    }
+  },
+  "note": "Three seeds reuse the same stimuli; the permutation unit is the unique stimulus text, not a seed-event pair."
+}

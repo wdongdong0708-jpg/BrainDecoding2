@@ -1,0 +1,173 @@
+% !TeX root = main.tex
+
+\section{实现细节}
+\label{sec:supp_settings}
+
+\subsection{数据与词库}
+
+表~\ref{tab:test_population} 汇总两个数据集的词库规模、候选数、训练词库覆盖率和测试范围。
+训练词库只包含训练材料中的词。
+验证选模时，从 $50$ 词候选中移除验证集未出现的词；测试时保留全部 $50$ 个候选。
+ChineseEEG-2 依据实际朗读标点形成片段：在强标点处结束，弱标点后达到 $16$ 词时优先切分，
+并将片段限制为最多 $32$ 词或 $15\,\mathrm{s}$，记录末尾保留剩余词位。
+
+\begin{table}[htbp]
+    \centering
+    \papertablestyle
+    \caption{词库、候选数及测试评价范围。查询数、片段数和词位数按一次模型评价计。}
+    \label{tab:test_population}
+    \input{../tables/test_population_v2.tex}
+\end{table}
+
+文本表示由冻结的 BGE-M3 编码器得到。
+每个词单独编码，取末层首个 token 的隐藏状态并做 $L_2$ 归一化：
+\[
+\mathbf y_i=\mathbf h_{i,\mathrm{first}}^{(L)}\big/\|\mathbf h_{i,\mathrm{first}}^{(L)}\|_2 .
+\]
+
+
+\subsection{模型与训练}
+\label{sec:supp_model_training}
+
+神经信号重采样至 $50$~Hz，主实验的 $1\,\mathrm{s}$ 词窗包含 $50$ 个时间点。
+长窗对照分别使用 $64$ 和 $75$ 个时间点，对应 $1.28$ 和 $1.50\,\mathrm{s}$；
+长窗词模型从头训练，沿用原词模型的训练配置和验证选模规则。
+上下文 Transformer 为 $16$ 层、$16$ 个注意力头，隐藏维度 $1024$，
+注意力 dropout 为 $0.1$，前馈层不使用 dropout。
+
+词模型从头训练。
+上下文模型加载同种子词模型的最佳检查点，新建上下文网络；
+第一轮冻结神经编码器，之后联合训练。
+两个阶段均使用 SigLIP 对比损失\cite{zhai2023siglip} 和 AdamW 优化器，
+学习率 $10^{-4}$，余弦退火，批次大小 $128$，权重衰减 $0$，FP16 混合精度。
+每阶段最多 $30$ 轮，验证指标连续 $10$ 轮未改善即停止。
+检查点按验证集宏平均 Top-$10$ 选择：
+词模型使用全部合格查询，上下文模型使用共同词位，共享滚动模型按 K2 选模。
+各条件的输入和监督范围见表~\ref{tab:model_settings}。
+
+\begin{table}[htbp]
+    \centering
+    \papertablestyle
+    \caption{各模型的输入与训练设置。范围相对于目标词给出。独立 K2 与局部半径 $2$ 的输入和监督相同，使用同一个检查点。}
+    \label{tab:model_settings}
+    \input{../tables/model_settings_v2.tex}
+\end{table}
+
+
+\subsection{文本序列解码}
+\label{sec:supp_sentence_settings}
+
+语言模型对每个前缀生成若干条续写，每条只取第一个完整词作为候选，并去除重复。
+两个数据集均使用连续叙述提示，提示中不包含刺激书名或内容：
+法语为“Écrivez un paragraphe de récit en français. Donnez seulement le texte, sans titre ni liste.”；
+中文为“请用中文写一段连续的叙述文字。只给出正文，不要标题或列表。”
+提示后接两个换行，再拼接已解码前缀。
+
+法语通常以空格连接词，但省音前项（如 c、j、l、d、qu）与后词之间插入撇号，
+例如将 c 和 est 还原为 \textit{c'est}；以连字符开头的词直接接到前词。
+中文词序列直接拼接，不插入空格。
+前缀和加入候选后的文本分别整串编码，语言分数为两条整串文本的对数概率之差；
+若拼接改变了边界 token，旧、新文本均从共同 token 前缀后的部分计算。
+这避免将独立词编码的 token 概率直接拼接。
+神经相似度乘以固定系数后，在训练词库和本步新提出的词库外候选上做 softmax。
+
+语言权重使用验证材料上的种子 $0$、策略 A 的 WER 选择，平局时取较小值。
+法语和中文分别选得 $\lambda=0.1$ 与 $0.5$，
+同一数据集的全部策略和训练种子沿用相同提示、权重和搜索配置。
+所有文本结果均按上述配置重新解码。
+
+\begin{table}[!htbp]
+    \centering
+    \papertablestyle
+    \caption{文本序列解码参数。两个数据集的语言权重分别选择；其余参数相同。}
+    \label{tab:sentence_decoder_settings}
+    \input{../tables/sentence_decoder_settings_v2.tex}
+\end{table}
+
+平均片段 BLEU-1 先在每个片段计算，再依次在受试者内、受试者间和种子间平均。
+WER 和词位准确率按词位汇总，再对训练种子平均。
+
+\subsection{统计方法}
+\label{sec:statistics}
+\label{sec:supp_statistics}
+
+同一刺激在不同受试者中的呈现归为同一材料单元，每 $5$ 个连续材料单元构成一块，
+在记录或章节内分层有放回抽样 $10000$ 次，取百分位数构造 $95\%$ 材料块 bootstrap 区间。
+每次抽样对所有受试者、训练种子和比较条件使用相同的材料块，训练种子不另行重采样。
+显著性检验采用双侧配对材料块符号翻转，使用 $1000000$ 次 Monte Carlo 抽样，
+并按研究问题分组进行 Holm 多重比较校正；中文的 $21$ 个块另以全部 $2097152$ 种符号组合复核。
+区间为点态区间，Holm 校正用于检验，不改变区间构造。
+图中误差棒为三个训练种子的样本标准差。
+
+\noindent\begin{minipage}{\linewidth}
+ChineseEEG-2 中，
+C$-$A 的 WER 差值为 $-1.57$ $[-2.07,-1.00]$ 个百分点，校正 $p=7.26\times10^{-4}$；词位准确率差值为 $+1.67$ $[1.07,2.19]$ 个百分点，校正 $p=7.26\times10^{-4}$。
+C$-$B 的 WER 差值为 $-2.00$ $[-2.50,-1.48]$ 个百分点，校正 $p=4.80\times10^{-5}$；词位准确率差值为 $+2.08$ $[1.54,2.59]$ 个百分点，校正 $p=2.70\times10^{-5}$。
+C$-$A 在两个数据集的三项文本指标组成的 $6$ 项比较内校正，
+C$-$B 与 B$-$A 在两个数据集的三项指标组成的 $12$ 项比较内校正。
+\end{minipage}
+
+\clearpage
+\section{完整词检索结果}
+\label{sec:supp_word_statistics}
+
+表~\ref{tab:word_complete_results} 给出 $50$ 词候选下全部模型的四项指标。
+“全部”指真实词属于候选集合的全部合格查询，
+“共同”进一步要求目标之后至少还有两个同片段词。
+宏平均只在查询中实际出现的真实词类型上计算；
+bootstrap 时按每次抽样实际出现的类型计算，两个比较条件使用相同的类型集合。
+
+\input{../tables/word_complete_metrics_two_datasets_v2_test.tex}
+
+共享模型与独立模型的比较见表~\ref{tab:word_complete_results} 的共同查询行；独立 K2 对应局部半径 $2$。
+
+
+\begin{table}[!htbp]
+    \centering
+    \papertablestyle
+    \caption{完整训练词库下局部与完整上下文的词检索结果（\%）。词库外目标计为未命中，差值为局部减完整上下文。}
+    \label{tab:full_vocab_comparison}
+    \input{../tables/full_vocab_comparison_v2_test.tex}
+\end{table}
+
+\FloatBarrier
+\clearpage
+\section{文本序列补充结果}
+\label{sec:supp_sentence}
+
+表~\ref{tab:sentence_by_seed_acf} 报告逐种子结果，
+表~\ref{tab:sequence_complete_metrics} 汇总全部六种策略。
+图~\ref{fig:sentence_participant_gains} 展示受试者收益，
+表~\ref{tab:input_wait_complete} 报告输入等待分布。
+
+\input{../tables/sentence_by_seed_acf_v2_test.tex}
+
+\begin{table}[!htbp]
+    \centering
+    \papertablestyle
+    \caption{六种策略的文本质量（\%）与平均总输入等待（s）。B 与 C 的输出固定时刻相同，F-local 与 F 相同。}
+    \label{tab:sequence_complete_metrics}
+    \input{../tables/sentence_wait_budget_metrics_v2_test.tex}
+\end{table}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=\linewidth]{14_participant_gains.pdf}
+    \caption{受试者层面 C 减 A 的平均片段 BLEU-1（百分点）。小符号为单个种子，空心圆为种子均值。ChineseEEG-2 的种子 $2$ 下 A 得分较低（$8.27\%$），种子 $1$ 的 C 减 A 为负。}
+    \label{fig:sentence_participant_gains}
+\end{figure}
+
+\begin{table}[!htbp]
+    \centering
+    \papertablestyle
+    \caption{全部测试词位的总输入等待（s）。等待从词起点计算，包含自身 $1\,\mathrm{s}$ 神经窗。}
+    \label{tab:input_wait_complete}
+    \input{../tables/input_wait_complete_v2_test.tex}
+\end{table}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=\linewidth]{10_sentence_revision_examples.pdf}
+    \caption{策略 C 的回修案例。三行依次为首次预测及两次回修；黑框标记目标词位，绿色和橙色分别表示与参考词一致和不一致。案例来自种子 $0$，各列对应固定词位。}
+    \label{fig:sentence_examples_full}
+\end{figure}

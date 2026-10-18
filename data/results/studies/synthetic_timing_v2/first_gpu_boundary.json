@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "checked_unix": 1791595763.0947182,
+  "path": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v2_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002\\resume.pt",
+  "bytes": 2459477259,
+  "format": "synthetic_epoch_boundary_v1",
+  "next_epoch": 1,
+  "optimizer_states": 195,
+  "scheduler_last_epoch": 1,
+  "amp_scaler_saved": true,
+  "random_state_components": [
+    "python",
+    "numpy",
+    "torch_cpu",
+    "torch_cuda"
+  ],
+  "best_checkpoint_files": [
+    "best.pt",
+    "best_full_vocab.pt"
+  ],
+  "first_epoch_train_loss_difference_from_original": 0.0,
+  "first_epoch_validation_selection_difference_from_original": 0.0,
+  "first_epoch_validation_identical_to_original": true
+}

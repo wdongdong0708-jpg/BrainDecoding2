@@ -1,0 +1,422 @@
+{
+  "schema_version": 1,
+  "export_command": "python -m braindecoding.signal_control_revision_exports",
+  "metric": "Exact equality between the actual displayed word at its annotated position and the reference token; not candidate Top-k accuracy.",
+  "cohort": "For each dataset, retain target offsets i with i+2 below the evaluation-segment length. Identical target positions are used at initial display, +1 and +2 later word arrivals, across both conditions and all three trained-model seeds. The final two positions of each segment (or all positions for shorter segments) are excluded.",
+  "initial_display": "The rolling decoder's own displayed token at arrival i; not the separately decoded k0_frozen strategy.",
+  "gain_definition": "gain_pp = 100 * (correct at +2 arrivals - correct at initial display) / common_word_events.",
+  "contrast_definition": "paired_real_minus_shift_gain_pp = real-signal gain_pp minus within-subject-shift gain_pp for the same trained-model seed and target positions.",
+  "shift_definition": "The stored shifted control deranges neural score rows within each subject and maximum-available-horizon stratum. The same donor-row permutation is applied to neural scores at K0, K1 and K2 before candidate selection and the otherwise unchanged rolling beam decoder. This is an offline counterfactual control, not a temporally causal online signal shuffling scheme.",
+  "shift_seed": 1729,
+  "shift_repetitions": 1,
+  "shift_audit": "Scheme checked in the current run_jayalath_stage2.shift_horizon_scores and candidate_recall.within_subject_permutation source code and matched against each stored protocol. Donor indices were not saved in these replay JSON files; donor assignments cannot be independently reconstructed from replay text alone.",
+  "limitations": [
+    "Model seeds 0, 1 and 2 share the same evaluation targets; they are not independent participants or independent word samples.",
+    "Only one fixed signal permutation seed (1729) is present; seed variation does not estimate a signal-permutation distribution.",
+    "Real-minus-shift gain is a descriptive control contrast, not pure neural information or a causal effect estimate.",
+    "All outputs are validation replays with supplied word boundaries and a 250-word training-derived retrieval vocabulary; the test split was not used.",
+    "The initial neural window lasts one second after word onset and may overlap subsequent annotated words. Arrival horizons do not establish strict real-time causal availability.",
+    "No new inference, confidence intervals, hypothesis tests, or bootstrap calculations were performed for this export."
+  ],
+  "validation": [
+    "Run completion, dataset, seed, and validation split checked.",
+    "Checkpoint and event-table hashes paired across signal conditions.",
+    "All protocol fields identical except intended condition and signal-shift fields.",
+    "Evaluation group identities, subjects, target events, references, and timings aligned across conditions and seeds.",
+    "Calibration texts excluded and full held-out group count matched.",
+    "Trace lengths, frozen-prefix preservation, input-window endpoints, and final replay outputs checked.",
+    "Saved all-available horizon counts and accuracies recomputed from traces.",
+    "Common-cohort counts and accuracies independently matched the existing display diagnostics."
+  ],
+  "cohorts": [
+    {
+      "dataset": "pallier2025",
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "subjects": 10,
+      "evaluation_segments_per_seed": 1550,
+      "total_reference_words_per_seed": 13710,
+      "common_word_events_per_seed": 10610,
+      "common_target_identity_sha256": "21b6a0b13b6b7861718c30856906c989796d87d7adf9fb3f73d40fef031b85a5",
+      "evaluation_identity_sha256": "0a5ffd9bc4c57d7a781ee232f70a0ee6a70dfab03c7bca219e9eb463eb8b1f27"
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "subjects": 8,
+      "evaluation_segments_per_seed": 948,
+      "total_reference_words_per_seed": 11152,
+      "common_word_events_per_seed": 9272,
+      "common_target_identity_sha256": "30a87b96b065a4f1a893a6c8adf60a51433689d9c7df76a162699129b5cdf44c",
+      "evaluation_identity_sha256": "c0b84ba2e195e9e58c9ddfd220c012a01222ad37e6ace0db30a6e74e3c1a2196"
+    }
+  ],
+  "sources": [
+    {
+      "path": "derived/pallier2025/jayalath_stage2_seed0_no_oov.json",
+      "sha256": "775e2e57561a87b999fe121459111010b2aee6b4cc8aecefac16d5847340062d",
+      "checkpoint_sha256": "b591d8f93d2e9844aa00827a42b5e7caa9e258191b795ada8c625ead60bc6502",
+      "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+      "seed": 0,
+      "protocol": {
+        "calibration_groups": 350,
+        "heldout_groups": 1550,
+        "retrieval_size": 250,
+        "retrieval_sha256": "00614bc43d654a0aee8a2efaa21b96702b5166d8946cd31f5e860d18e319d074",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 0.025,
+        "lm_weights_sha256": "71aa852dfdaac82252d7b737fb33b79d0c15e295a6cfc64963613d96741e3d7a",
+        "neural_score": "cosine_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/pallier2025/jayalath_stage2_seed0_within_subject_shift_no_oov.json",
+      "sha256": "09618867f2cadb5101a028c5d406930b057639e8c8e11a79a317d245aef4ddfc",
+      "checkpoint_sha256": "b591d8f93d2e9844aa00827a42b5e7caa9e258191b795ada8c625ead60bc6502",
+      "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+      "seed": 0,
+      "protocol": {
+        "condition": "within_subject_shift",
+        "shift_permutation_seed": 1729,
+        "shift_scope": "within_subject_and_horizon_availability_same_source_row_for_K0_K1_K2",
+        "calibration_groups": 350,
+        "heldout_groups": 1550,
+        "retrieval_size": 250,
+        "retrieval_sha256": "00614bc43d654a0aee8a2efaa21b96702b5166d8946cd31f5e860d18e319d074",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 0.025,
+        "lm_weights_sha256": "71aa852dfdaac82252d7b737fb33b79d0c15e295a6cfc64963613d96741e3d7a",
+        "neural_score": "cosine_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/pallier2025/jayalath_stage2_seed1_no_oov.json",
+      "sha256": "df76fe7f42401f7ff8959e5468b9b5ed67ddd5bb4a7f91b87c652adcd02f2193",
+      "checkpoint_sha256": "bebbb149b8b14903ebe5937e073dc99f33894822605b93d99fbdf251237dc486",
+      "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+      "seed": 1,
+      "protocol": {
+        "calibration_groups": 350,
+        "heldout_groups": 1550,
+        "retrieval_size": 250,
+        "retrieval_sha256": "00614bc43d654a0aee8a2efaa21b96702b5166d8946cd31f5e860d18e319d074",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 0.025,
+        "lm_weights_sha256": "71aa852dfdaac82252d7b737fb33b79d0c15e295a6cfc64963613d96741e3d7a",
+        "neural_score": "cosine_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/pallier2025/jayalath_stage2_seed1_within_subject_shift_no_oov.json",
+      "sha256": "c46976e113ffeb57e393682a327db0cb32e77aaf45d5e9f6ce391acf2261af37",
+      "checkpoint_sha256": "bebbb149b8b14903ebe5937e073dc99f33894822605b93d99fbdf251237dc486",
+      "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+      "seed": 1,
+      "protocol": {
+        "condition": "within_subject_shift",
+        "shift_permutation_seed": 1729,
+        "shift_scope": "within_subject_and_horizon_availability_same_source_row_for_K0_K1_K2",
+        "calibration_groups": 350,
+        "heldout_groups": 1550,
+        "retrieval_size": 250,
+        "retrieval_sha256": "00614bc43d654a0aee8a2efaa21b96702b5166d8946cd31f5e860d18e319d074",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 0.025,
+        "lm_weights_sha256": "71aa852dfdaac82252d7b737fb33b79d0c15e295a6cfc64963613d96741e3d7a",
+        "neural_score": "cosine_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/pallier2025/jayalath_stage2_seed2_no_oov.json",
+      "sha256": "8d35cfa69002ca48673e09b169f8731db5d2a7d59a56fb19d52acfe06369613b",
+      "checkpoint_sha256": "ecdc163aff8f1633b0fab9aa16af51cdee0fd40dff3bcbea3b121ea52e74b06f",
+      "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+      "seed": 2,
+      "protocol": {
+        "calibration_groups": 350,
+        "heldout_groups": 1550,
+        "retrieval_size": 250,
+        "retrieval_sha256": "00614bc43d654a0aee8a2efaa21b96702b5166d8946cd31f5e860d18e319d074",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 0.025,
+        "lm_weights_sha256": "71aa852dfdaac82252d7b737fb33b79d0c15e295a6cfc64963613d96741e3d7a",
+        "neural_score": "cosine_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/pallier2025/jayalath_stage2_seed2_within_subject_shift_no_oov.json",
+      "sha256": "07ca6120dae9d603c97d2c8ab923731ed10700f54162a5feca1b8684829fa8f8",
+      "checkpoint_sha256": "ecdc163aff8f1633b0fab9aa16af51cdee0fd40dff3bcbea3b121ea52e74b06f",
+      "event_table_sha256": "3cd1237fd138f3d827f8297cb7081243ce635ebb896f05241da8ccc5614a43fc",
+      "seed": 2,
+      "protocol": {
+        "condition": "within_subject_shift",
+        "shift_permutation_seed": 1729,
+        "shift_scope": "within_subject_and_horizon_availability_same_source_row_for_K0_K1_K2",
+        "calibration_groups": 350,
+        "heldout_groups": 1550,
+        "retrieval_size": 250,
+        "retrieval_sha256": "00614bc43d654a0aee8a2efaa21b96702b5166d8946cd31f5e860d18e319d074",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 0.025,
+        "lm_weights_sha256": "71aa852dfdaac82252d7b737fb33b79d0c15e295a6cfc64963613d96741e3d7a",
+        "neural_score": "cosine_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/chineseeeg2_littleprince/jayalath_stage2_seed0_no_oov.json",
+      "sha256": "9203f3adb0a7ded44a0c8ccc236c10cfaea50d715d395016ec81558f18ceca1d",
+      "checkpoint_sha256": "5c2349df66e8b5e15a3d7804f602a1a644014652b8ab57fbef66139eb6d45810",
+      "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+      "seed": 0,
+      "protocol": {
+        "condition": "real_signal",
+        "shift_permutation_seed": null,
+        "shift_scope": null,
+        "calibration_groups": 236,
+        "heldout_groups": 948,
+        "max_groups": null,
+        "random_retrieval_selection_seed": 20260923,
+        "retrieval_size": 250,
+        "retrieval_sha256": "24c598ef122e45c164a6cfd43a7cb515b172f3b0b78e01d28825e0fb09412a6e",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 1.5,
+        "lm_weights_sha256": "5478b950f53650c82f7f7e91010787c870813a76adeabe23c8571b01af1379b4",
+        "lm_proposal_score": "all_subtokens",
+        "lm_max_context_words": null,
+        "neural_score": "cosine_times_10_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/chineseeeg2_littleprince/jayalath_stage2_seed0_within_subject_shift_no_oov.json",
+      "sha256": "3f9a8a3fa459d5b42868e3f6fd27cdd9f155c3e0e1613891b909a02c3d240261",
+      "checkpoint_sha256": "5c2349df66e8b5e15a3d7804f602a1a644014652b8ab57fbef66139eb6d45810",
+      "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+      "seed": 0,
+      "protocol": {
+        "condition": "within_subject_shift",
+        "shift_permutation_seed": 1729,
+        "shift_scope": "within_subject_and_horizon_availability_same_source_row_for_K0_K1_K2",
+        "calibration_groups": 236,
+        "heldout_groups": 948,
+        "max_groups": null,
+        "random_retrieval_selection_seed": 20260923,
+        "retrieval_size": 250,
+        "retrieval_sha256": "24c598ef122e45c164a6cfd43a7cb515b172f3b0b78e01d28825e0fb09412a6e",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 1.5,
+        "lm_weights_sha256": "5478b950f53650c82f7f7e91010787c870813a76adeabe23c8571b01af1379b4",
+        "lm_proposal_score": "all_subtokens",
+        "lm_max_context_words": null,
+        "neural_score": "cosine_times_10_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/chineseeeg2_littleprince/jayalath_stage2_seed1_no_oov.json",
+      "sha256": "b2060e06fcc7327c4765538086d6a334910b91555590c4fe0541a8e16d2dde63",
+      "checkpoint_sha256": "1d6c8525ceda68e98e869cbd5f4a87fc062110ee6f83d8c51eaf6c9874b041fb",
+      "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+      "seed": 1,
+      "protocol": {
+        "condition": "real_signal",
+        "shift_permutation_seed": null,
+        "shift_scope": null,
+        "calibration_groups": 236,
+        "heldout_groups": 948,
+        "max_groups": null,
+        "random_retrieval_selection_seed": 20260923,
+        "retrieval_size": 250,
+        "retrieval_sha256": "24c598ef122e45c164a6cfd43a7cb515b172f3b0b78e01d28825e0fb09412a6e",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 1.5,
+        "lm_weights_sha256": "5478b950f53650c82f7f7e91010787c870813a76adeabe23c8571b01af1379b4",
+        "lm_proposal_score": "all_subtokens",
+        "lm_max_context_words": null,
+        "neural_score": "cosine_times_10_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/chineseeeg2_littleprince/jayalath_stage2_seed1_within_subject_shift_no_oov.json",
+      "sha256": "0740851aca3080ac297d21e20e064d31c6567ff3035ebf04f761bbda0d50b22a",
+      "checkpoint_sha256": "1d6c8525ceda68e98e869cbd5f4a87fc062110ee6f83d8c51eaf6c9874b041fb",
+      "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+      "seed": 1,
+      "protocol": {
+        "condition": "within_subject_shift",
+        "shift_permutation_seed": 1729,
+        "shift_scope": "within_subject_and_horizon_availability_same_source_row_for_K0_K1_K2",
+        "calibration_groups": 236,
+        "heldout_groups": 948,
+        "max_groups": null,
+        "random_retrieval_selection_seed": 20260923,
+        "retrieval_size": 250,
+        "retrieval_sha256": "24c598ef122e45c164a6cfd43a7cb515b172f3b0b78e01d28825e0fb09412a6e",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 1.5,
+        "lm_weights_sha256": "5478b950f53650c82f7f7e91010787c870813a76adeabe23c8571b01af1379b4",
+        "lm_proposal_score": "all_subtokens",
+        "lm_max_context_words": null,
+        "neural_score": "cosine_times_10_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/chineseeeg2_littleprince/jayalath_stage2_seed2_no_oov.json",
+      "sha256": "4577f3c25847e585ca75e4a1084f092e81da5d4e2a108effe40f23c7ca4504a1",
+      "checkpoint_sha256": "1a34b965f2308f29bd66d276be114c93a6be1ed23a09b0ea0d76dd3579fe2359",
+      "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+      "seed": 2,
+      "protocol": {
+        "condition": "real_signal",
+        "shift_permutation_seed": null,
+        "shift_scope": null,
+        "calibration_groups": 236,
+        "heldout_groups": 948,
+        "max_groups": null,
+        "random_retrieval_selection_seed": 20260923,
+        "retrieval_size": 250,
+        "retrieval_sha256": "24c598ef122e45c164a6cfd43a7cb515b172f3b0b78e01d28825e0fb09412a6e",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 1.5,
+        "lm_weights_sha256": "5478b950f53650c82f7f7e91010787c870813a76adeabe23c8571b01af1379b4",
+        "lm_proposal_score": "all_subtokens",
+        "lm_max_context_words": null,
+        "neural_score": "cosine_times_10_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    },
+    {
+      "path": "derived/chineseeeg2_littleprince/jayalath_stage2_seed2_within_subject_shift_no_oov.json",
+      "sha256": "2998d53837a2a5c01f67ea9ce9e560d95250c3c00b0d47284430ec45e9e9ba4e",
+      "checkpoint_sha256": "1a34b965f2308f29bd66d276be114c93a6be1ed23a09b0ea0d76dd3579fe2359",
+      "event_table_sha256": "c950ed2013ae25d58ea4e9ae7d45289d44f37806dec5ef61ee248f6d2d3abda0",
+      "seed": 2,
+      "protocol": {
+        "condition": "within_subject_shift",
+        "shift_permutation_seed": 1729,
+        "shift_scope": "within_subject_and_horizon_availability_same_source_row_for_K0_K1_K2",
+        "calibration_groups": 236,
+        "heldout_groups": 948,
+        "max_groups": null,
+        "random_retrieval_selection_seed": 20260923,
+        "retrieval_size": 250,
+        "retrieval_sha256": "24c598ef122e45c164a6cfd43a7cb515b172f3b0b78e01d28825e0fb09412a6e",
+        "candidate_width": 5,
+        "beam_width": 5,
+        "lm_weight": 1.5,
+        "lm_weights_sha256": "5478b950f53650c82f7f7e91010787c870813a76adeabe23c8571b01af1379b4",
+        "lm_proposal_score": "all_subtokens",
+        "lm_max_context_words": null,
+        "neural_score": "cosine_times_10_softmax_full_retrieval_set",
+        "oov_detector": null,
+        "word_boundaries_given": true,
+        "k0_window_seconds": 1.0,
+        "delay_limit_words": 2,
+        "test_split_used": false
+      }
+    }
+  ],
+  "current_implementation_hashes": [
+    {
+      "path": "scripts/replications/rolling_sequence_decoding/run_jayalath_stage2.py",
+      "sha256": "febaee1f526528f298167ddcf77c2a0884f3a12340f57c7edadda8630c2c8f3b"
+    },
+    {
+      "path": "braindecoding/candidate_recall.py",
+      "sha256": "89d96e14a1570325286ecaf222daef4e77047fb45a97884dd167993ec9594f18"
+    },
+    {
+      "path": "scripts/replications/rolling_sequence_decoding/analyze_jayalath_stage2.py",
+      "sha256": "f3988ccbf3d6a0fcffca3d52401306bd614c5b7f4162350d04aba74927898d4c"
+    },
+    {
+      "path": "braindecoding/signal_control_revision_exports.py",
+      "sha256": "7be67985ab8c7c83bd66237b29654895da4f5989010f8ec547315ad3453c3f73"
+    }
+  ],
+  "exports": [
+    {
+      "path": "reports/exports/signal_control_revision_horizons.csv",
+      "sha256": "bcc86650b623cdce7a70287d58fd54f4bf53b23167ea51b143adeaa13d543aaf"
+    },
+    {
+      "path": "reports/exports/signal_control_revision_gains.csv",
+      "sha256": "14d1249ba87f85bb60b3cd6178f8a113070b85482050f81d77db7c7547a03681"
+    },
+    {
+      "path": "reports/exports/signal_control_revision_contrasts.csv",
+      "sha256": "2632379ef7bd6a796c4baa89ad6641dbdaedc84316bcbcfd2d7bb1e11ab53c4e"
+    }
+  ]
+}

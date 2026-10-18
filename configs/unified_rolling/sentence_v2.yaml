@@ -1,0 +1,62 @@
+protocol:
+  id: unified_sentence_v2
+  neural_protocol: unified_rolling_v2
+  split: val
+  evidence: development_validation
+  test_evaluation_allowed: false
+  seeds: [0, 1, 2]
+  checkpoint: best.pt
+  evaluation_scope: all_validation_materials
+partition:
+  seed: 20260928
+  calibration_fraction: 0.2
+  # A block contains whole adjacent material components. Shared source lines
+  # connect Chinese segments across voices before any partition is assigned.
+  adjacent_components_per_block: 5
+  stratify_by_recording_material: true
+calibration:
+  condition: A
+  branch: open
+  metric: subject_equal_sentence_bleu1_then_seed_equal
+  language_weight_grid: [0.0, 0.025, 0.1, 0.5, 1.5]
+  tie_break: smaller_weight
+  apply_selected_weight_to_all_seeds_branches_and_controls: true
+decoding:
+  candidates: 20
+  beam_width: 5
+  neural_scale: 10.0
+  revision_words: 3
+  branches: [open, closed]
+  conditions: [A, B, C]
+  proposal_count: 5
+  proposal_max_new_tokens: 16
+  proposal_batch_size: 16
+  score_batch_size: 32
+  score_cache_size: 200000
+  segment_batch_size: 16
+controls:
+  shifted_repetitions: 3
+  shifted_seed: 314159
+  shifted_policy: circular_shift_within_subject_recording_and_horizon_availability
+  shifted_offset_fraction: [0.25, 0.75]
+  same_donor_for_all_horizons: true
+  pure_language: independent_full_training_vocabulary_plus_lm_proposals_bounded_replay
+  uniform_random_repetitions: 1000
+  uniform_random_seed: 271828
+statistics:
+  metric: subject_equal_sentence_bleu1_then_seed_equal
+  primary_branch: open
+  primary_comparisons: [C_minus_B, C_minus_shifted_C, C_minus_pure_language_C]
+  family: both_datasets_all_three_comparisons
+  alternative: greater
+  paired_material_block_sign_flips: 10000
+  material_block_bootstrap_repetitions: 10000
+  bootstrap_interval: percentile_95
+  multiplicity: holm
+  seed: 161803
+  secondary_metrics: [wer, corpus_bleu1, aligned_word_accuracy, repair_rate, harm_rate]
+execution:
+  output_group: unified_sentence_v2
+  resume: completed_chunks_with_matching_frozen_manifest_only
+  stop_rule: numerical_or_contract_failure_only
+  progress_interval_seconds: 30

@@ -1,0 +1,13 @@
+{
+  "authorization_date": "2026-10-08",
+  "authorization": "user_requested_pallier2025_only_and_deferred_chineseeeg2_littleprince",
+  "active_dataset": "pallier2025",
+  "deferred_dataset": "chineseeeg2_littleprince",
+  "additional_chinese_work_allowed": false,
+  "conditions": ["shared", "independent"],
+  "seeds": [0, 1, 2],
+  "horizons": [0, 1, 2],
+  "queue_verified": "all_12_training_stages_target_pallier2025",
+  "existing_chinese_timestamp_statistics": "computed_before_this_scope_clarification; no further work",
+  "scope_change_requires_training_restart": false
+}

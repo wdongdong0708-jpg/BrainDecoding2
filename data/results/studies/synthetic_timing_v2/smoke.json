@@ -1,0 +1,49 @@
+{
+  "passed": true,
+  "device": "cpu",
+  "records": [
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "shared",
+      "stage": "word",
+      "updates": 1,
+      "train_loss": 9.830632209777832,
+      "seconds": 0.42133339983411133,
+      "parameters": 8200705,
+      "passed": true
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "shared",
+      "stage": "revision",
+      "updates": 1,
+      "train_loss": 10.074454307556152,
+      "seconds": 1.8847352999728173,
+      "parameters": 209642018,
+      "passed": true
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "independent",
+      "stage": "word",
+      "updates": 1,
+      "train_loss": 9.76891803741455,
+      "seconds": 0.08526989980600774,
+      "parameters": 8200705,
+      "passed": true
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "condition": "independent",
+      "stage": "revision",
+      "updates": 1,
+      "train_loss": 10.072704315185547,
+      "seconds": 1.3352384001482278,
+      "parameters": 209642018,
+      "passed": true
+    }
+  ],
+  "full_model_capacity": true,
+  "formal_performance_estimate": false,
+  "pallier_v1_smoke_reused": true
+}

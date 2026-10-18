@@ -1,0 +1,44 @@
+extends: ../base.yaml
+
+experiment:
+  task: word_decoding
+  dataset: chineseeeg2_littleprince
+  subject_scope: sub01-08
+  id: local_window_rolling_revision_k2_d2_full_coverage
+  category: development
+  output_group: rolling_revision
+
+dataset:
+  context_grouping: bounded_semantic_v1
+
+model:
+  use_transformer: true
+  context_mode: grouped
+  local_window_revision:
+    enabled: true
+    history_radius: 2
+    horizons: [0, 1, 2]
+    validation_query_batch_size: 128
+
+training:
+  warm_start_from: main_word
+  warm_start_output_group: null
+  warm_start_seed: 0
+  freeze_brain_encoder_epochs: 1
+  preserve_complete_groups: true
+  save_last_checkpoint: false
+  revision_cutoff_policy: all
+
+evaluation:
+  selection_metric: revision_common_delay2_retrieval_acc10_vocab=chineseeeg2_littleprince50_macro
+
+provenance:
+  context_condition: shared_transformer_local_window_rolling_revision_k0_k1_k2
+  rolling_windows: [[-2, 0], [-2, 1], [-2, 2]]
+  loss: independent_horizon_siglip_mean
+  negative_bank: all_text_targets_in_original_batch
+  future_leakage_control: physical_input_truncation
+  cutoff_policy: all_available_per_group_per_epoch
+  checkpoint_selection: delay_2_common_target_validation_macro_top10
+  parameter_change: none
+  test_status: locked_not_evaluated

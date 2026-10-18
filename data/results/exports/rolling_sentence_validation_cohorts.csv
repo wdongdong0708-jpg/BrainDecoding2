@@ -1,0 +1,3 @@
+dataset,split,seeds,subjects,calibration_segments,evaluation_segments_per_seed,reference_words_per_seed,unique_stimulus_clusters,retrieval_size
+pallier2025,val,0;1;2,10,350,1550,13710,150,250
+chineseeeg2_littleprince,val,0;1;2,8,236,948,11152,141,250

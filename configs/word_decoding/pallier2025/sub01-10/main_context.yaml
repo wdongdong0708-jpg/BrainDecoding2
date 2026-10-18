@@ -1,0 +1,18 @@
+extends: ../base.yaml
+
+experiment:
+  task: word_decoding
+  dataset: pallier2025
+  subject_scope: sub01-10
+  id: main_context
+  category: historical_diagnostic
+
+dataset:
+  runtime_context_grouping: recording_id_plus_canonical_context_v1
+
+model:
+  use_transformer: true
+  context_mode: grouped
+
+provenance:
+  context_condition: frozen_sequence_grouped_transformer

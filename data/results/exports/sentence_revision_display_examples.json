@@ -1,0 +1,585 @@
+{
+  "schema_version": 1,
+  "analysis_status": "exploratory_validation",
+  "selection": "Purposive qualitative seed-0 examples of a sustained recovery and a loss of correctness in each dataset. They are not random or representative estimates.",
+  "display": "Exact saved rolling-display tokens at the target's arrival and its next two arrivals. Null means that position has not arrived. No spelling, punctuation or fluency has been corrected.",
+  "examples": [
+    {
+      "dataset": "pallier2025",
+      "split": "val",
+      "seed": 0,
+      "source_path": "derived/pallier2025/jayalath_stage2_seed0_no_oov.json",
+      "example_kind": "sustained_recovery",
+      "subject": "sub-01",
+      "target_index": 1,
+      "target_event_id": "pallier2025|sub-01|run-07|event-0035",
+      "target_onset_seconds": 32.392,
+      "reference_target": "était",
+      "target_trajectory": [
+        "est",
+        "était",
+        "était"
+      ],
+      "reference_full": [
+        "c",
+        "était",
+        "un",
+        "jardin",
+        "fleuri",
+        "de",
+        "roses"
+      ],
+      "event_ids_full": [
+        "pallier2025|sub-01|run-07|event-0034",
+        "pallier2025|sub-01|run-07|event-0035",
+        "pallier2025|sub-01|run-07|event-0036",
+        "pallier2025|sub-01|run-07|event-0037",
+        "pallier2025|sub-01|run-07|event-0038",
+        "pallier2025|sub-01|run-07|event-0039",
+        "pallier2025|sub-01|run-07|event-0040"
+      ],
+      "onset_seconds_full": [
+        32.242,
+        32.392,
+        32.632,
+        32.762,
+        33.322,
+        33.922,
+        34.072
+      ],
+      "crop_start": 0,
+      "crop_stop": 4,
+      "crop_event_ids": [
+        "pallier2025|sub-01|run-07|event-0034",
+        "pallier2025|sub-01|run-07|event-0035",
+        "pallier2025|sub-01|run-07|event-0036",
+        "pallier2025|sub-01|run-07|event-0037"
+      ],
+      "reference_crop": [
+        "c",
+        "était",
+        "un",
+        "jardin"
+      ],
+      "target_column": 1,
+      "frames": [
+        {
+          "delay_words": 0,
+          "arrival_index": 1,
+          "arrival_event_id": "pallier2025|sub-01|run-07|event-0035",
+          "input_window_end_seconds": 33.392,
+          "elapsed_from_target_onset_seconds": 1.0,
+          "displayed_tokens": [
+            "il",
+            "est",
+            null,
+            null
+          ],
+          "correct": [
+            false,
+            false,
+            null,
+            null
+          ],
+          "changed_from_previous": [
+            null,
+            null,
+            null,
+            null
+          ],
+          "target_token": "est"
+        },
+        {
+          "delay_words": 1,
+          "arrival_index": 2,
+          "arrival_event_id": "pallier2025|sub-01|run-07|event-0036",
+          "input_window_end_seconds": 33.632,
+          "elapsed_from_target_onset_seconds": 1.2399999999999949,
+          "displayed_tokens": [
+            "il",
+            "était",
+            "un",
+            null
+          ],
+          "correct": [
+            false,
+            true,
+            true,
+            null
+          ],
+          "changed_from_previous": [
+            false,
+            true,
+            null,
+            null
+          ],
+          "target_token": "était"
+        },
+        {
+          "delay_words": 2,
+          "arrival_index": 3,
+          "arrival_event_id": "pallier2025|sub-01|run-07|event-0037",
+          "input_window_end_seconds": 33.762,
+          "elapsed_from_target_onset_seconds": 1.3699999999999974,
+          "displayed_tokens": [
+            "il",
+            "était",
+            "un",
+            "ma"
+          ],
+          "correct": [
+            false,
+            true,
+            true,
+            false
+          ],
+          "changed_from_previous": [
+            false,
+            false,
+            false,
+            null
+          ],
+          "target_token": "était"
+        }
+      ],
+      "matching_seed0_patterns": 5,
+      "selection_rule": "Fixed illustrative target trajectory; lexicographically first matching subject, event-id group and target index in seed 0."
+    },
+    {
+      "dataset": "pallier2025",
+      "split": "val",
+      "seed": 0,
+      "source_path": "derived/pallier2025/jayalath_stage2_seed0_no_oov.json",
+      "example_kind": "transient_recovery_then_loss",
+      "subject": "sub-06",
+      "target_index": 0,
+      "target_event_id": "pallier2025|sub-06|run-07|event-1479",
+      "target_onset_seconds": 585.289,
+      "reference_target": "bonjour",
+      "target_trajectory": [
+        "ah",
+        "bonjour",
+        "et"
+      ],
+      "reference_full": [
+        "bonjour",
+        "dit",
+        "le",
+        "petit",
+        "prince"
+      ],
+      "event_ids_full": [
+        "pallier2025|sub-06|run-07|event-1479",
+        "pallier2025|sub-06|run-07|event-1480",
+        "pallier2025|sub-06|run-07|event-1481",
+        "pallier2025|sub-06|run-07|event-1482",
+        "pallier2025|sub-06|run-07|event-1483"
+      ],
+      "onset_seconds_full": [
+        585.289,
+        586.069,
+        586.212,
+        586.289,
+        586.569
+      ],
+      "crop_start": 0,
+      "crop_stop": 3,
+      "crop_event_ids": [
+        "pallier2025|sub-06|run-07|event-1479",
+        "pallier2025|sub-06|run-07|event-1480",
+        "pallier2025|sub-06|run-07|event-1481"
+      ],
+      "reference_crop": [
+        "bonjour",
+        "dit",
+        "le"
+      ],
+      "target_column": 0,
+      "frames": [
+        {
+          "delay_words": 0,
+          "arrival_index": 0,
+          "arrival_event_id": "pallier2025|sub-06|run-07|event-1479",
+          "input_window_end_seconds": 586.289,
+          "elapsed_from_target_onset_seconds": 1.0,
+          "displayed_tokens": [
+            "ah",
+            null,
+            null
+          ],
+          "correct": [
+            false,
+            null,
+            null
+          ],
+          "changed_from_previous": [
+            null,
+            null,
+            null
+          ],
+          "target_token": "ah"
+        },
+        {
+          "delay_words": 1,
+          "arrival_index": 1,
+          "arrival_event_id": "pallier2025|sub-06|run-07|event-1480",
+          "input_window_end_seconds": 587.069,
+          "elapsed_from_target_onset_seconds": 1.7799999999999727,
+          "displayed_tokens": [
+            "bonjour",
+            "et",
+            null
+          ],
+          "correct": [
+            true,
+            false,
+            null
+          ],
+          "changed_from_previous": [
+            true,
+            null,
+            null
+          ],
+          "target_token": "bonjour"
+        },
+        {
+          "delay_words": 2,
+          "arrival_index": 2,
+          "arrival_event_id": "pallier2025|sub-06|run-07|event-1481",
+          "input_window_end_seconds": 587.212,
+          "elapsed_from_target_onset_seconds": 1.9230000000000018,
+          "displayed_tokens": [
+            "et",
+            "la",
+            "consigne"
+          ],
+          "correct": [
+            false,
+            false,
+            false
+          ],
+          "changed_from_previous": [
+            true,
+            true,
+            null
+          ],
+          "target_token": "et"
+        }
+      ],
+      "matching_seed0_patterns": 1,
+      "selection_rule": "Fixed illustrative target trajectory; lexicographically first matching subject, event-id group and target index in seed 0."
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "split": "val",
+      "seed": 0,
+      "source_path": "derived/chineseeeg2_littleprince/jayalath_stage2_seed0_no_oov.json",
+      "example_kind": "sustained_recovery",
+      "subject": "sub-01",
+      "target_index": 0,
+      "target_event_id": "sub-01|f1|actual-f1-c25-w00145",
+      "target_onset_seconds": 59.68,
+      "reference_target": "我",
+      "target_trajectory": [
+        "如果",
+        "我",
+        "我"
+      ],
+      "reference_full": [
+        "我",
+        "把",
+        "水桶",
+        "缓缓",
+        "地",
+        "吊",
+        "到",
+        "井栏",
+        "上",
+        "稳稳地",
+        "搁",
+        "住"
+      ],
+      "event_ids_full": [
+        "sub-01|f1|actual-f1-c25-w00145",
+        "sub-01|f1|actual-f1-c25-w00146",
+        "sub-01|f1|actual-f1-c25-w00147",
+        "sub-01|f1|actual-f1-c25-w00148",
+        "sub-01|f1|actual-f1-c25-w00149",
+        "sub-01|f1|actual-f1-c25-w00150",
+        "sub-01|f1|actual-f1-c25-w00151",
+        "sub-01|f1|actual-f1-c25-w00152",
+        "sub-01|f1|actual-f1-c25-w00153",
+        "sub-01|f1|actual-f1-c25-w00154",
+        "sub-01|f1|actual-f1-c25-w00155",
+        "sub-01|f1|actual-f1-c25-w00156"
+      ],
+      "onset_seconds_full": [
+        59.68,
+        59.76,
+        59.92,
+        60.48,
+        60.88,
+        61.04,
+        61.2,
+        61.36,
+        61.76,
+        62.56,
+        63.04,
+        63.28
+      ],
+      "crop_start": 0,
+      "crop_stop": 3,
+      "crop_event_ids": [
+        "sub-01|f1|actual-f1-c25-w00145",
+        "sub-01|f1|actual-f1-c25-w00146",
+        "sub-01|f1|actual-f1-c25-w00147"
+      ],
+      "reference_crop": [
+        "我",
+        "把",
+        "水桶"
+      ],
+      "target_column": 0,
+      "frames": [
+        {
+          "delay_words": 0,
+          "arrival_index": 0,
+          "arrival_event_id": "sub-01|f1|actual-f1-c25-w00145",
+          "input_window_end_seconds": 60.68,
+          "elapsed_from_target_onset_seconds": 1.0,
+          "displayed_tokens": [
+            "如果",
+            null,
+            null
+          ],
+          "correct": [
+            false,
+            null,
+            null
+          ],
+          "changed_from_previous": [
+            null,
+            null,
+            null
+          ],
+          "target_token": "如果"
+        },
+        {
+          "delay_words": 1,
+          "arrival_index": 1,
+          "arrival_event_id": "sub-01|f1|actual-f1-c25-w00146",
+          "input_window_end_seconds": 60.76,
+          "elapsed_from_target_onset_seconds": 1.0799999999999983,
+          "displayed_tokens": [
+            "我",
+            "觉得",
+            null
+          ],
+          "correct": [
+            true,
+            false,
+            null
+          ],
+          "changed_from_previous": [
+            true,
+            null,
+            null
+          ],
+          "target_token": "我"
+        },
+        {
+          "delay_words": 2,
+          "arrival_index": 2,
+          "arrival_event_id": "sub-01|f1|actual-f1-c25-w00147",
+          "input_window_end_seconds": 60.92,
+          "elapsed_from_target_onset_seconds": 1.240000000000002,
+          "displayed_tokens": [
+            "我",
+            "还",
+            "觉得"
+          ],
+          "correct": [
+            true,
+            false,
+            false
+          ],
+          "changed_from_previous": [
+            false,
+            true,
+            null
+          ],
+          "target_token": "我"
+        }
+      ],
+      "matching_seed0_patterns": 15,
+      "selection_rule": "Fixed illustrative target trajectory; lexicographically first matching subject, event-id group and target index in seed 0."
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "split": "val",
+      "seed": 0,
+      "source_path": "derived/chineseeeg2_littleprince/jayalath_stage2_seed0_no_oov.json",
+      "example_kind": "regression",
+      "subject": "sub-01",
+      "target_index": 6,
+      "target_event_id": "sub-01|f1|actual-f1-c03-w00007",
+      "target_onset_seconds": 7.12,
+      "reference_target": "明白",
+      "target_trajectory": [
+        "明白",
+        "明白",
+        "占有"
+      ],
+      "reference_full": [
+        "很",
+        "久",
+        "以后",
+        "我",
+        "才",
+        "弄",
+        "明白",
+        "他",
+        "是从",
+        "哪儿",
+        "来",
+        "的"
+      ],
+      "event_ids_full": [
+        "sub-01|f1|actual-f1-c03-w00001",
+        "sub-01|f1|actual-f1-c03-w00002",
+        "sub-01|f1|actual-f1-c03-w00003",
+        "sub-01|f1|actual-f1-c03-w00004",
+        "sub-01|f1|actual-f1-c03-w00005",
+        "sub-01|f1|actual-f1-c03-w00006",
+        "sub-01|f1|actual-f1-c03-w00007",
+        "sub-01|f1|actual-f1-c03-w00008",
+        "sub-01|f1|actual-f1-c03-w00009",
+        "sub-01|f1|actual-f1-c03-w00010",
+        "sub-01|f1|actual-f1-c03-w00011",
+        "sub-01|f1|actual-f1-c03-w00012"
+      ],
+      "onset_seconds_full": [
+        5.84,
+        6.0,
+        6.16,
+        6.4,
+        6.8,
+        6.96,
+        7.12,
+        7.52,
+        7.6,
+        8.0,
+        8.24,
+        8.56
+      ],
+      "crop_start": 4,
+      "crop_stop": 9,
+      "crop_event_ids": [
+        "sub-01|f1|actual-f1-c03-w00005",
+        "sub-01|f1|actual-f1-c03-w00006",
+        "sub-01|f1|actual-f1-c03-w00007",
+        "sub-01|f1|actual-f1-c03-w00008",
+        "sub-01|f1|actual-f1-c03-w00009"
+      ],
+      "reference_crop": [
+        "才",
+        "弄",
+        "明白",
+        "他",
+        "是从"
+      ],
+      "target_column": 2,
+      "frames": [
+        {
+          "delay_words": 0,
+          "arrival_index": 6,
+          "arrival_event_id": "sub-01|f1|actual-f1-c03-w00007",
+          "input_window_end_seconds": 8.120000000000001,
+          "elapsed_from_target_onset_seconds": 1.0000000000000009,
+          "displayed_tokens": [
+            "都",
+            "不",
+            "明白",
+            null,
+            null
+          ],
+          "correct": [
+            false,
+            false,
+            true,
+            null,
+            null
+          ],
+          "changed_from_previous": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "target_token": "明白"
+        },
+        {
+          "delay_words": 1,
+          "arrival_index": 7,
+          "arrival_event_id": "sub-01|f1|actual-f1-c03-w00008",
+          "input_window_end_seconds": 8.52,
+          "elapsed_from_target_onset_seconds": 1.3999999999999995,
+          "displayed_tokens": [
+            "都",
+            "不",
+            "明白",
+            "中",
+            null
+          ],
+          "correct": [
+            false,
+            false,
+            true,
+            false,
+            null
+          ],
+          "changed_from_previous": [
+            false,
+            false,
+            false,
+            null,
+            null
+          ],
+          "target_token": "明白"
+        },
+        {
+          "delay_words": 2,
+          "arrival_index": 8,
+          "arrival_event_id": "sub-01|f1|actual-f1-c03-w00009",
+          "input_window_end_seconds": 8.6,
+          "elapsed_from_target_onset_seconds": 1.4799999999999995,
+          "displayed_tokens": [
+            "都",
+            "不",
+            "占有",
+            "的",
+            "人"
+          ],
+          "correct": [
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "changed_from_previous": [
+            false,
+            false,
+            true,
+            true,
+            null
+          ],
+          "target_token": "占有"
+        }
+      ],
+      "matching_seed0_patterns": 1,
+      "selection_rule": "Fixed illustrative target trajectory; lexicographically first matching subject, event-id group and target index in seed 0."
+    }
+  ]
+}

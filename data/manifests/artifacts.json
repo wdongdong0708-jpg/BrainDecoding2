@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "status": "frozen_after_content_preserving_move",
+  "artifact_root": "artifacts",
+  "hash_contract": "sha256(canonical_json_without_manifest_sha256)",
+  "manifest_sha256": "41784c6e5f4faff32841bf5f8f0d5f5edc5202d1b5ccb8bf178e008bf3100cfb",
+  "event_table_migration_validation": {
+    "config": "configs/word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart.yaml",
+    "subject_scope": "sub01-08",
+    "context_grouping": "semantic_v1",
+    "row_count_before": 112492,
+    "row_count_after": 112492,
+    "column_count_before": 75,
+    "column_count_after": 75,
+    "event_table_sha256_before": "26689b4b2a04e6f46e49e9fa48829212f38266362d4f8eaebeb6f36244f92a1c",
+    "event_table_sha256_after": "26689b4b2a04e6f46e49e9fa48829212f38266362d4f8eaebeb6f36244f92a1c",
+    "event_id_sequence_sha256_before": "ecf9abaf31467fe26777ef2f6612b79a161de9d81654e2c9fb2b5c455a93fd2f",
+    "event_id_sequence_sha256_after": "ecf9abaf31467fe26777ef2f6612b79a161de9d81654e2c9fb2b5c455a93fd2f",
+    "exact_dataframe_equal": true,
+    "raw_eeg_loaded": false,
+    "note": "迁移前后对完整八受试者事件表执行 check_dtype=True、check_exact=True 的逐值比较；配置路径 provenance 改变，事件科学内容不变。"
+  },
+  "artifacts": [
+    {
+      "artifact_id": "chineseeeg2_alignment_f1_processing_provenance",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/f1/处理记录.json",
+      "role": "processing_provenance",
+      "voice_version": "f1",
+      "sha256": "f2ec3a86f88778da0abd18e65acad31f63d75da535109d122afa2c6164581ba5",
+      "size_bytes": 1184,
+      "source_legacy_path": "outputs/女声一小王子时间戳/处理记录.json",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_f1_word_timestamps",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/f1/词级时间戳.csv",
+      "role": "word_timestamp_table",
+      "voice_version": "f1",
+      "sha256": "c579054b97e5628b27929a24bc5d12c647afc309f8ba149e1df98bb63ebc54a9",
+      "size_bytes": 1054685,
+      "source_legacy_path": "outputs/女声一小王子时间戳/词级时间戳.csv",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_f1",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/f1/女声一_小王子_实际朗读时间戳.xlsx",
+      "role": "production_alignment_workbook",
+      "voice_version": "f1",
+      "sha256": "a54089b786993f9bbc758581ec60b11ad9b80e6e95ee23cb6e57132cc4c51190",
+      "size_bytes": 1961040,
+      "source_legacy_path": "outputs/女声一小王子时间戳/女声一_小王子_实际朗读时间戳.xlsx",
+      "required_by": [
+        "configs/ChineseEEG2_LittlePrince.yaml",
+        "configs/ChineseEEG2_LittlePrince_sub01_actual_reading_1s.yaml",
+        "configs/ChineseEEG2_LittlePrince_sub01_sub08_actual_reading_1s.yaml"
+      ]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_f1_validation_report",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/f1/验证报告.json",
+      "role": "validation_report",
+      "voice_version": "f1",
+      "sha256": "301aaff675656a577219c8caee45494082b9d41a94fb632b0cdbcd5cd5c102a3",
+      "size_bytes": 453,
+      "source_legacy_path": "outputs/女声一小王子时间戳/验证报告.json",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_f1_anomalies",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/f1/异常记录.csv",
+      "role": "alignment_anomaly_log",
+      "voice_version": "f1",
+      "sha256": "7508dbaca2a7295e62f6f6b232d48b64e8e70122ee99acff3f07f58058ecc63f",
+      "size_bytes": 46963,
+      "source_legacy_path": "outputs/女声一小王子时间戳/异常记录.csv",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_f1_audio_inventory",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/f1/音频汇总.csv",
+      "role": "audio_inventory",
+      "voice_version": "f1",
+      "sha256": "e9e6e7a5ddb10df7cf7663952648082ef1f3c44327852c56a2193acd4f742190",
+      "size_bytes": 565,
+      "source_legacy_path": "outputs/女声一小王子时间戳/音频汇总.csv",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_f1_rows",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/f1/逐行对照.csv",
+      "role": "row_alignment_table",
+      "voice_version": "f1",
+      "sha256": "7923d3203938e8663331616a093cdc33390f3065f79ecfb18d237fa627ef9c47",
+      "size_bytes": 339465,
+      "source_legacy_path": "outputs/女声一小王子时间戳/逐行对照.csv",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_f1_characters",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/f1/字级时间戳.csv",
+      "role": "character_timestamp_table",
+      "voice_version": "f1",
+      "sha256": "5e577f7cdfe90a3ca56ca8480efe91be33cc41030fc23c9582a07d4062a1ac34",
+      "size_bytes": 1715826,
+      "source_legacy_path": "outputs/女声一小王子时间戳/字级时间戳.csv",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_m1_processing_provenance",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/m1/处理记录.json",
+      "role": "processing_provenance",
+      "voice_version": "m1",
+      "sha256": "755dc331c01652dd2ceb66abf223f3ec0fb2551d1028a36c8fa092bc74ad4830",
+      "size_bytes": 1182,
+      "source_legacy_path": "outputs/男声一小王子时间戳/处理记录.json",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_m1_word_timestamps",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/m1/词级时间戳.csv",
+      "role": "word_timestamp_table",
+      "voice_version": "m1",
+      "sha256": "9d5d17b466f1df844b5d01bea9a24b749ff708a7d05037197ab1a9233637c73c",
+      "size_bytes": 1053466,
+      "source_legacy_path": "outputs/男声一小王子时间戳/词级时间戳.csv",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_m1",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/m1/男声一_小王子_实际朗读时间戳.xlsx",
+      "role": "production_alignment_workbook",
+      "voice_version": "m1",
+      "sha256": "0b93f64b9cee019957b147059e9b2e90ba285631f69e96efd61778b9a87d48f5",
+      "size_bytes": 1941767,
+      "source_legacy_path": "outputs/男声一小王子时间戳/男声一_小王子_实际朗读时间戳.xlsx",
+      "required_by": [
+        "configs/ChineseEEG2_LittlePrince_sub05_sub08_actual_reading_1s.yaml",
+        "configs/ChineseEEG2_LittlePrince_sub01_sub08_actual_reading_1s.yaml"
+      ]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_m1_validation_report",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/m1/验证报告.json",
+      "role": "validation_report",
+      "voice_version": "m1",
+      "sha256": "dc908d60f6dfd1a6319ef7544eebb068ea2b7547e442297ff2435c6febbe9006",
+      "size_bytes": 576,
+      "source_legacy_path": "outputs/男声一小王子时间戳/验证报告.json",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_m1_anomalies",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/m1/异常记录.csv",
+      "role": "alignment_anomaly_log",
+      "voice_version": "m1",
+      "sha256": "87264d7756bee2d7dd5c685e310eec0d6be1dd21793c02f3842ccc5bd8cd43e8",
+      "size_bytes": 42057,
+      "source_legacy_path": "outputs/男声一小王子时间戳/异常记录.csv",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_m1_audio_inventory",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/m1/音频汇总.csv",
+      "role": "audio_inventory",
+      "voice_version": "m1",
+      "sha256": "9ee7dab7b452e885b839e06a6315132aee0ffaecaa80b69d16f1d51b2fce973f",
+      "size_bytes": 568,
+      "source_legacy_path": "outputs/男声一小王子时间戳/音频汇总.csv",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_m1_rows",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/m1/逐行对照.csv",
+      "role": "row_alignment_table",
+      "voice_version": "m1",
+      "sha256": "4810dea5b6fcd262852f60f0bc65ad6b6112a69e593f5cc59f53ccf5556ef8a6",
+      "size_bytes": 335904,
+      "source_legacy_path": "outputs/男声一小王子时间戳/逐行对照.csv",
+      "required_by": ["alignment provenance and independent validation"]
+    },
+    {
+      "artifact_id": "chineseeeg2_alignment_m1_characters",
+      "relative_path": "artifacts/alignments/chineseeeg2_littleprince/m1/字级时间戳.csv",
+      "role": "character_timestamp_table",
+      "voice_version": "m1",
+      "sha256": "a411f80de9d4d22e066239a092323064b60c8c4cc851ddabc6cbfd623184d586",
+      "size_bytes": 1712701,
+      "source_legacy_path": "outputs/男声一小王子时间戳/字级时间戳.csv",
+      "required_by": ["alignment provenance and independent validation"]
+    }
+  ],
+  "retained_legacy_content": [
+    {
+      "relative_path": "outputs/女声一小王子时间戳/中间结果",
+      "classification": "temporary_regenerable",
+      "reason": "逐段对齐缓存、工作簿中间 JSON、分词缓存和预览图"
+    },
+    {
+      "relative_path": "outputs/男声一小王子时间戳/中间结果",
+      "classification": "temporary_regenerable",
+      "reason": "逐段对齐缓存、工作簿中间 JSON、分词缓存和预览图"
+    },
+    {
+      "relative_path": "outputs/女声一小王子时间戳/node_modules",
+      "classification": "temporary_third_party_dependencies",
+      "reason": "可重新安装的第三方工具依赖"
+    },
+    {
+      "relative_path": "outputs/女声一小王子时间戳/女声一_小王子_实际朗读时间戳.xlsx.inspect.ndjson",
+      "classification": "temporary_inspection_output",
+      "reason": "工作簿 inspect 临时输出，当前生产代码不读取"
+    },
+    {
+      "relative_path": "outputs/女声一小王子时间戳/运行日志.txt",
+      "classification": "temporary_log",
+      "reason": "生成过程日志，当前生产代码不读取"
+    },
+    {
+      "relative_path": "outputs/女声一小王子时间戳/生成时间戳.py",
+      "classification": "unresolved_reproduction_tooling",
+      "reason": "含本机绝对路径并依赖中间缓存，本轮保留原位且不宣称为正式 artifact"
+    },
+    {
+      "relative_path": "outputs/女声一小王子时间戳/生成工作簿.mjs",
+      "classification": "unresolved_reproduction_tooling",
+      "reason": "依赖 node_modules 和中间 JSON，本轮保留原位且不宣称为正式 artifact"
+    }
+  ]
+}

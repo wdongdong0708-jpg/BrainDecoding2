@@ -1,0 +1,73 @@
+protocol:
+  id: pure_language_prompt_sensitivity_test_v2
+  parent: data/manifests/rolling_sentence/heldout_test_v2.json
+  original_language: data/manifests/rolling_sentence/pure_language_baseline_test_v2.json
+  datasets: [pallier2025, chineseeeg2_littleprince]
+  split: test
+  reference_neural_seeds: [0, 1, 2]
+  training_allowed: false
+  recalibration_allowed: false
+  neural_input_allowed: false
+  reference_prompt_allowed: false
+prompt_diagnostic:
+  selection: first_predeclared_prompt_passing_generation_checks
+  use_test_references: false
+  word_count: 12
+  minimum_unique_words: 4
+  maximum_digit_words: 1
+  maximum_word_fraction: 0.5
+  maximum_identical_run: 3
+  candidate_ids: [native_prose, generic_prose, story_opening]
+  templates:
+    native_prose:
+      fr: "Écrivez un paragraphe de récit en français. Donnez seulement le texte, sans titre ni liste.\n\n"
+      zh: "请用中文写一段连续的叙述文字。只给出正文，不要标题或列表。\n\n"
+    generic_prose:
+      fr: "Le soir était calme. Une lumière brillait derrière la fenêtre. Quelqu'un marchait lentement dans la rue.\n\n"
+      zh: "夜色很安静。窗后亮着一盏灯。有人沿着街道慢慢地走着。\n\n"
+    story_opening:
+      fr: "Voici le début d'un récit original en français :\n\n"
+      zh: "下面是一段用中文写的故事正文：\n\n"
+decoding:
+  conditions: [LM_A, LM_C1, LM_R]
+  matched_controls: {A: LM_A, B: LM_R, C1: LM_C1, C: LM_R}
+  revision_words: {LM_A: 1, LM_C1: 2, LM_R: 3}
+  candidates: full_frozen_training_vocabulary_plus_language_proposals
+  inherit_neural_shortlist: false
+  language_weight: 1.0
+  language_weight_interpretation: positive_scale_irrelevant_without_neural_scores
+  known_word_count: identical_original_event_count
+  boundaries: identical_original_segments_reset_to_selected_language_prompt
+  beam_width: 5
+  proposal_count: 5
+  proposal_max_new_tokens: 16
+  proposal_batch_size: 16
+  score_batch_size: 32
+  score_cache_size: 200000
+  score: sum_all_word_subtokens
+statistics:
+  primary_metric: subject_equal_sentence_bleu1
+  main_question: selected_prompt_minus_original_prompt_language_only
+  comparisons: [LM_A_new_minus_old, LM_C1_new_minus_old, LM_R_new_minus_old]
+  family: two_datasets_three_language_prompt_comparisons
+  alternative: two_sided
+  material_block_size: 5
+  material_block_bootstrap_repetitions: 10000
+  paired_material_block_sign_flips: 10000
+  bootstrap_interval: percentile_95
+  multiplicity: holm
+  seed: 161803
+  secondary_metrics: [wer, bleu1, aligned_word_accuracy]
+  neural_reference_comparisons: descriptive_cross_prompt_only
+execution:
+  computed_lm_seed: 0
+  deterministic_generation: true
+  fresh_isolated_language_cache: true
+  deduplicate_by_language_and_length: true
+  reuse_length: final_state_at_actual_last_arrival
+  resume: authenticated_arrival_and_its_exact_prompt_bound_cache_snapshot
+  cpu_threads: 2
+  gpu_memory_limit_gib: 6
+  minimum_free_gpu_memory_gib: 7
+  overwrite_existing_outputs: false
+  progress_interval_seconds: 30

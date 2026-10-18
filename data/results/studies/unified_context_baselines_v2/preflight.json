@@ -1,0 +1,96 @@
+{
+  "status": "passed",
+  "datasets": {
+    "pallier2025": {
+      "population": {
+        "expected_all_vocab50_queries": 8260,
+        "expected_common_vocab50_queries": 6760,
+        "expected_common_rows": 13160,
+        "expected_legacy_word_candidates": 50,
+        "expected_legacy_common_candidates": 49
+      },
+      "max_real_batch_words": 128,
+      "local_r8_updates": [
+        {
+          "brain_encoder_frozen": true,
+          "loss": 9.888423919677734,
+          "attempts": 1,
+          "optimizer_updates": 1
+        },
+        {
+          "brain_encoder_frozen": false,
+          "loss": 6.085083961486816,
+          "attempts": 1,
+          "optimizer_updates": 1
+        }
+      ],
+      "full_context_loss": 6.6350507736206055,
+      "full_context_attempts": [
+        {
+          "loss": 6.636590957641602,
+          "updates": 0,
+          "amp_scale": 32768.0
+        },
+        {
+          "loss": 6.6350507736206055,
+          "updates": 1,
+          "amp_scale": 32768.0
+        }
+      ],
+      "peak_allocated_gib": 4.67478084564209,
+      "peak_reserved_gib": 5.46484375,
+      "strict50_all_queries": 8260,
+      "strict50_common_queries": 6760,
+      "seconds": 18.63310089998413,
+      "smoke_outputs_discarded": true
+    },
+    "chineseeeg2_littleprince": {
+      "population": {
+        "expected_all_vocab50_queries": 6160,
+        "expected_common_vocab50_queries": 5280,
+        "expected_common_rows": 11780,
+        "expected_legacy_word_candidates": 47,
+        "expected_legacy_common_candidates": 46
+      },
+      "max_real_batch_words": 128,
+      "local_r8_updates": [
+        {
+          "brain_encoder_frozen": true,
+          "loss": 9.663460731506348,
+          "attempts": 1,
+          "optimizer_updates": 1
+        },
+        {
+          "brain_encoder_frozen": false,
+          "loss": 6.158806800842285,
+          "attempts": 1,
+          "optimizer_updates": 1
+        }
+      ],
+      "full_context_loss": 6.468097686767578,
+      "full_context_attempts": [
+        {
+          "loss": 6.467972278594971,
+          "updates": 0,
+          "amp_scale": 32768.0
+        },
+        {
+          "loss": 6.468097686767578,
+          "updates": 1,
+          "amp_scale": 32768.0
+        }
+      ],
+      "peak_allocated_gib": 4.626240253448486,
+      "peak_reserved_gib": 5.23828125,
+      "strict50_all_queries": 6160,
+      "strict50_common_queries": 5280,
+      "seconds": 24.32891819998622,
+      "smoke_outputs_discarded": true
+    }
+  },
+  "test_evaluated": false,
+  "worker_sha256": "0f6b27bd11c8909c6705086d396d510ab3b7dbd43142be882ed85bca8a54c2eb",
+  "config_sha256": "bf09516060ea2072f6c4291ddbecae04da9c726208cf608f252f1f019424c394",
+  "created_unix": 1790695022.4336941,
+  "smoke_is_formal_result": false
+}

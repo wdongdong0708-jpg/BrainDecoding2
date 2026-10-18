@@ -1,0 +1,14 @@
+extends: pallier_seed0_bge_alignment_v1.yaml
+
+experiment:
+  output_group: baseline_alignment_bge_v1_retry1
+
+training:
+  warm_start_output_group: baseline_alignment_bge_v1_retry1
+
+recovery:
+  reason: telemetry_status_replace_permission_error
+  action: restart_same_seed_from_epoch_one_without_changing_scientific_settings
+  previous_output_group: baseline_alignment_bge_v1
+  previous_completed_epochs: 7
+  previous_optimizer_state_available: false

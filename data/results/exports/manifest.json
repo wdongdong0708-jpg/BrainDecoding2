@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-15T08:58:39.918547Z",
+  "datasets": [
+    "ChineseEEG2",
+    "SMN4Lang",
+    "Pallier2025"
+  ],
+  "included_selectors": [
+    "chineseeeg2_littleprince/sub01-08/main_word",
+    "chineseeeg2_littleprince/sub01-08/main_context_warmstart",
+    "smn4lang/sub01-06/main_word",
+    "smn4lang/sub01-06/main_context_warmstart",
+    "pallier2025/sub01-10/main_word",
+    "pallier2025/sub01-10/main_context_warmstart"
+  ],
+  "excluded_datasets": [
+    "LibriBrain100"
+  ],
+  "available_splits": [
+    "val"
+  ],
+  "runs": [
+    {
+      "dataset": "ChineseEEG2",
+      "model": "word",
+      "selector": "chineseeeg2_littleprince/sub01-08/main_word",
+      "scientific_config_sha": "8dd6d1bc8b90a755ebe5d88a55fc2f03fbb3373174c2faf5fb907499d216dd07",
+      "checkpoint_sha": "e72c6f6e28519a513eec4727bd561607d07d0072436f812c24c920dc83f49986"
+    },
+    {
+      "dataset": "ChineseEEG2",
+      "model": "context",
+      "selector": "chineseeeg2_littleprince/sub01-08/main_context_warmstart",
+      "scientific_config_sha": "2bf436237636708d94a3612d0062f2957983bf91526888b08e7e136b3e961f98",
+      "checkpoint_sha": "3e242a1fe2d426c979a6f12ce7ef2767a81c68fab5a17339903fdebb0d56245e"
+    },
+    {
+      "dataset": "SMN4Lang",
+      "model": "word",
+      "selector": "smn4lang/sub01-06/main_word",
+      "scientific_config_sha": "4da34c56dd91c1adc2c1eb02df9c1af7bea810b3f3e0338249e3f22576d82604",
+      "checkpoint_sha": "50eac5bdf4e06da9b280856c499c79a92fd5010eae8c08a81c62297fe7ad6382"
+    },
+    {
+      "dataset": "SMN4Lang",
+      "model": "context",
+      "selector": "smn4lang/sub01-06/main_context_warmstart",
+      "scientific_config_sha": "d9ed5fa323c9ad4db6be80988fd5e988e40c0b023fee85f99bc8cef728bbfc90",
+      "checkpoint_sha": "252319e44f2bead335926c7902dc6ab511e8112172d016926a23324ef9c2b6b2"
+    },
+    {
+      "dataset": "Pallier2025",
+      "model": "word",
+      "selector": "pallier2025/sub01-10/main_word",
+      "scientific_config_sha": "5c6f68f711d19c341b71d75e654c607b88ba1c606ae8b2fad0377ee680d12ff6",
+      "checkpoint_sha": "fee17f5d7c935d0e0efd1ff30e62ba8945e8e3f3cb2e041b0182bc3e45d7f9de"
+    },
+    {
+      "dataset": "Pallier2025",
+      "model": "context",
+      "selector": "pallier2025/sub01-10/main_context_warmstart",
+      "scientific_config_sha": "24d8882f690bcb0b918efe83574036b94625a793954555bd3bc9610c2336a2d1",
+      "checkpoint_sha": "4159a216dd5e1b419335c137caeffe8ecd7a574a248e56f6ef4bbfb15be1a751"
+    }
+  ],
+  "sources": [
+    {
+      "dataset": "ChineseEEG2",
+      "model": "word",
+      "kind": "run_manifest",
+      "path": "outputs/word_decoding/chineseeeg2_littleprince/sub01-08/main_word/seed-000/run_manifest.json",
+      "sha256": "750538423c8934f23dc691172f4bea76317ede3ab557558b5392f33622ba5a5e"
+    },
+    {
+      "dataset": "ChineseEEG2",
+      "model": "word",
+      "kind": "training_summary",
+      "path": "outputs/word_decoding/chineseeeg2_littleprince/sub01-08/main_word/seed-000/training_summary.json",
+      "sha256": "9d1ec2bc9d8da78b05240327984ef1db7b03b3a525aded110292096263ff7f93"
+    },
+    {
+      "dataset": "ChineseEEG2",
+      "model": "word",
+      "kind": "evaluation",
+      "split": "val",
+      "path": "outputs/word_decoding/chineseeeg2_littleprince/sub01-08/main_word/seed-000/evaluation/val.json",
+      "sha256": "4db2961b091d94524b92d5e874c412d1f9dbda67b3be229877ebf7f545a4e767"
+    },
+    {
+      "dataset": "ChineseEEG2",
+      "model": "word",
+      "kind": "audit_summary",
+      "split": "val",
+      "path": "outputs/word_decoding/chineseeeg2_littleprince/sub01-08/main_word/seed-000/audits/validation/summary.json",
+      "sha256": "2eb806eda8676a196f109674513c6b251376f19de9a0517ae8bcd90f815e9927"
+    },
+    {
+      "dataset": "ChineseEEG2",
+      "model": "context",
+      "kind": "run_manifest",
+      "path": "outputs/word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart/seed-000/run_manifest.json",
+      "sha256": "f05f149d08ad66d1a15edc97d90847cbf808bb08bdee625907bbf059dcc1b7c9"
+    },
+    {
+      "dataset": "ChineseEEG2",
+      "model": "context",
+      "kind": "training_summary",
+      "path": "outputs/word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart/seed-000/training_summary.json",
+      "sha256": "50ee9937cf02f7c0d2f2ddce00b340d5220925787d84ada5468103892f1bdca5"
+    },
+    {
+      "dataset": "ChineseEEG2",
+      "model": "context",
+      "kind": "evaluation",
+      "split": "val",
+      "path": "outputs/word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart/seed-000/evaluation/val.json",
+      "sha256": "e015e96f8d86424dac68ff63751874e0dca8a37226cfd93f709194676874acb4"
+    },
+    {
+      "dataset": "ChineseEEG2",
+      "model": "context",
+      "kind": "audit_summary",
+      "split": "val",
+      "path": "outputs/word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart/seed-000/audits/validation/summary.json",
+      "sha256": "85a75d4d57dd825a257a321abbfcb1a864a2f73afc6ce44a731b92d15b1c64e7"
+    },
+    {
+      "dataset": "SMN4Lang",
+      "model": "word",
+      "kind": "run_manifest",
+      "path": "outputs/word_decoding/smn4lang/sub01-06/main_word/seed-000/run_manifest.json",
+      "sha256": "ecae5f9409b21951c8d45bef13b7225214d2e1ba957195c9bae03bfa51415290"
+    },
+    {
+      "dataset": "SMN4Lang",
+      "model": "word",
+      "kind": "training_summary",
+      "path": "outputs/word_decoding/smn4lang/sub01-06/main_word/seed-000/training_summary.json",
+      "sha256": "a299652e183df690b78409e83e70b694e69116f0f190d0c991c314f09e172ec5"
+    },
+    {
+      "dataset": "SMN4Lang",
+      "model": "word",
+      "kind": "evaluation",
+      "split": "val",
+      "path": "outputs/word_decoding/smn4lang/sub01-06/main_word/seed-000/evaluation/val.json",
+      "sha256": "639d2233274b471da08571274ca1a07e37bbabe7d55c78582115ab3bf758c0f2"
+    },
+    {
+      "dataset": "SMN4Lang",
+      "model": "word",
+      "kind": "audit_summary",
+      "split": "val",
+      "path": "outputs/word_decoding/smn4lang/sub01-06/main_word/seed-000/audits/validation/summary.json",
+      "sha256": "eccbc5fd8525aa27077a96bd58d83760a91aa231b1781848d7e841136118cc11"
+    },
+    {
+      "dataset": "SMN4Lang",
+      "model": "context",
+      "kind": "run_manifest",
+      "path": "outputs/word_decoding/smn4lang/sub01-06/main_context_warmstart/seed-000/run_manifest.json",
+      "sha256": "6d4b24d8d624ad32e1a57adbad4b98142c984d24e8afc3af6a5856f5a2f83a3a"
+    },
+    {
+      "dataset": "SMN4Lang",
+      "model": "context",
+      "kind": "training_summary",
+      "path": "outputs/word_decoding/smn4lang/sub01-06/main_context_warmstart/seed-000/training_summary.json",
+      "sha256": "26ffb9e697e716e662189a4ae2cf6ed2821ef4f042d8c843ad2d54ac58c15ae6"
+    },
+    {
+      "dataset": "SMN4Lang",
+      "model": "context",
+      "kind": "evaluation",
+      "split": "val",
+      "path": "outputs/word_decoding/smn4lang/sub01-06/main_context_warmstart/seed-000/evaluation/val.json",
+      "sha256": "b449e068cae30e51de704cc0aba5225b3ef783ac3f193f6aec8ecbd43e486388"
+    },
+    {
+      "dataset": "SMN4Lang",
+      "model": "context",
+      "kind": "audit_summary",
+      "split": "val",
+      "path": "outputs/word_decoding/smn4lang/sub01-06/main_context_warmstart/seed-000/audits/validation/summary.json",
+      "sha256": "dfdab67d3c8d61f8b1b605f87031988186c41c7fba14a0a0565d1b6b700a6a77"
+    },
+    {
+      "dataset": "Pallier2025",
+      "model": "word",
+      "kind": "run_manifest",
+      "path": "outputs/word_decoding/pallier2025/sub01-10/main_word/seed-000/run_manifest.json",
+      "sha256": "c433c435b9139e024c909aa22eb2ee1d5cf90dade7548b3bbd0dd6013f682425"
+    },
+    {
+      "dataset": "Pallier2025",
+      "model": "word",
+      "kind": "training_summary",
+      "path": "outputs/word_decoding/pallier2025/sub01-10/main_word/seed-000/training_summary.json",
+      "sha256": "75ecf0938571bffafd3909b5f13e223b7e36aebe981b54fad71bfa56cdaec142"
+    },
+    {
+      "dataset": "Pallier2025",
+      "model": "word",
+      "kind": "evaluation",
+      "split": "val",
+      "path": "outputs/word_decoding/pallier2025/sub01-10/main_word/seed-000/evaluation/val.json",
+      "sha256": "b395c335324451e5e8158949df6e06a72e1a4825b9c2f7a6b901523ee616fa7c"
+    },
+    {
+      "dataset": "Pallier2025",
+      "model": "word",
+      "kind": "audit_summary",
+      "split": "val",
+      "path": "outputs/word_decoding/pallier2025/sub01-10/main_word/seed-000/audits/validation/summary.json",
+      "sha256": "374430acbeb4e1d2aa82219ea71e4bd52b43353ee3263e52b72cbfcefab9eb1c"
+    },
+    {
+      "dataset": "Pallier2025",
+      "model": "context",
+      "kind": "run_manifest",
+      "path": "outputs/word_decoding/pallier2025/sub01-10/main_context_warmstart/seed-000/run_manifest.json",
+      "sha256": "939328b9bf5b2ed048ed8dfcbf629780c6c316fac647a28653a30ab252014093"
+    },
+    {
+      "dataset": "Pallier2025",
+      "model": "context",
+      "kind": "training_summary",
+      "path": "outputs/word_decoding/pallier2025/sub01-10/main_context_warmstart/seed-000/training_summary.json",
+      "sha256": "821ac0f7a12072e52fa851b594f2104fc83d616de41839a0dc648d5597b05d1d"
+    },
+    {
+      "dataset": "Pallier2025",
+      "model": "context",
+      "kind": "evaluation",
+      "split": "val",
+      "path": "outputs/word_decoding/pallier2025/sub01-10/main_context_warmstart/seed-000/evaluation/val.json",
+      "sha256": "6cdb1d82c13d1dbe14c2371164103da7efc10de05721d615caff22d528f81209"
+    },
+    {
+      "dataset": "Pallier2025",
+      "model": "context",
+      "kind": "audit_summary",
+      "split": "val",
+      "path": "outputs/word_decoding/pallier2025/sub01-10/main_context_warmstart/seed-000/audits/validation/summary.json",
+      "sha256": "4119e2fea9f4de8191f84830c8bb2d1e9360631bf943d07482190194499b8c73"
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+﻿dataset,dataset_label,language,subjects,train_events,validation_events,common_validation_events,train_vocabulary,strict50_candidates,strict50_all_queries,strict50_common_queries,completed_revision_seeds,planned_seeds
+pallier2025,Pallier2025,fr,10,115290,16960,13160,2020,50,8260,6760,3,3
+chineseeeg2_littleprince,ChineseEEG-2,zh,8,81620,14132,11780,2180,50,6160,5280,3,3

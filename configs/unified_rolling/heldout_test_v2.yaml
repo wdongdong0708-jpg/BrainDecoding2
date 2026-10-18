@@ -1,0 +1,52 @@
+protocol:
+  id: unified_heldout_test_v2
+  authorization_date: '2026-10-02'
+  authorization: user_requested_next_step_after_test_main_experiment_proposal
+  split: test
+  datasets: [pallier2025, chineseeeg2_littleprince]
+  seeds: [0, 1, 2]
+  checkpoints: validation_selected_rolling_best_pt
+  training_allowed: false
+  recalibration_allowed: false
+  test_evaluation_allowed: true
+population:
+  pallier2025:
+    scopes: [run-06]
+    expected_events: 18450
+    expected_subjects: 10
+  chineseeeg2_littleprince:
+    scopes: [chapter-02, chapter-09]
+    expected_events: 8480
+    expected_subjects: 8
+  material_block_size: 5
+  calibration_fraction: 0
+word:
+  horizons: [0, 1, 2]
+  candidates: frozen_training_50
+  retain_absent_candidates: true
+  delay_comparison: common_k0_k1_k2_queries
+  inference_only: true
+sentence:
+  parent: data/manifests/rolling_sentence/unified_sentence_v2.json
+  development: data/manifests/rolling_sentence/unified_sentence_v2_revision_gain_full.json
+  conditions: [A, C]
+  branch: open
+  alignment: real
+  language_weight: 0.1
+  decoder_parameters: unchanged_from_frozen_validation
+  reuse_validation_outputs: false
+  reuse_validation_lm_cache: false
+statistics:
+  metric: subject_equal_sentence_bleu1_then_seed_equal
+  family: both_datasets_C_minus_A
+  alternative: greater
+  paired_material_block_sign_flips: 10000
+  material_block_bootstrap_repetitions: 10000
+  bootstrap_interval: percentile_95
+  multiplicity: holm
+  seed: 161803
+execution:
+  segment_batch_size: 16
+  progress_interval_seconds: 30
+  resume: matching_manifest_atomic_chunks_only
+  stop: numerical_or_population_or_provenance_failure_only

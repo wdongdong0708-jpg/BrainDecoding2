@@ -1,0 +1,58 @@
+{
+  "status": "preflight_passed",
+  "manifest_sha256": "67a551e1f196b7536a57b919d531b5c559c912e819b22f117470b78c65794fae",
+  "scientific_protocol_manifest_sha256": "9139c4be3d230ec84dc87451bb45cccc69df8ac94db61200f6e601bb67191c04",
+  "preserved_units": 7676,
+  "preserved_chunks": 483,
+  "remaining_units": 568,
+  "tests_passed": 22,
+  "original_chunks_unchanged": true,
+  "coverage": [
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 0,
+      "units": 808
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 1,
+      "units": 808
+    },
+    {
+      "dataset": "chineseeeg2_littleprince",
+      "seed": 2,
+      "units": 240
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 0,
+      "units": 1940
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 1,
+      "units": 1940
+    },
+    {
+      "dataset": "pallier2025",
+      "seed": 2,
+      "units": 1940
+    }
+  ],
+  "recovery": {
+    "method": "reuse_authenticated_arrival_0_before_policy_divergence",
+    "use_reference_words": false,
+    "use_A_future_arrivals": false,
+    "use_A_final": false,
+    "use_C": false,
+    "use_K1_K2": false,
+    "first_independent_arrival": 1,
+    "preserved_record_content": true,
+    "diagnostic": ".cache/runs/fixed_k0_rolling_search_test_v2_stable/initial_diagnostic.json",
+    "missing_units": 568
+  },
+  "verified_unix": 1791588064.2593803,
+  "adopted_records_verified": 7676,
+  "original_failure_chunk_passed": true,
+  "adoption_verified_unix": 1791588139.8930097
+}

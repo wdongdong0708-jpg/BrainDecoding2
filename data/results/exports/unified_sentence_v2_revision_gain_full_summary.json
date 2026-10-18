@@ -1,0 +1,4654 @@
+{
+  "status": "completed_full_revision_gain",
+  "profile": "unified_sentence_v2_revision_gain_full",
+  "manifest_sha256": "880fc0e6f0f15c83b31b718c6e03df578671ddb8b27ee456c6da73f22b8953fb",
+  "parent_manifest_sha256": "6be90d2a1ea630f41a19faf7513d24528465e70d5c8d1af2ba0210cc0ea9ceea",
+  "preview_sha256": "315819db3b5f4eba89509a55425e8125eefba17aabdee4bab7e0ee0a70f58d2d",
+  "conditions": [
+    "A",
+    "C"
+  ],
+  "branch": "open",
+  "alignment": "real",
+  "comparison": "C_minus_A",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "scope": "all_frozen_evaluation_materials",
+  "evidence": "development_validation",
+  "datasets": {
+    "pallier2025": {
+      "scope": {
+        "groups": 1500,
+        "words": 13060,
+        "subjects": 10,
+        "materials": 150,
+        "blocks": 30
+      },
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "selected_weight": 0.1,
+      "reserved_calibration": {
+        "groups": 400,
+        "words": 3900,
+        "blocks": 8
+      },
+      "calibration_used": {
+        "segments": 50,
+        "words": 520,
+        "subjects": 10,
+        "materials": 5,
+        "blocks": 5,
+        "scopes": [
+          "run-07"
+        ]
+      },
+      "summary": [
+        {
+          "condition": "A",
+          "sentence_bleu1_mean": 0.09753841828940764,
+          "wer": 0.9359111791730474,
+          "bleu1": 0.09864726901480347,
+          "aligned_word_accuracy": 0.06385911179173047
+        },
+        {
+          "condition": "C",
+          "sentence_bleu1_mean": 0.16075142792368305,
+          "wer": 0.869806023481368,
+          "bleu1": 0.16174068402246045,
+          "aligned_word_accuracy": 0.12978560490045943
+        }
+      ],
+      "by_seed": [
+        {
+          "seed": 0,
+          "condition": "A",
+          "sentence_bleu1_mean": 0.0924585852238228,
+          "wer": 0.9385911179173048,
+          "bleu1": 0.09494640122511486,
+          "aligned_word_accuracy": 0.061026033690658496
+        },
+        {
+          "seed": 0,
+          "condition": "C",
+          "sentence_bleu1_mean": 0.1529473807348084,
+          "wer": 0.8755742725880552,
+          "bleu1": 0.1562021439509954,
+          "aligned_word_accuracy": 0.12419601837672282
+        },
+        {
+          "seed": 1,
+          "condition": "A",
+          "sentence_bleu1_mean": 0.09912870443670685,
+          "wer": 0.9344563552833078,
+          "bleu1": 0.09777947932618683,
+          "aligned_word_accuracy": 0.06546707503828483
+        },
+        {
+          "seed": 1,
+          "condition": "C",
+          "sentence_bleu1_mean": 0.1703292857857806,
+          "wer": 0.8620214395099541,
+          "bleu1": 0.16883614088820825,
+          "aligned_word_accuracy": 0.13736600306278712
+        },
+        {
+          "seed": 2,
+          "condition": "A",
+          "sentence_bleu1_mean": 0.1010279652076933,
+          "wer": 0.9346860643185299,
+          "bleu1": 0.1032159264931087,
+          "aligned_word_accuracy": 0.06508422664624809
+        },
+        {
+          "seed": 2,
+          "condition": "C",
+          "sentence_bleu1_mean": 0.15897761725046014,
+          "wer": 0.8718223583460949,
+          "bleu1": 0.16018376722817765,
+          "aligned_word_accuracy": 0.1277947932618683
+        }
+      ],
+      "by_subject_seed": [
+        {
+          "seed": 0,
+          "subject": "sub-01",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.08795081033841297,
+          "wer": 0.94104134762634,
+          "bleu1": 0.09494640122511486,
+          "aligned_word_accuracy": 0.05819295558958652
+        },
+        {
+          "seed": 0,
+          "subject": "sub-01",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.14347299076986786,
+          "wer": 0.8744257274119449,
+          "bleu1": 0.15390505359877488,
+          "aligned_word_accuracy": 0.12557427258805512
+        },
+        {
+          "seed": 0,
+          "subject": "sub-02",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.08424065531044936,
+          "wer": 0.9418070444104135,
+          "bleu1": 0.08346094946401225,
+          "aligned_word_accuracy": 0.05742725880551302
+        },
+        {
+          "seed": 0,
+          "subject": "sub-02",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.14333886925406644,
+          "wer": 0.8767228177641654,
+          "bleu1": 0.1447166921898928,
+          "aligned_word_accuracy": 0.12327718223583461
+        },
+        {
+          "seed": 0,
+          "subject": "sub-03",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.10656977966918739,
+          "wer": 0.9295558958652373,
+          "bleu1": 0.10336906584992343,
+          "aligned_word_accuracy": 0.07044410413476264
+        },
+        {
+          "seed": 0,
+          "subject": "sub-03",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.19516472408254615,
+          "wer": 0.8483920367534457,
+          "bleu1": 0.18683001531393567,
+          "aligned_word_accuracy": 0.15084226646248086
+        },
+        {
+          "seed": 0,
+          "subject": "sub-04",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.08365119638043315,
+          "wer": 0.9509954058192955,
+          "bleu1": 0.09111791730474732,
+          "aligned_word_accuracy": 0.04747320061255743
+        },
+        {
+          "seed": 0,
+          "subject": "sub-04",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1260116790823481,
+          "wer": 0.9027565084226646,
+          "bleu1": 0.1324655436447167,
+          "aligned_word_accuracy": 0.09724349157733538
+        },
+        {
+          "seed": 0,
+          "subject": "sub-05",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.08718769306203686,
+          "wer": 0.942572741194487,
+          "bleu1": 0.09111791730474732,
+          "aligned_word_accuracy": 0.05742725880551302
+        },
+        {
+          "seed": 0,
+          "subject": "sub-05",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.14117774967189423,
+          "wer": 0.8782542113323124,
+          "bleu1": 0.1562021439509954,
+          "aligned_word_accuracy": 0.12021439509954059
+        },
+        {
+          "seed": 0,
+          "subject": "sub-06",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.10866395588726993,
+          "wer": 0.9310872894333844,
+          "bleu1": 0.10336906584992343,
+          "aligned_word_accuracy": 0.0681470137825421
+        },
+        {
+          "seed": 0,
+          "subject": "sub-06",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1624646519406918,
+          "wer": 0.8713629402756509,
+          "bleu1": 0.166156202143951,
+          "aligned_word_accuracy": 0.12863705972434916
+        },
+        {
+          "seed": 0,
+          "subject": "sub-07",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.09969502092210397,
+          "wer": 0.9318529862174579,
+          "bleu1": 0.09494640122511486,
+          "aligned_word_accuracy": 0.0681470137825421
+        },
+        {
+          "seed": 0,
+          "subject": "sub-07",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.17105408881960235,
+          "wer": 0.8667687595712098,
+          "bleu1": 0.1669218989280245,
+          "aligned_word_accuracy": 0.1332312404287902
+        },
+        {
+          "seed": 0,
+          "subject": "sub-08",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.08271922762231014,
+          "wer": 0.9464012251148545,
+          "bleu1": 0.09264931087289434,
+          "aligned_word_accuracy": 0.05359877488514548
+        },
+        {
+          "seed": 0,
+          "subject": "sub-08",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1446012861743781,
+          "wer": 0.8874425727411945,
+          "bleu1": 0.14854517611026033,
+          "aligned_word_accuracy": 0.1125574272588055
+        },
+        {
+          "seed": 0,
+          "subject": "sub-09",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.07388217829542369,
+          "wer": 0.9525267993874426,
+          "bleu1": 0.08269525267993874,
+          "aligned_word_accuracy": 0.04747320061255743
+        },
+        {
+          "seed": 0,
+          "subject": "sub-09",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.11684754888550823,
+          "wer": 0.9042879019908117,
+          "bleu1": 0.12480857580398162,
+          "aligned_word_accuracy": 0.09571209800918837
+        },
+        {
+          "seed": 0,
+          "subject": "sub-10",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1100253347506006,
+          "wer": 0.9180704441041347,
+          "bleu1": 0.11179173047473201,
+          "aligned_word_accuracy": 0.08192955589586524
+        },
+        {
+          "seed": 0,
+          "subject": "sub-10",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.18534021866718056,
+          "wer": 0.8453292496171516,
+          "bleu1": 0.18147013782542112,
+          "aligned_word_accuracy": 0.1546707503828484
+        },
+        {
+          "seed": 1,
+          "subject": "sub-01",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.09939364246478259,
+          "wer": 0.9341500765696784,
+          "bleu1": 0.09571209800918837,
+          "aligned_word_accuracy": 0.06584992343032159
+        },
+        {
+          "seed": 1,
+          "subject": "sub-01",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.16259732259833215,
+          "wer": 0.8644716692189893,
+          "bleu1": 0.16768759571209801,
+          "aligned_word_accuracy": 0.1332312404287902
+        },
+        {
+          "seed": 1,
+          "subject": "sub-02",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.08831114777944767,
+          "wer": 0.942572741194487,
+          "bleu1": 0.09264931087289434,
+          "aligned_word_accuracy": 0.05742725880551302
+        },
+        {
+          "seed": 1,
+          "subject": "sub-02",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.16940016565746813,
+          "wer": 0.8660030627871363,
+          "bleu1": 0.16539050535987748,
+          "aligned_word_accuracy": 0.1324655436447167
+        },
+        {
+          "seed": 1,
+          "subject": "sub-03",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.11647245185379525,
+          "wer": 0.9264931087289433,
+          "bleu1": 0.1110260336906585,
+          "aligned_word_accuracy": 0.07350689127105667
+        },
+        {
+          "seed": 1,
+          "subject": "sub-03",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.19045038871031603,
+          "wer": 0.8506891271056661,
+          "bleu1": 0.1891271056661562,
+          "aligned_word_accuracy": 0.14854517611026033
+        },
+        {
+          "seed": 1,
+          "subject": "sub-04",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.07423776286530358,
+          "wer": 0.9509954058192955,
+          "bleu1": 0.08116385911179173,
+          "aligned_word_accuracy": 0.04900459418070444
+        },
+        {
+          "seed": 1,
+          "subject": "sub-04",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.14691267613747086,
+          "wer": 0.8759571209800919,
+          "bleu1": 0.15237366003062788,
+          "aligned_word_accuracy": 0.12327718223583461
+        },
+        {
+          "seed": 1,
+          "subject": "sub-05",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1009119944831346,
+          "wer": 0.9349157733537519,
+          "bleu1": 0.09800918836140889,
+          "aligned_word_accuracy": 0.06431852986217458
+        },
+        {
+          "seed": 1,
+          "subject": "sub-05",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1639059232497111,
+          "wer": 0.8644716692189893,
+          "bleu1": 0.16156202143950996,
+          "aligned_word_accuracy": 0.13552833078101073
+        },
+        {
+          "seed": 1,
+          "subject": "sub-06",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.11378937285674397,
+          "wer": 0.9203675344563553,
+          "bleu1": 0.11026033690658499,
+          "aligned_word_accuracy": 0.07963246554364471
+        },
+        {
+          "seed": 1,
+          "subject": "sub-06",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.19006704603931684,
+          "wer": 0.8392036753445635,
+          "bleu1": 0.18683001531393567,
+          "aligned_word_accuracy": 0.16079632465543645
+        },
+        {
+          "seed": 1,
+          "subject": "sub-07",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.10802022349606143,
+          "wer": 0.9318529862174579,
+          "bleu1": 0.10260336906584992,
+          "aligned_word_accuracy": 0.0681470137825421
+        },
+        {
+          "seed": 1,
+          "subject": "sub-07",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.17037881303771732,
+          "wer": 0.8606431852986217,
+          "bleu1": 0.16462480857580397,
+          "aligned_word_accuracy": 0.13935681470137826
+        },
+        {
+          "seed": 1,
+          "subject": "sub-08",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1010214874340598,
+          "wer": 0.9280245022970903,
+          "bleu1": 0.10107197549770292,
+          "aligned_word_accuracy": 0.07197549770290965
+        },
+        {
+          "seed": 1,
+          "subject": "sub-08",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.16866864882822616,
+          "wer": 0.8621745788667687,
+          "bleu1": 0.16921898928024504,
+          "aligned_word_accuracy": 0.13782542113323124
+        },
+        {
+          "seed": 1,
+          "subject": "sub-09",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.07468249428042133,
+          "wer": 0.9494640122511485,
+          "bleu1": 0.07503828483920368,
+          "aligned_word_accuracy": 0.05053598774885146
+        },
+        {
+          "seed": 1,
+          "subject": "sub-09",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1530816732436735,
+          "wer": 0.8843797856049005,
+          "bleu1": 0.15237366003062788,
+          "aligned_word_accuracy": 0.11562021439509954
+        },
+        {
+          "seed": 1,
+          "subject": "sub-10",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.11444646685331837,
+          "wer": 0.9257274119448698,
+          "bleu1": 0.11026033690658499,
+          "aligned_word_accuracy": 0.07427258805513016
+        },
+        {
+          "seed": 1,
+          "subject": "sub-10",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1878302003555739,
+          "wer": 0.8522205206738132,
+          "bleu1": 0.17917304747320062,
+          "aligned_word_accuracy": 0.14701378254211334
+        },
+        {
+          "seed": 2,
+          "subject": "sub-01",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.09410808142864947,
+          "wer": 0.9356814701378254,
+          "bleu1": 0.10183767228177641,
+          "aligned_word_accuracy": 0.06431852986217458
+        },
+        {
+          "seed": 2,
+          "subject": "sub-01",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.15440335865756513,
+          "wer": 0.8683001531393568,
+          "bleu1": 0.16003062787136293,
+          "aligned_word_accuracy": 0.13169984686064318
+        },
+        {
+          "seed": 2,
+          "subject": "sub-02",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.08199251581241081,
+          "wer": 0.942572741194487,
+          "bleu1": 0.08346094946401225,
+          "aligned_word_accuracy": 0.05742725880551302
+        },
+        {
+          "seed": 2,
+          "subject": "sub-02",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.15638486457580544,
+          "wer": 0.8736600306278713,
+          "bleu1": 0.15773353751914243,
+          "aligned_word_accuracy": 0.12557427258805512
+        },
+        {
+          "seed": 2,
+          "subject": "sub-03",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.11407818551330465,
+          "wer": 0.9280245022970903,
+          "bleu1": 0.1125574272588055,
+          "aligned_word_accuracy": 0.07197549770290965
+        },
+        {
+          "seed": 2,
+          "subject": "sub-03",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.18348674318407793,
+          "wer": 0.8621745788667687,
+          "bleu1": 0.1784073506891271,
+          "aligned_word_accuracy": 0.13705972434915772
+        },
+        {
+          "seed": 2,
+          "subject": "sub-04",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1031822430297999,
+          "wer": 0.9464012251148545,
+          "bleu1": 0.10872894333843798,
+          "aligned_word_accuracy": 0.052833078101071976
+        },
+        {
+          "seed": 2,
+          "subject": "sub-04",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.13517834293254943,
+          "wer": 0.8966309341500766,
+          "bleu1": 0.13935681470137826,
+          "aligned_word_accuracy": 0.10336906584992343
+        },
+        {
+          "seed": 2,
+          "subject": "sub-05",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.08358117755324647,
+          "wer": 0.9486983154670751,
+          "bleu1": 0.08652373660030628,
+          "aligned_word_accuracy": 0.05130168453292496
+        },
+        {
+          "seed": 2,
+          "subject": "sub-05",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1420646622861591,
+          "wer": 0.891271056661562,
+          "bleu1": 0.14318529862174578,
+          "aligned_word_accuracy": 0.10719754977029096
+        },
+        {
+          "seed": 2,
+          "subject": "sub-06",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.1191947426373998,
+          "wer": 0.9196018376722818,
+          "bleu1": 0.11332312404287902,
+          "aligned_word_accuracy": 0.07963246554364471
+        },
+        {
+          "seed": 2,
+          "subject": "sub-06",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.16930050468319413,
+          "wer": 0.8568147013782542,
+          "bleu1": 0.17151607963246554,
+          "aligned_word_accuracy": 0.14318529862174578
+        },
+        {
+          "seed": 2,
+          "subject": "sub-07",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.09160664980512874,
+          "wer": 0.94104134762634,
+          "bleu1": 0.09877488514548238,
+          "aligned_word_accuracy": 0.05819295558958652
+        },
+        {
+          "seed": 2,
+          "subject": "sub-07",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.15704569165149324,
+          "wer": 0.8728943338437979,
+          "bleu1": 0.15696784073506892,
+          "aligned_word_accuracy": 0.12633996937212863
+        },
+        {
+          "seed": 2,
+          "subject": "sub-08",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.12336341967759386,
+          "wer": 0.9165390505359877,
+          "bleu1": 0.12557427258805512,
+          "aligned_word_accuracy": 0.08346094946401225
+        },
+        {
+          "seed": 2,
+          "subject": "sub-08",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.17552985163632626,
+          "wer": 0.8552833078101072,
+          "bleu1": 0.17611026033690658,
+          "aligned_word_accuracy": 0.1447166921898928
+        },
+        {
+          "seed": 2,
+          "subject": "sub-09",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.08639672039820108,
+          "wer": 0.945635528330781,
+          "bleu1": 0.08805513016845329,
+          "aligned_word_accuracy": 0.05436447166921899
+        },
+        {
+          "seed": 2,
+          "subject": "sub-09",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.13364919693658417,
+          "wer": 0.8935681470137825,
+          "bleu1": 0.14088820826952528,
+          "aligned_word_accuracy": 0.10643185298621746
+        },
+        {
+          "seed": 2,
+          "subject": "sub-10",
+          "condition": "A",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.11277591622119824,
+          "wer": 0.9226646248085758,
+          "bleu1": 0.11332312404287902,
+          "aligned_word_accuracy": 0.0773353751914242
+        },
+        {
+          "seed": 2,
+          "subject": "sub-10",
+          "condition": "C",
+          "segments": 150,
+          "words": 1306,
+          "sentence_bleu1_mean": 0.18273295596084665,
+          "wer": 0.8476263399693721,
+          "bleu1": 0.1776416539050536,
+          "aligned_word_accuracy": 0.15237366003062788
+        }
+      ],
+      "revisions": {
+        "words": 39180,
+        "eligible": 34680,
+        "paired_repaired": 3155,
+        "paired_harmed": 572,
+        "rolling_repaired": 3095,
+        "rolling_harmed": 557,
+        "net_correct_words": 2583,
+        "paired_repaired_rate": 0.08052577845839713,
+        "paired_harmed_rate": 0.014599285349668199,
+        "rolling_repaired_rate": 0.08924452133794696,
+        "rolling_harmed_rate": 0.016061130334486737,
+        "count_unit": "word_position_seed_decisions",
+        "rate_aggregation": "within_subject_pooled_positions_then_equal_subjects_then_equal_seeds"
+      },
+      "revisions_by_seed": [
+        {
+          "seed": 0,
+          "words": 13060,
+          "eligible": 11560,
+          "paired_repaired": 1016,
+          "paired_harmed": 191,
+          "rolling_repaired": 1001,
+          "rolling_harmed": 194,
+          "paired_repaired_rate": 0.0777947932618683,
+          "paired_harmed_rate": 0.014624808575803982,
+          "rolling_repaired_rate": 0.0865916955017301,
+          "rolling_harmed_rate": 0.016782006920415225,
+          "net_correct_words": 825
+        },
+        {
+          "seed": 1,
+          "words": 13060,
+          "eligible": 11560,
+          "paired_repaired": 1125,
+          "paired_harmed": 186,
+          "rolling_repaired": 1101,
+          "rolling_harmed": 187,
+          "paired_repaired_rate": 0.08614088820826951,
+          "paired_harmed_rate": 0.01424196018376723,
+          "rolling_repaired_rate": 0.09524221453287196,
+          "rolling_harmed_rate": 0.016176470588235296,
+          "net_correct_words": 939
+        },
+        {
+          "seed": 2,
+          "words": 13060,
+          "eligible": 11560,
+          "paired_repaired": 1014,
+          "paired_harmed": 195,
+          "rolling_repaired": 993,
+          "rolling_harmed": 176,
+          "paired_repaired_rate": 0.07764165390505359,
+          "paired_harmed_rate": 0.014931087289433384,
+          "rolling_repaired_rate": 0.08589965397923877,
+          "rolling_harmed_rate": 0.015224913494809686,
+          "net_correct_words": 819
+        }
+      ],
+      "gains": {
+        "sentence_bleu1": 0.06321300963427541,
+        "aligned_word_accuracy": 0.06592649310872896,
+        "wer_reduction": 0.06610515569167941
+      },
+      "primary_statistics": {
+        "effect": 0.0632130096342754,
+        "ci_lower": 0.05260752733217528,
+        "ci_upper": 0.07461096990443436,
+        "p_one_sided": 9.999000099990002e-05,
+        "blocks": 30,
+        "subjects": 10,
+        "seeds": 3,
+        "sign_flip_exact": false,
+        "bootstrap_samples": 10000,
+        "p_holm": 0.00019998000199980003,
+        "family": "two_datasets_C_minus_A"
+      },
+      "examples": [
+        {
+          "selection": "most_C_repairs",
+          "seed": 0,
+          "subject": "sub-01",
+          "group": "pallier2025|sub-01|run-07|pallier2025|run-07|sequence-124",
+          "reference": [
+            "c",
+            "est",
+            "ta",
+            "faute",
+            "dit",
+            "le",
+            "petit",
+            "prince",
+            "je",
+            "ne",
+            "te",
+            "souhaitais",
+            "point",
+            "de",
+            "mal",
+            "mais",
+            "tu",
+            "as",
+            "voulu",
+            "que",
+            "je",
+            "t",
+            "apprivoise"
+          ],
+          "initial_C": [
+            "alors",
+            "n",
+            "bien",
+            "débarrasser",
+            "sans",
+            "dit",
+            "la",
+            "roses",
+            "ou",
+            "disais",
+            "comprenais",
+            "mur",
+            "de",
+            "des",
+            "fleurs",
+            "pas",
+            "meurt",
+            "trouve",
+            "peux",
+            "aussi",
+            "moutons",
+            "chance",
+            "manger"
+          ],
+          "repaired_C": [
+            0,
+            1,
+            8,
+            9,
+            10,
+            13,
+            15
+          ],
+          "harmed_C": [],
+          "gain": 0.2608695652173913,
+          "changes": {
+            "subject": "sub-01",
+            "group": "pallier2025|sub-01|run-07|pallier2025|run-07|sequence-124",
+            "words": 23,
+            "eligible": 22,
+            "paired_repaired": 7,
+            "paired_harmed": 0,
+            "rolling_repaired": 7,
+            "rolling_harmed": 0
+          },
+          "final": {
+            "A": [
+              "alors",
+              "n",
+              "peux",
+              "débarrasser",
+              "sans",
+              "dit",
+              "reviens",
+              "roses",
+              "ou",
+              "disais",
+              "comprenais",
+              "mur",
+              "de",
+              "des",
+              "mur",
+              "pas",
+              "mur",
+              "n",
+              "peux",
+              "comme",
+              "moutons",
+              "sorte",
+              "marcher"
+            ],
+            "C": [
+              "c",
+              "est",
+              "peux",
+              "extraordinaire",
+              "comme",
+              "que",
+              "ses",
+              "roses",
+              "je",
+              "ne",
+              "te",
+              "jamais",
+              "mangent",
+              "de",
+              "mouton",
+              "mais",
+              "j",
+              "ai",
+              "pas",
+              "pas",
+              "peu",
+              "a",
+              "manger"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "alors"
+              ],
+              "C": [
+                "alors"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "alors",
+                "n"
+              ],
+              "C": [
+                "ce",
+                "n"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "alors",
+                "n",
+                "peux"
+              ],
+              "C": [
+                "c",
+                "est",
+                "bien"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "débarrasser"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "sans"
+              ]
+            },
+            {
+              "arrival": 5,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "ce",
+                "dit"
+              ]
+            },
+            {
+              "arrival": 6,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "dit",
+                "la"
+              ]
+            },
+            {
+              "arrival": 7,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses"
+              ]
+            },
+            {
+              "arrival": 8,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "ou"
+              ]
+            },
+            {
+              "arrival": 9,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "disais"
+              ]
+            },
+            {
+              "arrival": 10,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "comprenais"
+              ]
+            },
+            {
+              "arrival": 11,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "mur"
+              ]
+            },
+            {
+              "arrival": 12,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur",
+                "de"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "beaucoup",
+                "de"
+              ]
+            },
+            {
+              "arrival": 13,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur",
+                "de",
+                "des"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "jamais",
+                "mangent",
+                "des"
+              ]
+            },
+            {
+              "arrival": 14,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur",
+                "de",
+                "des",
+                "mur"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "jamais",
+                "mangent",
+                "de",
+                "fleurs"
+              ]
+            },
+            {
+              "arrival": 15,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur",
+                "de",
+                "des",
+                "mur",
+                "pas"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "jamais",
+                "mangent",
+                "de",
+                "fleurs",
+                "pas"
+              ]
+            },
+            {
+              "arrival": 16,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur",
+                "de",
+                "des",
+                "mur",
+                "pas",
+                "mur"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "jamais",
+                "mangent",
+                "de",
+                "mouton",
+                "pour",
+                "meurt"
+              ]
+            },
+            {
+              "arrival": 17,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur",
+                "de",
+                "des",
+                "mur",
+                "pas",
+                "mur",
+                "n"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "jamais",
+                "mangent",
+                "de",
+                "mouton",
+                "mais",
+                "je",
+                "trouve"
+              ]
+            },
+            {
+              "arrival": 18,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur",
+                "de",
+                "des",
+                "mur",
+                "pas",
+                "mur",
+                "n",
+                "peux"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "jamais",
+                "mangent",
+                "de",
+                "mouton",
+                "mais",
+                "j",
+                "ai",
+                "peux"
+              ]
+            },
+            {
+              "arrival": 19,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur",
+                "de",
+                "des",
+                "mur",
+                "pas",
+                "mur",
+                "n",
+                "peux",
+                "comme"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "jamais",
+                "mangent",
+                "de",
+                "mouton",
+                "mais",
+                "j",
+                "ai",
+                "peux",
+                "aussi"
+              ]
+            },
+            {
+              "arrival": 20,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur",
+                "de",
+                "des",
+                "mur",
+                "pas",
+                "mur",
+                "n",
+                "peux",
+                "comme",
+                "moutons"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "jamais",
+                "mangent",
+                "de",
+                "mouton",
+                "mais",
+                "j",
+                "ai",
+                "pas",
+                "de",
+                "moutons"
+              ]
+            },
+            {
+              "arrival": 21,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur",
+                "de",
+                "des",
+                "mur",
+                "pas",
+                "mur",
+                "n",
+                "peux",
+                "comme",
+                "moutons",
+                "sorte"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "jamais",
+                "mangent",
+                "de",
+                "mouton",
+                "mais",
+                "j",
+                "ai",
+                "pas",
+                "pas",
+                "la",
+                "chance"
+              ]
+            },
+            {
+              "arrival": 22,
+              "A": [
+                "alors",
+                "n",
+                "peux",
+                "débarrasser",
+                "sans",
+                "dit",
+                "reviens",
+                "roses",
+                "ou",
+                "disais",
+                "comprenais",
+                "mur",
+                "de",
+                "des",
+                "mur",
+                "pas",
+                "mur",
+                "n",
+                "peux",
+                "comme",
+                "moutons",
+                "sorte",
+                "marcher"
+              ],
+              "C": [
+                "c",
+                "est",
+                "peux",
+                "extraordinaire",
+                "comme",
+                "que",
+                "ses",
+                "roses",
+                "je",
+                "ne",
+                "te",
+                "jamais",
+                "mangent",
+                "de",
+                "mouton",
+                "mais",
+                "j",
+                "ai",
+                "pas",
+                "pas",
+                "peu",
+                "a",
+                "manger"
+              ]
+            }
+          ]
+        },
+        {
+          "selection": "most_C_harms",
+          "seed": 0,
+          "subject": "sub-04",
+          "group": "pallier2025|sub-04|run-07|pallier2025|run-07|sequence-124",
+          "reference": [
+            "c",
+            "est",
+            "ta",
+            "faute",
+            "dit",
+            "le",
+            "petit",
+            "prince",
+            "je",
+            "ne",
+            "te",
+            "souhaitais",
+            "point",
+            "de",
+            "mal",
+            "mais",
+            "tu",
+            "as",
+            "voulu",
+            "que",
+            "je",
+            "t",
+            "apprivoise"
+          ],
+          "initial_C": [
+            "c",
+            "n",
+            "peux",
+            "pas",
+            "dit",
+            "ne",
+            "peux",
+            "pas",
+            "si",
+            "le",
+            "petit",
+            "jamais",
+            "dans",
+            "mur",
+            "maison",
+            "et",
+            "disait",
+            "a",
+            "roi",
+            "encore",
+            "roi",
+            "vie",
+            "encore"
+          ],
+          "repaired_C": [],
+          "harmed_C": [
+            0,
+            4
+          ],
+          "gain": 0.043478260869565216,
+          "changes": {
+            "subject": "sub-04",
+            "group": "pallier2025|sub-04|run-07|pallier2025|run-07|sequence-124",
+            "words": 23,
+            "eligible": 22,
+            "paired_repaired": 0,
+            "paired_harmed": 2,
+            "rolling_repaired": 0,
+            "rolling_harmed": 2
+          },
+          "final": {
+            "A": [
+              "c",
+              "n",
+              "besoin",
+              "pas",
+              "dit",
+              "ne",
+              "pouvais",
+              "pas",
+              "si",
+              "le",
+              "petit",
+              "jamais",
+              "dans",
+              "mur",
+              "mur",
+              "et",
+              "ferait",
+              "finissait",
+              "roi",
+              "rose",
+              "roi",
+              "pas",
+              "aussi"
+            ],
+            "C": [
+              "je",
+              "ne",
+              "peux",
+              "pas",
+              "je",
+              "ne",
+              "pouvais",
+              "encore",
+              "dit",
+              "n",
+              "a",
+              "jamais",
+              "dans",
+              "le",
+              "roi",
+              "il",
+              "dit",
+              "a",
+              "fait",
+              "de",
+              "peu",
+              "pas",
+              "encore"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "c"
+              ],
+              "C": [
+                "c"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "c",
+                "n"
+              ],
+              "C": [
+                "je",
+                "n"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "c",
+                "n",
+                "besoin"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "dit"
+              ]
+            },
+            {
+              "arrival": 5,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne"
+              ]
+            },
+            {
+              "arrival": 6,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "peux"
+              ]
+            },
+            {
+              "arrival": 7,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "voulais",
+                "pas"
+              ]
+            },
+            {
+              "arrival": 8,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "si"
+              ]
+            },
+            {
+              "arrival": 9,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "le"
+              ]
+            },
+            {
+              "arrival": 10,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "le",
+                "petit"
+              ]
+            },
+            {
+              "arrival": 11,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais"
+              ]
+            },
+            {
+              "arrival": 12,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais",
+                "dans"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais",
+                "dans"
+              ]
+            },
+            {
+              "arrival": 13,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais",
+                "dans",
+                "mur"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais",
+                "son",
+                "mur"
+              ]
+            },
+            {
+              "arrival": 14,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais",
+                "dans",
+                "mur",
+                "mur"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais",
+                "dans",
+                "la",
+                "maison"
+              ]
+            },
+            {
+              "arrival": 15,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais",
+                "dans",
+                "mur",
+                "mur",
+                "et"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais",
+                "dans",
+                "le",
+                "mur",
+                "et"
+              ]
+            },
+            {
+              "arrival": 16,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais",
+                "dans",
+                "mur",
+                "mur",
+                "et",
+                "ferait"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais",
+                "dans",
+                "le",
+                "roi",
+                "qui",
+                "disait"
+              ]
+            },
+            {
+              "arrival": 17,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais",
+                "dans",
+                "mur",
+                "mur",
+                "et",
+                "ferait",
+                "finissait"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais",
+                "dans",
+                "le",
+                "roi",
+                "il",
+                "y",
+                "a"
+              ]
+            },
+            {
+              "arrival": 18,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais",
+                "dans",
+                "mur",
+                "mur",
+                "et",
+                "ferait",
+                "finissait",
+                "roi"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais",
+                "dans",
+                "le",
+                "roi",
+                "il",
+                "dit",
+                "le",
+                "roi"
+              ]
+            },
+            {
+              "arrival": 19,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais",
+                "dans",
+                "mur",
+                "mur",
+                "et",
+                "ferait",
+                "finissait",
+                "roi",
+                "rose"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais",
+                "dans",
+                "le",
+                "roi",
+                "il",
+                "dit",
+                "a",
+                "fait",
+                "encore"
+              ]
+            },
+            {
+              "arrival": 20,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais",
+                "dans",
+                "mur",
+                "mur",
+                "et",
+                "ferait",
+                "finissait",
+                "roi",
+                "rose",
+                "roi"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais",
+                "dans",
+                "le",
+                "roi",
+                "il",
+                "dit",
+                "a",
+                "fait",
+                "le",
+                "roi"
+              ]
+            },
+            {
+              "arrival": 21,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais",
+                "dans",
+                "mur",
+                "mur",
+                "et",
+                "ferait",
+                "finissait",
+                "roi",
+                "rose",
+                "roi",
+                "pas"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais",
+                "dans",
+                "le",
+                "roi",
+                "il",
+                "dit",
+                "a",
+                "fait",
+                "de",
+                "la",
+                "vie"
+              ]
+            },
+            {
+              "arrival": 22,
+              "A": [
+                "c",
+                "n",
+                "besoin",
+                "pas",
+                "dit",
+                "ne",
+                "pouvais",
+                "pas",
+                "si",
+                "le",
+                "petit",
+                "jamais",
+                "dans",
+                "mur",
+                "mur",
+                "et",
+                "ferait",
+                "finissait",
+                "roi",
+                "rose",
+                "roi",
+                "pas",
+                "aussi"
+              ],
+              "C": [
+                "je",
+                "ne",
+                "peux",
+                "pas",
+                "je",
+                "ne",
+                "pouvais",
+                "encore",
+                "dit",
+                "n",
+                "a",
+                "jamais",
+                "dans",
+                "le",
+                "roi",
+                "il",
+                "dit",
+                "a",
+                "fait",
+                "de",
+                "peu",
+                "pas",
+                "encore"
+              ]
+            }
+          ]
+        },
+        {
+          "selection": "median_C_minus_A",
+          "seed": 0,
+          "subject": "sub-09",
+          "group": "pallier2025|sub-09|run-07|pallier2025|run-07|sequence-040",
+          "reference": [
+            "c",
+            "est",
+            "leur",
+            "seul",
+            "intérêt"
+          ],
+          "initial_C": [
+            "j",
+            "étais",
+            "ordonne",
+            "pas",
+            "dérangé"
+          ],
+          "repaired_C": [],
+          "harmed_C": [],
+          "gain": 0.0,
+          "changes": {
+            "subject": "sub-09",
+            "group": "pallier2025|sub-09|run-07|pallier2025|run-07|sequence-040",
+            "words": 5,
+            "eligible": 4,
+            "paired_repaired": 0,
+            "paired_harmed": 0,
+            "rolling_repaired": 0,
+            "rolling_harmed": 0
+          },
+          "final": {
+            "A": [
+              "j",
+              "étais",
+              "assis",
+              "pas",
+              "dérangé"
+            ],
+            "C": [
+              "je",
+              "n",
+              "ai",
+              "pas",
+              "dérangé"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "j"
+              ],
+              "C": [
+                "j"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "j",
+                "étais"
+              ],
+              "C": [
+                "j",
+                "étais"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "j",
+                "étais",
+                "assis"
+              ],
+              "C": [
+                "je",
+                "n",
+                "ordonne"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "j",
+                "étais",
+                "assis",
+                "pas"
+              ],
+              "C": [
+                "je",
+                "n",
+                "ai",
+                "pas"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "j",
+                "étais",
+                "assis",
+                "pas",
+                "dérangé"
+              ],
+              "C": [
+                "je",
+                "n",
+                "ai",
+                "pas",
+                "dérangé"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "chineseeeg2_littleprince": {
+      "scope": {
+        "groups": 984,
+        "words": 11400,
+        "subjects": 8,
+        "materials": 121,
+        "blocks": 25
+      },
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "selected_weight": 0.1,
+      "reserved_calibration": {
+        "groups": 200,
+        "words": 2732,
+        "blocks": 5
+      },
+      "calibration_used": {
+        "segments": 40,
+        "words": 568,
+        "subjects": 8,
+        "materials": 5,
+        "blocks": 5,
+        "scopes": [
+          "chapter-03",
+          "chapter-05",
+          "chapter-25"
+        ]
+      },
+      "summary": [
+        {
+          "condition": "A",
+          "sentence_bleu1_mean": 0.0422579454554425,
+          "wer": 0.9876919122079212,
+          "bleu1": 0.046869028905514386,
+          "aligned_word_accuracy": 0.012132525302666777
+        },
+        {
+          "condition": "C",
+          "sentence_bleu1_mean": 0.07053074727066971,
+          "wer": 0.9637053485247827,
+          "bleu1": 0.07852457086913528,
+          "aligned_word_accuracy": 0.036119212101155505
+        }
+      ],
+      "by_seed": [
+        {
+          "seed": 0,
+          "condition": "A",
+          "sentence_bleu1_mean": 0.04164315743077472,
+          "wer": 0.9885979180701816,
+          "bleu1": 0.047891255658381496,
+          "aligned_word_accuracy": 0.01140208192981834
+        },
+        {
+          "seed": 0,
+          "condition": "C",
+          "sentence_bleu1_mean": 0.07044999465794216,
+          "wer": 0.9653424133366426,
+          "bleu1": 0.08046240648157997,
+          "aligned_word_accuracy": 0.03448251663534612
+        },
+        {
+          "seed": 1,
+          "condition": "A",
+          "sentence_bleu1_mean": 0.05843237278191206,
+          "wer": 0.9821092466522474,
+          "bleu1": 0.05990866810859365,
+          "aligned_word_accuracy": 0.01762777895968514
+        },
+        {
+          "seed": 1,
+          "condition": "C",
+          "sentence_bleu1_mean": 0.07361205618069241,
+          "wer": 0.9613054610029665,
+          "bleu1": 0.07957708399815622,
+          "aligned_word_accuracy": 0.03860663463697715
+        },
+        {
+          "seed": 2,
+          "condition": "A",
+          "sentence_bleu1_mean": 0.02669830615364071,
+          "wer": 0.9923685719013344,
+          "bleu1": 0.03280716294956801,
+          "aligned_word_accuracy": 0.00736771501849685
+        },
+        {
+          "seed": 2,
+          "condition": "C",
+          "sentence_bleu1_mean": 0.06753019097337457,
+          "wer": 0.9644681712347387,
+          "bleu1": 0.07553422212766964,
+          "aligned_word_accuracy": 0.03526848503114326
+        }
+      ],
+      "by_subject_seed": [
+        {
+          "seed": 0,
+          "subject": "sub-01",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.04672498862757233,
+          "wer": 0.988795518207283,
+          "bleu1": 0.05182072829131653,
+          "aligned_word_accuracy": 0.011204481792717087
+        },
+        {
+          "seed": 0,
+          "subject": "sub-01",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.061527217834189955,
+          "wer": 0.9719887955182073,
+          "bleu1": 0.0700280112044818,
+          "aligned_word_accuracy": 0.028011204481792718
+        },
+        {
+          "seed": 0,
+          "subject": "sub-02",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.04414836216762192,
+          "wer": 0.988795518207283,
+          "bleu1": 0.049019607843137254,
+          "aligned_word_accuracy": 0.011204481792717087
+        },
+        {
+          "seed": 0,
+          "subject": "sub-02",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.06436519999237109,
+          "wer": 0.9677871148459384,
+          "bleu1": 0.06862745098039216,
+          "aligned_word_accuracy": 0.031512605042016806
+        },
+        {
+          "seed": 0,
+          "subject": "sub-03",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.04690965769032489,
+          "wer": 0.9852941176470589,
+          "bleu1": 0.05112044817927171,
+          "aligned_word_accuracy": 0.014705882352941176
+        },
+        {
+          "seed": 0,
+          "subject": "sub-03",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.05774986238631597,
+          "wer": 0.9684873949579832,
+          "bleu1": 0.06722689075630252,
+          "aligned_word_accuracy": 0.031512605042016806
+        },
+        {
+          "seed": 0,
+          "subject": "sub-04",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.036768336286761245,
+          "wer": 0.988795518207283,
+          "bleu1": 0.046218487394957986,
+          "aligned_word_accuracy": 0.011204481792717087
+        },
+        {
+          "seed": 0,
+          "subject": "sub-04",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.06139645138146,
+          "wer": 0.969187675070028,
+          "bleu1": 0.07072829131652661,
+          "aligned_word_accuracy": 0.03011204481792717
+        },
+        {
+          "seed": 0,
+          "subject": "sub-05",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.03974913788849926,
+          "wer": 0.990857946554149,
+          "bleu1": 0.047116736990154715,
+          "aligned_word_accuracy": 0.009142053445850914
+        },
+        {
+          "seed": 0,
+          "subject": "sub-05",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.07526254807739198,
+          "wer": 0.9641350210970464,
+          "bleu1": 0.0850914205344585,
+          "aligned_word_accuracy": 0.035864978902953586
+        },
+        {
+          "seed": 0,
+          "subject": "sub-06",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.038526905042592346,
+          "wer": 0.9866385372714487,
+          "bleu1": 0.0450070323488045,
+          "aligned_word_accuracy": 0.013361462728551337
+        },
+        {
+          "seed": 0,
+          "subject": "sub-06",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.07823111095783378,
+          "wer": 0.9578059071729957,
+          "bleu1": 0.09142053445850915,
+          "aligned_word_accuracy": 0.04219409282700422
+        },
+        {
+          "seed": 0,
+          "subject": "sub-07",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.044298843513421844,
+          "wer": 0.9887482419127989,
+          "bleu1": 0.05063291139240506,
+          "aligned_word_accuracy": 0.011251758087201125
+        },
+        {
+          "seed": 0,
+          "subject": "sub-07",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.08075480744355382,
+          "wer": 0.9634317862165963,
+          "bleu1": 0.09563994374120956,
+          "aligned_word_accuracy": 0.03656821378340366
+        },
+        {
+          "seed": 0,
+          "subject": "sub-08",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.036019028229403935,
+          "wer": 0.990857946554149,
+          "bleu1": 0.04219409282700422,
+          "aligned_word_accuracy": 0.009142053445850914
+        },
+        {
+          "seed": 0,
+          "subject": "sub-08",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.08431275919042074,
+          "wer": 0.959915611814346,
+          "bleu1": 0.0949367088607595,
+          "aligned_word_accuracy": 0.04008438818565401
+        },
+        {
+          "seed": 1,
+          "subject": "sub-01",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.06712444367598101,
+          "wer": 0.9789915966386554,
+          "bleu1": 0.06582633053221289,
+          "aligned_word_accuracy": 0.02100840336134454
+        },
+        {
+          "seed": 1,
+          "subject": "sub-01",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.07434106172925597,
+          "wer": 0.9621848739495799,
+          "bleu1": 0.07563025210084033,
+          "aligned_word_accuracy": 0.037815126050420166
+        },
+        {
+          "seed": 1,
+          "subject": "sub-02",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.05724081216190659,
+          "wer": 0.9810924369747899,
+          "bleu1": 0.05672268907563025,
+          "aligned_word_accuracy": 0.018907563025210083
+        },
+        {
+          "seed": 1,
+          "subject": "sub-02",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.0650716819968559,
+          "wer": 0.9663865546218487,
+          "bleu1": 0.07352941176470588,
+          "aligned_word_accuracy": 0.03361344537815126
+        },
+        {
+          "seed": 1,
+          "subject": "sub-03",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.05824589118743403,
+          "wer": 0.9810924369747899,
+          "bleu1": 0.06302521008403361,
+          "aligned_word_accuracy": 0.018907563025210083
+        },
+        {
+          "seed": 1,
+          "subject": "sub-03",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.06622851966397746,
+          "wer": 0.9677871148459384,
+          "bleu1": 0.07282913165266107,
+          "aligned_word_accuracy": 0.03221288515406162
+        },
+        {
+          "seed": 1,
+          "subject": "sub-04",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.059835913865045554,
+          "wer": 0.9796918767507002,
+          "bleu1": 0.06092436974789916,
+          "aligned_word_accuracy": 0.018907563025210083
+        },
+        {
+          "seed": 1,
+          "subject": "sub-04",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.06218059050182452,
+          "wer": 0.9684873949579832,
+          "bleu1": 0.0665266106442577,
+          "aligned_word_accuracy": 0.031512605042016806
+        },
+        {
+          "seed": 1,
+          "subject": "sub-05",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.049860756079349464,
+          "wer": 0.9873417721518988,
+          "bleu1": 0.053445850914205346,
+          "aligned_word_accuracy": 0.011954992967651195
+        },
+        {
+          "seed": 1,
+          "subject": "sub-05",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.07553831558359946,
+          "wer": 0.959915611814346,
+          "bleu1": 0.08649789029535865,
+          "aligned_word_accuracy": 0.03938115330520394
+        },
+        {
+          "seed": 1,
+          "subject": "sub-06",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.04865359267594692,
+          "wer": 0.9880450070323488,
+          "bleu1": 0.05063291139240506,
+          "aligned_word_accuracy": 0.011954992967651195
+        },
+        {
+          "seed": 1,
+          "subject": "sub-06",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.07814271088194007,
+          "wer": 0.9556962025316456,
+          "bleu1": 0.08438818565400844,
+          "aligned_word_accuracy": 0.04430379746835443
+        },
+        {
+          "seed": 1,
+          "subject": "sub-07",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.06097308325787657,
+          "wer": 0.9817158931082982,
+          "bleu1": 0.06540084388185655,
+          "aligned_word_accuracy": 0.01828410689170183
+        },
+        {
+          "seed": 1,
+          "subject": "sub-07",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.0863698399046939,
+          "wer": 0.9507735583684951,
+          "bleu1": 0.09212376933895922,
+          "aligned_word_accuracy": 0.04922644163150492
+        },
+        {
+          "seed": 1,
+          "subject": "sub-08",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.06552448935175632,
+          "wer": 0.9789029535864979,
+          "bleu1": 0.06329113924050633,
+          "aligned_word_accuracy": 0.02109704641350211
+        },
+        {
+          "seed": 1,
+          "subject": "sub-08",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.08102372918339201,
+          "wer": 0.9592123769338959,
+          "bleu1": 0.0850914205344585,
+          "aligned_word_accuracy": 0.040787623066104076
+        },
+        {
+          "seed": 2,
+          "subject": "sub-01",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.03161679323749068,
+          "wer": 0.9915966386554622,
+          "bleu1": 0.03711484593837535,
+          "aligned_word_accuracy": 0.008403361344537815
+        },
+        {
+          "seed": 2,
+          "subject": "sub-01",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.07057187734175312,
+          "wer": 0.969187675070028,
+          "bleu1": 0.07703081232492998,
+          "aligned_word_accuracy": 0.03081232492997199
+        },
+        {
+          "seed": 2,
+          "subject": "sub-02",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.027917736661112115,
+          "wer": 0.9929971988795518,
+          "bleu1": 0.03571428571428571,
+          "aligned_word_accuracy": 0.0070028011204481795
+        },
+        {
+          "seed": 2,
+          "subject": "sub-02",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.05948213516873715,
+          "wer": 0.9670868347338936,
+          "bleu1": 0.06792717086834733,
+          "aligned_word_accuracy": 0.03221288515406162
+        },
+        {
+          "seed": 2,
+          "subject": "sub-03",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.020855129780958267,
+          "wer": 0.9901960784313726,
+          "bleu1": 0.025910364145658265,
+          "aligned_word_accuracy": 0.00980392156862745
+        },
+        {
+          "seed": 2,
+          "subject": "sub-03",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.06298114509526088,
+          "wer": 0.9649859943977591,
+          "bleu1": 0.07072829131652661,
+          "aligned_word_accuracy": 0.0350140056022409
+        },
+        {
+          "seed": 2,
+          "subject": "sub-04",
+          "condition": "A",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.026955444067003384,
+          "wer": 0.9943977591036415,
+          "bleu1": 0.03221288515406162,
+          "aligned_word_accuracy": 0.0056022408963585435
+        },
+        {
+          "seed": 2,
+          "subject": "sub-04",
+          "condition": "C",
+          "segments": 124,
+          "words": 1428,
+          "sentence_bleu1_mean": 0.06479282592639848,
+          "wer": 0.9670868347338936,
+          "bleu1": 0.07142857142857142,
+          "aligned_word_accuracy": 0.032913165266106444
+        },
+        {
+          "seed": 2,
+          "subject": "sub-05",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.028439057666329943,
+          "wer": 0.9922644163150492,
+          "bleu1": 0.035161744022503515,
+          "aligned_word_accuracy": 0.007032348804500703
+        },
+        {
+          "seed": 2,
+          "subject": "sub-05",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.07134935734399457,
+          "wer": 0.9627285513361463,
+          "bleu1": 0.07805907172995781,
+          "aligned_word_accuracy": 0.03727144866385373
+        },
+        {
+          "seed": 2,
+          "subject": "sub-06",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.022443002509172635,
+          "wer": 0.9943741209563994,
+          "bleu1": 0.02812939521800281,
+          "aligned_word_accuracy": 0.004922644163150493
+        },
+        {
+          "seed": 2,
+          "subject": "sub-06",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.06979391320544125,
+          "wer": 0.9627285513361463,
+          "bleu1": 0.07735583684950774,
+          "aligned_word_accuracy": 0.03727144866385373
+        },
+        {
+          "seed": 2,
+          "subject": "sub-07",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.02392915679825751,
+          "wer": 0.9922644163150492,
+          "bleu1": 0.029535864978902954,
+          "aligned_word_accuracy": 0.007735583684950774
+        },
+        {
+          "seed": 2,
+          "subject": "sub-07",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.07358070066444317,
+          "wer": 0.9613220815752461,
+          "bleu1": 0.0850914205344585,
+          "aligned_word_accuracy": 0.03867791842475387
+        },
+        {
+          "seed": 2,
+          "subject": "sub-08",
+          "condition": "A",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.03143012850880114,
+          "wer": 0.990857946554149,
+          "bleu1": 0.03867791842475387,
+          "aligned_word_accuracy": 0.008438818565400843
+        },
+        {
+          "seed": 2,
+          "subject": "sub-08",
+          "condition": "C",
+          "segments": 122,
+          "words": 1422,
+          "sentence_bleu1_mean": 0.06768957304096788,
+          "wer": 0.960618846694796,
+          "bleu1": 0.07665260196905767,
+          "aligned_word_accuracy": 0.0379746835443038
+        }
+      ],
+      "revisions": {
+        "words": 34200,
+        "eligible": 31248,
+        "paired_repaired": 1028,
+        "paired_harmed": 208,
+        "rolling_repaired": 956,
+        "rolling_harmed": 200,
+        "net_correct_words": 820,
+        "paired_repaired_rate": 0.030067353945797726,
+        "paired_harmed_rate": 0.006080667147308994,
+        "rolling_repaired_rate": 0.030601109013685703,
+        "rolling_harmed_rate": 0.006398458392323423,
+        "count_unit": "word_position_seed_decisions",
+        "rate_aggregation": "within_subject_pooled_positions_then_equal_subjects_then_equal_seeds"
+      },
+      "revisions_by_seed": [
+        {
+          "seed": 0,
+          "words": 11400,
+          "eligible": 10416,
+          "paired_repaired": 328,
+          "paired_harmed": 65,
+          "rolling_repaired": 309,
+          "rolling_harmed": 55,
+          "paired_repaired_rate": 0.02878055230531031,
+          "paired_harmed_rate": 0.005700117599782529,
+          "rolling_repaired_rate": 0.02967348985370458,
+          "rolling_harmed_rate": 0.005279318074563473,
+          "net_correct_words": 263
+        },
+        {
+          "seed": 1,
+          "words": 11400,
+          "eligible": 10416,
+          "paired_repaired": 325,
+          "paired_harmed": 86,
+          "rolling_repaired": 298,
+          "rolling_harmed": 88,
+          "paired_repaired_rate": 0.02852016333959744,
+          "paired_harmed_rate": 0.007541307662305428,
+          "rolling_repaired_rate": 0.02861933695139217,
+          "rolling_harmed_rate": 0.008445316186880604,
+          "net_correct_words": 239
+        },
+        {
+          "seed": 2,
+          "words": 11400,
+          "eligible": 10416,
+          "paired_repaired": 375,
+          "paired_harmed": 57,
+          "rolling_repaired": 349,
+          "rolling_harmed": 57,
+          "paired_repaired_rate": 0.032901346192485435,
+          "paired_harmed_rate": 0.005000576179839024,
+          "rolling_repaired_rate": 0.03351050023596036,
+          "rolling_harmed_rate": 0.005470740915526192,
+          "net_correct_words": 318
+        }
+      ],
+      "gains": {
+        "sentence_bleu1": 0.028272801815227212,
+        "aligned_word_accuracy": 0.023986686798488727,
+        "wer_reduction": 0.02398656368313845
+      },
+      "primary_statistics": {
+        "effect": 0.028272801815227212,
+        "ci_lower": 0.021777122470623682,
+        "ci_upper": 0.03402164611050672,
+        "p_one_sided": 9.999000099990002e-05,
+        "blocks": 25,
+        "subjects": 8,
+        "seeds": 3,
+        "sign_flip_exact": false,
+        "bootstrap_samples": 10000,
+        "p_holm": 0.00019998000199980003,
+        "family": "two_datasets_C_minus_A"
+      },
+      "examples": [
+        {
+          "selection": "most_C_repairs",
+          "seed": 0,
+          "subject": "sub-01",
+          "group": "sub-01|run-15|chapter-5|semantic-32",
+          "reference": [
+            "猴面包树",
+            "小",
+            "的",
+            "时候",
+            "跟",
+            "玫瑰",
+            "幼苗",
+            "是",
+            "很",
+            "像",
+            "的",
+            "那",
+            "你",
+            "就",
+            "得",
+            "给",
+            "自己",
+            "立",
+            "个",
+            "规矩"
+          ],
+          "initial_C": [
+            "所以",
+            "即使",
+            "却",
+            "计算",
+            "除了",
+            "待",
+            "的",
+            "的",
+            "成熟",
+            "高兴",
+            "的",
+            "而",
+            "一堆",
+            "中",
+            "变",
+            "权力",
+            "天",
+            "孩子",
+            "丑陋",
+            "权力"
+          ],
+          "repaired_C": [
+            2,
+            14,
+            18
+          ],
+          "harmed_C": [
+            10
+          ],
+          "gain": 0.15000000000000002,
+          "changes": {
+            "subject": "sub-01",
+            "group": "sub-01|run-15|chapter-5|semantic-32",
+            "words": 20,
+            "eligible": 19,
+            "paired_repaired": 3,
+            "paired_harmed": 1,
+            "rolling_repaired": 3,
+            "rolling_harmed": 1
+          },
+          "final": {
+            "A": [
+              "所以",
+              "本来",
+              "地",
+              "行星",
+              "即使",
+              "等",
+              "速",
+              "号",
+              "变",
+              "暖",
+              "的",
+              "而",
+              "对",
+              "内",
+              "着",
+              "权力",
+              "天",
+              "体",
+              "三",
+              "权力"
+            ],
+            "C": [
+              "可是",
+              "一旦",
+              "的",
+              "时刻",
+              "只",
+              "等到",
+              "很快",
+              "地",
+              "被",
+              "非常",
+              "丑陋",
+              "和",
+              "一切",
+              "望",
+              "得",
+              "跟",
+              "更",
+              "来",
+              "个",
+              "权力"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "所以"
+              ],
+              "C": [
+                "所以"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "所以",
+                "本来"
+              ],
+              "C": [
+                "但是",
+                "即使"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "所以",
+                "本来",
+                "地"
+              ],
+              "C": [
+                "可是",
+                "当初",
+                "却"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "你",
+                "计算"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "除了"
+              ]
+            },
+            {
+              "arrival": 5,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "待"
+              ]
+            },
+            {
+              "arrival": 6,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等",
+                "的"
+              ]
+            },
+            {
+              "arrival": 7,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "的"
+              ]
+            },
+            {
+              "arrival": 8,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "成熟"
+              ]
+            },
+            {
+              "arrival": 9,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变",
+                "暖"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "挺",
+                "高兴"
+              ]
+            },
+            {
+              "arrival": 10,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变",
+                "暖",
+                "的"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "被",
+                "绿色",
+                "的"
+              ]
+            },
+            {
+              "arrival": 11,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变",
+                "暖",
+                "的",
+                "而"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "被",
+                "非常",
+                "丑陋",
+                "而"
+              ]
+            },
+            {
+              "arrival": 12,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变",
+                "暖",
+                "的",
+                "而",
+                "对"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "被",
+                "非常",
+                "丑陋",
+                "和",
+                "一堆"
+              ]
+            },
+            {
+              "arrival": 13,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变",
+                "暖",
+                "的",
+                "而",
+                "对",
+                "内"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "被",
+                "非常",
+                "丑陋",
+                "和",
+                "一堆",
+                "中"
+              ]
+            },
+            {
+              "arrival": 14,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变",
+                "暖",
+                "的",
+                "而",
+                "对",
+                "内",
+                "着"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "被",
+                "非常",
+                "丑陋",
+                "和",
+                "一切",
+                "都",
+                "变"
+              ]
+            },
+            {
+              "arrival": 15,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变",
+                "暖",
+                "的",
+                "而",
+                "对",
+                "内",
+                "着",
+                "权力"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "被",
+                "非常",
+                "丑陋",
+                "和",
+                "一切",
+                "望",
+                "得",
+                "权力"
+              ]
+            },
+            {
+              "arrival": 16,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变",
+                "暖",
+                "的",
+                "而",
+                "对",
+                "内",
+                "着",
+                "权力",
+                "天"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "被",
+                "非常",
+                "丑陋",
+                "和",
+                "一切",
+                "望",
+                "得",
+                "跟",
+                "天"
+              ]
+            },
+            {
+              "arrival": 17,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变",
+                "暖",
+                "的",
+                "而",
+                "对",
+                "内",
+                "着",
+                "权力",
+                "天",
+                "体"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "被",
+                "非常",
+                "丑陋",
+                "和",
+                "一切",
+                "望",
+                "得",
+                "跟",
+                "那个",
+                "孩子"
+              ]
+            },
+            {
+              "arrival": 18,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变",
+                "暖",
+                "的",
+                "而",
+                "对",
+                "内",
+                "着",
+                "权力",
+                "天",
+                "体",
+                "三"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "被",
+                "非常",
+                "丑陋",
+                "和",
+                "一切",
+                "望",
+                "得",
+                "跟",
+                "更",
+                "更",
+                "丑陋"
+              ]
+            },
+            {
+              "arrival": 19,
+              "A": [
+                "所以",
+                "本来",
+                "地",
+                "行星",
+                "即使",
+                "等",
+                "速",
+                "号",
+                "变",
+                "暖",
+                "的",
+                "而",
+                "对",
+                "内",
+                "着",
+                "权力",
+                "天",
+                "体",
+                "三",
+                "权力"
+              ],
+              "C": [
+                "可是",
+                "一旦",
+                "的",
+                "时刻",
+                "只",
+                "等到",
+                "很快",
+                "地",
+                "被",
+                "非常",
+                "丑陋",
+                "和",
+                "一切",
+                "望",
+                "得",
+                "跟",
+                "更",
+                "来",
+                "个",
+                "权力"
+              ]
+            }
+          ]
+        },
+        {
+          "selection": "most_C_harms",
+          "seed": 0,
+          "subject": "sub-07",
+          "group": "sub-07|run-211|chapter-25|semantic-31",
+          "reference": [
+            "这种",
+            "蜂蜜",
+            "的",
+            "色泽",
+            "也",
+            "使",
+            "我",
+            "心头",
+            "洋溢着",
+            "幸福",
+            "的",
+            "感觉"
+          ],
+          "initial_C": [
+            "你好",
+            "叫",
+            "灯",
+            "翅膀",
+            "也",
+            "不会",
+            "鸟",
+            "鸟",
+            "上",
+            "说",
+            "的",
+            "变成"
+          ],
+          "repaired_C": [],
+          "harmed_C": [
+            4,
+            10
+          ],
+          "gain": -0.08333333333333333,
+          "changes": {
+            "subject": "sub-07",
+            "group": "sub-07|run-211|chapter-25|semantic-31",
+            "words": 12,
+            "eligible": 11,
+            "paired_repaired": 0,
+            "paired_harmed": 1,
+            "rolling_repaired": 0,
+            "rolling_harmed": 2
+          },
+          "final": {
+            "A": [
+              "你好",
+              "叫",
+              "吧",
+              "事情",
+              "也",
+              "像",
+              "猜",
+              "回家",
+              "过",
+              "说",
+              "和",
+              "闹"
+            ],
+            "C": [
+              "为什么",
+              "长",
+              "着",
+              "翅膀",
+              "而",
+              "给",
+              "在",
+              "玫瑰",
+              "身旁",
+              "消逝",
+              "而",
+              "变成"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "你好"
+              ],
+              "C": [
+                "你好"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "你好",
+                "叫"
+              ],
+              "C": [
+                "为什么",
+                "叫"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "你好",
+                "叫",
+                "吧"
+              ],
+              "C": [
+                "为什么",
+                "叫",
+                "灯"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "你好",
+                "叫",
+                "吧",
+                "事情"
+              ],
+              "C": [
+                "为什么",
+                "长",
+                "着",
+                "翅膀"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "你好",
+                "叫",
+                "吧",
+                "事情",
+                "也"
+              ],
+              "C": [
+                "为什么",
+                "长",
+                "着",
+                "的",
+                "也"
+              ]
+            },
+            {
+              "arrival": 5,
+              "A": [
+                "你好",
+                "叫",
+                "吧",
+                "事情",
+                "也",
+                "像"
+              ],
+              "C": [
+                "为什么",
+                "长",
+                "着",
+                "翅膀",
+                "而",
+                "不会"
+              ]
+            },
+            {
+              "arrival": 6,
+              "A": [
+                "你好",
+                "叫",
+                "吧",
+                "事情",
+                "也",
+                "像",
+                "猜"
+              ],
+              "C": [
+                "为什么",
+                "长",
+                "着",
+                "翅膀",
+                "而",
+                "像",
+                "鸟"
+              ]
+            },
+            {
+              "arrival": 7,
+              "A": [
+                "你好",
+                "叫",
+                "吧",
+                "事情",
+                "也",
+                "像",
+                "猜",
+                "回家"
+              ],
+              "C": [
+                "为什么",
+                "长",
+                "着",
+                "翅膀",
+                "而",
+                "给",
+                "那",
+                "鸟"
+              ]
+            },
+            {
+              "arrival": 8,
+              "A": [
+                "你好",
+                "叫",
+                "吧",
+                "事情",
+                "也",
+                "像",
+                "猜",
+                "回家",
+                "过"
+              ],
+              "C": [
+                "为什么",
+                "长",
+                "着",
+                "翅膀",
+                "而",
+                "给",
+                "在",
+                "天空",
+                "上"
+              ]
+            },
+            {
+              "arrival": 9,
+              "A": [
+                "你好",
+                "叫",
+                "吧",
+                "事情",
+                "也",
+                "像",
+                "猜",
+                "回家",
+                "过",
+                "说"
+              ],
+              "C": [
+                "为什么",
+                "长",
+                "着",
+                "翅膀",
+                "而",
+                "给",
+                "在",
+                "玫瑰",
+                "身旁",
+                "说"
+              ]
+            },
+            {
+              "arrival": 10,
+              "A": [
+                "你好",
+                "叫",
+                "吧",
+                "事情",
+                "也",
+                "像",
+                "猜",
+                "回家",
+                "过",
+                "说",
+                "和"
+              ],
+              "C": [
+                "为什么",
+                "长",
+                "着",
+                "翅膀",
+                "而",
+                "给",
+                "在",
+                "玫瑰",
+                "身旁",
+                "消逝",
+                "的"
+              ]
+            },
+            {
+              "arrival": 11,
+              "A": [
+                "你好",
+                "叫",
+                "吧",
+                "事情",
+                "也",
+                "像",
+                "猜",
+                "回家",
+                "过",
+                "说",
+                "和",
+                "闹"
+              ],
+              "C": [
+                "为什么",
+                "长",
+                "着",
+                "翅膀",
+                "而",
+                "给",
+                "在",
+                "玫瑰",
+                "身旁",
+                "消逝",
+                "而",
+                "变成"
+              ]
+            }
+          ]
+        },
+        {
+          "selection": "median_C_minus_A",
+          "seed": 0,
+          "subject": "sub-06",
+          "group": "sub-06|run-15|chapter-5|semantic-7",
+          "reference": [
+            "小王子",
+            "接着",
+            "说",
+            "这么",
+            "说",
+            "它们",
+            "也",
+            "吃",
+            "猴面包树",
+            "喽"
+          ],
+          "initial_C": [
+            "我",
+            "即使",
+            "不",
+            "地",
+            "成熟",
+            "同时",
+            "挺",
+            "难",
+            "上",
+            "和"
+          ],
+          "repaired_C": [],
+          "harmed_C": [],
+          "gain": 0.0,
+          "changes": {
+            "subject": "sub-06",
+            "group": "sub-06|run-15|chapter-5|semantic-7",
+            "words": 10,
+            "eligible": 9,
+            "paired_repaired": 0,
+            "paired_harmed": 0,
+            "rolling_repaired": 0,
+            "rolling_harmed": 0
+          },
+          "final": {
+            "A": [
+              "我",
+              "问",
+              "不",
+              "都",
+              "挺",
+              "地",
+              "挺",
+              "山",
+              "多",
+              "地"
+            ],
+            "C": [
+              "所以",
+              "是",
+              "长大",
+              "和",
+              "长大",
+              "都",
+              "像",
+              "一条",
+              "蟒蛇",
+              "和"
+            ]
+          },
+          "trace": [
+            {
+              "arrival": 0,
+              "A": [
+                "我"
+              ],
+              "C": [
+                "我"
+              ]
+            },
+            {
+              "arrival": 1,
+              "A": [
+                "我",
+                "问"
+              ],
+              "C": [
+                "然而",
+                "即使"
+              ]
+            },
+            {
+              "arrival": 2,
+              "A": [
+                "我",
+                "问",
+                "不"
+              ],
+              "C": [
+                "所以",
+                "其实",
+                "不"
+              ]
+            },
+            {
+              "arrival": 3,
+              "A": [
+                "我",
+                "问",
+                "不",
+                "都"
+              ],
+              "C": [
+                "所以",
+                "是",
+                "十二",
+                "地"
+              ]
+            },
+            {
+              "arrival": 4,
+              "A": [
+                "我",
+                "问",
+                "不",
+                "都",
+                "挺"
+              ],
+              "C": [
+                "所以",
+                "是",
+                "长大",
+                "就",
+                "成熟"
+              ]
+            },
+            {
+              "arrival": 5,
+              "A": [
+                "我",
+                "问",
+                "不",
+                "都",
+                "挺",
+                "地"
+              ],
+              "C": [
+                "所以",
+                "是",
+                "长大",
+                "和",
+                "成熟",
+                "同时"
+              ]
+            },
+            {
+              "arrival": 6,
+              "A": [
+                "我",
+                "问",
+                "不",
+                "都",
+                "挺",
+                "地",
+                "挺"
+              ],
+              "C": [
+                "所以",
+                "是",
+                "长大",
+                "和",
+                "长大",
+                "都",
+                "挺"
+              ]
+            },
+            {
+              "arrival": 7,
+              "A": [
+                "我",
+                "问",
+                "不",
+                "都",
+                "挺",
+                "地",
+                "挺",
+                "山"
+              ],
+              "C": [
+                "所以",
+                "是",
+                "长大",
+                "和",
+                "长大",
+                "都",
+                "挺",
+                "难"
+              ]
+            },
+            {
+              "arrival": 8,
+              "A": [
+                "我",
+                "问",
+                "不",
+                "都",
+                "挺",
+                "地",
+                "挺",
+                "山",
+                "多"
+              ],
+              "C": [
+                "所以",
+                "是",
+                "长大",
+                "和",
+                "长大",
+                "都",
+                "像",
+                "一棵树",
+                "上"
+              ]
+            },
+            {
+              "arrival": 9,
+              "A": [
+                "我",
+                "问",
+                "不",
+                "都",
+                "挺",
+                "地",
+                "挺",
+                "山",
+                "多",
+                "地"
+              ],
+              "C": [
+                "所以",
+                "是",
+                "长大",
+                "和",
+                "长大",
+                "都",
+                "像",
+                "一条",
+                "蟒蛇",
+                "和"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2_revision_gain_full/pallier2025/seed-000/main.json",
+      "sha256": "72b88393fbcb3c87d0d8d087a6be801731f05062a8a16367500a341b3b093534"
+    },
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2_revision_gain_full/pallier2025/seed-001/main.json",
+      "sha256": "448fb1755d01a3e18d1f1a04ad5c3867620c10af6a5309332060649df833ccc5"
+    },
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2_revision_gain_full/pallier2025/seed-002/main.json",
+      "sha256": "02cb78312dade9c3fcdd3407cd0741ff4c10ffc19ac5bb178fdd10b8e0e37e9d"
+    },
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2_revision_gain_full/chineseeeg2_littleprince/seed-000/main.json",
+      "sha256": "7b102396ef1a21d9a7caa5f5bbc773cddc098b820ca82cdf35068e12c7d34450"
+    },
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2_revision_gain_full/chineseeeg2_littleprince/seed-001/main.json",
+      "sha256": "c70b9d51f27c5c272c8ed9a326a676d1d25d69d998c3fdc0a8558e490fd648c8"
+    },
+    {
+      "path": "outputs/sentence_decoding/unified_sentence_v2_revision_gain_full/chineseeeg2_littleprince/seed-002/main.json",
+      "sha256": "621bbe1713ea5189cc3949c8f7a840c6a9ecb7d7c0ec5040923f65f18787a91d"
+    }
+  ],
+  "metric_contract": "BLEU1: within-subject segment mean, equal subjects, equal seeds. WER/accuracy: pool words within subject, equal subjects, equal seeds.",
+  "statistical_contract": "Shared material blocks paired across A/C; all subjects and neural seeds retained in each block. Stratified material-block bootstrap; one-sided sign flips; Holm across two datasets.",
+  "fixed_calibration": "Existing preview seed-0 A calibration selects lambda=0.1 for both languages; applied unchanged to all full-evaluation seeds and A/C.",
+  "unique_evaluation_groups": 2484,
+  "unique_evaluation_word_events": 24460,
+  "segment_seed_units": 7452,
+  "metric_rows": 14904,
+  "subject_seed_condition_rows": 108,
+  "completed_unix": 1790620794.3959873,
+  "test_evaluated": false,
+  "full_experiment_completed": true,
+  "report_path": "reports/studies/unified_sentence_v2_revision_gain_full/results.md"
+}

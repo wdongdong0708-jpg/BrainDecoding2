@@ -1,0 +1,50 @@
+{
+  "observed_unix": 1791595320.890497,
+  "prior_output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002",
+  "prior_worker_status": {
+    "dataset": "pallier2025",
+    "seed": 2,
+    "stage": "revision",
+    "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002",
+    "started_unix": 1791503763.771009,
+    "test_evaluated": false,
+    "status": "training",
+    "pid": 2332,
+    "updated_unix": 1791506489.3112507,
+    "epoch": 7,
+    "completed_epochs": 6,
+    "completed_batches": 550,
+    "max_epochs": 30,
+    "brain_encoder_frozen": false,
+    "best_epoch": 5,
+    "best_selection_score": 0.2945118156185614,
+    "epoch_seconds": 428.98625740013085
+  },
+  "prior_queue_status": {
+    "state": "training",
+    "pid": 8760,
+    "started_unix": 1791452621.0801933,
+    "manifest_sha256": "0765ae70eb9682ac63823e662e5ec5f8973e9c569e5c9de8efe51bf32df744ab",
+    "completed_stages": 9,
+    "total_stages": 12,
+    "current": {
+      "condition": "shared",
+      "seed": 2,
+      "stage": "revision",
+      "output_dir": "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002"
+    },
+    "updated_unix": 1791503759.7936873
+  },
+  "completed_epochs": 6,
+  "python_traceback_recorded": false,
+  "full_resume_checkpoint_existed": false,
+  "cause": "unclean_process_exit_without_recorded_python_exception; external cause unconfirmed",
+  "action": "restart_only_interrupted_revision_from_completed_matching_synthetic_CNN",
+  "user_scope": "2026-10-10: fix third seed and add chineseeeg2_littleprince",
+  "evidence_sha256": {
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002\\status.json": "47c8bbacef3b3cbc0ceda858dfa134678d8191f3fa1d2a494730ba8d8923195f",
+    "D:\\code\\BrainDecoding\\outputs\\word_decoding\\pallier2025\\synthetic_timing_v1_shared\\sub01-10\\local_window_rolling_revision_k2_d2\\seed-002\\progress.json": "68febe3958f6d2bc68009cd21024843ca75d94e59ecfc54b0316e38f51d294cc",
+    "D:\\code\\BrainDecoding\\.cache\\runs\\synthetic_timing_v1\\queue.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "D:\\code\\BrainDecoding\\.cache\\runs\\synthetic_timing_v1\\shared_seed2_revision.log": "efc6b7e7d64240eb720e11540ab187ab1c06dcb76554a2a2938791a9913a415b"
+  }
+}

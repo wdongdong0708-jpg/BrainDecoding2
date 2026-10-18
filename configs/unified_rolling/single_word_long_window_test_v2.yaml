@@ -1,0 +1,55 @@
+protocol:
+  id: single_word_long_window_test_v2
+  parent: unified_protocol_v2
+  datasets: [pallier2025, chineseeeg2_littleprince]
+  seeds: [0, 1, 2]
+  train_splits: [train, val]
+  evaluation_split: test
+  train_only_word_models: true
+  cross_word_transformer_allowed: false
+  language_model_allowed: false
+  test_selection_allowed: false
+windows:
+  long_1p27:
+    requested_seconds: 1.27
+    samples: 64
+    actual_seconds: 1.28
+    compare_horizon: 1
+  long_1p5:
+    requested_seconds: 1.5
+    samples: 75
+    actual_seconds: 1.5
+    compare_horizon: 2
+reference:
+  word_1s: authenticated_existing_same_seed_word_best_pt
+  rolling: authenticated_existing_K0_K1_K2_test_predictions
+training:
+  inherit: configs/unified_rolling/v2.yaml
+  initialization: independent_same_seed_from_scratch
+  checkpoint: validation_selected_best_pt
+  hyperparameter_search: false
+evaluation:
+  main_candidates: full_frozen_training_vocabulary
+  oov_policy: retain_as_errors
+  diagnostics: strict_fixed_50_candidates
+  populations: [common_words, within_long_window_budget]
+  common_words: original_K0_K1_K2_common_events
+  within_long_window_budget: common_words_and_Kh_last_window_end_not_later_than_long_window_end
+  primary_metric: full_vocabulary_subject_equal_top10
+  secondary_metrics: [full_vocabulary_subject_equal_top1, word_type_macro_top10, event_micro_top10]
+statistics:
+  material_block_length: 5
+  bootstrap_repetitions: 10000
+  sign_flip_repetitions: 10000
+  random_seed: 161803
+  primary_tests: 4
+  multiplicity: Holm_across_two_datasets_two_horizons_for_within_budget_top10
+  inference: conditional_on_observed_subjects_and_three_trained_seeds
+execution:
+  cpu_threads: 2
+  gpu_memory_limit_gib: 4
+  minimum_free_gpu_memory_gib: 5
+  resumability: completed_verified_runs_only
+  overwrite_existing_runs: false
+  save_exact_epoch_resume_state: true
+  progress_interval_seconds: 30

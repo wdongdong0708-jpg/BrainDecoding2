@@ -1,0 +1,13 @@
+dataset,split,seed,condition,common_word_events,initial_correct,final_correct,net_correct_words,gain_pp
+pallier2025,val,0,real_signal,10610,536,1210,674,6.352497643732328
+pallier2025,val,0,within_subject_shift,10610,101,95,-6,-0.05655042412818096
+pallier2025,val,1,real_signal,10610,609,1241,632,5.956644674835061
+pallier2025,val,1,within_subject_shift,10610,89,89,0,0.0
+pallier2025,val,2,real_signal,10610,545,1225,680,6.409048067860509
+pallier2025,val,2,within_subject_shift,10610,95,99,4,0.03770028275212064
+chineseeeg2_littleprince,val,0,real_signal,9272,207,471,264,2.8472821397756687
+chineseeeg2_littleprince,val,0,within_subject_shift,9272,102,90,-12,-0.12942191544434858
+chineseeeg2_littleprince,val,1,real_signal,9272,292,465,173,1.865832614322692
+chineseeeg2_littleprince,val,1,within_subject_shift,9272,135,91,-44,-0.4745470232959448
+chineseeeg2_littleprince,val,2,real_signal,9272,222,490,268,2.8904227782571184
+chineseeeg2_littleprince,val,2,within_subject_shift,9272,105,112,7,0.07549611734253667

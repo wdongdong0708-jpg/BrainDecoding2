@@ -1,0 +1,42 @@
+{
+  "passed": true,
+  "verified_unix": 1791595427.4243677,
+  "manifest_sha256": "a4adea9fdb93facca8a6a0ed2a45727bfd7bb2b3f2d50fd1a3a0e3204dfa1307",
+  "unique_regression_tests_passed": 91,
+  "test_files": [
+    "test_epoch_recovery.py",
+    "test_synthetic_timing_recovery.py",
+    "test_synthetic_timing.py",
+    "test_unified_rolling_v2_training.py",
+    "test_unified_rolling_v2_queue.py",
+    "test_training_protocol_v2.py"
+  ],
+  "pallier_restarted_stage_numerical_settings_unchanged": true,
+  "only_training_config_difference": "output_dir",
+  "window_identity_pairs_checked": 240,
+  "window_audits_passed": true,
+  "chinese_full_model_smoke_passed": true,
+  "independent_background_launch": {
+    "pid": 22916,
+    "created": 1791595337.3922193,
+    "started_unix": 1791595337.8019645,
+    "entry": "D:\\code\\BrainDecoding\\braindecoding\\synthetic_timing_queue_entry.py",
+    "parent_chain": [
+      {
+        "pid": 2100,
+        "name": "svchost.exe"
+      },
+      {
+        "pid": 1120,
+        "name": "services.exe"
+      },
+      {
+        "pid": 1048,
+        "name": "wininit.exe"
+      }
+    ],
+    "state": "launched",
+    "windows_task": "Codex_BrainDecoding_SyntheticTimingV2",
+    "requested_unix": 1791595337.8899794
+  }
+}

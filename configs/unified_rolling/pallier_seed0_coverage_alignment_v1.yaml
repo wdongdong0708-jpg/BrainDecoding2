@@ -1,0 +1,26 @@
+extends: ../word_decoding/pallier2025/rolling_revision/k2_d2.yaml
+
+experiment:
+  output_group: baseline_alignment_coverage_v1
+
+training:
+  seed: 0
+  warm_start_seed: 0
+  revision_cutoff_policy: all
+  save_last_checkpoint: false
+
+alignment_trial:
+  id: pallier_seed0_coverage_alignment_v1
+  status: authorized_single_seed_only
+  changed_training_factor: revision_cutoff_policy_sample_one_to_all
+  baseline_directory: outputs/word_decoding/pallier2025/rolling_revision/sub01-10/local_window_rolling_revision_k2_d2/seed-000
+  primary_selection: legacy_common_k2_word_macro_top10
+  secondary_selection: full_train_vocab_subject_macro_top10_horizon_mean
+  maximum_drop: 0.02
+  expected_validation_rows: 16960
+  expected_all_vocab50_queries: 8260
+  expected_common_vocab50_queries: 6760
+  expected_candidates: 50
+  baseline_reproduction_tolerance: 0.0001
+  full_queue_authorized: false
+  test_evaluation_allowed: false

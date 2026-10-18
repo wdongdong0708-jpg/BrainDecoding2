@@ -1,0 +1,39 @@
+profile:
+  id: unified_sentence_v2_revision_gain
+  parent_sentence_protocol: unified_sentence_v2
+  neural_protocol: unified_rolling_v2
+  purpose: delayed_rolling_revision_performance_gain
+population:
+  source: data/manifests/rolling_sentence/unified_sentence_v2_preview.json
+  partition: evaluation
+  seeds: [0]
+  scope: fixed_preview
+  retain_all_subjects_and_voices: true
+decoding:
+  inherit_frozen_parent_decoder: true
+  branch: open
+  alignment: real
+  conditions: [A, C]
+  initial: K0
+  rolling: available_K1_K2_recent_three_words
+calibration:
+  reuse_existing_preview_A_calibration: true
+  recalibrate: false
+  selected_language_weights:
+    pallier2025: 0.1
+    chineseeeg2_littleprince: 0.1
+comparison:
+  primary: C_minus_A_sentence_bleu1
+  aggregation: within_subject_mean_then_equal_subjects
+  secondary: [aligned_word_accuracy_gain, wer_reduction]
+  final_output_transitions: A_final_to_C_final_all_positions
+  rolling_action_transitions: C_own_first_output_to_C_final_excluding_last_word
+controls: []
+ablations: []
+execution:
+  default_entry: python -m braindecoding.unified_sentence_v2_complete
+  current_action: report_completed_preview_from_cache
+  output_group: unified_sentence_v2_revision_gain
+  full_run_requires_new_user_decision: true
+  future_expansion_conditions: [A, C]
+  test_evaluation_allowed: false

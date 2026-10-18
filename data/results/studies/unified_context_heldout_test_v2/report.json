@@ -1,0 +1,212 @@
+{
+  "status": "completed",
+  "split": "test",
+  "test_evaluated": true,
+  "completed_jobs": 48,
+  "planned_jobs": 48,
+  "manifest_sha256": "a38685ef074780ea4db8d7fe5cd157f424ada697ca686922e17b18de7a5eda4c",
+  "test_material_manifest_sha256": "90934e139ee62e1fedf89ebf57370f38ac0ca73930ed02d951e11a64e6d2f278",
+  "sources": [
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-000\\local_r0\\metrics.json",
+      "sha256": "0a16c157fdb871a79fa7c6e6c83d3444fa6dbb837f646566c7d22fd95b7ac2cd"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-000\\local_r1\\metrics.json",
+      "sha256": "8d9aac36f6aec04e26de3aba4eff4cb784863f8a63a6d2791937cefebeb11fd4"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-000\\local_r2\\metrics.json",
+      "sha256": "2e67bcb00b27b47a14247099f4f28e88b5507124320955c138acf8b24020fd5e"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-000\\local_r4\\metrics.json",
+      "sha256": "64114323a6c073cdd35e569b539b7c8435e17f7b6c34e4311c3bc9c7053036f8"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-000\\local_r8\\metrics.json",
+      "sha256": "a55f39545e94d2ce985a768ff692ac92eba13b51fc26d3a8a967d00e59dac266"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-000\\full_context\\metrics.json",
+      "sha256": "b665be2f9f535b278548678d6f8a3b6f36ba51c276546704ec831b83986d786f"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-000\\independent_k0\\metrics.json",
+      "sha256": "9e71edf5f020f829332ad46b5c67d9ac5da5b0c2cb663e02454184fbf87c61a5"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-000\\independent_k1\\metrics.json",
+      "sha256": "357d0b4b0c509023f68e47608c6791d17507cf941a7a7e9f37df741a07ebe9ff"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-001\\local_r0\\metrics.json",
+      "sha256": "1d23879ebba7e51ffc402fba571451da24737e064810cf4ea092f20119010c77"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-001\\local_r1\\metrics.json",
+      "sha256": "912185daeb6eaff89e3097c062259d1f02ecaccaeb4641c0bffe3ea19b4c455a"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-001\\local_r2\\metrics.json",
+      "sha256": "14484f4e5751fd480cecb4e881af9ac8a0c28f392f5c3cd99cfa244dce07be45"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-001\\local_r4\\metrics.json",
+      "sha256": "08f953487343946f064a2d7c649f283d7e9bce6911c0d05d3d3e11c4b72f1b3d"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-001\\local_r8\\metrics.json",
+      "sha256": "72236c553a7d4f467740329940c8485a99ad6f81cd9cc51507984c2c48ed0331"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-001\\full_context\\metrics.json",
+      "sha256": "635bbcaaca87681e58507e352d6d99ef03b69b0032141419a52d3f5115ee31e2"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-001\\independent_k0\\metrics.json",
+      "sha256": "31190156dfed5a549f68c160e4b0ad9fb9f2659eb176512df8a15d39af260aba"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-001\\independent_k1\\metrics.json",
+      "sha256": "869e7aae0ad9bab1bc04468c99221da95049b767bb5dc5055886633b22d6e927"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-002\\local_r0\\metrics.json",
+      "sha256": "c478b602ad5981cce07a386a44e805de9cc4440173183e9341aedb3fd5972932"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-002\\local_r1\\metrics.json",
+      "sha256": "b660bf6d07888d524cf15ff8202a30edfa02c262d5d4887cd149354387c795fa"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-002\\local_r2\\metrics.json",
+      "sha256": "b29852a5e06873240e08023f230a28959fb080386acce431e3bfe264f94996d4"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-002\\local_r4\\metrics.json",
+      "sha256": "f19bd0acbb23601b4985eef33b6086aa57cb067ed93afd211f99c45a93533ca8"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-002\\local_r8\\metrics.json",
+      "sha256": "0222255d2ddfc7e43072ab5a76a8957925b3267a25829e83ba670e597687b29a"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-002\\full_context\\metrics.json",
+      "sha256": "cccd8f37f88c35bee700565b5726c9e88385a72be20b756f5b85320035bd6368"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-002\\independent_k0\\metrics.json",
+      "sha256": "741f126ab28cafde8de0195173fcea8a7b498a2f6b097ce6ca1afc3a2610344e"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\pallier2025\\seed-002\\independent_k1\\metrics.json",
+      "sha256": "7e90effd308185025ce0bc27001af26c815d4f1fd8b96a30d1dfc8a15d55ad4b"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-000\\local_r0\\metrics.json",
+      "sha256": "af38c22c16c701b497128049678a9d393516ed3f96fd1eea2fbc282de4a33337"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-000\\local_r1\\metrics.json",
+      "sha256": "4e35027c7fd31bf7f7db1bc500c559bda3d35536bdac0ecd76ea9380db02bde2"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-000\\local_r2\\metrics.json",
+      "sha256": "82305c07219e9735cc8a06eb74252e2e2f663a89ac98ee41b7fd70c19bdb8593"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-000\\local_r4\\metrics.json",
+      "sha256": "26c1b8897b93cc61890aa06bcfe15b248313f1228ca8b715ade5fb4ec2395817"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-000\\local_r8\\metrics.json",
+      "sha256": "a3302bb583b144017bb6ac350142cf48391e54f7ae9107e551b4556c54233bbb"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-000\\full_context\\metrics.json",
+      "sha256": "f31b5f2421869b0e2444f561f66c530536943ff66058628a59c9509805a22557"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-000\\independent_k0\\metrics.json",
+      "sha256": "84b626dadd9107f8ef8071d6e28ea26372a21577fd07d5c52ee9782e9bc1ee71"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-000\\independent_k1\\metrics.json",
+      "sha256": "bebd05292f952df21064f6305bf74a56ea8ab951a6e45e0d403487877671798e"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-001\\local_r0\\metrics.json",
+      "sha256": "a243e8ccb26e738507aba598fcf869b6aec3a32fb4b4ff2eeb0133a1ebf4600d"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-001\\local_r1\\metrics.json",
+      "sha256": "70ffb9c30abbe4140bc68ad8aa170aa24acfd826e0f38a851a5057d4a764d665"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-001\\local_r2\\metrics.json",
+      "sha256": "6f88ac641c1013cae443c8e4ba97f266245c83ee69faebfdab53a17c0a91a13a"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-001\\local_r4\\metrics.json",
+      "sha256": "651df07f21393a871887e94241d53b6da4465101bf7302d407ccd41992e7b8fa"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-001\\local_r8\\metrics.json",
+      "sha256": "0b07517feb4ebabb31cc6f316c0b6d118c5988e70c120a4ffcf2b1da5f4f7c12"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-001\\full_context\\metrics.json",
+      "sha256": "5aaed5fa52171b430e16d6a59d55d2bbe93fbb8d1d084535496b61b2558ead25"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-001\\independent_k0\\metrics.json",
+      "sha256": "53ae5a91a6832092a8a5e4e3fc5e472bc9da40b3d6b6430011d5c52e6c1524f2"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-001\\independent_k1\\metrics.json",
+      "sha256": "3614985651e91db856e6b8e8a62ae65f93cc032a6e13bf416bde45868b24c42d"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-002\\local_r0\\metrics.json",
+      "sha256": "f1cc9ddc3dd7b893cd9eb102ca7888cff8e12e25969ad115dd48524bea609368"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-002\\local_r1\\metrics.json",
+      "sha256": "7bba8df7251f2076c91a2d171ca58ede912d709954133faa9f4c74c3d1a09214"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-002\\local_r2\\metrics.json",
+      "sha256": "243e65cd62dc4703f1efa0058b3023f5046d17fce1e0e572016db376f5cf4f97"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-002\\local_r4\\metrics.json",
+      "sha256": "7a2c6be5c380a05fde547f2cd6a6def3237f199b11fa1003857fa23665e31788"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-002\\local_r8\\metrics.json",
+      "sha256": "a78e4f97621c493e4c5c357011256fc47f2b1b6b45698b319c2f8dfe2617bfa4"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-002\\full_context\\metrics.json",
+      "sha256": "2843a4a63fd550f3c199f48280f7b2101c2f60697b110fc83d3cf9aca39437a3"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-002\\independent_k0\\metrics.json",
+      "sha256": "94a6dcc631b4cb7a2691fc0769882181636863d9fb240a8355abec46ce361ca7"
+    },
+    {
+      "path": "outputs\\heldout_test\\unified_context_heldout_test_v2\\chineseeeg2_littleprince\\seed-002\\independent_k1\\metrics.json",
+      "sha256": "33d6e3db95ab0a6a9f14f2b79bccddc75c6a6855193fe6ae22c807102e99c5a5"
+    }
+  ],
+  "exports": {
+    "reports\\exports\\unified_context_heldout_test_v2_context_by_seed.csv": "7633ccd0314fb3dbb270ecbda9d5f4eb0f240f548f91251c7417a3920fe5d033",
+    "reports\\exports\\unified_context_heldout_test_v2_context_summary.csv": "19cba2df8ac4390a57fbfd1477b1775599b81d7196196e5ae09f96f4cbf1599d",
+    "reports\\exports\\unified_context_heldout_test_v2_independent_vs_rolling_by_seed.csv": "645fe29d527499717a9a61658cb651bc3fcfe8312bdcbeb250247859d7178405"
+  },
+  "completed_unix": 1791031169.872039,
+  "aliases": {
+    "independent_k2": "local_r2"
+  }
+}

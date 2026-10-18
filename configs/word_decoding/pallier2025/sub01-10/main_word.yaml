@@ -1,0 +1,15 @@
+extends: ../base.yaml
+
+experiment:
+  task: word_decoding
+  dataset: pallier2025
+  subject_scope: sub01-10
+  id: main_word
+  category: main
+
+model:
+  use_transformer: false
+
+provenance:
+  context_condition: conv_only
+

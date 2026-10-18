@@ -1,0 +1,30 @@
+{
+  "status": "verified_complete",
+  "manifest_sha256": "95b265241f62c3a0534d11156e102ae7d3f03a029ae91f2bdb496666d6a0a888",
+  "manifest_file_sha256": "04793b4c92705f4d33739744c53d690d9639ca818f4834638644d86feebe7793",
+  "output_sha256": {
+    "block_length_sensitivity.png": "8814cd602841996557ff6afdde785e8b6519f22398432f8dce09127acd0a6deb",
+    "block_length_sensitivity.svg": "a0bf69049bf0997d379f75b94208502606f4c99f033963c9427a0c4db83c78db",
+    "block_structure.csv": "a39783afa12db6fbe289bc7abf9142b0e45c0bfd24372065681f3fba1dd6a8dd",
+    "estimates.csv": "bf8cad579924cd1b0f4fccc894909ce43b961fad7e6d7c96a6fb284e9a652dde",
+    "material_blocks.csv": "9ab13388f8ae0035e4e1a025c0b6c451b2b7788ba4c496bb29b4c9a3a7140454",
+    "results.json": "2c78169a4c016ab0ff8646ffff00e40d118eb96ce6699e7d8b7cb6b8148faa0b",
+    "results.md": "b53296d555ef50c89b423e21fa0615fabf9ea94f84983fb5f3eecf873666d51d"
+  },
+  "checks": {
+    "original_L5_block_identities_reproduced": true,
+    "original_L5_all_statistics_reproduced": true,
+    "original_L5_Holm_reproduced": true,
+    "all_point_estimands_unchanged": true,
+    "A_C_metrics_identical_in_B_C1_exports": true,
+    "complete_segment_seed_units": 8244,
+    "conditions": 4,
+    "statistics_runs": 240,
+    "discarded_bootstrap_samples": 0,
+    "shared_material_components_unchanged": true,
+    "all_stratum_tails_retained": true,
+    "GPU_used": false,
+    "sources_unchanged_before_and_after": true
+  },
+  "elapsed_seconds": 15.22617410006933
+}

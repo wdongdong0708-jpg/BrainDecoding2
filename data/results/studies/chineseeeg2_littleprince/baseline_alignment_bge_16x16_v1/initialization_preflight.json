@@ -1,0 +1,6 @@
+{
+  "word_successful_optimizer_update": true,
+  "batches_until_update": 2,
+  "serialized_matching_bge_cnn_load_passed": true,
+  "test_evaluated": false
+}
