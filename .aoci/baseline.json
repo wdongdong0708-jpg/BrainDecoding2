@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-10-18T09:04:04Z",
+  "updated_at": "2026-10-18T09:40:25Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -23,15 +23,15 @@
     },
     "README.md": {
       "role": "index",
-      "sha256": "759568269aaae8e380e68329170ddf53313c10f4f972fa44fe6bc22e84ed4fba",
-      "size": 11108,
-      "normalized_sha256": "c045f5c988f08129891c95fa98c1e16696aac5b5e23328d83850b5621d3baa68"
+      "sha256": "148f9e458b4156e17bc9dd60f35f3cbfdaa63aa07e0fa3607adad6af70a5df75",
+      "size": 11223,
+      "normalized_sha256": "8e86b1b952b7c83d8a78239e7bdf0ca9bebb19a7da89d5f50198a713954f8a14"
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "e75852f6bf555e54e980ba15db80b30800e41f7a5daa7db8b285d2761e7449e5",
-      "size": 89932,
-      "normalized_sha256": "e75852f6bf555e54e980ba15db80b30800e41f7a5daa7db8b285d2761e7449e5"
+      "sha256": "3b4572307b14641a36ca5ef2050017b99c8e825cc2a1ebce4edb5b947132faf6",
+      "size": 90369,
+      "normalized_sha256": "3b4572307b14641a36ca5ef2050017b99c8e825cc2a1ebce4edb5b947132faf6"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -3092,21 +3092,27 @@
     },
     "scripts/colab/colab_cpu_cache.ipynb": {
       "role": "index",
-      "sha256": "c46c18fabd0d704d74b3ce5dccfcfb37a7b1fbf34357e6918db6b33b2ef85c32",
-      "size": 5428,
-      "normalized_sha256": "c46c18fabd0d704d74b3ce5dccfcfb37a7b1fbf34357e6918db6b33b2ef85c32"
+      "sha256": "b408332ecb640ef69c8bdb797862e5fe1d33335c3e8f518f4b24d1c3a2fa975b",
+      "size": 5580,
+      "normalized_sha256": "b408332ecb640ef69c8bdb797862e5fe1d33335c3e8f518f4b24d1c3a2fa975b"
+    },
+    "scripts/colab/colab_drive_init.ipynb": {
+      "role": "index",
+      "sha256": "b0696289c73c0495c169a9f21063b63f27f688593b6450e7275678f259fc9725",
+      "size": 5238,
+      "normalized_sha256": "b0696289c73c0495c169a9f21063b63f27f688593b6450e7275678f259fc9725"
     },
     "scripts/colab/colab_gpu_train.ipynb": {
       "role": "index",
-      "sha256": "ccb4c8493db2d56af39db9fc91fd8a91221b2c804d62996edc66a4441c44c872",
-      "size": 5588,
-      "normalized_sha256": "ccb4c8493db2d56af39db9fc91fd8a91221b2c804d62996edc66a4441c44c872"
+      "sha256": "60eeabb8dcb266666913bf158ad5db15e75d7556c7846c079557135f519bafee",
+      "size": 5884,
+      "normalized_sha256": "60eeabb8dcb266666913bf158ad5db15e75d7556c7846c079557135f519bafee"
     },
     "scripts/colab_setup.py": {
       "role": "index",
-      "sha256": "b67c43f3b61b1de1215e026161503e3769182b70e78fd7d39c963d51b8c288a6",
-      "size": 9690,
-      "normalized_sha256": "b67c43f3b61b1de1215e026161503e3769182b70e78fd7d39c963d51b8c288a6"
+      "sha256": "6f7becf5a9ca2ed4180cca71857c2b47b3a50c2c17607296c74465c768d67d66",
+      "size": 9774,
+      "normalized_sha256": "6f7becf5a9ca2ed4180cca71857c2b47b3a50c2c17607296c74465c768d67d66"
     },
     "scripts/decode_sentences.py": {
       "role": "index",
@@ -3314,9 +3320,9 @@
     },
     "tests/core/test_repository_conventions.py": {
       "role": "observe",
-      "sha256": "0bcbe3c39465e589108613196e8461aa05cc5c24b20f2ac44b93ec8ffbe91965",
-      "size": 4801,
-      "normalized_sha256": "a42f39e5b4622fc22378e9b1d6f25fa2071789e7b0b4082560a137e615e5d695"
+      "sha256": "fdf7f508def664bfa9efaae127d23125ae62c77e884d0fa022afb12a40ad9e83",
+      "size": 4973,
+      "normalized_sha256": "7fca266d96bde465f796d0efc4026c612eeb16d109cc944484d22cb6f852fd1c"
     },
     "tests/core/test_result_schema.py": {
       "role": "observe",
@@ -3326,9 +3332,9 @@
     },
     "tests/core/test_workflow_cli.py": {
       "role": "observe",
-      "sha256": "b27330d5cd96af164ca3edfec8b8fbe0b45a3be58a79673d7a203af0a7568f5a",
-      "size": 7344,
-      "normalized_sha256": "b27330d5cd96af164ca3edfec8b8fbe0b45a3be58a79673d7a203af0a7568f5a"
+      "sha256": "8bb33e43b030fccccbfd67e9dbcef3e96c2c5ddc708834808cc6ba2a0160198f",
+      "size": 7415,
+      "normalized_sha256": "8bb33e43b030fccccbfd67e9dbcef3e96c2c5ddc708834808cc6ba2a0160198f"
     },
     "tests/data/test_chineseeeg2_littleprince.py": {
       "role": "observe",
