@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-10-18T16:04:48Z",
+  "updated_at": "2026-10-18T16:23:26Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "a9eccfac70a328087488c7e80f27636373ce8ddb764602c0da471dfc7ea33ddd",
-      "size": 94910,
-      "normalized_sha256": "a9eccfac70a328087488c7e80f27636373ce8ddb764602c0da471dfc7ea33ddd"
+      "sha256": "1ddbcba347120ff1fa6f4f68da135a642f7ec2fb41abbf1a472d330427b60bd0",
+      "size": 94954,
+      "normalized_sha256": "1ddbcba347120ff1fa6f4f68da135a642f7ec2fb41abbf1a472d330427b60bd0"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -1030,9 +1030,9 @@
     },
     "pyproject.toml": {
       "role": "index",
-      "sha256": "517271c7463a4ad324cf383e98d923d152a91f6284c5d3e56b91da723e167a5a",
-      "size": 890,
-      "normalized_sha256": "517271c7463a4ad324cf383e98d923d152a91f6284c5d3e56b91da723e167a5a"
+      "sha256": "a1b610ef5797c956e84feb4e45cb2ab16006dd6525cbc0c76af388da8aaaae7b",
+      "size": 932,
+      "normalized_sha256": "a1b610ef5797c956e84feb4e45cb2ab16006dd6525cbc0c76af388da8aaaae7b"
     },
     "scripts/build_derived_data.py": {
       "role": "index",
@@ -1072,9 +1072,9 @@
     },
     "scripts/colab_setup.py": {
       "role": "index",
-      "sha256": "6f7becf5a9ca2ed4180cca71857c2b47b3a50c2c17607296c74465c768d67d66",
-      "size": 9774,
-      "normalized_sha256": "6f7becf5a9ca2ed4180cca71857c2b47b3a50c2c17607296c74465c768d67d66"
+      "sha256": "fa52ecc24f5aabb9376f2c7e346257250c5f9b27efcc587de8bd1fd6aaae9814",
+      "size": 9839,
+      "normalized_sha256": "fa52ecc24f5aabb9376f2c7e346257250c5f9b27efcc587de8bd1fd6aaae9814"
     },
     "scripts/decode_sentences.py": {
       "role": "index",

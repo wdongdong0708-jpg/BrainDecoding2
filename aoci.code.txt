@@ -5,7 +5,7 @@
 .gitignore[FC4T]: F:定义Git忽略规则，排除Python缓存、本地派生信号缓存、训练输出与打包归档、模型权重及本机MCP配置 | R:- | A:- | S:.mcp.json、workspace/、archives/及data/cache/含本机路径及GB级缓存与检查点，禁止入库
 AGENTS.md[SG7S]: F:定义仓库AOCI认知合同、日常对话自动速度分流及目录与文件命名规范 | R:code:aoci.txt,code:aoci.meta.txt,code:tests/core/test_repository_conventions.py | A:- | S:aoci区块由工具受管禁止篡改，严禁新增顶层目录或生成散落json/md及含糊缩写文件名
 README.md[SG8S]: F:定义6顶层目录架构、4类configs子目录规范、JSON/Markdown归口准则、文件命名规范与三阶段训练及评估双模工作流说明 | R:code:tests/core/test_repository_conventions.py,code:braindecoding/cli.py,code:braindecoding/training/workflow_runner.py | A:- | S:全仓仅允许保留README.md、AGENTS.md与unified_protocol_v2.md三个Markdown文件，违规会被门禁拦截
-pyproject.toml[FV8T]: F:Python项目构建元数据、核心科学计算依赖、brain-decoding命令行入口与pytest缓存及协议标记配置 | R:code:braindecoding/cli.py | A:build-system,project,tool | S:精确固定jieba==0.42.1以保证ChineseEEG-2分词确定性，并将pytest临时目录与缓存重定向至.cache/下以保持仓库根目录整洁
+pyproject.toml[FV8T]: F:Python项目构建元数据、含x-transformers与einops的核心科学计算依赖、brain-decoding命令行入口与pytest配置 | R:code:braindecoding/cli.py | A:build-system,project,tool | S:精确固定jieba==0.42.1以保证ChineseEEG-2分词确定性，并将pytest临时目录与缓存重定向至.cache/下以保持仓库根目录整洁
 
 ===C:/Users/Administrator/Desktop/BrainDecoding/braindecoding/===
 __init__.py[CG8M]: F:挂载MetaPathFinder实现分层子包与合并模块的历史导入路径透明转发 | R:code:braindecoding/data/__init__.py,code:braindecoding/decoding/__init__.py,code:braindecoding/training/workflow_runner.py | A:_SUBPACKAGE_MAP,_MERGED_MODULE_ALIASES | S:合并或迁移模块必须在_SUBPACKAGE_MAP或_MERGED_MODULE_ALIASES登记，确保新旧全限定名共享同一sys.modules实例
@@ -176,7 +176,7 @@ decode_sentences.py[EW7T]: F:统一滚动修订句子解码与留出测试集六
 generate_paper_assets.py[EW6T]: F:一键顺序调用表格统一脚本与主图润色脚本重生成论文全部LaTeX表格与矢量图的入口脚本 | R:code:scripts/paper/unify_manuscript_tables.py,code:scripts/paper/polish_main_assets.py | A:main | S:在仓库根目录下通过子进程依次执行表格与图形生成脚本，支持--tables-only与--figures-only独立过滤
 train_rolling.py[EW6T]: F:薄层CLI入口，转发执行滚动脑电到文本训练主流程 | R:code:braindecoding/training/rolling.py | A:- | S:仅做命令行入口转发，自身不含训练逻辑与参数解析
 cache_archive.py[EW7M]: F:提供预处理特征缓存单文件.tar流式打包（pack）与秒级安全解包（unpack）命令行工具 | R:code:braindecoding/config.py,code:braindecoding/training/workflow_runner.py | A:default_cache_dir,resolve_archive_path,pack_cache,unpack_cache,build_parser,main | S:打包与解包均采用.tmp临时文件原子替换并校验tar成员路径防目录穿越，规避Google Drive FUSE对海量零散.npy/.json小文件的I/O瓶颈
-colab_setup.py[EW7M]: F:防崩版Google Colab虚拟环境初始化、系统PyTorch/CUDA版本约束锁定与本地数据软链接桥工具 | R:code:pyproject.toml,code:scripts/cache_archive.py | A:export_runtime_constraints,create_colab_venv,install_project_dependencies,setup_studies_links,build_parser,main | S:禁用venv with_pip=True规避Python 3.13+缺少ensurepip报错，导出runtime-constraints.txt保护原生torch/triton并在云盘源目录缺失时自动创建空目录防报错
+colab_setup.py[EW7M]: F:防崩版Google Colab虚拟环境初始化、含x-transformers/einops/tqdm的依赖安装、PyTorch版本约束锁定与本地数据软链接桥工具 | R:code:pyproject.toml,code:scripts/cache_archive.py | A:export_runtime_constraints,create_colab_venv,install_project_dependencies,setup_studies_links,build_parser,main | S:禁用venv with_pip=True规避Python 3.13+缺少ensurepip报错，导出runtime-constraints.txt保护原生torch/triton并在云盘源目录缺失时自动创建空目录防报错
 
 ===C:/Users/Administrator/Desktop/BrainDecoding/scripts/paper/===
 add_full_context_comparison.py[AO6M]: F:核验留出测试集A/C/F完整上下文对比导出结果并绘制质量—输入等待折中图与LaTeX汇总表 | R:code:scripts/paper/publication_suite_style.py,code:scripts/paper/refine_publication_style.py,code:data/manifests/rolling_sentence/full_context_sentence_test_v2.json | A:read,sha,close,verify,save,tradeoff | S:作图前强制逐文件核对manifest_sha256、源预测NPZ哈希及事件级等待时间公式（K0固定1s、C_K2不大于F），仅做展示渲染而不重跑统计检验
