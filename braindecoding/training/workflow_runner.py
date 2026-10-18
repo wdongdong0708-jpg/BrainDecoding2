@@ -2412,7 +2412,10 @@ def _evaluate_single_stage(
         batch_size=eval_bs,
     )
 
-    vocabulary = sorted(set(train_table["normalized_word"].astype(str)))
+    train_word_col = (
+        "normalized_word" if "normalized_word" in train_table.columns else "标准词"
+    )
+    vocabulary = sorted(set(train_table[train_word_col].astype(str)))
     vocab50 = list(
         pallier_task.frozen_vocabulary()
         if dataset == "pallier2025"

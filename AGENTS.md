@@ -101,3 +101,33 @@ Entry 的语义必须来自模型对真实证据的理解。不得仅依据路�
 
 不预加载、不猜测，也不自行重建这些专项流程。平台调用方式、请求格式、批次上限、审批规则、索引格式细节和恢复步骤由对应Guide、工具说明、模型Prompt和CLI帮助按需提供。
 <!-- aoci:end -->
+
+## 项目工程规范与日常协作约定
+
+本节规范由 Agent 自动执行，用户在日常对话中只需直接提出业务需求，无需额外附加 AOCI 或目录规范提示词。
+
+### 1. 日常对话速度与 AOCI 自动分流（零用户心智负担）
+
+- **同会话直接复用**：同一会话内已完成认知建立后，后续轮次直接复用当前认知，不得机械重跑 `aoci_overview`。
+- **只读与问答零维护**：代码解读、Bug 排查、架构讨论等未修改受管对象的交互，结束时严禁调用 `aoci_maintain`。
+- **调试中途暂缓维护**：处于多轮报错修复、参数调整、单测迭代等中间探索过程时，视为未达到“最终稳定状态”，中途不调用 `aoci_maintain`；仅当本次功能完整跑通、测试通过准备交付收尾时，才在最后静默调用一次 `aoci_maintain` 与 `aoci_update_entry`。
+- **静默执行不刷屏**：日常维护在后台静默完成，不要向用户展示 `batch_id`、`candidate_id`、`source_sha256` 等内部机器字段，仅在遇到真实安全边界或冲突时请求用户裁决。
+
+### 2. 目录边界与文件落盘规范（严防 JSON / Markdown 散落与文件夹膨胀）
+
+- **顶层目录严格锁定**：仓库仅保留 6 个核心业务顶层目录：`braindecoding/`、`configs/`、`data/`、`paper/`、`scripts/`、`tests/`。**严禁创建任何新的顶层文件夹**。
+- **严禁散落生成 `.json` 与 `.md` 文件**：
+  - 仓库根目录仅允许保留 `README.md` 与 `AGENTS.md`，严禁在根目录或 `braindecoding/`、`scripts/`、`tests/` 中新建零散的 `.md` 说明文档或 `.json` 结果文件。
+  - **数据与产物唯一合法归属**：
+    - 冻结协议与实验清单 $\rightarrow$ `data/manifests/`
+    - 正式实验结果与统计表导出 $\rightarrow$ `data/results/studies/` 与 `data/results/exports/`
+    - 本地派生信号缓存与对齐产物 $\rightarrow$ `data/cache/`
+    - 临时调试输出、运行日志与模型权重 $\rightarrow$ `outputs/`、`tmp/` 或 `.cache/`（均由 `.gitignore` 忽略，不入 Git）
+- **职责分层**：核心算法与业务逻辑必须写在 `braindecoding/{data,models,training,decoding,evaluation,tasks}/` 对应子包中；`scripts/` 仅保留薄层入口脚本与 `scripts/paper/`、`scripts/colab/` 专用脚本。
+
+### 3. 文件与符号命名规范（见名知意，禁止含糊缩写）
+
+- **文件名必须自解释**：所有新增模块、脚本、配置与测试文件统一采用完整英文单词的 `snake_case` 命名，让人仅看文件名即可明确其职责与作用（例如使用 `word_language_model_rescorer.py`、`single_step_atomic_writer.py`，而非缩写代号）。
+- **禁止自造缩写与含糊命名**：严禁使用 `exp`、`res`、` util`、`cfg`、`tmp`、`helper`、`new`、`v1_fix` 或实验代号缩写命名代码文件（仅允许 `eeg`、`meg`、`llm`、`cli`、`io` 等领域通用标准词）。
+- **自动化门禁校验**：任何新增文件或结构调整完成后，必须确保 `pytest tests/core/test_repository_conventions.py` 全部通过。
+
