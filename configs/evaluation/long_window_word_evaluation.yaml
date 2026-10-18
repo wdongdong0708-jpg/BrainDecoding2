@@ -24,7 +24,7 @@ reference:
   word_1s: authenticated_existing_same_seed_word_best_pt
   rolling: authenticated_existing_K0_K1_K2_test_predictions
 training:
-  inherit: configs/unified_rolling/v2.yaml
+  inherit: configs/training/rolling_revision_protocol.yaml
   initialization: independent_same_seed_from_scratch
   checkpoint: validation_selected_best_pt
   hyperparameter_search: false

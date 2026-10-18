@@ -29,7 +29,7 @@ from braindecoding.training import epoch_recovery as recovery
 from braindecoding.training.runtime import cpu_state_dict, load_checkpoint, save_checkpoint, set_seed
 from braindecoding.training.word import encode_loader, make_loader, train_one_epoch
 
-CONFIG = ROOT / "configs/unified_rolling/synthetic_timing_v2.yaml"
+CONFIG = ROOT / "configs/training/synthetic_timing_recovery.yaml"
 PROTOCOL = ROOT / "data/manifests/rolling_sentence/unified_protocol_v2.md"
 MANIFEST = PROTOCOL.with_suffix(".json")
 REPORT = study_report_dir(None, "synthetic_timing_v2")

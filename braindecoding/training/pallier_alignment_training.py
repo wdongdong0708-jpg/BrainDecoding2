@@ -24,7 +24,7 @@ from braindecoding.training.runtime import load_checkpoint, save_checkpoint, sav
 from braindecoding.training.word import encode_loader, make_loader, train_one_epoch
 from braindecoding.unified_rolling_training import full_vocabulary_metrics
 
-CONFIG = PROJECT_ROOT / "configs/unified_rolling/pallier_seed0_coverage_alignment_v1.yaml"
+CONFIG = PROJECT_ROOT / "configs/training/full_coverage_revision_alignment.yaml"
 RUNTIME = runtime_cache_dir("pallier_seed0_coverage_alignment_v1")
 REPORT = study_report_dir("pallier2025", "baseline_alignment_coverage_v1")
 

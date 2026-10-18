@@ -381,7 +381,7 @@ def test_task_loaders_inject_canonical_output_and_warm_start_paths():
 
     chinese_word = 载入配置(
         PROJECT_ROOT
-        / "configs/word_decoding/chineseeeg2_littleprince/sub01-08/main_word.yaml"
+        / "configs/word_decoding/chineseeeg2_littleprince/all_subjects/main_word.yaml"
     )
     assert Path(chinese_word["training"]["output_dir"]) == (
         PROJECT_ROOT

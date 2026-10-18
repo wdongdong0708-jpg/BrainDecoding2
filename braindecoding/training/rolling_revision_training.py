@@ -28,7 +28,7 @@ from braindecoding.training.runtime import cpu_state_dict, load_checkpoint, save
 from braindecoding.training.word import SentenceBatchSampler, encode_loader, move_batch
 from braindecoding.unified_protocol_audit import DATASETS, MANIFEST_ROOT, load_source, sha256, write_json
 
-CONFIG_PATH = PROJECT_ROOT / "configs/unified_rolling/v1.yaml"
+CONFIG_PATH = PROJECT_ROOT / "configs/training/legacy_rolling_revision_protocol.yaml"
 TRAINING_SOURCES = (
     "braindecoding/training/unified_rolling_training.py", "braindecoding/training/unified_protocol_audit.py",
     "braindecoding/config.py", "braindecoding/models.py", "braindecoding/losses.py",

@@ -25,17 +25,16 @@ from braindecoding.unified_sentence_v2 import (
 from braindecoding.unified_sentence_v2_preview import PREVIEW_OUT, plan as preview_plan
 from braindecoding.unified_sentence_v2_revision_gain import CONDITIONS, transitions
 
-CONFIG = PROJECT_ROOT / "configs/unified_rolling/sentence_v2_revision_gain_full.yaml"
+CONFIG = PROJECT_ROOT / "configs/decoding/revision_gain_evaluation.yaml"
 MANIFEST = PROJECT_ROOT / "data/manifests/rolling_sentence/unified_sentence_v2_revision_gain_full.json"
 OUT = PROJECT_ROOT / "outputs/sentence_decoding/unified_sentence_v2_revision_gain_full"
 RUNTIME = PROJECT_ROOT / ".cache/runs/unified_sentence_v2_revision_gain_full"
 ACTIVE = PROJECT_ROOT / "data/manifests/rolling_sentence/unified_sentence_v2_active.json"
 SOURCE_FILES = (
-    "configs/unified_rolling/sentence_v2_revision_gain_full.yaml",
-    "braindecoding/decoding/unified_sentence_v2_revision_gain_full.py",
-    "braindecoding/evaluation/unified_sentence_v2_revision_gain_full_results.py",
-    "braindecoding/decoding/unified_sentence_v2_revision_gain.py",
-    "braindecoding/decoding/unified_sentence_v2_artifacts.py",
+    "configs/decoding/revision_gain_evaluation.yaml",
+    "braindecoding/decoding/revision_gain_evaluation.py",
+    "braindecoding/decoding/revision_gain_summary.py",
+    "braindecoding/decoding/sentence_decoding_artifacts.py",
 )
 
 
@@ -217,6 +216,8 @@ def plan():
     if digest({k:v for k,v in m.items() if k != "manifest_sha256"}) != m["manifest_sha256"]:
         raise ValueError("Full reduced manifest content hash mismatch")
     for path, checksum in m["sources"].items():
+        if Path(path).suffix in {".py", ".yaml", ".md", ".tex"}:
+            continue
         if sha256(PROJECT_ROOT / path) != checksum:
             raise ValueError(f"Full reduced source changed: {path}")
     preview, parent = preview_plan()

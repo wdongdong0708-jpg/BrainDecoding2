@@ -12,7 +12,7 @@ protocol:
   test_selection_allowed: false
   language_model_allowed: false
   expand_context_automatically: false
-synthetic_from: configs/unified_rolling/synthetic_timing_v1.yaml
+synthetic_from: configs/training/synthetic_timing_control.yaml
 execution:
   output_group_prefix: synthetic_timing_v2
   reuse_completed_pallier_v1: true

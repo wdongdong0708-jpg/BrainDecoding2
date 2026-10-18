@@ -63,6 +63,7 @@ def test_markdown_files_strictly_governed() -> None:
         p.relative_to(PROJECT_ROOT).as_posix()
         for p in PROJECT_ROOT.rglob("*.md")
         if not any(part.startswith(".") or part.endswith(".egg-info") for part in p.relative_to(PROJECT_ROOT).parts)
+        and p.relative_to(PROJECT_ROOT).parts[0] not in GITIGNORED_LOCAL_DIRS
     }
     allowed_md = {
         "README.md",
@@ -80,6 +81,7 @@ def test_json_files_confined_Strictly_to_data_directory() -> None:
         p.relative_to(PROJECT_ROOT).as_posix()
         for p in PROJECT_ROOT.rglob("*.json")
         if not any(part.startswith(".") or part.endswith(".egg-info") for part in p.relative_to(PROJECT_ROOT).parts)
+        and p.relative_to(PROJECT_ROOT).parts[0] not in GITIGNORED_LOCAL_DIRS
         and p.relative_to(PROJECT_ROOT).parts[0] != "data"
     ]
     assert json_outside_data == [], f"检测到 data/ 目录之外的违规 JSON 文件: {json_outside_data}"
@@ -125,3 +127,24 @@ def test_python_filenames_are_self_explanatory_without_abbreviations_or_versions
             if bad_tokens:
                 violations.append(f"{rel}: 禁止使用不清晰的缩写词 {sorted(bad_tokens)}")
     assert violations == [], "Python 文件命名规范检查未通过:\n" + "\n".join(violations)
+
+
+def test_config_yaml_filenames_are_self_explanatory_without_abbreviations_or_versions() -> None:
+    """所有 configs/ 下的 YAML 配置文件名与子目录名必须见名知意，严禁版本号与内部代号缩写。"""
+    config_root = PROJECT_ROOT / "configs"
+    forbidden_config_tokens = FORBIDDEN_ABBREVIATION_TOKENS | {"v1", "v2", "k2", "d2", "retry1"}
+    violations: list[str] = []
+    for yaml_file in config_root.rglob("*.yaml"):
+        rel = yaml_file.relative_to(PROJECT_ROOT).as_posix()
+        stem = yaml_file.stem
+        if stem != stem.lower():
+            violations.append(f"{rel}: 配置文件名必须全小写 snake_case")
+        for pattern in FORBIDDEN_NAME_PATTERNS:
+            if pattern.match(stem):
+                violations.append(f"{rel}: 禁止包含版本号或临时补丁后缀 ({pattern.pattern})")
+        tokens = set(stem.split("_"))
+        bad_tokens = tokens & forbidden_config_tokens
+        if bad_tokens:
+            violations.append(f"{rel}: 禁止使用不清晰的缩写词 {sorted(bad_tokens)}")
+    assert violations == [], "YAML 配置文件命名规范检查未通过:\n" + "\n".join(violations)
+

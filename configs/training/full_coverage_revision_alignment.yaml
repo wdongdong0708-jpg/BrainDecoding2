@@ -1,4 +1,4 @@
-extends: ../word_decoding/pallier2025/rolling_revision/k2_d2.yaml
+extends: ../word_decoding/pallier2025/rolling_revision/local_window_revision.yaml
 
 experiment:
   output_group: baseline_alignment_coverage_v1

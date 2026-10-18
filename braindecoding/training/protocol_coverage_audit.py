@@ -21,8 +21,8 @@ from braindecoding.training.word import SentenceBatchSampler
 
 
 DATASETS = {
-    "pallier2025": "configs/word_decoding/pallier2025/rolling_revision/k2_d2.yaml",
-    "chineseeeg2_littleprince": "configs/word_decoding/chineseeeg2_littleprince/rolling_revision/k2_d2_full_coverage.yaml",
+    "pallier2025": "configs/word_decoding/pallier2025/rolling_revision/local_window_revision.yaml",
+    "chineseeeg2_littleprince": "configs/word_decoding/chineseeeg2_littleprince/rolling_revision/full_coverage_local_window_revision.yaml",
 }
 MANIFEST_ROOT = PROJECT_ROOT / "data/manifests/rolling_sentence"
 

@@ -24,7 +24,7 @@ from braindecoding.unified_sentence_v2 import (
 from braindecoding.unified_sentence_batch import replay_many
 from braindecoding.unified_sentence_v2_revision_gain_full import validate_result
 
-CONFIG = PROJECT_ROOT / 'configs/unified_rolling/heldout_test_v2.yaml'
+CONFIG = PROJECT_ROOT / 'configs/evaluation/heldout_sentence_evaluation.yaml'
 PROTOCOL = PROJECT_ROOT / 'data/manifests/rolling_sentence/unified_protocol_v2.md'
 MANIFEST = PROTOCOL.with_suffix('.json')
 OUT = PROJECT_ROOT / 'outputs/heldout_test/unified_heldout_test_v2'

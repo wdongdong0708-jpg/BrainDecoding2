@@ -54,7 +54,7 @@ def test_current_scope_is_one_primary_and_two_named_supplements():
     }
     primary = resolve_protocol("unified_protocol_v2")
     assert primary["protocol"] == "data/manifests/rolling_sentence/unified_protocol_v2.md"
-    assert primary["config"] == "configs/unified_rolling/v2.yaml"
+    assert primary["config"] == "configs/training/rolling_revision_protocol.yaml"
     assert {dataset for record in records for dataset in record["datasets"]} == {
         "pallier2025", "chineseeeg2_littleprince",
     }

@@ -1,6 +1,8 @@
+# Compatibility reference only. The retired v1 trainer must remain blocked.
+# Authoritative executable rules: configs/training/rolling_revision_protocol.yaml.
 protocol:
-  id: unified_rolling_v2
-  status: ready_for_development_training
+  id: unified_rolling_v1_retired
+  status: retired_use_unified_rolling_v2
   splits_allowed:
   - train
   - val
@@ -23,6 +25,7 @@ protocol:
   neural_rules: accepted_pallier_bge_16x16_full_coverage
   sentence_status: pending_development_calibration_and_statistical_freeze
   test_evaluation_allowed: false
+  superseded_by: configs/training/rolling_revision_protocol.yaml
 text_embedding:
   model_name: BAAI/bge-m3
   revision: 5617a9f61b028005a4858fdac845db406aefb181
@@ -150,11 +153,11 @@ adapters:
     subject_scope: sub01-10
     language: fr
     group_column: runtime_context_uid
-    alignment_config: configs/unified_rolling/pallier_seed0_bge_alignment_retry1.yaml
-    word_source_config: configs/word_decoding/pallier2025/sub01-10/main_word.yaml
+    alignment_config: configs/training/multilingual_embedding_alignment_recovery.yaml
+    word_source_config: configs/word_decoding/pallier2025/all_subjects/main_word.yaml
     embedding_cache: data/cache/derived/pallier2025/text/unified_bge_m3_v1/embeddings.npz
     vocabulary_manifest: data/manifests/rolling_sentence/pallier2025_train_vocabulary.json
-    revision_source_config: configs/word_decoding/pallier2025/rolling_revision/k2_d2.yaml
+    revision_source_config: configs/word_decoding/pallier2025/rolling_revision/local_window_revision.yaml
     main_selection_metric_word: retrieval_acc10_vocab=pallier2025_50_macro
     main_selection_metric_revision: revision_common_delay2_retrieval_acc10_vocab=pallier2025_50_macro
     expected_train_rows: 115290
@@ -171,10 +174,10 @@ adapters:
     language: zh
     group_column: sentence_uid
     alignment_config: configs/unified_rolling/chineseeeg2_seed0_bge_16x16_v1.yaml
-    word_source_config: configs/word_decoding/chineseeeg2_littleprince/sub01-08/main_word.yaml
+    word_source_config: configs/word_decoding/chineseeeg2_littleprince/all_subjects/main_word.yaml
     embedding_cache: data/cache/derived/chineseeeg2_littleprince/text/unified_bge_m3_v1/embeddings.npz
     vocabulary_manifest: data/manifests/rolling_sentence/chineseeeg2_littleprince_train_vocabulary.json
-    revision_source_config: configs/word_decoding/chineseeeg2_littleprince/rolling_revision/k2_d2_full_coverage.yaml
+    revision_source_config: configs/word_decoding/chineseeeg2_littleprince/rolling_revision/full_coverage_local_window_revision.yaml
     main_selection_metric_word: retrieval_acc10_vocab=chineseeeg2_littleprince50_macro
     main_selection_metric_revision: revision_common_delay2_retrieval_acc10_vocab=chineseeeg2_littleprince50_macro
     expected_train_rows: 81620

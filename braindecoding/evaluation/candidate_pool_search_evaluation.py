@@ -21,7 +21,7 @@ from braindecoding.unified_heldout_test_v2 import validate_chunk as validate_ac_
 
 
 ID = "fixed_k0_rolling_search_test_v2"
-CONFIG = ROOT / f"configs/unified_rolling/{ID}.yaml"
+CONFIG = ROOT / "configs/evaluation/candidate_pool_search_evaluation.yaml"
 PROTOCOL = ROOT / "data/manifests/rolling_sentence/unified_protocol_v2.md"
 MANIFEST = ROOT / f"data/manifests/rolling_sentence/{ID}.json"
 PARENT = ROOT / "data/manifests/rolling_sentence/heldout_test_v2.json"

@@ -103,7 +103,7 @@ def test_preflight_covers_supported_legacy_configs_without_side_effects(
 
 
 @pytest.mark.parametrize("config, message", (
-    ("configs/unified_rolling/v2.yaml", "专用检查入口"),
+    ("configs/training/rolling_revision_protocol.yaml", "专用检查入口"),
 ))
 def test_configs_outside_legacy_contract_are_rejected_before_data_access(
     config, message, tmp_path, monkeypatch
@@ -199,7 +199,7 @@ def test_existing_upstream_checkpoint_makes_context_dependency_ready(
 
 def test_completed_run_is_reported_as_collision(tmp_path, monkeypatch):
     output_root = tmp_path / "outputs"
-    relative_path = "configs/word_decoding/pallier2025/sub01-10/main_word.yaml"
+    relative_path = "configs/word_decoding/pallier2025/all_subjects/main_word.yaml"
     config = preflight._load_resolved_config(relative_path, output_root=output_root)
     run_path = run_directory(config, output_root=output_root)
     run_path.mkdir(parents=True)

@@ -13,7 +13,7 @@ from braindecoding.unified_sentence_v2_preview import PREVIEW_OUT, REPORT as PRE
 from braindecoding.unified_sentence_v2_results import METRICS, metric_row
 from braindecoding.unified_sentence_v2_artifacts import csv_write
 
-CONFIG = PROJECT_ROOT / "configs/unified_rolling/sentence_v2_revision_gain.yaml"
+CONFIG = PROJECT_ROOT / "configs/decoding/revision_gain_preview.yaml"
 REPORT = PROJECT_ROOT / "data/results/studies/unified_sentence_v2_revision_gain/results.json"
 NAMES = {"pallier2025":"Pallier2025", "chineseeeg2_littleprince":"ChineseEEG-2"}
 CONDITIONS = ("A", "C")
@@ -197,7 +197,7 @@ def markdown(report):
             cells=[pos+1,example["reference"][pos],example["final"]["A"][pos],example["initial_C"][pos],after1,after2,example["final"]["C"][pos]]
             lines.append("| "+" | ".join(str(c).replace("|","\\|").replace("\n"," ") for c in cells)+" |")
         lines.append("")
-    lines += ["## 当前协议", "", "主比较衡量整个延迟滚动方法相对固定输出的收益。词数与材料边界已知。后续扩大评价范围时，主条件继续为 A/C，沿用同样的评分和统计定义。", "", "当前全量运行仍等待用户决定，测试集保持封存。执行配置：`configs/unified_rolling/sentence_v2_revision_gain.yaml`；协议说明：`data/manifests/rolling_sentence/unified_protocol_v2.md`。", "", f"原固定预览 SHA-256：`{report['preview_sha256']}`。", ""]
+    lines += ["## 当前协议", "", "主比较衡量整个延迟滚动方法相对固定输出的收益。词数与材料边界已知。后续扩大评价范围时，主条件继续为 A/C，沿用同样的评分和统计定义。", "", "当前全量运行仍等待用户决定，测试集保持封存。执行配置：`configs/decoding/revision_gain_preview.yaml`；协议说明：`data/manifests/rolling_sentence/unified_protocol_v2.md`。", "", f"原固定预览 SHA-256：`{report['preview_sha256']}`。", ""]
     REPORT.with_suffix(".md").write_text("\n".join(lines),encoding="utf-8")
 
 

@@ -327,15 +327,22 @@ def _add_training_workflow_args(
     parser: argparse.ArgumentParser, *, default_epochs: int | None = None
 ) -> None:
     parser.add_argument(
+        "--config",
+        "-c",
+        dest="config",
+        default=None,
+        help="YAML 配置文件路径（如 configs/training/pallier2025_word_encoder.yaml）",
+    )
+    parser.add_argument(
         "--dataset",
         choices=("chineseeeg2_littleprince", "pallier2025"),
-        default="chineseeeg2_littleprince",
-        help="目标数据集（默认：chineseeeg2_littleprince）",
+        default=None,
+        help="目标数据集（指定 --config 时自动从 YAML 读取；未指定时默认 chineseeeg2_littleprince）",
     )
     parser.add_argument(
         "--stage",
         choices=("word", "revision"),
-        default="word",
+        default=None,
         help="训练阶段：word（单窗脑编码器）或 revision（16 层局部窗口修订）",
     )
     parser.add_argument("--seed", type=int, default=0, help="随机种子（默认：0）")
@@ -344,19 +351,19 @@ def _add_training_workflow_args(
         "--epochs",
         type=int,
         default=default_epochs,
-        help="训练轮数（smoke 默认 2，train 默认按协议配置）",
+        help="训练轮数（smoke 默认 2，train 默认从 YAML 读取）",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
         default=None,
-        help="可选覆写训练批大小（train 默认 256）",
+        help="可选覆写训练批大小（默认从 YAML 读取，L4 GPU 默认为 256）",
     )
     parser.add_argument(
         "--eval-batch-size",
         type=int,
         default=None,
-        help="可选覆写验证与检索批大小（train 默认 512）",
+        help="可选覆写验证与检索批大小（默认从 YAML 读取，L4 GPU 默认为 512）",
     )
     parser.add_argument(
         "--learning-rate",
@@ -364,7 +371,7 @@ def _add_training_workflow_args(
         dest="learning_rate",
         type=float,
         default=None,
-        help="可选覆写初始学习率（train bs>=256 默认 4e-4）",
+        help="可选覆写初始学习率（默认从 YAML 读取，bs>=256 默认为 4e-4）",
     )
     parser.add_argument(
         "--num-workers",
@@ -374,9 +381,9 @@ def _add_training_workflow_args(
     )
     parser.add_argument(
         "--precision",
-        default="bf16-mixed",
+        default=None,
         choices=("bf16-mixed", "fp16-mixed", "fp16", "fp32"),
-        help="混合精度模式（默认：bf16-mixed）",
+        help="混合精度模式（默认从 YAML 读取或使用 bf16-mixed）",
     )
     parser.add_argument(
         "--require-cache",
@@ -425,13 +432,17 @@ def _add_training_workflow_args(
 def _workflow_cache(args) -> int:
     from braindecoding.training.workflow_runner import run_cache_workflow
 
+    dataset = args.dataset
+    if dataset is None and args.config is None:
+        dataset = "chineseeeg2_littleprince"
     report = run_cache_workflow(
-        args.dataset,
+        dataset,
         subject=args.subject,
         num_subjects=args.num_subjects,
         subjects=args.subjects,
         include_test=args.include_test,
         force=args.force,
+        config_path=args.config,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
@@ -440,8 +451,11 @@ def _workflow_cache(args) -> int:
 def _workflow_train(args, *, mode: str) -> int:
     from braindecoding.training.workflow_runner import run_training_workflow
 
+    dataset = args.dataset
+    if dataset is None and args.config is None:
+        dataset = "chineseeeg2_littleprince"
     run_training_workflow(
-        args.dataset,
+        dataset,
         stage=args.stage,
         seed=args.seed,
         subject=args.subject,
@@ -462,6 +476,7 @@ def _workflow_train(args, *, mode: str) -> int:
         max_val_rows=args.max_val_rows,
         overwrite=args.overwrite,
         show_progress=not bool(getattr(args, "no_progress", False)),
+        config_path=args.config,
     )
     return 0
 
@@ -488,10 +503,17 @@ def build_parser() -> argparse.ArgumentParser:
         "cache", help="预热并校验指定数据集与受试者子集的预处理特征缓存"
     )
     cache_cmd.add_argument(
+        "--config",
+        "-c",
+        dest="config",
+        default=None,
+        help="可选传入 YAML 配置文件（如 configs/training/pallier2025_word_encoder.yaml）",
+    )
+    cache_cmd.add_argument(
         "--dataset",
         choices=("chineseeeg2_littleprince", "pallier2025", "all"),
-        default="chineseeeg2_littleprince",
-        help="要预热缓存的数据集（默认：chineseeeg2_littleprince，支持 all）",
+        default=None,
+        help="要预热缓存的数据集（未传 --config 时默认 chineseeeg2_littleprince，支持 all）",
     )
     _add_subject_subset_args(cache_cmd)
     cache_cmd.add_argument(
@@ -511,7 +533,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_training_workflow_args(smoke_cmd, default_epochs=2)
 
     train_cmd = commands.add_parser(
-        "train", help="支持灵活受试者子集、缓存校验与断点续训的正式训练入口"
+        "train", help="支持灵活受试者子集、YAML 配置文件、缓存校验与断点续训的正式训练入口"
     )
     _add_training_workflow_args(train_cmd, default_epochs=None)
 

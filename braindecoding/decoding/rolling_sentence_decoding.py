@@ -31,7 +31,7 @@ from braindecoding.unified_rolling_v2_training import config as neural_config, d
 from braindecoding.unified_sentence_batch import BatchedWordLM, replay_many
 
 
-CONFIG = PROJECT_ROOT / "configs/unified_rolling/sentence_v2.yaml"
+CONFIG = PROJECT_ROOT / "configs/decoding/rolling_sentence_decoding.yaml"
 MANIFEST = PROJECT_ROOT / "data/manifests/rolling_sentence/unified_sentence_v2.json"
 OUT = PROJECT_ROOT / "outputs/sentence_decoding/unified_sentence_v2"
 RUNTIME = PROJECT_ROOT / ".cache/runs/unified_sentence_v2"

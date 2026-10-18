@@ -1,0 +1,113 @@
+# ChineseEEG-2 中文《小王子》EEG 第二阶段：16 层局部窗口滚动修订训练配置（NVIDIA L4 GPU 默认调优）
+# 启动命令：
+#   python -u -m braindecoding train --config configs/training/chineseeeg2_rolling_revision.yaml --require-cache --resume auto
+extends: ../word_decoding/chineseeeg2_littleprince/rolling_revision/full_coverage_local_window_revision.yaml
+
+workflow:
+  dataset: chineseeeg2_littleprince
+  stage: revision
+  subject: all
+  precision: bf16-mixed
+
+experiment:
+  output_group: unified_rolling_v2
+
+cache:
+  text_embeddings: data/cache/derived/chineseeeg2_littleprince/text/unified_bge_m3_v1/embeddings.npz
+
+text_embedding:
+  model_name: BAAI/bge-m3
+  revision: 5617a9f61b028005a4858fdac845db406aefb181
+  backend: auto_model
+  layer_fraction: 1.0
+  token_aggregation: first
+  add_special_tokens: true
+  normalize_embeddings: true
+  embedding_dimension: 1024
+  max_length: 64
+  batch_size: 64
+  dtype: float16
+  device: cuda
+  local_files_only: true
+  word_normalization: canonical_standard_word
+
+model:
+  embedding_dimension: 1024
+  use_transformer: true
+  context_mode: grouped
+  conv:
+    merger_channels: 270
+    merger_position_dimension: 2048
+    merger_per_subject: true
+    merger_dropout: 0.2
+    initial_linear: 512
+    hidden: 160
+    depth: 5
+    kernel_size: 3
+    dilation_growth: 2
+    dilation_period: 5
+    dropout_input: 0.1
+    convolution_dropout: 0.0
+    batch_norm: true
+    gelu: true
+    skip: true
+    glu_every: 2
+    glu_context: 1
+    temporal_attention_hidden: 256
+  transformer:
+    depth: 16
+    heads: 16
+    attention_dropout: 0.1
+    feedforward_dropout: 0.0
+    use_scalenorm: true
+    use_rmsnorm: false
+    rotary_position_embedding: true
+    residual_attention: false
+    scale_residual: true
+  local_window_revision:
+    enabled: true
+    history_radius: 2
+    horizons: [0, 1, 2]
+    validation_query_batch_size: 512
+
+loss:
+  name: SigLip
+  initial_temperature: 10.0
+  initial_bias: -10.0
+  identical_candidates_threshold: 0.999
+
+training:
+  seed: 0
+  device: auto
+  epochs: 30
+  batch_size: 256
+  eval_batch_size: 512
+  validation_query_batch_size: 512
+  learning_rate: 0.0004
+  weight_decay: 0.0
+  minimum_learning_rate: 0.0
+  max_grad_norm: 0.0
+  num_workers: 0
+  patience: 10
+  precision: bf16-mixed
+  amp: true
+  amp_dtype: bfloat16
+  freeze_brain_encoder_epochs: 1
+  preserve_complete_groups: true
+  revision_cutoff_policy: all
+  loss_normalization: per_batch_independent_horizon_mean
+  track_revision_coverage: true
+  save_last_checkpoint: true
+  warm_start_from: main_word
+  warm_start_output_group: unified_rolling_v2
+  scheduler: cosine_annealing_per_epoch
+  record_amp_skipped_updates: true
+  primary_checkpoint: best.pt
+  secondary_checkpoint: best_full_vocab.pt
+  warm_start_source: same_dataset_same_seed_word_best_pt
+  top_ks: [1, 10]
+  word_sampling: legacy_word_sampler
+
+evaluation:
+  default_split: val
+  selection_metric: revision_common_delay2_retrieval_acc10_vocab=chineseeeg2_littleprince50_macro

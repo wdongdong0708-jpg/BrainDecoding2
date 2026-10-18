@@ -23,7 +23,7 @@ from braindecoding.unified_sentence_v2 import digest, load_lm, read, save, sha25
 
 
 ID = "single_revision_c1_test_v2"
-CONFIG = ROOT / f"configs/unified_rolling/{ID}.yaml"
+CONFIG = ROOT / "configs/evaluation/single_step_revision_evaluation.yaml"
 PROTOCOL = ROOT / "data/manifests/rolling_sentence/unified_protocol_v2.md"
 MANIFEST = ROOT / f"data/manifests/rolling_sentence/{ID}.json"
 OUT = ROOT / f"outputs/heldout_test/{ID}"

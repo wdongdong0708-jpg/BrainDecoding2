@@ -45,7 +45,7 @@ def export_protocol_tables():
         assert sha(ROOT / rel) == digest, rel
     sources[old_path.relative_to(ROOT).as_posix()] = sha(old_path)
     manifest = read(ROOT / 'data/manifests/rolling_sentence/heldout_test_v2.json')
-    config = yaml.safe_load((ROOT / 'configs/unified_rolling/v2.yaml').read_text(encoding='utf-8'))
+    config = yaml.safe_load((ROOT / 'configs/training/rolling_revision_protocol.yaml').read_text(encoding='utf-8'))
     decoder, language = manifest['decoder'], config['language_model']
     for key, source in [('candidates', 'candidate_count'), ('beam_width', 'beam_width'),
                         ('neural_scale', 'neural_scale'), ('proposal_count', 'proposal_count'),

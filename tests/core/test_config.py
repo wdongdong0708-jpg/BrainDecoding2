@@ -34,7 +34,7 @@ MODEL_ROOT_CONFIGS = (
 )
 ALIGNMENT_CONFIGS = (
     (
-        "configs/word_decoding/chineseeeg2_littleprince/sub01-08/main_word.yaml",
+        "configs/word_decoding/chineseeeg2_littleprince/all_subjects/main_word.yaml",
         "data/cache/artifacts/alignments/chineseeeg2_littleprince/f1/女声一_小王子_实际朗读时间戳.xlsx",
         (
             "data/cache/artifacts/alignments/chineseeeg2_littleprince/f1/女声一_小王子_实际朗读时间戳.xlsx",
@@ -243,6 +243,7 @@ def test_real_dataset_config_requires_braindata_root(monkeypatch):
         "BRAINDECODING_MODEL_ROOT", "D:/code/dascoli-word-decoding/models"
     )
     monkeypatch.delenv("BRAINDATA_ROOT", raising=False)
+    monkeypatch.delenv("BRAINDECODING_DATA_DIR", raising=False)
     with pytest.raises(ValueError, match="未设置的环境变量：BRAINDATA_ROOT"):
         load_yaml_with_extends(
             PROJECT_ROOT / "configs/word_decoding/chineseeeg2_littleprince/base.yaml"

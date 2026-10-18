@@ -198,7 +198,7 @@ def main():
     context, _, word_report = verify_word()
     summary, _, sentence_sources = verify_sentence()
     manifest_path = ROOT / 'data/manifests/rolling_sentence/heldout_test_v2.json'
-    config_path = ROOT / 'configs/unified_rolling/v2.yaml'
+    config_path = ROOT / 'configs/training/rolling_revision_protocol.yaml'
     manifest = read(manifest_path)
     config = yaml.safe_load(config_path.read_text(encoding='utf-8'))
     assert manifest['manifest_sha256'] == summary['manifest_sha256']

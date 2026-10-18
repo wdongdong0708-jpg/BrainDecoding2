@@ -54,16 +54,69 @@ _LEGACY_PATH_PREFIX_MAP: tuple[tuple[str, str], ...] = (
     ("artifacts/", "data/cache/artifacts/"),
 )
 
+_LEGACY_CONFIG_PATH_MAP: dict[str, str] = {
+    "configs/unified_rolling/v2.yaml": "configs/training/rolling_revision_protocol.yaml",
+    "configs/unified_rolling/v1.yaml": "configs/training/legacy_rolling_revision_protocol.yaml",
+    "configs/unified_rolling/context_baselines_v2.yaml": "configs/training/context_window_baselines.yaml",
+    "configs/unified_rolling/pallier_seed0_coverage_alignment_v1.yaml": "configs/training/full_coverage_revision_alignment.yaml",
+    "configs/unified_rolling/pallier_seed0_bge_alignment_v1.yaml": "configs/training/multilingual_embedding_alignment.yaml",
+    "configs/unified_rolling/pallier_seed0_bge_alignment_retry1.yaml": "configs/training/multilingual_embedding_alignment_recovery.yaml",
+    "configs/unified_rolling/synthetic_timing_v1.yaml": "configs/training/synthetic_timing_control.yaml",
+    "configs/unified_rolling/synthetic_timing_v2.yaml": "configs/training/synthetic_timing_recovery.yaml",
+    "configs/unified_rolling/sentence_v2.yaml": "configs/decoding/rolling_sentence_decoding.yaml",
+    "configs/unified_rolling/sentence_v2_revision_gain.yaml": "configs/decoding/revision_gain_preview.yaml",
+    "configs/unified_rolling/sentence_v2_revision_gain_full.yaml": "configs/decoding/revision_gain_evaluation.yaml",
+    "configs/unified_rolling/heldout_test_v2.yaml": "configs/evaluation/heldout_sentence_evaluation.yaml",
+    "configs/unified_rolling/fixed_k0_rolling_search_test_v2.yaml": "configs/evaluation/candidate_pool_search_evaluation.yaml",
+    "configs/unified_rolling/single_revision_c1_test_v2.yaml": "configs/evaluation/single_step_revision_evaluation.yaml",
+    "configs/unified_rolling/f_local_sentence_test_v2.yaml": "configs/evaluation/neural_only_local_evaluation.yaml",
+    "configs/unified_rolling/single_word_long_window_test_v2.yaml": "configs/evaluation/long_window_word_evaluation.yaml",
+    "configs/unified_rolling/pure_language_baseline_test_v2.yaml": "configs/evaluation/language_only_baseline_evaluation.yaml",
+    "configs/unified_rolling/pure_language_prompt_sensitivity_test_v2.yaml": "configs/evaluation/language_prompt_sensitivity_evaluation.yaml",
+    "configs/unified_rolling/neural_prompt_sensitivity_test_v2.yaml": "configs/evaluation/neural_prompt_sensitivity_evaluation.yaml",
+    "configs/word_decoding/chineseeeg2_littleprince/sub01-08/main_word.yaml": "configs/word_decoding/chineseeeg2_littleprince/all_subjects/main_word.yaml",
+    "configs/word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart.yaml": "configs/word_decoding/chineseeeg2_littleprince/all_subjects/main_context_warmstart.yaml",
+    "configs/word_decoding/chineseeeg2_littleprince/rolling_revision/k2_d2.yaml": "configs/word_decoding/chineseeeg2_littleprince/rolling_revision/local_window_revision.yaml",
+    "configs/word_decoding/chineseeeg2_littleprince/rolling_revision/k2_d2_full_coverage.yaml": "configs/word_decoding/chineseeeg2_littleprince/rolling_revision/full_coverage_local_window_revision.yaml",
+    "configs/word_decoding/pallier2025/sub01-10/main_word.yaml": "configs/word_decoding/pallier2025/all_subjects/main_word.yaml",
+    "configs/word_decoding/pallier2025/sub01-10/main_context.yaml": "configs/word_decoding/pallier2025/all_subjects/main_context.yaml",
+    "configs/word_decoding/pallier2025/sub01-10/main_context_warmstart.yaml": "configs/word_decoding/pallier2025/all_subjects/main_context_warmstart.yaml",
+    "configs/word_decoding/pallier2025/rolling_revision/k2_d2.yaml": "configs/word_decoding/pallier2025/rolling_revision/local_window_revision.yaml",
+}
 
-def normalize_project_relative(value: str) -> str:
-    """将历史仓库相对路径映射为统一 data/ 下的标准相对路径。"""
-    normalized = value.replace("\\", "/")
+
+def normalize_project_relative(value: str | Path) -> str:
+    """将历史仓库相对路径映射为统一 data/ 或标准 configs/ 下的相对路径。"""
+    if isinstance(value, Path):
+        try:
+            value = value.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+        except ValueError:
+            value = value.as_posix()
+    normalized = str(value).replace("\\", "/")
+    if normalized in _LEGACY_CONFIG_PATH_MAP:
+        return _LEGACY_CONFIG_PATH_MAP[normalized]
     for old_prefix, new_prefix in _LEGACY_PATH_PREFIX_MAP:
         if normalized == old_prefix.rstrip("/"):
             return new_prefix.rstrip("/")
         if normalized.startswith(old_prefix):
             return new_prefix + normalized[len(old_prefix):]
-    return value
+    return str(value)
+
+
+def resolve_config_path(path: str | Path) -> Path:
+    """解析 YAML 配置文件路径，支持相对路径与历史配置路径透明映射。"""
+    expanded_value = expand_environment_variables(str(path))
+    candidate = Path(expanded_value)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / normalize_project_relative(expanded_value)
+    else:
+        try:
+            rel = candidate.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+            if rel in _LEGACY_CONFIG_PATH_MAP and not candidate.exists():
+                candidate = PROJECT_ROOT / _LEGACY_CONFIG_PATH_MAP[rel]
+        except ValueError:
+            pass
+    return candidate.resolve()
 
 
 def project_path(value):
@@ -75,6 +128,12 @@ def project_path(value):
     expanded_value = expand_environment_variables(str(value))
     path = Path(expanded_value)
     if path.is_absolute():
+        try:
+            rel = path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix()
+            if rel in _LEGACY_CONFIG_PATH_MAP and not path.exists():
+                return PROJECT_ROOT / _LEGACY_CONFIG_PATH_MAP[rel]
+        except ValueError:
+            pass
         return path
     normalized = normalize_project_relative(expanded_value)
     posix_rel = normalized.replace("\\", "/")
@@ -139,7 +198,7 @@ def deep_merge(base, override):
 
 
 def _load_yaml_mapping(config_path, ancestors=()):
-    config_path = Path(config_path).resolve()
+    config_path = resolve_config_path(config_path)
     if config_path in ancestors:
         raise ValueError(f"配置继承出现循环：{config_path}")
     with config_path.open("r", encoding="utf-8") as stream:
@@ -156,7 +215,7 @@ def _load_yaml_mapping(config_path, ancestors=()):
 
 def load_yaml_with_extends(path):
     """读取 YAML，递归展开 ``extends``，并展开最终配置中的环境变量。"""
-    config_path = Path(expand_environment_variables(str(path))).resolve()
+    config_path = resolve_config_path(path)
     config = _load_yaml_mapping(config_path)
     return expand_environment_variables(config)
 

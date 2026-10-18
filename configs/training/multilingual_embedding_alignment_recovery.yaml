@@ -1,4 +1,4 @@
-extends: pallier_seed0_bge_alignment_v1.yaml
+extends: multilingual_embedding_alignment.yaml
 
 experiment:
   output_group: baseline_alignment_bge_v1_retry1

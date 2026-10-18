@@ -230,4 +230,45 @@ def test_cli_parses_smoke_cache_and_train_subcommands():
     assert cfg_train["training"]["batch_size"] == 256
     assert cfg_train["training"]["eval_batch_size"] == 512
     assert cfg_train["training"]["learning_rate"] == pytest.approx(0.0004)
+    assert (
+        cfg_train["workflow"]["config_path"]
+        == "configs/training/pallier2025_word_encoder.yaml"
+    )
+
+
+def test_workflow_config_loads_explicit_yaml_files():
+    parser = cli.build_parser()
+    cfg_args = parser.parse_args(
+        [
+            "train",
+            "--config",
+            "configs/training/pallier2025_word_encoder.yaml",
+            "--seed",
+            "0",
+            "--require-cache",
+            "--resume",
+            "auto",
+        ]
+    )
+    assert cfg_args.config == "configs/training/pallier2025_word_encoder.yaml"
+    assert cfg_args.dataset is None
+    assert cfg_args.stage is None
+
+    for expected_ds, expected_stage, rel_yaml in (
+        ("pallier2025", "word", "configs/training/pallier2025_word_encoder.yaml"),
+        ("pallier2025", "revision", "configs/training/pallier2025_rolling_revision.yaml"),
+        ("chineseeeg2_littleprince", "word", "configs/training/chineseeeg2_word_encoder.yaml"),
+        ("chineseeeg2_littleprince", "revision", "configs/training/chineseeeg2_rolling_revision.yaml"),
+    ):
+        cfg, subset = build_workflow_config(
+            config_path=rel_yaml, seed=1, mode="train"
+        )
+        assert subset["dataset"] == expected_ds
+        assert cfg["workflow"]["stage"] == expected_stage
+        assert cfg["workflow"]["config_path"] == rel_yaml
+        assert cfg["training"]["batch_size"] == 256
+        assert cfg["training"]["eval_batch_size"] == 512
+        assert cfg["training"]["learning_rate"] == pytest.approx(0.0004)
+        assert cfg["training"]["precision"] == "bf16-mixed"
+        assert cfg["model"]["use_transformer"] is (expected_stage == "revision")
 

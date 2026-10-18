@@ -26,7 +26,7 @@ from braindecoding.full_context_sentence_test_v2 import validate_chunk as valida
 
 ID = "f_local_sentence_test_v2"
 CONDITIONS = ("C", "F-local", "F")
-CONFIG = ROOT / f"configs/unified_rolling/{ID}.yaml"
+CONFIG = ROOT / "configs/evaluation/neural_only_local_evaluation.yaml"
 PROTOCOL = ROOT / "data/manifests/rolling_sentence/unified_protocol_v2.md"
 MANIFEST = ROOT / f"data/manifests/rolling_sentence/{ID}.json"
 PARENT = ROOT / "data/manifests/rolling_sentence/heldout_test_v2.json"

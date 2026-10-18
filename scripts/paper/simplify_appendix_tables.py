@@ -50,7 +50,7 @@ def main():
     sentence, _, sources = verify()
     sources = dict(sources)
     manifest_rel = 'data/manifests/rolling_sentence/heldout_test_v2.json'
-    config_rel = 'configs/unified_rolling/v2.yaml'
+    config_rel = 'configs/training/rolling_revision_protocol.yaml'
     vocabulary_rel = 'data/results/exports/full_vocabulary_context_test_v2_summary.json'
     wait_rel = 'data/results/exports/full_context_sentence_test_v2_input_wait_summary.csv'
     timing_rel = 'data/results/exports/full_context_sentence_test_v2_summary.json'

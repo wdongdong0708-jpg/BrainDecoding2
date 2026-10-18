@@ -32,7 +32,7 @@ from braindecoding.pallier_alignment_trial import strict_bank_metrics
 from braindecoding.training.runtime import load_checkpoint, set_seed
 from braindecoding.training.word import make_loader, train_one_epoch, encode_loader
 
-CONFIG = ROOT / "configs/unified_rolling/synthetic_timing_v1.yaml"
+CONFIG = ROOT / "configs/training/synthetic_timing_control.yaml"
 PROTOCOL = ROOT / "data/manifests/rolling_sentence/unified_protocol_v2.md"
 MANIFEST = PROTOCOL.with_suffix(".json")
 REPORT = ROOT / "data/results/studies/synthetic_timing_v1"

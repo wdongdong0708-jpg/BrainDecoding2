@@ -24,7 +24,7 @@ from braindecoding.training.runtime import load_checkpoint, save_checkpoint, set
 from braindecoding.training.word import make_loader, train_one_epoch
 from braindecoding.unified_rolling_training import full_vocabulary_metrics
 
-CONFIG = PROJECT_ROOT / "configs/unified_rolling/pallier_seed0_bge_alignment_v1.yaml"
+CONFIG = PROJECT_ROOT / "configs/training/multilingual_embedding_alignment.yaml"
 RUNTIME = runtime_cache_dir("pallier_seed0_bge_alignment_v1")
 REPORT = study_report_dir("pallier2025", "baseline_alignment_bge_v1")
 _STATUS = {}
@@ -249,7 +249,7 @@ def main():
             PROJECT_ROOT / "braindecoding/training/word.py", PROJECT_ROOT / "braindecoding/models.py",
             PROJECT_ROOT / "braindecoding/losses.py", PROJECT_ROOT / "braindecoding/training/unified_rolling_training.py",
             PROJECT_ROOT / "braindecoding/tasks/word_decoding/pallier2025/train.py",
-            PROJECT_ROOT / "configs/unified_rolling/pallier_seed0_coverage_alignment_v1.yaml",
+            PROJECT_ROOT / "configs/training/full_coverage_revision_alignment.yaml",
             PROJECT_ROOT / "configs/word_decoding/pallier2025/base.yaml"]
         hashes = {str(p.relative_to(PROJECT_ROOT)):file_sha256(p) for p in sources if Path(p).is_file()}
         status(status="preparing", started_unix=time.time(), dataset="pallier2025", seed=0,

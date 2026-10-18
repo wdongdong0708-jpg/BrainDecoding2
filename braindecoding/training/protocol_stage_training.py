@@ -35,7 +35,7 @@ from braindecoding.training.word import make_loader, train_one_epoch
 from braindecoding.unified_rolling_training import full_vocabulary_metrics
 
 
-CONFIG_PATH = PROJECT_ROOT / "configs/unified_rolling/v2.yaml"
+CONFIG_PATH = PROJECT_ROOT / "configs/training/rolling_revision_protocol.yaml"
 DATASETS = ("pallier2025", "chineseeeg2_littleprince")
 STAGES = ("word", "revision")
 COMMON_TRAINING_KEYS = (

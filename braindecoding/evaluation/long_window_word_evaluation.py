@@ -27,7 +27,7 @@ from braindecoding.unified_sentence_v2 import digest, read, save, sha256
 
 
 ID = "single_word_long_window_test_v2"
-CONFIG = ROOT / f"configs/unified_rolling/{ID}.yaml"
+CONFIG = ROOT / "configs/evaluation/long_window_word_evaluation.yaml"
 PROTOCOL = ROOT / "data/manifests/rolling_sentence/unified_protocol_v2.md"
 MANIFEST = ROOT / f"data/manifests/rolling_sentence/{ID}.json"
 PARENT = ROOT / "data/manifests/rolling_sentence/heldout_test_v2.json"

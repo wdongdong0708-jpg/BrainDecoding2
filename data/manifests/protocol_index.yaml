@@ -8,7 +8,7 @@ protocols:
   - pallier2025
   - chineseeeg2_littleprince
   protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/unified_rolling/v2.yaml
+  config: configs/training/rolling_revision_protocol.yaml
   entrypoints:
   - python scripts/replications/run_unified_rolling_v2.py --help
   - python -m braindecoding.unified_rolling_v2_training --help
@@ -56,7 +56,7 @@ protocols:
   datasets:
   - pallier2025
   protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/unified_rolling/synthetic_timing_v1.yaml
+  config: configs/training/synthetic_timing_control.yaml
   manifests:
   - data/manifests/rolling_sentence/synthetic_timing_v1.json
   entrypoints:
@@ -80,7 +80,7 @@ protocols:
   - pallier2025
   - chineseeeg2_littleprince
   protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/unified_rolling/synthetic_timing_v2.yaml
+  config: configs/training/synthetic_timing_recovery.yaml
   manifests:
   - data/manifests/rolling_sentence/synthetic_timing_v2.json
   entrypoints:
@@ -108,7 +108,7 @@ protocols:
   - pallier2025
   - chineseeeg2_littleprince
   protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/unified_rolling/fixed_k0_rolling_search_test_v2.yaml
+  config: configs/evaluation/candidate_pool_search_evaluation.yaml
   manifests:
   - data/manifests/rolling_sentence/fixed_k0_rolling_search_test_v2.json
   entrypoints:
@@ -132,7 +132,7 @@ protocols:
   - pallier2025
   - chineseeeg2_littleprince
   protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/unified_rolling/single_word_long_window_test_v2.yaml
+  config: configs/evaluation/long_window_word_evaluation.yaml
   manifests:
   - data/manifests/rolling_sentence/single_word_long_window_test_v2.json
   entrypoints:
@@ -157,7 +157,7 @@ protocols:
   - pallier2025
   - chineseeeg2_littleprince
   protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/unified_rolling/pure_language_baseline_test_v2.yaml
+  config: configs/evaluation/language_only_baseline_evaluation.yaml
   manifests:
   - data/manifests/rolling_sentence/pure_language_baseline_test_v2.json
   entrypoints:
@@ -183,7 +183,7 @@ protocols:
   - pallier2025
   - chineseeeg2_littleprince
   protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/unified_rolling/f_local_sentence_test_v2.yaml
+  config: configs/evaluation/neural_only_local_evaluation.yaml
   manifests:
   - data/manifests/rolling_sentence/f_local_sentence_test_v2.json
   entrypoints:
@@ -207,7 +207,7 @@ protocols:
   - pallier2025
   - chineseeeg2_littleprince
   protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/unified_rolling/pure_language_prompt_sensitivity_test_v2.yaml
+  config: configs/evaluation/language_prompt_sensitivity_evaluation.yaml
   manifests:
   - data/manifests/rolling_sentence/pure_language_prompt_sensitivity_test_v2.json
   entrypoints:
@@ -231,7 +231,7 @@ protocols:
   - pallier2025
   - chineseeeg2_littleprince
   protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/unified_rolling/neural_prompt_sensitivity_test_v2.yaml
+  config: configs/evaluation/neural_prompt_sensitivity_evaluation.yaml
   manifests:
   - data/manifests/rolling_sentence/neural_prompt_sensitivity_test_v2.json
   entrypoints:

@@ -584,7 +584,7 @@ def readme():
 运行：`python scripts/paper/refine_publication_style_test_v2.py --deploy`
 
 所有结果直接读取并核验 `reports/exports/unified_*heldout_test_v2*` 的正式测试导出。
-设置表读取 frozen test manifest 与 `configs/unified_rolling/v2.yaml`。
+设置表读取 frozen test manifest 与 `configs/training/rolling_revision_protocol.yaml`。
 原 publication_suite、原测试资产和正文逐字保留的图注用于对照；本目录不是新结果真源。
 
 - 方法图保留已认可的 editorial 版本；蓝色新信号、黑框固定目标、等宽可回修尾部。
@@ -610,7 +610,7 @@ def main():
     summary, _, sentence_sources = verify_sentence()
     by_seed = pd.read_csv(EXPORT / 'unified_context_heldout_test_v2_context_by_seed.csv')
     manifest_path = ROOT / 'data/manifests/rolling_sentence/heldout_test_v2.json'
-    config_path = ROOT / 'configs/unified_rolling/v2.yaml'
+    config_path = ROOT / 'configs/training/rolling_revision_protocol.yaml'
     manifest = read(manifest_path)
     config = yaml.safe_load(config_path.read_text(encoding='utf-8'))
     assert manifest['manifest_sha256'] == summary['manifest_sha256']

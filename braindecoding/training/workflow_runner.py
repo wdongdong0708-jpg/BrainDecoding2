@@ -30,7 +30,9 @@ from braindecoding.config import (
     ensure_default_environment,
     load_yaml_with_extends,
     model_root,
+    normalize_project_relative,
     project_path,
+    resolve_config_path,
     results_root,
 )
 from braindecoding.data import chineseeeg2_dataset as chineseeeg2
@@ -78,6 +80,13 @@ from braindecoding.training.word_encoder_training import (
 CANONICAL_SUBJECTS: dict[str, tuple[str, ...]] = {
     "chineseeeg2_littleprince": tuple(f"sub-{index:02d}" for index in range(1, 9)),
     "pallier2025": tuple(pallier2025.SUBJECTS),
+}
+
+DEFAULT_STAGE_CONFIGS: dict[tuple[str, str], str] = {
+    ("pallier2025", "word"): "configs/training/pallier2025_word_encoder.yaml",
+    ("pallier2025", "revision"): "configs/training/pallier2025_rolling_revision.yaml",
+    ("chineseeeg2_littleprince", "word"): "configs/training/chineseeeg2_word_encoder.yaml",
+    ("chineseeeg2_littleprince", "revision"): "configs/training/chineseeeg2_rolling_revision.yaml",
 }
 
 
@@ -232,11 +241,41 @@ def workflow_output_directory(
     ).resolve()
 
 
-def build_workflow_config(
-    dataset: str,
+def _infer_dataset_and_stage_from_yaml(
+    raw_cfg: dict,
     *,
-    stage: str = "word",
-    seed: int = 0,
+    dataset: str | None = None,
+    stage: str | None = None,
+) -> tuple[str, str]:
+    """从 YAML 配置推断或核验 dataset 与 stage。"""
+    exp = raw_cfg.get("experiment") if isinstance(raw_cfg.get("experiment"), dict) else {}
+    ds_block = raw_cfg.get("dataset") if isinstance(raw_cfg.get("dataset"), dict) else {}
+    model_block = raw_cfg.get("model") if isinstance(raw_cfg.get("model"), dict) else {}
+
+    yaml_dataset = exp.get("dataset") or ds_block.get("name")
+    yaml_stage = exp.get("stage")
+    if yaml_stage not in STAGES and "use_transformer" in model_block:
+        yaml_stage = "revision" if bool(model_block.get("use_transformer")) else "word"
+
+    if dataset is not None and yaml_dataset and dataset != yaml_dataset:
+        raise ValueError(
+            f"--dataset={dataset!r} 与配置文件中的 dataset={yaml_dataset!r} 不一致。"
+        )
+    if stage is not None and exp.get("stage") in STAGES and stage != exp.get("stage"):
+        raise ValueError(
+            f"--stage={stage!r} 与配置文件中的 stage={exp.get('stage')!r} 不一致。"
+        )
+
+    final_dataset = str(dataset or yaml_dataset or "pallier2025")
+    final_stage = str(stage or yaml_stage or "word")
+    return final_dataset, final_stage
+
+
+def build_workflow_config(
+    dataset: str | None = None,
+    *,
+    stage: str | None = None,
+    seed: int | None = 0,
     subject: str | None = None,
     num_subjects: int | None = None,
     subjects: str | Iterable[str] | None = None,
@@ -245,19 +284,39 @@ def build_workflow_config(
     eval_batch_size: int | None = None,
     learning_rate: float | None = None,
     num_workers: int | None = None,
-    precision: str = "bf16-mixed",
+    precision: str | None = None,
     mode: str = "train",
     output_dir: str | Path | None = None,
     word_checkpoint: str | Path | None = None,
     max_train_rows: int | None = None,
     max_val_rows: int | None = None,
+    config_path: str | Path | None = None,
 ) -> tuple[dict, dict]:
-    """构建支持灵活受试者子集与环境变量路径解耦的训练配置。"""
+    """构建支持灵活受试者子集、自定义 YAML 配置与环境变量路径解耦的训练配置。"""
     ensure_default_environment()
+    explicit_cfg_path: Path | None = None
+    explicit_yaml: dict | None = None
+    if config_path is not None:
+        explicit_cfg_path = resolve_config_path(project_path(config_path))
+        if not explicit_cfg_path.is_file():
+            raise FileNotFoundError(f"指定的配置文件不存在：{config_path}")
+        explicit_yaml = load_yaml_with_extends(explicit_cfg_path)
+        dataset, stage = _infer_dataset_and_stage_from_yaml(
+            explicit_yaml, dataset=dataset, stage=stage
+        )
+    else:
+        dataset = str(dataset or "pallier2025")
+        stage = str(stage or "word")
+
     if dataset not in DATASETS:
         raise ValueError(f"不支持的数据集 {dataset!r}，可选：{DATASETS}")
     if stage not in STAGES:
         raise ValueError(f"不支持的训练阶段 {stage!r}，可选：{STAGES}")
+
+    if seed is None and explicit_yaml is not None:
+        seed = explicit_yaml.get("training", {}).get("seed", 0)
+    if seed is None:
+        seed = 0
     if isinstance(seed, bool) or int(seed) < 0:
         raise ValueError(f"随机种子必须是非负整数：{seed!r}")
     seed = int(seed)
@@ -265,7 +324,6 @@ def build_workflow_config(
     subset_spec = resolve_subject_subset(
         dataset, subject=subject, num_subjects=num_subjects, subjects=subjects
     )
-    precision_label, amp_dtype_name, amp_enabled = _normalize_precision(precision)
 
     settings = load_yaml_with_extends(CONFIG_PATH)
     adapter = settings["adapters"][dataset]
@@ -274,15 +332,43 @@ def build_workflow_config(
         if dataset == "pallier2025"
         else chinese_task.load_config
     )
-    cfg = loader(project_path(adapter[f"{stage}_source_config"]))
-    cfg["experiment"]["output_group"] = settings["execution"]["output_group"]
-    cfg["model"] = copy.deepcopy(settings["model"])
+    default_source_rel = DEFAULT_STAGE_CONFIGS.get(
+        (dataset, stage), adapter[f"{stage}_source_config"]
+    )
+    active_config_path = (
+        explicit_cfg_path
+        if explicit_cfg_path is not None
+        else resolve_config_path(project_path(default_source_rel))
+    )
+    cfg = loader(active_config_path)
+    yaml_tc = dict(cfg.get("training", {}))
+
+    effective_precision = (
+        precision
+        if precision is not None
+        else str(yaml_tc.get("precision", "bf16-mixed"))
+    )
+    precision_label, amp_dtype_name, amp_enabled = _normalize_precision(
+        effective_precision
+    )
+
+    cfg["experiment"]["output_group"] = (
+        explicit_yaml.get("experiment", {}).get("output_group")
+        if explicit_yaml is not None
+        and explicit_yaml.get("experiment", {}).get("output_group")
+        else settings["execution"]["output_group"]
+    )
+    if explicit_yaml is None or "model" not in explicit_yaml:
+        cfg["model"] = copy.deepcopy(settings["model"])
     cfg["model"]["use_transformer"] = stage == "revision"
     if stage == "word":
         cfg["model"].pop("local_window_revision", None)
-    cfg["text_embedding"] = copy.deepcopy(settings["text_embedding"])
-    cfg["loss"] = copy.deepcopy(settings["loss"])
-    cfg["cache"]["text_embeddings"] = str(project_path(adapter["embedding_cache"]))
+    if explicit_yaml is None or "text_embedding" not in explicit_yaml:
+        cfg["text_embedding"] = copy.deepcopy(settings["text_embedding"])
+    if explicit_yaml is None or "loss" not in explicit_yaml:
+        cfg["loss"] = copy.deepcopy(settings["loss"])
+    if explicit_yaml is None or not explicit_yaml.get("cache", {}).get("text_embeddings"):
+        cfg["cache"]["text_embeddings"] = str(project_path(adapter["embedding_cache"]))
 
     cfg["dataset"]["subjects"] = list(subset_spec["subjects"])
     cfg["dataset"]["allow_subject_subset"] = True
@@ -296,22 +382,33 @@ def build_workflow_config(
     tc = cfg["training"]
     common = settings["training"]
     for key in COMMON_TRAINING_KEYS:
-        tc[key] = copy.deepcopy(common[key])
-    default_epochs = 2 if mode == "smoke" else int(common[f"{stage}_epochs"])
+        if key not in yaml_tc:
+            tc[key] = copy.deepcopy(common[key])
+    yaml_epochs = yaml_tc.get("epochs")
+    default_epochs = (
+        2
+        if mode == "smoke"
+        else int(yaml_epochs if yaml_epochs is not None else common[f"{stage}_epochs"])
+    )
     tc.update(
         seed=seed,
         epochs=int(epochs) if epochs is not None else default_epochs,
-        top_ks=[1, 10],
+        top_ks=list(yaml_tc.get("top_ks", [1, 10])),
         amp=amp_enabled,
         amp_dtype=amp_dtype_name,
         precision=precision_label,
     )
     if batch_size is not None:
         tc["batch_size"] = int(batch_size)
+    elif "batch_size" in yaml_tc and explicit_yaml is not None:
+        tc["batch_size"] = int(yaml_tc["batch_size"])
     elif mode == "train":
-        tc["batch_size"] = 256
+        tc["batch_size"] = int(yaml_tc.get("batch_size", 256))
+
     if eval_batch_size is not None:
         tc["eval_batch_size"] = int(eval_batch_size)
+    elif "eval_batch_size" in yaml_tc and explicit_yaml is not None:
+        tc["eval_batch_size"] = int(yaml_tc["eval_batch_size"])
     else:
         tc["eval_batch_size"] = max(
             int(tc["batch_size"]), 512 if mode == "train" else 256
@@ -322,6 +419,8 @@ def build_workflow_config(
     )
     if learning_rate is not None:
         tc["learning_rate"] = float(learning_rate)
+    elif "learning_rate" in yaml_tc and explicit_yaml is not None:
+        tc["learning_rate"] = float(yaml_tc["learning_rate"])
     elif mode == "train" and int(tc["batch_size"]) >= 256:
         tc["learning_rate"] = 0.0004
     if num_workers is not None:
@@ -346,13 +445,15 @@ def build_workflow_config(
 
     if stage == "revision":
         tc.update(
-            preserve_complete_groups=True,
-            revision_cutoff_policy="all",
-            freeze_brain_encoder_epochs=int(common["freeze_brain_encoder_epochs"]),
+            preserve_complete_groups=bool(yaml_tc.get("preserve_complete_groups", True)),
+            revision_cutoff_policy=str(yaml_tc.get("revision_cutoff_policy", "all")),
+            freeze_brain_encoder_epochs=int(
+                yaml_tc.get("freeze_brain_encoder_epochs", common["freeze_brain_encoder_epochs"])
+            ),
             save_last_checkpoint=True,
-            warm_start_from="main_word",
+            warm_start_from=str(yaml_tc.get("warm_start_from", "main_word")),
             warm_start_seed=seed,
-            warm_start_output_group=settings["execution"]["output_group"],
+            warm_start_output_group=cfg["experiment"]["output_group"],
         )
         if word_checkpoint:
             tc["pretrained_brain_encoder_checkpoint"] = str(
@@ -371,9 +472,10 @@ def build_workflow_config(
                 candidate_ckpt = default_word_dir / "best.pt"
             tc["pretrained_brain_encoder_checkpoint"] = str(candidate_ckpt)
 
-    cfg["evaluation"]["selection_metric"] = adapter[
-        f"main_selection_metric_{stage}"
-    ]
+    cfg["evaluation"]["selection_metric"] = (
+        cfg.get("evaluation", {}).get("selection_metric")
+        or adapter[f"main_selection_metric_{stage}"]
+    )
     cfg["evaluation"]["default_split"] = "val"
     out_dir = workflow_output_directory(
         dataset,
@@ -387,6 +489,7 @@ def build_workflow_config(
     cfg["workflow"] = {
         "mode": mode,
         "stage": stage,
+        "config_path": normalize_project_relative(active_config_path),
         "precision": precision_label,
         "amp_dtype": amp_dtype_name,
         "subset": subset_spec,
@@ -790,27 +893,36 @@ def write_subjects_manifest(output_dir: str | Path, subset_spec: dict, *, stage:
 
 
 def run_cache_workflow(
-    dataset: str,
+    dataset: str | None = None,
     *,
     subject: str | None = None,
     num_subjects: int | None = None,
     subjects: str | Iterable[str] | None = None,
     include_test: bool = False,
     force: bool = False,
+    config_path: str | Path | None = None,
 ) -> dict:
     """预热并校验指定数据集与受试者子集的事件表、神经信号与文本嵌入缓存。"""
     ensure_default_environment()
-    datasets = list(DATASETS) if str(dataset).lower() == "all" else [dataset]
+    if config_path is not None and dataset is None:
+        raw_cfg = load_yaml_with_extends(resolve_config_path(project_path(config_path)))
+        inferred_ds, _ = _infer_dataset_and_stage_from_yaml(raw_cfg)
+        datasets = [inferred_ds]
+    elif str(dataset or "pallier2025").lower() == "all":
+        datasets = list(DATASETS)
+    else:
+        datasets = [str(dataset or "pallier2025")]
     reports = {}
     for ds_name in datasets:
         cfg, subset_spec = build_workflow_config(
             ds_name,
-            stage="word",
+            stage=None if config_path is not None else "word",
             seed=0,
             subject=subject,
             num_subjects=num_subjects,
             subjects=subjects,
             mode="cache",
+            config_path=config_path if len(datasets) == 1 else None,
         )
         selected_subjects = subset_spec["subjects"]
         splits = ("train", "val", "test") if include_test else ("train", "val")
@@ -914,6 +1026,7 @@ def run_cache_workflow(
         report = {
             "status": "cache_ready",
             "dataset": ds_name,
+            "config_path": cfg["workflow"]["config_path"],
             "subset": subset_spec,
             "subjects_file": str(subjects_file),
             "cache_verification": verified,
@@ -927,10 +1040,10 @@ def run_cache_workflow(
 
 
 def run_training_workflow(
-    dataset: str,
+    dataset: str | None = None,
     *,
-    stage: str = "word",
-    seed: int = 0,
+    stage: str | None = None,
+    seed: int | None = 0,
     subject: str | None = None,
     num_subjects: int | None = None,
     subjects: str | Iterable[str] | None = None,
@@ -939,7 +1052,7 @@ def run_training_workflow(
     eval_batch_size: int | None = None,
     learning_rate: float | None = None,
     num_workers: int | None = None,
-    precision: str = "bf16-mixed",
+    precision: str | None = None,
     require_cache: bool = False,
     resume: str | None = None,
     mode: str = "train",
@@ -949,6 +1062,7 @@ def run_training_workflow(
     max_val_rows: int | None = None,
     overwrite: bool = False,
     show_progress: bool = True,
+    config_path: str | Path | None = None,
 ) -> dict:
     """运行 smoke 冒烟测试或 train 正式训练工作流。"""
     cfg, subset_spec = build_workflow_config(
@@ -969,8 +1083,12 @@ def run_training_workflow(
         word_checkpoint=word_checkpoint,
         max_train_rows=max_train_rows,
         max_val_rows=max_val_rows,
+        config_path=config_path,
     )
+    dataset = subset_spec["dataset"]
+    stage = cfg["workflow"]["stage"]
     tc = cfg["training"]
+    seed = int(tc["seed"])
     out = Path(tc["output_dir"])
     revision = stage == "revision"
 
@@ -987,6 +1105,7 @@ def run_training_workflow(
                 subjects=subjects,
                 include_test=False,
                 force=False,
+                config_path=config_path,
             )
             cache_verification = verify_cache_ready(cfg, splits=("train", "val"))
 
@@ -1127,6 +1246,7 @@ def run_training_workflow(
         f"\n{sep}\n"
         f" BrainDecoding Training  |  dataset={dataset}  |  stage={stage}  |  mode={mode}\n"
         f"{thin_sep}\n"
+        f" Config File : {cfg['workflow']['config_path']}\n"
         f" GPU / AMP   : {gpu_name} ({gpu_total_gb:.1f} GB)  |  precision={tc['precision']} (TF32=on)\n"
         f" Subset      : {subset_spec['subset_tag']} ({subset_spec['subject_count']}/{subset_spec['total_canonical_subjects']} subjects)  |  seed={seed}\n"
         f" DataLoader  : train={len(train_ds):,} rows ({len(train_loader)} batches @ bs={tc['batch_size']})"

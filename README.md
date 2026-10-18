@@ -16,9 +16,11 @@ BrainDecoding/
 │   ├── decoding/               # 词级/句级解码器、延迟承诺搜索、修正增益与语言模型重打分
 │   ├── evaluation/             # 检索评测、候选召回、配对显著性检验與跨数据集留出集评估
 │   └── tasks/                  # 任务级训练入口与配置适配
-├── configs/                    # 实验超参数配置（仅限 .yaml）
-│   ├── datasets/               # 数据集与词级别基线实验配置
-│   └── unified_rolling/        # 统一滚动句级解码实验配置
+├── configs/                    # 实验超参数与协议配置（仅限 .yaml，零缩写见名知意）
+│   ├── training/               # 训练工作流配置（如 pallier2025_word_encoder.yaml）与训练协议
+│   ├── decoding/               # 在线滚动句级解码与修正增益预览配置
+│   ├── evaluation/             # 留出测试集主评测与各项对照消融配置
+│   └── word_decoding/          # 数据集底层契约 (base.yaml) 与词级阶段配置
 ├── data/                       # 唯一允许存放 JSON 清单、实验结果与派生缓存的数据中心
 │   ├── manifests/              # 实验协议注册表 (protocol_index.yaml)、数据切分与产物哈希清单
 │   ├── results/                # 正式实验结果（studies/<study>/results.json 与 tables/exports/*.csv）
@@ -51,13 +53,13 @@ BrainDecoding/
 
 ## 3. 新增代码与文件命名规范（Self-Explanatory Naming Standard）
 
-新增或重构任何 Python 模块、脚本与测试文件时，必须遵守以下命名规范（由自动化测试实时拦截违规命名）：
+新增或重构任何 Python 模块、脚本、测试文件与 `.yaml` 配置文件时，必须遵守以下命名规范（由自动化测试实时拦截违规命名）：
 
 1. **见名知意，禁用内部缩写**：
    - 文件名必须采用完整的英文单词（小写 `snake_case`），让人仅凭文件名即可明确模块职责。
-   - **严禁使用内部代号或缩写词**：如 `c1`（应写为 `candidate`）、`f`（应写为 `forgetting`）、`k0`（应写为 `fixed_horizon`）、`lm`（应写为 `language_model`）、`bge`（应写为 `bilingual_embedding`）、`ctc`（应写为 `connectionist_temporal_classification` 或 `sequence_decoder`）、`eval`（应写为 `evaluation`）。
+   - **严禁使用内部代号或缩写词**：如 `c1`（应写为 `single_step_revision`）、`f_local`（应写为 `neural_only_local`）、`k0`（应写为 `candidate_pool_search`）、`k2_d2`（应写为 `local_window_revision`）、`bge`（应写为 `multilingual_embedding`）、`eval`（应写为 `evaluation`）。
 2. **严禁版本号与临时补丁后缀**：
-   - **禁止**在文件名末尾追加 `_v1`、`_v2`、`_test_v2`、`_stable`、`_patch`、`_new`、`_old`、`_tmp`、`_io_guard` 等后缀。
+   - **禁止**在文件名末尾追加 `_v1`、`_v2`、`_test_v2`、`_stable`、`_patch`、`_new`、`_old`、`_tmp`、`_retry1` 等后缀。
    - 演进算法应直接演进对应模块（版本历史由 Git 追踪），补充函数应合并入所属职责模块，不得为单个辅助函数新建碎片文件。
 
 ### 核心模块速查表
@@ -113,32 +115,36 @@ BrainDecoding/
 | `BRAINDECODING_RESULTS_DIR` | 训练 Checkpoint 与日志目录 | `data/cache/runs` | `/content/drive/MyDrive/BrainDecoding/runs` |
 | `BRAINDECODING_MODEL_DIR`（兼容 `BRAINDECODING_MODEL_ROOT`） | 预训练文本/语言模型目录 | `D:/code/dascoli-word-decoding/models` | `/content/drive/MyDrive/BrainDecoding/models` |
 
-### 4.2 统一 CLI 入口（`smoke` / `cache` / `train`）
+### 4.2 统一 CLI 入口（`smoke` / `cache` / `train`）与训练 YAML 配置
 
-支持灵活的数据子集参数（`--subject all`、`--num-subjects N`、`--subjects id1,id2,...`），自动根据所选子集动态校验样本与词表，并在独立子目录中写入 `subjects.json` 防止不同子集断点权重互相覆盖：
+支持通过 `--config` / `-c` 直接指定 `configs/training/*.yaml` 配置文件（或通过 `--dataset` + `--stage` 指定），并支持灵活的数据子集参数（`--subject all`、`--num-subjects N`、`--subjects id1,id2,...`），在独立子目录中写入 `subjects.json` 防止不同子集断点权重互相覆盖：
 
 ```bash
 # 1. 本地单受试者 2 Epoch 极速冒烟测试（验证前反向传播、bf16-mixed、指标计算与 Checkpoint 保存）
-python -m braindecoding smoke --dataset chineseeeg2_littleprince --num-subjects 1 --epochs 2 --precision bf16-mixed --require-cache
+python -m braindecoding smoke --config configs/training/chineseeeg2_word_encoder.yaml --num-subjects 1 --epochs 2 --require-cache
 
 # 2. 仅预热特征缓存（支持全量或指定受试者子集）
 python -m braindecoding cache --dataset chineseeeg2_littleprince --subject all
 python -m braindecoding cache --dataset pallier2025 --subjects sub-01,sub-02
 
-# 3. 正式训练（强制要求命中缓存 --require-cache，支持 --resume auto 自动从 last.ckpt 断点续训）
-python -m braindecoding train --dataset chineseeeg2_littleprince --stage word --seed 0 --subject all --precision bf16-mixed --require-cache --resume auto
+# 3. 正式训练（直接传入 configs/training/*.yaml，内置 L4 GPU 调优超参，支持 --resume auto 自动从 last.ckpt 断点续训）
+python -m braindecoding train --config configs/training/pallier2025_word_encoder.yaml --seed 0 --subject all --require-cache --resume auto
+python -m braindecoding train --config configs/training/pallier2025_rolling_revision.yaml --seed 0 --subject all --require-cache --resume auto
+python -m braindecoding train --config configs/training/chineseeeg2_word_encoder.yaml --seed 0 --subject all --require-cache --resume auto
+python -m braindecoding train --config configs/training/chineseeeg2_rolling_revision.yaml --seed 0 --subject all --require-cache --resume auto
 
 # 4. 缓存单文件打包与解包（Colab 本地高速盘 <-> Google Drive）
-python scripts/cache_archive.py pack --cache-dir /content/local_cache --archive-dir /content/drive/MyDrive/BrainDecoding/archives --modality eeg
-python scripts/cache_archive.py unpack --archive-dir /content/drive/MyDrive/BrainDecoding/archives --cache-dir /content/local_cache --modality eeg --skip-existing
+python scripts/cache_archive.py pack --cache-dir /content/local_cache --archive-dir /content/drive/MyDrive/BrainDecoding/archives --modality meg
+python scripts/cache_archive.py unpack --archive-dir /content/drive/MyDrive/BrainDecoding/archives --cache-dir /content/local_cache --modality meg --skip-existing
 
 # 5. Colab 云端 Notebook
 # - scripts/colab/colab_drive_init.ipynb : 一键创建 Google Drive 标准目录并核验上传的 .tar 缓存包
 # - scripts/colab/colab_cpu_cache.ipynb  : CPU 实例预热特征缓存并打包为单文件 .tar
-# - scripts/colab/colab_gpu_train.ipynb  : GPU 实例秒级解包缓存并启动 bf16-mixed 训练
+# - scripts/colab/colab_gpu_train.ipynb  : GPU 实例秒级解包缓存并通过 --config 启动 bf16-mixed 训练
 
 # 6. 查看当前注册的标准实验协议与运行单元测试
 python -m braindecoding list
 pytest tests -q
 ```
+
 

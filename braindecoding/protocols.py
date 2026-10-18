@@ -532,7 +532,7 @@ from pathlib import Path
 
 import yaml
 
-from braindecoding.config import PROJECT_ROOT, deep_merge, load_yaml_with_extends
+from braindecoding.config import PROJECT_ROOT, deep_merge, load_yaml_with_extends, resolve_config_path
 from braindecoding.experiment import experiment_identity, resolve_experiment_config
 
 
@@ -557,7 +557,7 @@ def experiment_selector(identity: dict) -> str:
 
 def _load_raw_config(path: Path, ancestors=()) -> dict:
     """只为发现实验读取继承关系，不展开机器环境变量。"""
-    path = path.resolve()
+    path = resolve_config_path(path).resolve()
     if path in ancestors:
         raise ValueError(f"配置继承出现循环：{path}")
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -649,6 +649,10 @@ def repository_path(relative: str, root: Path = PROJECT_ROOT) -> Path:
     path = (root / relative).resolve()
     if Path(relative).is_absolute() or not path.is_relative_to(root):
         raise ValueError(f"协议索引路径超出仓库：{relative}")
+    if not path.exists() and root == PROJECT_ROOT.resolve():
+        resolved = resolve_config_path(path).resolve()
+        if resolved.exists():
+            return resolved
     return path
 
 

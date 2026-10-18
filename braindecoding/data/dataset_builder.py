@@ -30,7 +30,7 @@ DATASETS = (
 
 def _config_path(dataset: str) -> Path:
     if dataset == "chineseeeg2_littleprince":
-        return PROJECT_ROOT / "configs/word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart.yaml"
+        return PROJECT_ROOT / "configs/word_decoding/chineseeeg2_littleprince/all_subjects/main_context_warmstart.yaml"
     if dataset == "pallier2025":
         return PROJECT_ROOT / "configs/word_decoding/pallier2025/base.yaml"
     raise ValueError(f"未知数据集：{dataset}")
