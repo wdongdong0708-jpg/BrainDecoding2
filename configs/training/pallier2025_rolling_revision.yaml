@@ -103,7 +103,7 @@ training:
   precision: bf16-mixed
   amp: true
   amp_dtype: bfloat16
-  freeze_brain_encoder_epochs: 1
+  freeze_brain_encoder_epochs: 30 # 全程冻结cnn
   preserve_complete_groups: true
   revision_cutoff_policy: all
   loss_normalization: per_batch_independent_horizon_mean

@@ -99,7 +99,7 @@ training:
   precision: bf16-mixed
   amp: true
   amp_dtype: bfloat16
-  freeze_brain_encoder_epochs: 1
+  freeze_brain_encoder_epochs: 30 # 全程冻结cnn
   preserve_complete_groups: true
   save_last_checkpoint: true
   warm_start_from: main_word
