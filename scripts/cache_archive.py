@@ -13,10 +13,13 @@ import argparse
 import io
 import json
 import os
+import shutil
 import sys
 import tarfile
 import time
 from pathlib import Path
+
+STREAM_BUFFER_BYTES = 16 * 1024 * 1024
 
 
 MODALITY_TO_DATASET = {
@@ -74,7 +77,11 @@ def _collect_cache_files(cache_dir: Path, dataset_filter: str) -> list[tuple[Pat
         for file_path in sorted(root.rglob("*")):
             if not file_path.is_file():
                 continue
-            if file_path.name.endswith(".tmp") or file_path.name == "_archive_manifest.json":
+            if (
+                file_path.name.endswith(".tmp")
+                or file_path.name == "_archive_manifest.json"
+                or file_path.name.startswith(".unpacked_")
+            ):
                 continue
             rel = file_path.relative_to(cache_dir).as_posix()
             entries.append((file_path, rel))
@@ -92,7 +99,7 @@ def pack_cache(
     archive_dir: str | Path | None = None,
     modality: str = "eeg",
 ) -> dict:
-    """将本地缓存目录打包为单一未压缩 .tar 归档（流式原子写入）。"""
+    """将本地缓存目录打包为单一未压缩 .tar 归档（16 MiB 大缓冲单遍流式写入）。"""
     started = time.perf_counter()
     source_root = Path(cache_dir).resolve() if cache_dir else default_cache_dir()
     target_tar = resolve_archive_path(
@@ -104,39 +111,50 @@ def pack_cache(
 
     total_bytes = 0
     manifest_files = []
+    for abs_path, rel_posix in entries:
+        size = int(abs_path.stat().st_size)
+        total_bytes += size
+        manifest_files.append({"path": rel_posix, "size_bytes": size})
+
+    manifest_payload = {
+        "schema_version": 1,
+        "modality": modality,
+        "dataset": MODALITY_TO_DATASET.get(modality.lower(), modality),
+        "file_count": len(entries),
+        "total_bytes": int(total_bytes),
+        "created_unix": time.time(),
+        "files": manifest_files,
+    }
+    manifest_bytes = (
+        json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
+
     print(
-        f"[cache_archive] Packing {len(entries)} files from {source_root} -> {target_tar}",
+        f"[cache_archive] Packing {len(entries)} files "
+        f"({total_bytes / (1024 * 1024):.1f} MiB) from {source_root} -> {target_tar}",
         flush=True,
     )
-    with tarfile.open(temp_tar, mode="w") as tar:
-        for idx, (abs_path, rel_posix) in enumerate(entries, start=1):
-            size = abs_path.stat().st_size
-            total_bytes += size
-            manifest_files.append({"path": rel_posix, "size_bytes": int(size)})
-            tar.add(abs_path, arcname=rel_posix, recursive=False)
-            if idx == 1 or idx % 20 == 0 or idx == len(entries):
-                print(
-                    f"[cache_archive] Packed {idx}/{len(entries)} files "
-                    f"({total_bytes / (1024 * 1024):.1f} MiB): {rel_posix}",
-                    flush=True,
-                )
+    written_bytes = 0
+    with temp_tar.open("wb", buffering=STREAM_BUFFER_BYTES) as raw_out:
+        with tarfile.open(fileobj=raw_out, mode="w|") as tar:
+            info = tarfile.TarInfo(name="_archive_manifest.json")
+            info.size = len(manifest_bytes)
+            info.mtime = int(time.time())
+            tar.addfile(info, io.BytesIO(manifest_bytes))
 
-        manifest_payload = {
-            "schema_version": 1,
-            "modality": modality,
-            "dataset": MODALITY_TO_DATASET.get(modality.lower(), modality),
-            "file_count": len(entries),
-            "total_bytes": int(total_bytes),
-            "created_unix": time.time(),
-            "files": manifest_files,
-        }
-        manifest_bytes = (
-            json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n"
-        ).encode("utf-8")
-        info = tarfile.TarInfo(name="_archive_manifest.json")
-        info.size = len(manifest_bytes)
-        info.mtime = int(time.time())
-        tar.addfile(info, io.BytesIO(manifest_bytes))
+            for idx, (abs_path, rel_posix) in enumerate(entries, start=1):
+                size = manifest_files[idx - 1]["size_bytes"]
+                tar.add(abs_path, arcname=rel_posix, recursive=False)
+                written_bytes += size
+                if idx == 1 or idx % 20 == 0 or idx == len(entries):
+                    elapsed_so_far = max(time.perf_counter() - started, 1e-6)
+                    speed_mib = (written_bytes / (1024 * 1024)) / elapsed_so_far
+                    print(
+                        f"[cache_archive] Packed {idx}/{len(entries)} files "
+                        f"({written_bytes / (1024 * 1024):.1f} / {total_bytes / (1024 * 1024):.1f} MiB, "
+                        f"{speed_mib:.1f} MiB/s): {rel_posix}",
+                        flush=True,
+                    )
 
     os.replace(temp_tar, target_tar)
     elapsed = time.perf_counter() - started
@@ -162,6 +180,60 @@ def _is_safe_tar_member(member_name: str, target_root: Path) -> Path:
     return dest
 
 
+def _marker_path(target_root: Path, modality: str) -> Path:
+    clean_mod = str(modality or "eeg").strip().lower()
+    return target_root / f".unpacked_{clean_mod}.json"
+
+
+def _try_fast_skip_unpacked(
+    source_tar: Path, target_root: Path, modality: str
+) -> tuple[int, int] | None:
+    """若本地已完成解包且所有文件尺寸均与清单匹配，直接秒级跳过，避免重扫云盘大文件。"""
+    try:
+        archive_size = int(source_tar.stat().st_size)
+    except OSError:
+        return None
+
+    marker_file = _marker_path(target_root, modality)
+    if marker_file.is_file():
+        try:
+            payload = json.loads(marker_file.read_text(encoding="utf-8"))
+            if int(payload.get("archive_size_bytes", -1)) == archive_size:
+                members = payload.get("members")
+                if isinstance(members, list) and members:
+                    total_bytes = 0
+                    for item in members:
+                        rel_path = str(item.get("path", ""))
+                        expected_size = int(item.get("size_bytes", -1))
+                        dest = _is_safe_tar_member(rel_path, target_root)
+                        if not dest.is_file() or int(dest.stat().st_size) != expected_size:
+                            return None
+                        total_bytes += expected_size
+                    return len(members), total_bytes
+        except Exception:
+            pass
+
+    manifest_file = target_root / "_archive_manifest.json"
+    if manifest_file.is_file():
+        try:
+            payload = json.loads(manifest_file.read_text(encoding="utf-8"))
+            files = payload.get("files")
+            if isinstance(files, list) and files:
+                total_bytes = int(manifest_file.stat().st_size)
+                for item in files:
+                    rel_path = str(item.get("path", ""))
+                    expected_size = int(item.get("size_bytes", -1))
+                    dest = _is_safe_tar_member(rel_path, target_root)
+                    if not dest.is_file() or int(dest.stat().st_size) != expected_size:
+                        return None
+                    total_bytes += expected_size
+                return len(files) + 1, total_bytes
+        except Exception:
+            pass
+
+    return None
+
+
 def unpack_cache(
     archive: str | Path | None = None,
     cache_dir: str | Path | None = None,
@@ -170,7 +242,7 @@ def unpack_cache(
     modality: str = "eeg",
     skip_existing: bool = False,
 ) -> dict:
-    """将云盘上的单一 .tar 归档高速解包到本地缓存目录。"""
+    """将云盘上的单一 .tar 归档单遍流式高速解包到本地缓存目录（零预扫描，16 MiB 顺序缓冲）。"""
     started = time.perf_counter()
     source_tar = resolve_archive_path(
         archive, archive_dir=archive_dir, modality=modality
@@ -180,47 +252,121 @@ def unpack_cache(
     target_root = Path(cache_dir).resolve() if cache_dir else default_cache_dir()
     target_root.mkdir(parents=True, exist_ok=True)
 
+    archive_size = int(source_tar.stat().st_size)
     print(
-        f"[cache_archive] Unpacking {source_tar} -> {target_root}",
+        f"[cache_archive] Unpacking {source_tar} ({archive_size / (1024 * 1024):.1f} MiB) -> {target_root}",
         flush=True,
     )
+
+    if skip_existing:
+        fast_hit = _try_fast_skip_unpacked(source_tar, target_root, modality)
+        if fast_hit is not None:
+            skipped_files, total_bytes = fast_hit
+            elapsed = time.perf_counter() - started
+            print(
+                f"[cache_archive] Fast skip: all {skipped_files} files "
+                f"({total_bytes / (1024 * 1024):.1f} MiB) already present in {target_root} "
+                f"({elapsed:.2f}s)",
+                flush=True,
+            )
+            summary = {
+                "action": "unpack",
+                "archive": str(source_tar),
+                "cache_dir": str(target_root),
+                "modality": modality,
+                "extracted_files": 0,
+                "skipped_files": int(skipped_files),
+                "total_bytes": int(total_bytes),
+                "seconds": round(elapsed, 2),
+            }
+            print(json.dumps(summary, ensure_ascii=False), flush=True)
+            return summary
+
     extracted_files = 0
     skipped_files = 0
     total_bytes = 0
+    idx = 0
+    expected_total_files: int | None = None
+    recorded_members: list[dict] = []
 
-    with tarfile.open(source_tar, mode="r:*") as tar:
-        members = [m for m in tar.getmembers() if m.isfile()]
-        total_members = len(members)
-        for idx, member in enumerate(members, start=1):
-            dest_path = _is_safe_tar_member(member.name, target_root)
-            if (
-                skip_existing
-                and dest_path.is_file()
-                and dest_path.stat().st_size == member.size
-            ):
-                skipped_files += 1
-                total_bytes += int(member.size)
-                continue
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            source_stream = tar.extractfile(member)
-            if source_stream is None:
-                continue
-            temp_dest = dest_path.with_suffix(dest_path.suffix + ".tmp")
-            with temp_dest.open("wb") as out_stream:
-                while True:
-                    chunk = source_stream.read(4 * 1024 * 1024)
-                    if not chunk:
-                        break
-                    out_stream.write(chunk)
-            os.replace(temp_dest, dest_path)
-            extracted_files += 1
-            total_bytes += int(member.size)
-            if idx == 1 or idx % 20 == 0 or idx == total_members:
-                print(
-                    f"[cache_archive] Unpacked {idx}/{total_members} files "
-                    f"({total_bytes / (1024 * 1024):.1f} MiB): {member.name}",
-                    flush=True,
+    with source_tar.open("rb", buffering=STREAM_BUFFER_BYTES) as raw_in:
+        with tarfile.open(fileobj=raw_in, mode="r|*") as tar:
+            for member in tar:
+                if not member.isfile():
+                    continue
+                idx += 1
+                member_size = int(member.size)
+                dest_path = _is_safe_tar_member(member.name, target_root)
+                recorded_members.append(
+                    {"path": member.name, "size_bytes": member_size}
                 )
+
+                if (
+                    skip_existing
+                    and dest_path.is_file()
+                    and int(dest_path.stat().st_size) == member_size
+                ):
+                    skipped_files += 1
+                    total_bytes += member_size
+                    if member.name == "_archive_manifest.json" and expected_total_files is None:
+                        try:
+                            manifest_obj = json.loads(dest_path.read_text(encoding="utf-8"))
+                            if "file_count" in manifest_obj:
+                                expected_total_files = int(manifest_obj["file_count"]) + 1
+                        except Exception:
+                            pass
+                    continue
+
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                source_stream = tar.extractfile(member)
+                if source_stream is None:
+                    continue
+                temp_dest = dest_path.with_suffix(dest_path.suffix + ".tmp")
+                with temp_dest.open("wb", buffering=STREAM_BUFFER_BYTES) as out_stream:
+                    shutil.copyfileobj(source_stream, out_stream, length=STREAM_BUFFER_BYTES)
+                os.replace(temp_dest, dest_path)
+
+                if member.name == "_archive_manifest.json" and expected_total_files is None:
+                    try:
+                        manifest_obj = json.loads(dest_path.read_text(encoding="utf-8"))
+                        if "file_count" in manifest_obj:
+                            expected_total_files = int(manifest_obj["file_count"]) + 1
+                    except Exception:
+                        pass
+
+                extracted_files += 1
+                total_bytes += member_size
+                if (
+                    idx == 1
+                    or idx % 20 == 0
+                    or (expected_total_files is not None and idx == expected_total_files)
+                ):
+                    elapsed_so_far = max(time.perf_counter() - started, 1e-6)
+                    speed_mib = (total_bytes / (1024 * 1024)) / elapsed_so_far
+                    total_str = f"/{expected_total_files}" if expected_total_files else ""
+                    print(
+                        f"[cache_archive] Unpacked {idx}{total_str} files "
+                        f"({total_bytes / (1024 * 1024):.1f} MiB, {speed_mib:.1f} MiB/s): {member.name}",
+                        flush=True,
+                    )
+
+    if recorded_members:
+        try:
+            marker_file = _marker_path(target_root, modality)
+            marker_payload = {
+                "schema_version": 1,
+                "modality": modality,
+                "archive": str(source_tar),
+                "archive_size_bytes": archive_size,
+                "unpacked_unix": time.time(),
+                "members": recorded_members,
+            }
+            marker_file.write_text(
+                json.dumps(marker_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
 
     elapsed = time.perf_counter() - started
     summary = {

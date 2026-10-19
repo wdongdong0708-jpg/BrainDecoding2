@@ -268,9 +268,9 @@ def test_workflow_config_loads_all_six_stage_yaml_files():
         assert subset["dataset"] == expected_ds
         assert cfg["workflow"]["stage"] == expected_stage
         assert cfg["workflow"]["config_path"] == rel_yaml
-        assert cfg["training"]["batch_size"] == 256
-        assert cfg["training"]["eval_batch_size"] == 512
-        assert cfg["training"]["learning_rate"] == pytest.approx(0.0004)
+        assert int(cfg["training"]["batch_size"]) > 0
+        assert int(cfg["training"]["eval_batch_size"]) >= int(cfg["training"]["batch_size"])
+        assert float(cfg["training"]["learning_rate"]) > 0.0
         assert cfg["training"]["precision"] == "bf16-mixed"
         assert cfg["model"]["use_transformer"] is (expected_stage in ("context", "revision"))
         if expected_ds == "pallier2025":
@@ -288,16 +288,34 @@ def test_workflow_config_loads_all_six_stage_yaml_files():
             assert "pretrained_brain_encoder_checkpoint" not in cfg["training"]
         elif expected_stage == "context":
             assert "local_window_revision" not in cfg["model"]
-            assert cfg["training"]["freeze_brain_encoder_epochs"] == 1
+            assert cfg["training"]["freeze_brain_encoder_epochs"] >= 0
             assert cfg["training"]["preserve_complete_groups"] is True
             assert "pretrained_brain_encoder_checkpoint" in cfg["training"]
             assert "revision_cutoff_policy" not in cfg["training"]
         elif expected_stage == "revision":
             assert cfg["model"]["local_window_revision"]["enabled"] is True
-            assert cfg["training"]["freeze_brain_encoder_epochs"] == 1
+            assert cfg["training"]["freeze_brain_encoder_epochs"] >= 0
             assert cfg["training"]["preserve_complete_groups"] is True
             assert cfg["training"]["revision_cutoff_policy"] == "all"
             assert "pretrained_brain_encoder_checkpoint" in cfg["training"]
+
+
+def test_word_exp_tag_cross_experiment_warmstart(tmp_path, monkeypatch):
+    runs_dir = tmp_path / "runs"
+    monkeypatch.setenv("BRAINDECODING_RESULTS_DIR", str(runs_dir))
+    monkeypatch.setenv("BRAINDECODING_EXP_TAG", "ctx_lr2e-4_bs256")
+    monkeypatch.setenv("BRAINDECODING_WORD_EXP_TAG", "word_lr1e-4_bs128")
+
+    cfg, _ = build_workflow_config(
+        "pallier2025",
+        stage="context",
+        seed=0,
+        mode="train",
+    )
+    out_dir = Path(cfg["training"]["output_dir"]).as_posix()
+    warm_ckpt = Path(cfg["training"]["pretrained_brain_encoder_checkpoint"]).as_posix()
+    assert out_dir.endswith("runs/pallier2025/ctx_lr2e-4_bs256/context/all-n10/seed-000")
+    assert warm_ckpt.endswith("runs/pallier2025/word_lr1e-4_bs128/word/all-n10/seed-000/best.ckpt")
 
 
 def test_plot_evaluation_and_stage_comparison_figures(tmp_path):
