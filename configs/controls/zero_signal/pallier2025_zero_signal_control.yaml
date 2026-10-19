@@ -1,0 +1,8 @@
+# Pallier2025 法语 MEG 词级检索全零信号（Zero-Signal）负对照配置
+# 完全解耦于 configs/word_decoding/，可直接传给 eval-run 的 --control-config 或 --config 参数使用。
+extends: ./zero_signal_control.yaml
+
+workflow:
+  dataset: pallier2025
+  subject: all
+  precision: bf16-mixed

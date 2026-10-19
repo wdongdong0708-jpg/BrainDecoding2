@@ -165,12 +165,28 @@ def 物化所选输入(config, table, force_cache=False):
     )
 
 
-def 构建数据集(config, table, zero_eeg=False, zero_signal=False):
+def 构建数据集(
+    config,
+    table,
+    zero_eeg=False,
+    zero_signal=False,
+    temporal_shift_seconds: float = 0.0,
+):
     zero_eeg = bool(zero_eeg or zero_signal)
-    return _构建数据集_impl(config, table, zero_eeg=zero_eeg)
+    return _构建数据集_impl(
+        config,
+        table,
+        zero_eeg=zero_eeg,
+        temporal_shift_seconds=float(temporal_shift_seconds),
+    )
 
 
-def _构建数据集_impl(config, table, zero_eeg=False):
+def _构建数据集_impl(
+    config,
+    table,
+    zero_eeg=False,
+    temporal_shift_seconds: float = 0.0,
+):
     """构建与当前配置绑定的词事件数据集。"""
     return dataset_module.ChineseEEG2LittlePrinceWordDataset(
         table,
@@ -179,6 +195,7 @@ def _构建数据集_impl(config, table, zero_eeg=False):
         config["cache"]["text_embeddings"],
         config["text_embedding"],
         zero_eeg=zero_eeg,
+        temporal_shift_seconds=float(temporal_shift_seconds),
     )
 
 

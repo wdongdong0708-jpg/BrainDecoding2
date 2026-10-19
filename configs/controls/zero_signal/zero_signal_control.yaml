@@ -1,0 +1,18 @@
+# 词级检索全零神经信号（Zero-Signal）负对照通用配置
+# 将脑磁/脑电信号置零后输入已训练模型，检验模型在缺失神经输入时的机遇基线表现。
+#
+# 启动命令示例：
+#   python -u -m braindecoding eval-run --dataset pallier2025 --all-stages --split test --control-config configs/controls/zero_signal/zero_signal_control.yaml
+
+control:
+  name: zero_signal_negative_control
+  control_type: zero_signal
+  description: Replace MEG/EEG inputs with all-zero tensors of identical shape to verify chance-level retrieval behavior without neural signal.
+  shift_seconds: []
+  include_clean_reference: true
+  include_zero_signal: true
+
+evaluation:
+  negative_control: zero_signal
+  shift_seconds: []
+  zero_signal_control: true

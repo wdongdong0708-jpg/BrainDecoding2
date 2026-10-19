@@ -469,17 +469,51 @@ def build_workflow_config(
         (dataset, stage),
         adapter.get(f"{stage}_source_config", adapter["word_source_config"]),
     )
+    default_config_path = resolve_config_path(project_path(default_source_rel))
     active_config_path = (
         explicit_cfg_path
         if explicit_cfg_path is not None
-        else resolve_config_path(project_path(default_source_rel))
+        else default_config_path
     )
     active_yaml = (
         explicit_yaml
         if explicit_yaml is not None
         else load_yaml_with_extends(active_config_path)
     )
-    cfg = loader(active_config_path)
+    is_decoupled_overlay = explicit_yaml is not None and (
+        "dataset" not in explicit_yaml or "cache" not in explicit_yaml
+    )
+    if is_decoupled_overlay:
+        base_stage_yaml = load_yaml_with_extends(default_config_path)
+        cfg = loader(default_config_path)
+        for overlay_key in (
+            "control",
+            "evaluation",
+            "workflow",
+            "experiment",
+            "training",
+        ):
+            if isinstance(explicit_yaml.get(overlay_key), dict):
+                cfg.setdefault(overlay_key, {})
+                if isinstance(cfg[overlay_key], dict):
+                    cfg[overlay_key].update(
+                        copy.deepcopy(explicit_yaml[overlay_key])
+                    )
+                else:
+                    cfg[overlay_key] = copy.deepcopy(explicit_yaml[overlay_key])
+        merged_active_yaml = copy.deepcopy(base_stage_yaml)
+        for k, v in explicit_yaml.items():
+            if isinstance(v, dict) and isinstance(merged_active_yaml.get(k), dict):
+                merged_active_yaml[k].update(copy.deepcopy(v))
+            else:
+                merged_active_yaml[k] = copy.deepcopy(v)
+        active_yaml = merged_active_yaml
+    else:
+        cfg = loader(active_config_path)
+        if isinstance(active_yaml, dict) and isinstance(
+            active_yaml.get("control"), dict
+        ):
+            cfg["control"] = copy.deepcopy(active_yaml["control"])
     yaml_tc = dict(cfg.get("training", {}))
 
     yaml_exp_tag = None
@@ -518,7 +552,13 @@ def build_workflow_config(
     effective_precision = (
         precision
         if precision is not None
-        else str(yaml_tc.get("precision", "bf16-mixed"))
+        else str(
+            (active_yaml.get("workflow") or {}).get("precision")
+            if isinstance(active_yaml, dict)
+            and isinstance(active_yaml.get("workflow"), dict)
+            and (active_yaml.get("workflow") or {}).get("precision")
+            else yaml_tc.get("precision", "bf16-mixed")
+        )
     )
     precision_label, amp_dtype_name, amp_enabled = _normalize_precision(
         effective_precision
@@ -1989,8 +2029,348 @@ def _compute_encoded_evaluation_metrics(
     }
 
 
+def _parse_shift_seconds_list(
+    raw_shifts: str | Iterable[float | int | str] | None,
+) -> list[float]:
+    """解析时间错位秒数列表（支持逗号分隔字符串或数值序列），排除 0 秒并保持顺序去重。"""
+    if raw_shifts is None:
+        return []
+    if isinstance(raw_shifts, (int, float)):
+        val = float(raw_shifts)
+        return [val] if abs(val) > 1e-9 else []
+    if isinstance(raw_shifts, str):
+        tokens: list[float | int | str] = [
+            tok.strip() for tok in raw_shifts.split(",") if tok.strip()
+        ]
+    else:
+        tokens = []
+        for item in raw_shifts:
+            if isinstance(item, str):
+                tokens.extend(t.strip() for t in item.split(",") if t.strip())
+            else:
+                tokens.append(item)
+    parsed: list[float] = []
+    seen: set[float] = set()
+    for tok in tokens:
+        val = float(tok)
+        if abs(val) <= 1e-9:
+            continue
+        rounded = round(val, 6)
+        if rounded not in seen:
+            seen.add(rounded)
+            parsed.append(val)
+    return parsed
+
+
+def _format_shift_label(shift_sec: float) -> tuple[str, str]:
+    """返回 (条件键名, 展示标签)，例如 ('shift_-30s', 'Shift -30s')。"""
+    if abs(shift_sec - round(shift_sec)) < 1e-6:
+        sec_int = int(round(shift_sec))
+        return f"shift_{sec_int:+d}s", f"Shift {sec_int:+d}s"
+    return f"shift_{shift_sec:+.1f}s", f"Shift {shift_sec:+.1f}s"
+
+
+def _resolve_control_specification(
+    cfg: dict,
+    *,
+    control_config_path: str | Path | None = None,
+    shift_seconds: str | Iterable[float | int | str] | None = None,
+    zero_signal_control: bool = False,
+) -> dict:
+    """合并 CLI 参数、独立对照 YAML 配置（configs/controls/...）与主配置中的负对照设置。"""
+    resolved_ctrl_path: Path | None = None
+    ctrl_yaml: dict = {}
+    if control_config_path is not None and str(control_config_path).strip():
+        resolved_ctrl_path = resolve_config_path(project_path(control_config_path))
+        if not resolved_ctrl_path.is_file():
+            raise FileNotFoundError(
+                f"指定的负对照配置文件不存在：{control_config_path}"
+            )
+        loaded = load_yaml_with_extends(resolved_ctrl_path)
+        if isinstance(loaded, dict):
+            ctrl_yaml = loaded
+
+    dataset = cfg.get("experiment", {}).get("dataset")
+    ctrl_wf = (
+        ctrl_yaml.get("workflow")
+        if isinstance(ctrl_yaml.get("workflow"), dict)
+        else {}
+    )
+    ctrl_dataset = ctrl_wf.get("dataset")
+    if dataset and ctrl_dataset and str(dataset) != str(ctrl_dataset):
+        raise ValueError(
+            f"数据集 {dataset!r} 与负对照配置文件中的 dataset={ctrl_dataset!r} 不一致。"
+        )
+
+    cfg_control = (
+        dict(cfg.get("control")) if isinstance(cfg.get("control"), dict) else {}
+    )
+    cfg_eval = (
+        dict(cfg.get("evaluation"))
+        if isinstance(cfg.get("evaluation"), dict)
+        else {}
+    )
+    yaml_control = (
+        dict(ctrl_yaml.get("control"))
+        if isinstance(ctrl_yaml.get("control"), dict)
+        else {}
+    )
+    yaml_eval = (
+        dict(ctrl_yaml.get("evaluation"))
+        if isinstance(ctrl_yaml.get("evaluation"), dict)
+        else {}
+    )
+
+    merged_control = {**cfg_control, **yaml_control}
+    merged_eval = {**cfg_eval, **yaml_eval}
+
+    if shift_seconds is not None:
+        shifts = _parse_shift_seconds_list(shift_seconds)
+    elif "shift_seconds" in merged_control:
+        shifts = _parse_shift_seconds_list(merged_control.get("shift_seconds"))
+    elif "shift_seconds" in merged_eval:
+        shifts = _parse_shift_seconds_list(merged_eval.get("shift_seconds"))
+    else:
+        shifts = []
+
+    enable_zero = (
+        bool(zero_signal_control)
+        or bool(merged_control.get("include_zero_signal", False))
+        or bool(merged_eval.get("zero_signal_control", False))
+        or str(merged_control.get("control_type", "")).strip().lower()
+        == "zero_signal"
+    )
+    enabled = bool(shifts) or enable_zero
+    if not enabled:
+        return {
+            "enabled": False,
+            "name": "none",
+            "control_type": "none",
+            "config_path": None,
+            "shift_seconds": [],
+            "include_zero_signal": False,
+        }
+
+    default_type = (
+        "temporal_shift"
+        if shifts and not enable_zero
+        else ("zero_signal" if enable_zero and not shifts else "combined_control")
+    )
+    control_type = str(merged_control.get("control_type") or default_type)
+    control_name = str(
+        merged_control.get("name") or f"{control_type}_negative_control"
+    )
+    cfg_path_label = (
+        normalize_project_relative(resolved_ctrl_path)
+        if resolved_ctrl_path is not None
+        else (
+            cfg.get("workflow", {}).get("config_path")
+            if cfg_control or "shift_seconds" in cfg_eval
+            else None
+        )
+    )
+    return {
+        "enabled": True,
+        "name": control_name,
+        "control_type": control_type,
+        "description": str(merged_control.get("description", "")),
+        "config_path": cfg_path_label,
+        "shift_seconds": shifts,
+        "shift_mode": str(
+            merged_control.get("shift_mode", "deterministic_circular")
+        ),
+        "same_subject": bool(merged_control.get("same_subject", True)),
+        "same_recording": bool(merged_control.get("same_recording", True)),
+        "non_overlapping_window": bool(
+            merged_control.get("non_overlapping_window", True)
+        ),
+        "include_clean_reference": bool(
+            merged_control.get("include_clean_reference", True)
+        ),
+        "include_zero_signal": bool(enable_zero),
+    }
+
+
+def _extract_control_summary_row(
+    key: str,
+    label: str,
+    shift_seconds: float | None,
+    metrics: dict,
+    *,
+    clean_summary: dict | None = None,
+) -> dict:
+    """提取单个条件（Clean、Time-Shifted 或 Zero-Signal）的核心词级检索指标与相对 Clean 的差值。"""
+    sweep = metrics.get("vocabulary_sweep", {})
+    n50 = sweep.get("N50", {})
+    fv = sweep.get("full_vocab", {})
+    horizons = metrics.get("revision_horizons") or {}
+
+    row = {
+        "key": key,
+        "label": label,
+        "shift_seconds": shift_seconds,
+        "vocab50_macro_top10": float(n50.get("macro_top10", 0.0)),
+        "vocab50_micro_top10": float(n50.get("micro_top10", 0.0)),
+        "vocab50_macro_top5": float(n50.get("macro_top5", 0.0)),
+        "vocab50_macro_top1": float(n50.get("macro_top1", 0.0)),
+        "vocab50_mrr": float(n50.get("mrr", 0.0)),
+        "vocab50_median_rank": float(n50.get("median_rank", 0.0)),
+        "vocab50_chance_top10": float(n50.get("chance_top10", 0.2)),
+        "full_vocab_macro_top10": float(fv.get("macro_top10", 0.0)),
+        "full_vocab_micro_top10": float(fv.get("micro_top10", 0.0)),
+        "full_vocab_macro_top1": float(fv.get("macro_top1", 0.0)),
+        "full_vocab_mrr": float(fv.get("mrr", 0.0)),
+        "full_vocab_median_rank": float(fv.get("median_rank", 0.0)),
+    }
+    if horizons:
+        row["horizons"] = {
+            h_key: {
+                "common_vocab50_macro_top10": float(
+                    horizons[h_key].get("common_vocab50_macro_top10", 0.0)
+                ),
+                "common_vocab50_micro_top10": float(
+                    horizons[h_key].get("common_vocab50_micro_top10", 0.0)
+                ),
+                "common_vocab50_macro_top1": float(
+                    horizons[h_key].get("common_vocab50_macro_top1", 0.0)
+                ),
+                "common_full_vocab_macro_top10": float(
+                    horizons[h_key].get("common_full_vocab_macro_top10", 0.0)
+                ),
+            }
+            for h_key in ("K0", "K1", "K2")
+            if h_key in horizons
+        }
+    if clean_summary is not None:
+        delta = {
+            "vocab50_macro_top10": float(
+                row["vocab50_macro_top10"] - clean_summary["vocab50_macro_top10"]
+            ),
+            "vocab50_micro_top10": float(
+                row["vocab50_micro_top10"] - clean_summary["vocab50_micro_top10"]
+            ),
+            "vocab50_macro_top1": float(
+                row["vocab50_macro_top1"] - clean_summary["vocab50_macro_top1"]
+            ),
+            "vocab50_mrr": float(
+                row["vocab50_mrr"] - clean_summary["vocab50_mrr"]
+            ),
+            "full_vocab_macro_top10": float(
+                row["full_vocab_macro_top10"]
+                - clean_summary["full_vocab_macro_top10"]
+            ),
+            "clean_minus_control_vocab50_macro_top10": float(
+                clean_summary["vocab50_macro_top10"] - row["vocab50_macro_top10"]
+            ),
+            "clean_minus_control_full_vocab_macro_top10": float(
+                clean_summary["full_vocab_macro_top10"]
+                - row["full_vocab_macro_top10"]
+            ),
+        }
+        if "horizons" in row and "horizons" in clean_summary:
+            delta["horizons"] = {
+                h_key: {
+                    "common_vocab50_macro_top10": float(
+                        row["horizons"][h_key]["common_vocab50_macro_top10"]
+                        - clean_summary["horizons"][h_key][
+                            "common_vocab50_macro_top10"
+                        ]
+                    ),
+                    "common_full_vocab_macro_top10": float(
+                        row["horizons"][h_key]["common_full_vocab_macro_top10"]
+                        - clean_summary["horizons"][h_key][
+                            "common_full_vocab_macro_top10"
+                        ]
+                    ),
+                }
+                for h_key in row["horizons"]
+                if h_key in clean_summary["horizons"]
+            }
+        row["delta_vs_clean"] = delta
+    return row
+
+
+def _summarize_shifted_conditions(
+    clean_summary: dict,
+    shifted_rows: list[dict],
+) -> dict:
+    """汇总所有时间错位偏移量（如 ±30s, ±60s, ±120s）的均值、标准差与相对 Clean 的平均降幅。"""
+    if not shifted_rows:
+        return {}
+    metric_keys = (
+        "vocab50_macro_top10",
+        "vocab50_micro_top10",
+        "vocab50_macro_top5",
+        "vocab50_macro_top1",
+        "vocab50_mrr",
+        "vocab50_median_rank",
+        "full_vocab_macro_top10",
+        "full_vocab_micro_top10",
+        "full_vocab_macro_top1",
+        "full_vocab_mrr",
+        "full_vocab_median_rank",
+    )
+    agg: dict = {
+        "shift_count": len(shifted_rows),
+        "shift_seconds": [r["shift_seconds"] for r in shifted_rows],
+    }
+    for m_key in metric_keys:
+        vals = np.asarray([float(r[m_key]) for r in shifted_rows], dtype=np.float64)
+        mean_val = float(np.mean(vals))
+        std_val = float(np.std(vals, ddof=0))
+        agg[f"mean_{m_key}"] = mean_val
+        agg[f"std_{m_key}"] = std_val
+        if m_key in clean_summary:
+            agg[f"delta_{m_key}_vs_clean"] = float(mean_val - float(clean_summary[m_key]))
+            agg[f"clean_minus_shifted_{m_key}"] = float(
+                float(clean_summary[m_key]) - mean_val
+            )
+    if all("horizons" in r for r in shifted_rows) and "horizons" in clean_summary:
+        h_agg: dict = {}
+        for h_key in ("K0", "K1", "K2"):
+            if h_key not in clean_summary["horizons"]:
+                continue
+            v50_vals = np.asarray(
+                [
+                    float(r["horizons"][h_key]["common_vocab50_macro_top10"])
+                    for r in shifted_rows
+                    if h_key in r["horizons"]
+                ],
+                dtype=np.float64,
+            )
+            fv_vals = np.asarray(
+                [
+                    float(r["horizons"][h_key]["common_full_vocab_macro_top10"])
+                    for r in shifted_rows
+                    if h_key in r["horizons"]
+                ],
+                dtype=np.float64,
+            )
+            if len(v50_vals) > 0:
+                m_v50 = float(np.mean(v50_vals))
+                m_fv = float(np.mean(fv_vals))
+                h_agg[h_key] = {
+                    "mean_common_vocab50_macro_top10": m_v50,
+                    "std_common_vocab50_macro_top10": float(np.std(v50_vals, ddof=0)),
+                    "delta_common_vocab50_macro_top10_vs_clean": float(
+                        m_v50
+                        - float(
+                            clean_summary["horizons"][h_key][
+                                "common_vocab50_macro_top10"
+                            ]
+                        )
+                    ),
+                    "mean_common_full_vocab_macro_top10": m_fv,
+                    "std_common_full_vocab_macro_top10": float(
+                        np.std(fv_vals, ddof=0)
+                    ),
+                }
+        agg["horizons"] = h_agg
+    return agg
+
+
 def _print_evaluation_report(eval_result: dict) -> None:
-    """在终端或 Notebook 输出格式化的评估指标报表。"""
+    """在终端或 Notebook 输出格式化的评估指标报表（含时间错位/全零信号负对照表）。"""
     sep = "=" * 96
     thin_sep = "-" * 96
     dataset = eval_result["dataset"]
@@ -2042,6 +2422,54 @@ def _print_evaluation_report(eval_result: dict) -> None:
                 flush=True,
             )
 
+    neg_ctrl = eval_result.get("negative_controls") or {}
+    ctrl_conditions = neg_ctrl.get("conditions") or []
+    if ctrl_conditions:
+        clean_row = neg_ctrl["clean_reference"]
+        ctrl_spec = neg_ctrl.get("specification") or {}
+        cfg_note = (
+            f" (config: {ctrl_spec['config_path']})"
+            if ctrl_spec.get("config_path")
+            else ""
+        )
+        print(
+            f"{thin_sep}\n"
+            f" Negative Control Comparison ({split}){cfg_note}:\n"
+            f" {'Condition':<18} | {'50w Macro Top10':>15} | {'Delta vs Clean':>14} | {'50w Micro Top10':>15} | {'50w Macro Top1':>14} | {'FullVocab Top10':>15} | {'Med Rank':>8}\n"
+            f"{'-' * 20}+{'-' * 17}+{'-' * 16}+{'-' * 17}+{'-' * 16}+{'-' * 17}+{'-' * 10}",
+            flush=True,
+        )
+        print(
+            f" {clean_row['label']:<18} | {clean_row['vocab50_macro_top10'] * 100.0:14.2f}% | {'(Reference)':>14} |"
+            f" {clean_row['vocab50_micro_top10'] * 100.0:14.2f}% | {clean_row['vocab50_macro_top1'] * 100.0:13.2f}% |"
+            f" {clean_row['full_vocab_macro_top10'] * 100.0:14.2f}% | {clean_row['vocab50_median_rank']:8.1f}",
+            flush=True,
+        )
+        for cond in ctrl_conditions:
+            s_row = cond["summary"]
+            d_50 = s_row["delta_vs_clean"]["vocab50_macro_top10"] * 100.0
+            print(
+                f" {s_row['label']:<18} | {s_row['vocab50_macro_top10'] * 100.0:14.2f}% | {d_50:+13.2f}% |"
+                f" {s_row['vocab50_micro_top10'] * 100.0:14.2f}% | {s_row['vocab50_macro_top1'] * 100.0:13.2f}% |"
+                f" {s_row['full_vocab_macro_top10'] * 100.0:14.2f}% | {s_row['vocab50_median_rank']:8.1f}",
+                flush=True,
+            )
+        shifted_agg = neg_ctrl.get("shifted_aggregate") or {}
+        if shifted_agg.get("shift_count", 0) > 1:
+            m50 = shifted_agg["mean_vocab50_macro_top10"] * 100.0
+            sd50 = shifted_agg["std_vocab50_macro_top10"] * 100.0
+            d50 = shifted_agg["delta_vocab50_macro_top10_vs_clean"] * 100.0
+            mic50 = shifted_agg["mean_vocab50_micro_top10"] * 100.0
+            top1_50 = shifted_agg["mean_vocab50_macro_top1"] * 100.0
+            fv10 = shifted_agg["mean_full_vocab_macro_top10"] * 100.0
+            med_r = shifted_agg["mean_vocab50_median_rank"]
+            print(
+                f"{'-' * 20}+{'-' * 17}+{'-' * 16}+{'-' * 17}+{'-' * 16}+{'-' * 17}+{'-' * 10}\n"
+                f" {'Shifted Mean +- SD':<18} | {f'{m50:.2f}+-{sd50:.2f}%':>15} | {d50:+13.2f}% |"
+                f" {mic50:14.2f}% | {top1_50:13.2f}% | {fv10:14.2f}% | {med_r:8.1f}",
+                flush=True,
+            )
+
     per_subject = eval_result["metrics"].get("per_subject") or []
     if len(per_subject) > 1:
         print(
@@ -2059,6 +2487,414 @@ def _print_evaluation_report(eval_result: dict) -> None:
                 flush=True,
             )
     print(f"{sep}\n", flush=True)
+
+
+def plot_negative_control_figures(
+    eval_result: dict,
+    figures_dir: str | Path,
+) -> dict[str, str]:
+    """绘制单阶段时间错位（±30s, ±60s, ±120s）/ 全零信号负对照对比图（PNG 与 PDF）。"""
+    neg_ctrl = eval_result.get("negative_controls") or {}
+    ctrl_conditions = neg_ctrl.get("conditions") or []
+    if not ctrl_conditions:
+        return {}
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(figures_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    dataset = eval_result["dataset"]
+    stage = eval_result["stage"]
+    stage_title = STAGE_DISPLAY_NAMES.get(stage, stage)
+    split = eval_result["split"].upper()
+    subset_tag = eval_result["subset"]["subset_tag"]
+    seed = eval_result["seed"]
+    clean_row = neg_ctrl["clean_reference"]
+
+    # Sort conditions so negative shifts come before Clean (0s) and positive shifts come after
+    neg_shifts = sorted(
+        [
+            c["summary"]
+            for c in ctrl_conditions
+            if c["summary"].get("shift_seconds") is not None
+            and float(c["summary"]["shift_seconds"]) < 0
+        ],
+        key=lambda r: float(r["shift_seconds"]),
+    )
+    pos_shifts = sorted(
+        [
+            c["summary"]
+            for c in ctrl_conditions
+            if c["summary"].get("shift_seconds") is not None
+            and float(c["summary"]["shift_seconds"]) > 0
+        ],
+        key=lambda r: float(r["shift_seconds"]),
+    )
+    other_ctrls = [
+        c["summary"]
+        for c in ctrl_conditions
+        if c["summary"].get("shift_seconds") is None
+    ]
+    ordered_rows = [*neg_shifts, clean_row, *pos_shifts, *other_ctrls]
+    clean_idx = len(neg_shifts)
+
+    labels = [r["label"].replace("Shift ", "") for r in ordered_rows]
+    x = np.arange(len(ordered_rows))
+    v50_macro10 = [r["vocab50_macro_top10"] * 100.0 for r in ordered_rows]
+    v50_micro10 = [r["vocab50_micro_top10"] * 100.0 for r in ordered_rows]
+    v50_macro1 = [r["vocab50_macro_top1"] * 100.0 for r in ordered_rows]
+    fv_macro10 = [r["full_vocab_macro_top10"] * 100.0 for r in ordered_rows]
+    chance_50 = float(clean_row.get("vocab50_chance_top10", 0.2)) * 100.0
+
+    primary_color = "#1f77b4" if dataset == "pallier2025" else "#6a3d9a"
+    ctrl_color = "#b0bec5"
+    highlight_color = "#d62728"
+
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(15.0, 5.8), dpi=160)
+    fig.suptitle(
+        f"Negative Control Evaluation ({split})  |  {dataset}  |  {stage_title}  |  subset={subset_tag} (seed={seed})",
+        fontsize=12.5,
+        fontweight="bold",
+        y=0.98,
+    )
+
+    # Panel A: 50-Word Macro Top-10 & Micro Top-10 Across Temporal Shifts vs Clean (0s)
+    bar_colors = [
+        primary_color if idx == clean_idx else ctrl_color
+        for idx in range(len(ordered_rows))
+    ]
+    bars = ax_left.bar(
+        x,
+        v50_macro10,
+        width=0.56,
+        color=bar_colors,
+        edgecolor="#263238",
+        linewidth=0.9,
+        alpha=0.92,
+        label="50-Word Macro Top-10 (%)",
+    )
+    ax_left.plot(
+        x,
+        v50_micro10,
+        "-s",
+        color="#ff7f0e",
+        linewidth=1.8,
+        markersize=5.5,
+        label="50-Word Micro Top-10 (%)",
+    )
+    ax_left.plot(
+        x,
+        v50_macro1,
+        "--^",
+        color="#2ca02c",
+        linewidth=1.6,
+        markersize=5.0,
+        label="50-Word Macro Top-1 (%)",
+    )
+    ax_left.axhline(
+        chance_50,
+        color="black",
+        linestyle=":",
+        linewidth=1.4,
+        label=f"Random Chance Top-10 ({chance_50:.1f}%)",
+    )
+    for idx, bar in enumerate(bars):
+        h = bar.get_height()
+        ax_left.annotate(
+            f"{h:.1f}%",
+            xy=(bar.get_x() + bar.get_width() / 2, h),
+            xytext=(0, 4),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=8.5,
+            fontweight="bold" if idx == clean_idx else "normal",
+            color=primary_color if idx == clean_idx else "#37474f",
+        )
+    ax_left.set_title(
+        f"(A) 50-Word Retrieval Accuracy: Clean (0s) vs Shifted Signals ({split})",
+        fontsize=11,
+        fontweight="bold",
+    )
+    ax_left.set_xticks(x)
+    ax_left.set_xticklabels(labels, fontsize=9.5)
+    ax_left.set_ylabel("Accuracy (%)", fontsize=10)
+    ax_left.set_ylim(0, max(max(v50_macro10 + v50_micro10, default=35.0) * 1.24, 30.0))
+    ax_left.grid(axis="y", linestyle=":", alpha=0.5)
+    ax_left.legend(loc="upper right", fontsize=8.5)
+
+    # Panel B: If revision stage with K0/K1/K2 horizons, plot K0/K1/K2 across shifts; otherwise plot Full-Vocab + Delta Drop
+    has_horizons = all("horizons" in r for r in ordered_rows)
+    if has_horizons and stage == "revision":
+        h_colors = {"K0": "#4e79a7", "K1": "#f28e2b", "K2": "#59a14f"}
+        for h_key in ("K0", "K1", "K2"):
+            h_vals = [
+                r["horizons"].get(h_key, {}).get("common_vocab50_macro_top10", 0.0)
+                * 100.0
+                for r in ordered_rows
+            ]
+            ax_right.plot(
+                x,
+                h_vals,
+                "-o",
+                linewidth=2.1,
+                markersize=6,
+                color=h_colors[h_key],
+                label=f"{h_key} Common 50-Word Macro Top-10 (%)",
+            )
+        ax_right.axhline(
+            chance_50,
+            color="black",
+            linestyle=":",
+            linewidth=1.3,
+            label=f"Chance Top-10 ({chance_50:.1f}%)",
+        )
+        ax_right.axvline(
+            clean_idx,
+            color=highlight_color,
+            linestyle="--",
+            linewidth=1.1,
+            alpha=0.6,
+        )
+        ax_right.set_title(
+            f"(B) Rolling Revision Horizons (K0 / K1 / K2) Across Signal Shifts ({split})",
+            fontsize=11,
+            fontweight="bold",
+        )
+        ax_right.set_xticks(x)
+        ax_right.set_xticklabels(labels, fontsize=9.5)
+        ax_right.set_ylabel("50-Word Macro Top-10 (%)", fontsize=10)
+        ax_right.set_ylim(0, max(ax_right.get_ylim()[1] * 1.18, 30.0))
+        ax_right.grid(True, linestyle=":", alpha=0.5)
+        ax_right.legend(loc="upper right", fontsize=8.5)
+    else:
+        ctrl_only = [c["summary"] for c in ctrl_conditions]
+        cx = np.arange(len(ctrl_only))
+        c_labels = [r["label"].replace("Shift ", "") for r in ctrl_only]
+        drops_50 = [
+            r["delta_vs_clean"]["vocab50_macro_top10"] * 100.0 for r in ctrl_only
+        ]
+        drops_fv = [
+            r["delta_vs_clean"]["full_vocab_macro_top10"] * 100.0 for r in ctrl_only
+        ]
+        bw = 0.36
+        b1 = ax_right.bar(
+            cx - bw / 2,
+            drops_50,
+            bw,
+            color="#e15759",
+            alpha=0.9,
+            label="Delta 50-Word Macro Top-10 (Control - Clean)",
+        )
+        b2 = ax_right.bar(
+            cx + bw / 2,
+            drops_fv,
+            bw,
+            color="#76b7b2",
+            alpha=0.9,
+            label="Delta Full-Vocab Macro Top-10 (Control - Clean)",
+        )
+        ax_right.axhline(0.0, color="black", linewidth=1.2)
+        for bar in list(b1) + list(b2):
+            h = bar.get_height()
+            va = "top" if h < 0 else "bottom"
+            y_off = -11 if h < 0 else 3
+            ax_right.annotate(
+                f"{h:+.1f}%",
+                xy=(bar.get_x() + bar.get_width() / 2, h),
+                xytext=(0, y_off),
+                textcoords="offset points",
+                ha="center",
+                va=va,
+                fontsize=8,
+                fontweight="bold",
+            )
+        ax_right.set_title(
+            f"(B) Retrieval Accuracy Drop Under Negative Controls ({split})",
+            fontsize=11,
+            fontweight="bold",
+        )
+        ax_right.set_xticks(cx)
+        ax_right.set_xticklabels(c_labels, fontsize=9.5)
+        ax_right.set_ylabel("Accuracy Change vs Clean (%)", fontsize=10)
+        y_min = min(min(drops_50 + drops_fv, default=-10.0) * 1.28, -5.0)
+        y_max = max(max(drops_50 + drops_fv, default=2.0) * 1.25, 5.0)
+        ax_right.set_ylim(y_min, y_max)
+        ax_right.grid(axis="y", linestyle=":", alpha=0.5)
+        ax_right.legend(loc="lower right", fontsize=8.5)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
+    split_lower = eval_result["split"]
+    png_path = out_dir / f"negative_control_{split_lower}.png"
+    pdf_path = out_dir / f"negative_control_{split_lower}.pdf"
+    fig.savefig(png_path, dpi=160)
+    fig.savefig(pdf_path)
+    plt.close(fig)
+    return {
+        "negative_control_png": str(png_path),
+        "negative_control_pdf": str(pdf_path),
+    }
+
+
+def plot_stage_control_comparison_figure(
+    stage_results: dict[str, dict],
+    figures_dir: str | Path,
+    *,
+    split: str = "val",
+) -> dict[str, str]:
+    """绘制多阶段（Stage 1 / 2.1 / 2.2）在 Clean (0s) 与各时间错位负对照（±30s, ±60s, ±120s）下的对比图。"""
+    ordered_stages = [
+        s
+        for s in WORKFLOW_STAGES
+        if s in stage_results
+        and (stage_results[s].get("negative_controls") or {}).get("conditions")
+    ]
+    if not ordered_stages:
+        return {}
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(figures_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    first_res = stage_results[ordered_stages[0]]
+    dataset = first_res["dataset"]
+    subset_tag = first_res["subset"]["subset_tag"]
+    seed = first_res["seed"]
+    split_upper = split.upper()
+
+    first_nc = first_res["negative_controls"]
+    first_conds = first_nc["conditions"]
+    neg_shifts = sorted(
+        [
+            c["summary"]
+            for c in first_conds
+            if c["summary"].get("shift_seconds") is not None
+            and float(c["summary"]["shift_seconds"]) < 0
+        ],
+        key=lambda r: float(r["shift_seconds"]),
+    )
+    pos_shifts = sorted(
+        [
+            c["summary"]
+            for c in first_conds
+            if c["summary"].get("shift_seconds") is not None
+            and float(c["summary"]["shift_seconds"]) > 0
+        ],
+        key=lambda r: float(r["shift_seconds"]),
+    )
+    other_ctrls = [
+        c["summary"]
+        for c in first_conds
+        if c["summary"].get("shift_seconds") is None
+    ]
+    ordered_keys = [
+        *(r["key"] for r in neg_shifts),
+        "clean_0s",
+        *(r["key"] for r in pos_shifts),
+        *(r["key"] for r in other_ctrls),
+    ]
+    x_labels = [
+        *(r["label"].replace("Shift ", "") for r in neg_shifts),
+        "Clean (0s)",
+        *(r["label"].replace("Shift ", "") for r in pos_shifts),
+        *(r["label"] for r in other_ctrls),
+    ]
+    x = np.arange(len(ordered_keys))
+
+    stage_colors = {
+        "word": "#4e79a7",
+        "context": "#f28e2b",
+        "revision": "#59a14f",
+    }
+
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(15.0, 5.8), dpi=160)
+    fig.suptitle(
+        f"Multi-Stage Negative Control Comparison ({split_upper})  |  dataset={dataset}  |  subset={subset_tag} (seed={seed})",
+        fontsize=13,
+        fontweight="bold",
+        y=0.98,
+    )
+
+    for st in ordered_stages:
+        nc = stage_results[st]["negative_controls"]
+        row_map = {"clean_0s": nc["clean_reference"]}
+        for c in nc["conditions"]:
+            row_map[c["key"]] = c["summary"]
+        y_50 = [
+            float(row_map.get(k, {}).get("vocab50_macro_top10", 0.0)) * 100.0
+            for k in ordered_keys
+        ]
+        y_fv = [
+            float(row_map.get(k, {}).get("full_vocab_macro_top10", 0.0)) * 100.0
+            for k in ordered_keys
+        ]
+        ax_left.plot(
+            x,
+            y_50,
+            "-o",
+            linewidth=2.2,
+            markersize=6,
+            color=stage_colors.get(st, "#333333"),
+            label=STAGE_DISPLAY_NAMES.get(st, st),
+        )
+        ax_right.plot(
+            x,
+            y_fv,
+            "-s",
+            linewidth=2.2,
+            markersize=6,
+            color=stage_colors.get(st, "#333333"),
+            label=STAGE_DISPLAY_NAMES.get(st, st),
+        )
+
+    chance_50 = float(first_nc["clean_reference"].get("vocab50_chance_top10", 0.2)) * 100.0
+    ax_left.axhline(
+        chance_50,
+        color="black",
+        linestyle=":",
+        linewidth=1.3,
+        label=f"Random Chance ({chance_50:.1f}%)",
+    )
+    ax_left.set_title(
+        f"(A) 50-Word Macro Top-10 Across Temporal Shifts ({split_upper})",
+        fontsize=11,
+        fontweight="bold",
+    )
+    ax_left.set_xticks(x)
+    ax_left.set_xticklabels(x_labels, fontsize=9.5)
+    ax_left.set_ylabel("50-Word Macro Top-10 (%)", fontsize=10)
+    ax_left.set_ylim(0, max(ax_left.get_ylim()[1] * 1.18, 35.0))
+    ax_left.grid(True, linestyle=":", alpha=0.5)
+    ax_left.legend(loc="upper right", fontsize=8.5)
+
+    ax_right.set_title(
+        f"(B) Full-Vocabulary Macro Top-10 Across Temporal Shifts ({split_upper})",
+        fontsize=11,
+        fontweight="bold",
+    )
+    ax_right.set_xticks(x)
+    ax_right.set_xticklabels(x_labels, fontsize=9.5)
+    ax_right.set_ylabel("Full-Vocabulary Macro Top-10 (%)", fontsize=10)
+    ax_right.set_ylim(0, max(ax_right.get_ylim()[1] * 1.22, 8.0))
+    ax_right.grid(True, linestyle=":", alpha=0.5)
+    ax_right.legend(loc="upper right", fontsize=8.5)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
+    png_path = out_dir / f"stage_control_comparison_{split}.png"
+    pdf_path = out_dir / f"stage_control_comparison_{split}.pdf"
+    fig.savefig(png_path, dpi=160)
+    fig.savefig(pdf_path)
+    plt.close(fig)
+    return {
+        "stage_control_comparison_png": str(png_path),
+        "stage_control_comparison_pdf": str(pdf_path),
+    }
 
 
 def plot_evaluation_figures(
@@ -2287,10 +3123,12 @@ def plot_evaluation_figures(
     fig.savefig(png_path, dpi=160)
     fig.savefig(pdf_path)
     plt.close(fig)
-    return {
+    result_paths = {
         "overview_png": str(png_path),
         "overview_pdf": str(pdf_path),
     }
+    result_paths.update(plot_negative_control_figures(eval_result, out_dir))
+    return result_paths
 
 
 def plot_stage_comparison_figure(
@@ -2429,10 +3267,14 @@ def plot_stage_comparison_figure(
     fig.savefig(png_path, dpi=160)
     fig.savefig(pdf_path)
     plt.close(fig)
-    return {
+    result_paths = {
         "stage_comparison_png": str(png_path),
         "stage_comparison_pdf": str(pdf_path),
     }
+    result_paths.update(
+        plot_stage_control_comparison_figure(stage_results, out_dir, split=split)
+    )
+    return result_paths
 
 
 def _evaluate_single_stage(
@@ -2453,11 +3295,14 @@ def _evaluate_single_stage(
     exp_tag: str | None = None,
     word_exp_tag: str | None = None,
     config_path: str | Path | None = None,
+    control_config_path: str | Path | None = None,
+    shift_seconds: str | Iterable[float | int | str] | None = None,
+    zero_signal_control: bool = False,
     plot: bool = True,
     show_progress: bool = True,
     max_eval_rows: int | None = None,
 ) -> dict:
-    """对单个训练阶段（word / context / revision）执行验证集或测试集评估并生成图表。"""
+    """对单个训练阶段（word / context / revision）执行验证集或测试集评估（含可选负对照）并生成图表。"""
     if split not in {"val", "test"}:
         raise ValueError(f"评估 split 只能是 'val' 或 'test'，收到：{split!r}")
 
@@ -2476,6 +3321,12 @@ def _evaluate_single_stage(
         exp_tag=exp_tag,
         word_exp_tag=word_exp_tag,
         config_path=config_path,
+    )
+    control_spec = _resolve_control_specification(
+        cfg,
+        control_config_path=control_config_path,
+        shift_seconds=shift_seconds,
+        zero_signal_control=zero_signal_control,
     )
     dataset = subset_spec["dataset"]
     stage = cfg["workflow"]["stage"]
@@ -2605,7 +3456,7 @@ def _evaluate_single_stage(
         amp=amp_enabled,
         amp_dtype=amp_dtype,
         show_progress=show_progress,
-        progress_desc=f"Eval [{stage} | {split}]",
+        progress_desc=f"Eval [{stage} | {split} | Clean 0s]",
     )
 
     metrics = _compute_encoded_evaluation_metrics(
@@ -2617,6 +3468,118 @@ def _evaluate_single_stage(
         stage=stage,
         split=split,
     )
+
+    negative_controls_result: dict = {
+        "specification": control_spec,
+        "clean_reference": _extract_control_summary_row(
+            "clean_0s", "Clean (0s)", 0.0, metrics
+        ),
+        "conditions": [],
+        "shifted_aggregate": {},
+    }
+    if control_spec["enabled"]:
+        clean_summary = negative_controls_result["clean_reference"]
+        shifted_summaries: list[dict] = []
+        for shift_sec in control_spec["shift_seconds"]:
+            cond_key, cond_label = _format_shift_label(float(shift_sec))
+            shift_ds = build_fn(
+                cfg, eval_table, temporal_shift_seconds=float(shift_sec)
+            )
+            shift_loader, _ = make_loader(
+                shift_ds,
+                tc,
+                shuffle=False,
+                group_column=grp_col,
+                batch_size=eval_bs,
+            )
+            shift_encoded = encode_loader(
+                model,
+                shift_loader,
+                device,
+                amp=amp_enabled,
+                amp_dtype=amp_dtype,
+                show_progress=show_progress,
+                progress_desc=f"Eval [{stage} | {split} | {cond_label}]",
+            )
+            shift_metrics = _compute_encoded_evaluation_metrics(
+                shift_encoded,
+                shift_ds,
+                vocabulary,
+                vocab50,
+                cfg,
+                stage=stage,
+                split=split,
+            )
+            summary_row = _extract_control_summary_row(
+                cond_key,
+                cond_label,
+                float(shift_sec),
+                shift_metrics,
+                clean_summary=clean_summary,
+            )
+            shifted_summaries.append(summary_row)
+            negative_controls_result["conditions"].append(
+                {
+                    "key": cond_key,
+                    "label": cond_label,
+                    "control_type": "temporal_shift",
+                    "shift_seconds": float(shift_sec),
+                    "summary": summary_row,
+                    "metrics": shift_metrics,
+                }
+            )
+            del shift_ds, shift_loader, shift_encoded
+
+        if control_spec.get("include_zero_signal", False):
+            zero_ds = build_fn(cfg, eval_table, zero_signal=True)
+            zero_loader, _ = make_loader(
+                zero_ds,
+                tc,
+                shuffle=False,
+                group_column=grp_col,
+                batch_size=eval_bs,
+            )
+            zero_encoded = encode_loader(
+                model,
+                zero_loader,
+                device,
+                amp=amp_enabled,
+                amp_dtype=amp_dtype,
+                show_progress=show_progress,
+                progress_desc=f"Eval [{stage} | {split} | Zero Signal]",
+            )
+            zero_metrics = _compute_encoded_evaluation_metrics(
+                zero_encoded,
+                zero_ds,
+                vocabulary,
+                vocab50,
+                cfg,
+                stage=stage,
+                split=split,
+            )
+            zero_summary = _extract_control_summary_row(
+                "zero_signal",
+                "Zero Signal",
+                None,
+                zero_metrics,
+                clean_summary=clean_summary,
+            )
+            negative_controls_result["conditions"].append(
+                {
+                    "key": "zero_signal",
+                    "label": "Zero Signal",
+                    "control_type": "zero_signal",
+                    "shift_seconds": None,
+                    "summary": zero_summary,
+                    "metrics": zero_metrics,
+                }
+            )
+            del zero_ds, zero_loader, zero_encoded
+
+        if shifted_summaries:
+            negative_controls_result["shifted_aggregate"] = (
+                _summarize_shifted_conditions(clean_summary, shifted_summaries)
+            )
 
     training_history = []
     summary_path = out / "training_summary.json"
@@ -2647,6 +3610,7 @@ def _evaluate_single_stage(
         },
         "cache_verification": cache_verification,
         "metrics": metrics,
+        "negative_controls": negative_controls_result,
         "training_history": training_history,
         "output_dir": str(out),
         "figures": {},
@@ -2687,12 +3651,15 @@ def run_evaluation_workflow(
     exp_tag: str | None = None,
     word_exp_tag: str | None = None,
     config_path: str | Path | None = None,
+    control_config_path: str | Path | None = None,
+    shift_seconds: str | Iterable[float | int | str] | None = None,
+    zero_signal_control: bool = False,
     all_stages: bool = False,
     plot: bool = True,
     show_progress: bool = True,
     max_eval_rows: int | None = None,
 ) -> dict:
-    """运行验证集 (val) 或测试集 (test) 评估与可视化工作流（支持单阶段或全阶段对比）。"""
+    """运行验证集 (val) 或测试集 (test) 评估与可视化工作流（支持单阶段、全阶段对比及时间错位/全零信号负对照）。"""
     if split not in {"val", "test"}:
         raise ValueError(f"评估 split 只能是 'val' 或 'test'，收到：{split!r}")
 
@@ -2714,6 +3681,9 @@ def run_evaluation_workflow(
             exp_tag=exp_tag,
             word_exp_tag=word_exp_tag,
             config_path=config_path,
+            control_config_path=control_config_path,
+            shift_seconds=shift_seconds,
+            zero_signal_control=zero_signal_control,
             plot=plot,
             show_progress=show_progress,
             max_eval_rows=max_eval_rows,
@@ -2789,6 +3759,18 @@ def run_evaluation_workflow(
         word_exp_tag=word_exp_tag,
         config_path=config_path,
     )
+    effective_control_config_path = control_config_path
+    if effective_control_config_path is None and config_path is not None:
+        resolved_cfg_p = resolve_config_path(project_path(config_path))
+        if resolved_cfg_p.is_file():
+            raw_explicit = load_yaml_with_extends(resolved_cfg_p)
+            if isinstance(raw_explicit, dict) and (
+                "control" in raw_explicit
+                or "shift_seconds" in (raw_explicit.get("evaluation") or {})
+                or bool((raw_explicit.get("evaluation") or {}).get("zero_signal_control"))
+            ):
+                effective_control_config_path = config_path
+
     ds_name = subset_spec["dataset"]
     sub_tag = subset_spec["subset_tag"]
     sd = int(base_cfg["training"]["seed"])
@@ -2865,6 +3847,9 @@ def run_evaluation_workflow(
             exp_tag=st_tag,
             word_exp_tag=word_exp_tag,
             config_path=None,
+            control_config_path=effective_control_config_path,
+            shift_seconds=shift_seconds,
+            zero_signal_control=zero_signal_control,
             plot=plot,
             show_progress=show_progress,
             max_eval_rows=max_eval_rows,
@@ -2913,4 +3898,5 @@ def run_evaluation_workflow(
     save_json(summary_file, multi_summary)
     multi_summary["evaluation_json"] = str(summary_file)
     return multi_summary
+
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -440,6 +441,9 @@ def _add_training_workflow_args(
 
 
 def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
+    parser._negative_number_matcher = re.compile(
+        r"^-\d+(?:\.\d+)?(?:,\s*[+-]?\d+(?:\.\d+)?)*$"
+    )
     parser.add_argument(
         "--config",
         "-c",
@@ -516,6 +520,21 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
         help="要求必须命中预处理特征缓存，缺失时立即报错",
     )
     parser.add_argument(
+        "--control-config",
+        default=None,
+        help="可选传入独立解耦的负对照 YAML 配置（如 configs/controls/temporal_shift/temporal_shift_control.yaml）",
+    )
+    parser.add_argument(
+        "--shift-seconds",
+        default=None,
+        help="可选逗号分隔的时间错位秒数列表（如 -120,-60,-30,30,60,120），以真实错位脑磁/脑电信号作为词级检索负对照",
+    )
+    parser.add_argument(
+        "--zero-signal-control",
+        action="store_true",
+        help="同时评估全零脑磁/脑电信号负对照（Zero-Signal Control）",
+    )
+    parser.add_argument(
         "--max-eval-rows",
         type=int,
         default=None,
@@ -588,11 +607,24 @@ def _workflow_train(args, *, mode: str) -> int:
 
 
 def _workflow_eval(args) -> int:
+    from braindecoding.config import (
+        load_yaml_with_extends,
+        project_path,
+        resolve_config_path,
+    )
     from braindecoding.training.workflow_runner import run_evaluation_workflow
 
     dataset = args.dataset
+    control_cfg = getattr(args, "control_config", None)
     if dataset is None and args.config is None:
-        dataset = "chineseeeg2_littleprince"
+        if control_cfg is not None:
+            resolved_ctrl = resolve_config_path(project_path(control_cfg))
+            if resolved_ctrl.is_file():
+                raw_ctrl = load_yaml_with_extends(resolved_ctrl)
+                if isinstance(raw_ctrl, dict):
+                    dataset = (raw_ctrl.get("workflow") or {}).get("dataset")
+        if dataset is None:
+            dataset = "chineseeeg2_littleprince"
     run_evaluation_workflow(
         dataset,
         stage=args.stage,
@@ -610,6 +642,9 @@ def _workflow_eval(args) -> int:
         exp_tag=getattr(args, "exp_tag", None),
         word_exp_tag=getattr(args, "word_exp_tag", None),
         config_path=args.config,
+        control_config_path=control_cfg,
+        shift_seconds=getattr(args, "shift_seconds", None),
+        zero_signal_control=bool(getattr(args, "zero_signal_control", False)),
         all_stages=args.all_stages,
         plot=not bool(getattr(args, "no_plot", False)),
         show_progress=not bool(getattr(args, "no_progress", False)),
@@ -620,6 +655,9 @@ def _workflow_eval(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="brain-decoding")
+    parser._negative_number_matcher = re.compile(
+        r"^-\d+(?:\.\d+)?(?:,\s*[+-]?\d+(?:\.\d+)?)*$"
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     listing = commands.add_parser("list", help="列出主协议与补充实验")
     listing.add_argument("--legacy", action="store_true", help="只读列出历史词级配置")

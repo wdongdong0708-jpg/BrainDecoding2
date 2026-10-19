@@ -1,0 +1,24 @@
+# 词级检索时间错位（Temporal Shift）负对照通用配置
+# 将同一受试者、同一连续录音内的真实脑磁/脑电信号按固定秒数确定性圆周移位后输入已训练模型，
+# 用于检验词级与上下文检索性能是否依赖真实的词对齐神经信号。
+#
+# 启动命令示例：
+#   python -u -m braindecoding eval-run --dataset pallier2025 --all-stages --split test --control-config configs/controls/temporal_shift/temporal_shift_control.yaml
+#   python -u -m braindecoding eval-run --config configs/controls/temporal_shift/pallier2025_temporal_shift_control.yaml --all-stages --split test
+
+control:
+  name: temporal_shift_negative_control
+  control_type: temporal_shift
+  description: Feed real MEG/EEG signals circularly shifted by +-30s, +-60s, +-120s within the same subject and recording as negative controls for word-level retrieval.
+  shift_seconds: [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+  shift_mode: deterministic_circular
+  same_subject: true
+  same_recording: true
+  non_overlapping_window: true
+  include_clean_reference: true
+  include_zero_signal: false
+
+evaluation:
+  negative_control: temporal_shift
+  shift_seconds: [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+  zero_signal_control: false

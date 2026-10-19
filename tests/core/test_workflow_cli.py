@@ -359,3 +359,221 @@ def test_plot_evaluation_and_stage_comparison_figures(tmp_path):
     assert Path(comp_figs["stage_comparison_pdf"]).is_file()
 
 
+def test_decoupled_control_configs_and_temporal_shift_specification():
+    from braindecoding.training.workflow_runner import (
+        _extract_control_summary_row,
+        _resolve_control_specification,
+        _summarize_shifted_conditions,
+    )
+
+    temporal_shift_files = [
+        "configs/controls/temporal_shift/temporal_shift_control.yaml",
+        "configs/controls/temporal_shift/pallier2025_temporal_shift_control.yaml",
+        "configs/controls/temporal_shift/chineseeeg2_temporal_shift_control.yaml",
+    ]
+    for rel_path in temporal_shift_files:
+        full_p = PROJECT_ROOT / rel_path
+        assert full_p.is_file(), f"缺少负对照配置: {rel_path}"
+        raw_text = full_p.read_text(encoding="utf-8")
+        assert "word_decoding" not in raw_text.replace("configs/word_decoding/", "")
+
+    cfg_pal, sub_pal = build_workflow_config(
+        config_path="configs/controls/temporal_shift/pallier2025_temporal_shift_control.yaml",
+        stage="revision",
+        seed=0,
+    )
+    assert sub_pal["dataset"] == "pallier2025"
+    assert cfg_pal["workflow"]["stage"] == "revision"
+    spec_pal = _resolve_control_specification(cfg_pal)
+    assert spec_pal["enabled"] is True
+    assert spec_pal["control_type"] == "temporal_shift"
+    assert spec_pal["shift_seconds"] == [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+    assert spec_pal["same_subject"] is True
+    assert spec_pal["same_recording"] is True
+
+    cfg_cn, sub_cn = build_workflow_config(
+        "chineseeeg2_littleprince", stage="word", seed=0
+    )
+    assert sub_cn["dataset"] == "chineseeeg2_littleprince"
+    spec_cn = _resolve_control_specification(
+        cfg_cn,
+        control_config_path="configs/controls/temporal_shift/temporal_shift_control.yaml",
+    )
+    assert spec_cn["enabled"] is True
+    assert spec_cn["shift_seconds"] == [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+
+    spec_zero = _resolve_control_specification(
+        cfg_cn,
+        control_config_path="configs/controls/zero_signal/zero_signal_control.yaml",
+    )
+    assert spec_zero["enabled"] is True
+    assert spec_zero["control_type"] == "zero_signal"
+    assert spec_zero["include_zero_signal"] is True
+    assert spec_zero["shift_seconds"] == []
+
+    parser = cli.build_parser()
+    eval_ctrl_args = parser.parse_args(
+        [
+            "eval-run",
+            "--dataset",
+            "pallier2025",
+            "--split",
+            "test",
+            "--all-stages",
+            "--control-config",
+            "configs/controls/temporal_shift/temporal_shift_control.yaml",
+            "--shift-seconds",
+            "-120,-60,-30,30,60,120",
+        ]
+    )
+    assert (
+        eval_ctrl_args.control_config
+        == "configs/controls/temporal_shift/temporal_shift_control.yaml"
+    )
+    assert eval_ctrl_args.shift_seconds == "-120,-60,-30,30,60,120"
+
+    clean_metrics = {
+        "vocabulary_sweep": {
+            "N50": {
+                "macro_top10": 0.45,
+                "micro_top10": 0.48,
+                "macro_top5": 0.30,
+                "macro_top1": 0.12,
+                "mrr": 0.25,
+                "median_rank": 11.0,
+                "chance_top10": 0.20,
+            },
+            "full_vocab": {
+                "macro_top10": 0.06,
+                "micro_top10": 0.09,
+                "macro_top5": 0.03,
+                "macro_top1": 0.01,
+                "mrr": 0.03,
+                "median_rank": 350.0,
+            },
+        },
+        "revision_horizons": {
+            "K0": {"common_vocab50_macro_top10": 0.40, "common_full_vocab_macro_top10": 0.05},
+            "K1": {"common_vocab50_macro_top10": 0.43, "common_full_vocab_macro_top10": 0.055},
+            "K2": {"common_vocab50_macro_top10": 0.45, "common_full_vocab_macro_top10": 0.06},
+        },
+    }
+    shifted_metrics = {
+        "vocabulary_sweep": {
+            "N50": {
+                "macro_top10": 0.20,
+                "micro_top10": 0.20,
+                "macro_top5": 0.10,
+                "macro_top1": 0.02,
+                "mrr": 0.09,
+                "median_rank": 25.5,
+                "chance_top10": 0.20,
+            },
+            "full_vocab": {
+                "macro_top10": 0.005,
+                "micro_top10": 0.005,
+                "macro_top5": 0.002,
+                "macro_top1": 0.0005,
+                "mrr": 0.003,
+                "median_rank": 1010.0,
+            },
+        },
+        "revision_horizons": {
+            "K0": {"common_vocab50_macro_top10": 0.20, "common_full_vocab_macro_top10": 0.005},
+            "K1": {"common_vocab50_macro_top10": 0.20, "common_full_vocab_macro_top10": 0.005},
+            "K2": {"common_vocab50_macro_top10": 0.20, "common_full_vocab_macro_top10": 0.005},
+        },
+    }
+    clean_row = _extract_control_summary_row("clean_0s", "Clean (0s)", 0.0, clean_metrics)
+    shifted_rows = [
+        _extract_control_summary_row(
+            f"shift_{int(s):+d}s",
+            f"Shift {int(s):+d}s",
+            s,
+            shifted_metrics,
+            clean_summary=clean_row,
+        )
+        for s in (-120.0, -60.0, -30.0, 30.0, 60.0, 120.0)
+    ]
+    agg = _summarize_shifted_conditions(clean_row, shifted_rows)
+    assert agg["shift_count"] == 6
+    assert agg["mean_vocab50_macro_top10"] == pytest.approx(0.20)
+    assert agg["delta_vocab50_macro_top10_vs_clean"] == pytest.approx(-0.25)
+    assert agg["clean_minus_shifted_vocab50_macro_top10"] == pytest.approx(0.25)
+
+
+def test_plot_negative_control_figures(tmp_path):
+    from braindecoding.training.workflow_runner import (
+        _extract_control_summary_row,
+        _summarize_shifted_conditions,
+    )
+
+    dummy_sweep = {
+        "N20": {"label": "Top-20 Vocab", "macro_top10": 0.72, "micro_top10": 0.75, "macro_top5": 0.52, "macro_top1": 0.24, "mrr": 0.41, "chance_top10": 0.50},
+        "N50": {"label": "Top-50 Vocab", "macro_top10": 0.45, "micro_top10": 0.48, "macro_top5": 0.30, "macro_top1": 0.12, "mrr": 0.25, "median_rank": 11.0, "chance_top10": 0.20},
+        "full_vocab": {"label": "Full Vocab (2020)", "macro_top10": 0.06, "micro_top10": 0.09, "macro_top5": 0.03, "macro_top1": 0.01, "mrr": 0.03, "median_rank": 350.0, "chance_top10": 10.0 / 2020.0},
+    }
+    shifted_sweep = {
+        "N50": {"label": "Top-50 Vocab", "macro_top10": 0.20, "micro_top10": 0.21, "macro_top5": 0.10, "macro_top1": 0.02, "mrr": 0.09, "median_rank": 25.0, "chance_top10": 0.20},
+        "full_vocab": {"label": "Full Vocab (2020)", "macro_top10": 0.005, "micro_top10": 0.005, "macro_top5": 0.002, "macro_top1": 0.0005, "mrr": 0.003, "median_rank": 1010.0, "chance_top10": 10.0 / 2020.0},
+    }
+    clean_metrics = {"vocabulary_sweep": dummy_sweep, "revision_horizons": {}}
+    shift_metrics = {"vocabulary_sweep": shifted_sweep, "revision_horizons": {}}
+    clean_row = _extract_control_summary_row("clean_0s", "Clean (0s)", 0.0, clean_metrics)
+    conditions = []
+    shifted_rows = []
+    for s in (-120.0, -60.0, -30.0, 30.0, 60.0, 120.0):
+        key = f"shift_{int(s):+d}s"
+        label = f"Shift {int(s):+d}s"
+        row = _extract_control_summary_row(key, label, s, shift_metrics, clean_summary=clean_row)
+        shifted_rows.append(row)
+        conditions.append(
+            {
+                "key": key,
+                "label": label,
+                "control_type": "temporal_shift",
+                "shift_seconds": s,
+                "summary": row,
+                "metrics": shift_metrics,
+            }
+        )
+    eval_res = {
+        "dataset": "pallier2025",
+        "stage": "word",
+        "split": "test",
+        "seed": 0,
+        "subset": {"subset_tag": "all-n10", "subject_count": 10, "total_canonical_subjects": 10},
+        "checkpoint": {"path": "best.ckpt", "epoch": 12},
+        "metrics": {
+            "vocabulary_sweep": dummy_sweep,
+            "per_subject": [{"subject_id": "sub-01", "macro_top10": 0.45, "macro_top1": 0.12}],
+            "revision_horizons": {},
+        },
+        "negative_controls": {
+            "specification": {
+                "enabled": True,
+                "control_type": "temporal_shift",
+                "shift_seconds": [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0],
+            },
+            "clean_reference": clean_row,
+            "conditions": conditions,
+            "shifted_aggregate": _summarize_shifted_conditions(clean_row, shifted_rows),
+        },
+        "training_history": [],
+    }
+    figs = plot_evaluation_figures(eval_res, tmp_path / "figures")
+    assert Path(figs["overview_png"]).is_file()
+    assert Path(figs["negative_control_png"]).is_file()
+    assert Path(figs["negative_control_pdf"]).is_file()
+
+    comp_figs = plot_stage_comparison_figure(
+        {"word": eval_res, "context": eval_res, "revision": eval_res},
+        tmp_path / "figures",
+        split="test",
+    )
+    assert Path(comp_figs["stage_comparison_png"]).is_file()
+    assert Path(comp_figs["stage_control_comparison_png"]).is_file()
+    assert Path(comp_figs["stage_control_comparison_pdf"]).is_file()
+
+
+

@@ -17,6 +17,7 @@ BrainDecoding/
 │   ├── evaluation/             # 检索评测、候选召回、配对显著性检验與跨数据集留出集评估
 │   └── tasks/                  # 任务级训练入口与配置适配
 ├── configs/                    # 实验超参数与协议配置（仅限 .yaml，零缩写见名知意）
+│   ├── controls/               # 独立解耦的负对照配置（如 temporal_shift/ ±30s,±60s,±120s 错位信号与 zero_signal/）
 │   ├── training/               # 训练工作流配置（如 pallier2025_word_encoder.yaml）与训练协议
 │   ├── decoding/               # 在线滚动句级解码与修正增益预览配置
 │   ├── evaluation/             # 留出测试集主评测与各项对照消融配置
@@ -141,9 +142,10 @@ python -m braindecoding train --config configs/training/chineseeeg2_word_encoder
 python -m braindecoding train --config configs/training/chineseeeg2_context_transformer.yaml --seed 0 --subject all --require-cache --resume auto
 python -m braindecoding train --config configs/training/chineseeeg2_rolling_revision.yaml --seed 0 --subject all --require-cache --resume auto
 
-# 4. 验证集 (val) 与测试集 (test) 评估及可视化绘图（生成 2x2 综合看板图与跨阶段对比图）
+# 4. 验证集 (val) 与测试集 (test) 评估、负对照（±30s, ±60s, ±120s 时间错位 / 全零信号）及可视化绘图
 python -m braindecoding eval-run --config configs/training/pallier2025_context_transformer.yaml --seed 0 --split val --require-cache
-python -m braindecoding eval-run --dataset pallier2025 --seed 0 --split test --all-stages --require-cache
+python -m braindecoding eval-run --dataset pallier2025 --seed 0 --split test --all-stages --control-config configs/controls/temporal_shift/temporal_shift_control.yaml --require-cache
+python -m braindecoding eval-run --config configs/controls/temporal_shift/chineseeeg2_temporal_shift_control.yaml --seed 0 --split test --all-stages --require-cache
 
 # 5. 缓存单文件打包与解包（Colab 本地高速盘 <-> Google Drive）
 python scripts/cache_archive.py pack --cache-dir /content/local_cache --archive-dir /content/drive/MyDrive/BrainDecoding/archives --modality meg
@@ -153,7 +155,7 @@ python scripts/cache_archive.py unpack --archive-dir /content/drive/MyDrive/Brai
 # - scripts/colab/colab_drive_init.ipynb     : 一键创建 Google Drive 标准目录并核验上传的 .tar 缓存包
 # - scripts/colab/colab_cpu_cache.ipynb      : CPU 实例预热特征缓存（含 train/val/test）并打包为单文件 .tar
 # - scripts/colab/colab_gpu_train.ipynb      : GPU 实例秒级解包缓存、按 --config 启动三阶段训练并可视化验证集评估结果
-# - scripts/colab/colab_gpu_evaluation.ipynb : GPU 实例专门用于评估留出测试集（支持单阶段或三阶段横向对比及可视化图表）
+# - scripts/colab/colab_gpu_evaluation.ipynb : GPU 实例专门用于评估留出测试集与时间错位/全零信号负对照（支持单阶段或三阶段横向对比及可视化图表）
 
 # 7. 查看当前注册的标准实验协议与运行单元测试
 python -m braindecoding list

@@ -1105,6 +1105,7 @@ class Pallier2025WordDataset(Dataset):
         text_embedding_config,
         *,
         zero_meg=False,
+        temporal_shift_seconds: float = 0.0,
         allow_subject_subset=False,
     ):
         source = table.copy()
@@ -1162,6 +1163,13 @@ class Pallier2025WordDataset(Dataset):
         self._baseline_samples = int(contract["baseline_samples"])
         self._clamp = float(contract["clamp"])
         self._window_offset_seconds = float(contract["window_start_offset_seconds"])
+        self.sampling_rate_hz = float(
+            contract.get("sampling_rate_hz", TARGET_SAMPLING_RATE_HZ)
+        )
+        self.temporal_shift_seconds = float(temporal_shift_seconds)
+        self.temporal_shift_samples = int(
+            round(self.temporal_shift_seconds * self.sampling_rate_hz)
+        )
         self.channel_count = MEG_CHANNEL_COUNT
         self.subject_map = {
             subject: index for index, subject in enumerate(configured_subjects)
@@ -1287,6 +1295,22 @@ class Pallier2025WordDataset(Dataset):
         stop = start + self.window_samples
         if recording.ndim != 2 or start < 0 or stop > recording.shape[1]:
             raise ValueError("Pallier2025 词窗口超出 canonical continuous signal。")
+        if self.temporal_shift_samples != 0:
+            valid_span = int(recording.shape[1]) - self.window_samples + 1
+            if valid_span <= 2 * self.window_samples:
+                raise ValueError(
+                    "Pallier2025 连续信号长度不足以执行非重叠时间错位对照。"
+                )
+            shifted_start = (start + self.temporal_shift_samples) % valid_span
+            if abs(shifted_start - start) < self.window_samples:
+                step = (
+                    self.window_samples
+                    if self.temporal_shift_samples > 0
+                    else -self.window_samples
+                )
+                shifted_start = (shifted_start + step) % valid_span
+            start = int(shifted_start)
+            stop = start + self.window_samples
         window = recording[:, start:stop].astype(np.float32, copy=True)
         baseline = window[:, : self._baseline_samples].mean(
             axis=1, keepdims=True

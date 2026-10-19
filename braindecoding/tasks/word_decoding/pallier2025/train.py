@@ -83,7 +83,13 @@ def ensure_canonical_inputs(config):
     return Path(config["cache"]["event_table"])
 
 
-def build_dataset(config, table, zero_meg=False, zero_signal=False):
+def build_dataset(
+    config,
+    table,
+    zero_meg=False,
+    zero_signal=False,
+    temporal_shift_seconds: float = 0.0,
+):
     return dataset_module.Pallier2025WordDataset(
         table,
         config["dataset"],
@@ -91,6 +97,7 @@ def build_dataset(config, table, zero_meg=False, zero_signal=False):
         config["cache"]["text_embeddings"],
         config["text_embedding"],
         zero_meg=bool(zero_meg or zero_signal),
+        temporal_shift_seconds=float(temporal_shift_seconds),
         allow_subject_subset=bool(
             config.get("subject_generalization")
             or config["dataset"].get("allow_subject_subset")

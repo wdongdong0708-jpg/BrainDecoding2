@@ -1214,6 +1214,7 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
         embedding_cache_path,
         text_embedding_config,
         zero_eeg=False,
+        temporal_shift_seconds: float = 0.0,
     ):
         self.table = event_table.reset_index(drop=True).copy()
         self.dataset_config = dict(dataset_config)
@@ -1278,6 +1279,18 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
             )
         self.window_samples = int(self.table["target_sample_count"].iloc[0])
         self.clamp = self.dataset_config.get("clamp", 5.0)
+        if "target_sampling_rate_hz" in self.table.columns and len(self.table) > 0:
+            self.sampling_rate_hz = float(
+                self.table["target_sampling_rate_hz"].iloc[0]
+            )
+        else:
+            self.sampling_rate_hz = float(
+                self.dataset_config.get("target_sampling_rate_hz", 50.0)
+            )
+        self.temporal_shift_seconds = float(temporal_shift_seconds)
+        self.temporal_shift_samples = int(
+            round(self.temporal_shift_seconds * self.sampling_rate_hz)
+        )
 
         self.subject_ids = tuple(sorted(str(value) for value in self.dataset_config["subjects"]))
         self.subject_to_index = {
@@ -1343,6 +1356,22 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
             raise IndexError(
                 f"事件窗口越界：{self._event_ids[idx]} [{start}, {stop}) / {recording.shape[1]}"
             )
+        if self.temporal_shift_samples != 0:
+            valid_span = int(recording.shape[1]) - self.window_samples + 1
+            if valid_span <= 2 * self.window_samples:
+                raise ValueError(
+                    f"脑电连续记录长度不足以执行非重叠时间错位对照：{self._event_ids[idx]} ({recording.shape[1]})"
+                )
+            shifted_start = (start + self.temporal_shift_samples) % valid_span
+            if abs(shifted_start - start) < self.window_samples:
+                step = (
+                    self.window_samples
+                    if self.temporal_shift_samples > 0
+                    else -self.window_samples
+                )
+                shifted_start = (shifted_start + step) % valid_span
+            start = int(shifted_start)
+            stop = start + self.window_samples
         window = np.array(recording[:, start:stop], dtype=np.float32, copy=True)
         if self.clamp is not None:
             np.clip(window, -float(self.clamp), float(self.clamp), out=window)
