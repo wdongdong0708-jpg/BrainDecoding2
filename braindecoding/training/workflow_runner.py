@@ -260,6 +260,67 @@ def _normalize_precision(precision: str | None) -> tuple[str, str, bool]:
     )
 
 
+def _resolve_results_root_and_exp_tag(
+    exp_tag: str | None = None,
+    *,
+    ignore_implicit_tag: bool = False,
+) -> tuple[Path, str]:
+    """解析实验输出根目录与超参实验标签，确保目录层级为 <results_root>/<dataset>/<exp_tag>/<stage>/..."""
+    base_root = results_root()
+    implicit_tag = ""
+    if base_root.parent.name == "runs" and base_root.name not in {
+        "runs",
+        "studies",
+        "exports",
+        *DATASETS,
+    }:
+        implicit_tag = base_root.name
+        base_root = base_root.parent
+    if ignore_implicit_tag:
+        return base_root, ""
+
+    raw = (
+        exp_tag
+        if exp_tag is not None
+        else (os.environ.get("BRAINDECODING_EXP_TAG", "") or implicit_tag)
+    )
+    text = str(raw or "").strip().strip("/\\")
+    if not text or text.lower() in {"none", "default"}:
+        return base_root, ""
+    if ".." in Path(text).parts:
+        raise ValueError(f"exp_tag 不允许包含父目录跳转 '..'：{exp_tag!r}")
+    return base_root, text
+
+
+def _resolve_word_exp_tag(
+    word_exp_tag: str | None = None,
+    *,
+    yaml_word_exp_tag: str | None = None,
+) -> tuple[bool, str]:
+    """解析阶段 2 (context / revision) 热启动所用的阶段 1 (word) 实验标签。
+
+    返回 ``(是否显式指定了阶段1标签, 规范化后的阶段1标签)``。
+    当填入 ``'default'`` / ``'root'`` / ``'none'`` 时，显式指向无标签根目录 ``runs/<dataset>/word/...``。
+    """
+    raw = (
+        word_exp_tag
+        if word_exp_tag is not None
+        else (
+            yaml_word_exp_tag
+            if yaml_word_exp_tag is not None
+            else os.environ.get("BRAINDECODING_WORD_EXP_TAG", "")
+        )
+    )
+    text = str(raw or "").strip().strip("/\\")
+    if not text:
+        return False, ""
+    if text.lower() in {"default", "root", "none"}:
+        return True, ""
+    if ".." in Path(text).parts:
+        raise ValueError(f"word_exp_tag 不允许包含父目录跳转 '..'：{word_exp_tag!r}")
+    return True, text
+
+
 def workflow_output_directory(
     dataset: str,
     stage: str,
@@ -268,15 +329,22 @@ def workflow_output_directory(
     *,
     mode: str = "train",
     output_dir: str | Path | None = None,
+    exp_tag: str | None = None,
+    ignore_implicit_tag: bool = False,
 ) -> Path:
-    """计算受试者子集隔离的实验输出目录。"""
+    """计算受试者子集与超参实验标签隔离的实验输出目录（<dataset>/[<exp_tag>/]<stage>/<subset_tag>/seed-<seed>）。"""
     if output_dir is not None:
         return Path(output_dir).resolve()
     stage = normalize_workflow_stage(stage)
     stage_dir = f"smoke_{stage}" if mode == "smoke" else stage
+    base_root, resolved_tag = _resolve_results_root_and_exp_tag(
+        exp_tag, ignore_implicit_tag=ignore_implicit_tag
+    )
+    dataset_root = base_root / dataset
+    if resolved_tag:
+        dataset_root = dataset_root / resolved_tag
     return (
-        results_root()
-        / dataset
+        dataset_root
         / stage_dir
         / subset_tag
         / f"seed-{int(seed):03d}"
@@ -351,6 +419,8 @@ def build_workflow_config(
     precision: str | None = None,
     mode: str = "train",
     output_dir: str | Path | None = None,
+    exp_tag: str | None = None,
+    word_exp_tag: str | None = None,
     word_checkpoint: str | Path | None = None,
     max_train_rows: int | None = None,
     max_val_rows: int | None = None,
@@ -411,6 +481,39 @@ def build_workflow_config(
     )
     cfg = loader(active_config_path)
     yaml_tc = dict(cfg.get("training", {}))
+
+    yaml_exp_tag = None
+    yaml_word_exp_tag = None
+    if isinstance(active_yaml, dict):
+        yaml_exp_tag = (
+            (active_yaml.get("workflow") or {}).get("exp_tag")
+            if isinstance(active_yaml.get("workflow"), dict)
+            else None
+        ) or (
+            (active_yaml.get("experiment") or {}).get("exp_tag")
+            if isinstance(active_yaml.get("experiment"), dict)
+            else None
+        )
+        yaml_word_exp_tag = (
+            (
+                (active_yaml.get("workflow") or {}).get("word_exp_tag")
+                if isinstance(active_yaml.get("workflow"), dict)
+                else None
+            )
+            or (
+                (active_yaml.get("experiment") or {}).get("word_exp_tag")
+                if isinstance(active_yaml.get("experiment"), dict)
+                else None
+            )
+            or yaml_tc.get("word_exp_tag")
+            or yaml_tc.get("warm_start_exp_tag")
+        )
+    _, resolved_exp_tag = _resolve_results_root_and_exp_tag(
+        exp_tag if exp_tag is not None else yaml_exp_tag
+    )
+    has_explicit_word_tag, resolved_word_exp_tag = _resolve_word_exp_tag(
+        word_exp_tag, yaml_word_exp_tag=yaml_word_exp_tag
+    )
 
     effective_precision = (
         precision
@@ -535,6 +638,9 @@ def build_workflow_config(
     ):
         tc.pop(key, None)
 
+    effective_word_exp_tag = (
+        resolved_word_exp_tag if has_explicit_word_tag else resolved_exp_tag
+    )
     if stage in ("context", "revision"):
         tc.update(
             preserve_complete_groups=bool(yaml_tc.get("preserve_complete_groups", True)),
@@ -545,6 +651,7 @@ def build_workflow_config(
             warm_start_from=str(yaml_tc.get("warm_start_from", "main_word")),
             warm_start_seed=seed,
             warm_start_output_group=cfg["experiment"]["output_group"],
+            warm_start_exp_tag=effective_word_exp_tag,
         )
         if stage == "revision":
             tc["revision_cutoff_policy"] = str(
@@ -554,6 +661,22 @@ def build_workflow_config(
             tc["pretrained_brain_encoder_checkpoint"] = str(
                 project_path(word_checkpoint)
             )
+        elif has_explicit_word_tag:
+            explicit_word_dir = workflow_output_directory(
+                dataset,
+                "word",
+                subset_spec["subset_tag"],
+                seed,
+                mode=mode,
+                exp_tag=resolved_word_exp_tag,
+                ignore_implicit_tag=(resolved_word_exp_tag == ""),
+            )
+            candidate_ckpt = explicit_word_dir / "best.ckpt"
+            if not candidate_ckpt.exists():
+                b_pt = explicit_word_dir / "best.pt"
+                if b_pt.exists():
+                    candidate_ckpt = b_pt
+            tc["pretrained_brain_encoder_checkpoint"] = str(candidate_ckpt)
         else:
             default_word_dir = workflow_output_directory(
                 dataset,
@@ -561,10 +684,28 @@ def build_workflow_config(
                 subset_spec["subset_tag"],
                 seed,
                 mode=mode,
+                exp_tag=resolved_exp_tag,
             )
             candidate_ckpt = default_word_dir / "best.ckpt"
             if not candidate_ckpt.exists():
-                candidate_ckpt = default_word_dir / "best.pt"
+                b_pt = default_word_dir / "best.pt"
+                if b_pt.exists():
+                    candidate_ckpt = b_pt
+            if not candidate_ckpt.exists() and resolved_exp_tag:
+                fallback_word_dir = workflow_output_directory(
+                    dataset,
+                    "word",
+                    subset_spec["subset_tag"],
+                    seed,
+                    mode=mode,
+                    ignore_implicit_tag=True,
+                )
+                fallback_ckpt = fallback_word_dir / "best.ckpt"
+                if not fallback_ckpt.exists():
+                    fallback_ckpt = fallback_word_dir / "best.pt"
+                if fallback_ckpt.exists():
+                    candidate_ckpt = fallback_ckpt
+                    tc["warm_start_exp_tag"] = ""
             tc["pretrained_brain_encoder_checkpoint"] = str(candidate_ckpt)
 
     cfg["evaluation"]["selection_metric"] = (
@@ -579,11 +720,14 @@ def build_workflow_config(
         seed,
         mode=mode,
         output_dir=output_dir,
+        exp_tag=resolved_exp_tag,
     )
     tc["output_dir"] = str(out_dir)
     cfg["workflow"] = {
         "mode": mode,
         "stage": stage,
+        "exp_tag": resolved_exp_tag,
+        "word_exp_tag": tc.get("warm_start_exp_tag", effective_word_exp_tag),
         "config_path": normalize_project_relative(active_config_path),
         "precision": precision_label,
         "amp_dtype": amp_dtype_name,
@@ -592,6 +736,8 @@ def build_workflow_config(
             "BRAINDECODING_DATA_DIR": str(data_root()),
             "BRAINDECODING_CACHE_DIR": str(cache_root()),
             "BRAINDECODING_RESULTS_DIR": str(results_root()),
+            "BRAINDECODING_EXP_TAG": resolved_exp_tag,
+            "BRAINDECODING_WORD_EXP_TAG": resolved_word_exp_tag if has_explicit_word_tag else "",
             "BRAINDECODING_MODEL_DIR": str(model_root()),
         },
     }
@@ -1154,6 +1300,8 @@ def run_training_workflow(
     resume: str | None = None,
     mode: str = "train",
     output_dir: str | Path | None = None,
+    exp_tag: str | None = None,
+    word_exp_tag: str | None = None,
     word_checkpoint: str | Path | None = None,
     max_train_rows: int | None = None,
     max_val_rows: int | None = None,
@@ -1177,6 +1325,8 @@ def run_training_workflow(
         precision=precision,
         mode=mode,
         output_dir=output_dir,
+        exp_tag=exp_tag,
+        word_exp_tag=word_exp_tag,
         word_checkpoint=word_checkpoint,
         max_train_rows=max_train_rows,
         max_val_rows=max_val_rows,
@@ -2300,6 +2450,8 @@ def _evaluate_single_stage(
     require_cache: bool = False,
     checkpoint_path: str | Path | None = None,
     output_dir: str | Path | None = None,
+    exp_tag: str | None = None,
+    word_exp_tag: str | None = None,
     config_path: str | Path | None = None,
     plot: bool = True,
     show_progress: bool = True,
@@ -2321,10 +2473,14 @@ def _evaluate_single_stage(
         precision=precision,
         mode="train",
         output_dir=output_dir,
+        exp_tag=exp_tag,
+        word_exp_tag=word_exp_tag,
         config_path=config_path,
     )
     dataset = subset_spec["dataset"]
     stage = cfg["workflow"]["stage"]
+    resolved_exp_tag = cfg["workflow"].get("exp_tag", "")
+    resolved_word_exp_tag = cfg["workflow"].get("word_exp_tag", resolved_exp_tag)
     tc = cfg["training"]
     seed = int(tc["seed"])
     out = Path(tc["output_dir"])
@@ -2341,7 +2497,12 @@ def _evaluate_single_stage(
             ckpt_file = out / "best.pt"
         if not ckpt_file.is_file():
             smoke_dir = workflow_output_directory(
-                dataset, stage, subset_spec["subset_tag"], seed, mode="smoke"
+                dataset,
+                stage,
+                subset_spec["subset_tag"],
+                seed,
+                mode="smoke",
+                exp_tag=resolved_exp_tag,
             )
             smoke_ckpt = smoke_dir / "best.ckpt"
             if not smoke_ckpt.is_file():
@@ -2471,6 +2632,8 @@ def _evaluate_single_stage(
         "status": "evaluation_completed",
         "dataset": dataset,
         "stage": stage,
+        "exp_tag": resolved_exp_tag,
+        "word_exp_tag": resolved_word_exp_tag,
         "stage_display_name": STAGE_DISPLAY_NAMES.get(stage, stage),
         "split": split,
         "seed": seed,
@@ -2521,6 +2684,8 @@ def run_evaluation_workflow(
     require_cache: bool = False,
     checkpoint_path: str | Path | None = None,
     output_dir: str | Path | None = None,
+    exp_tag: str | None = None,
+    word_exp_tag: str | None = None,
     config_path: str | Path | None = None,
     all_stages: bool = False,
     plot: bool = True,
@@ -2546,6 +2711,8 @@ def run_evaluation_workflow(
             require_cache=require_cache,
             checkpoint_path=checkpoint_path,
             output_dir=output_dir,
+            exp_tag=exp_tag,
+            word_exp_tag=word_exp_tag,
             config_path=config_path,
             plot=plot,
             show_progress=show_progress,
@@ -2555,20 +2722,45 @@ def run_evaluation_workflow(
             ds_name = single_res["dataset"]
             sub_tag = single_res["subset"]["subset_tag"]
             sd = single_res["seed"]
+            active_tag = single_res.get("exp_tag", "")
+            active_word_tag = single_res.get("word_exp_tag", active_tag)
             discovered: dict[str, dict] = {single_res["stage"]: single_res}
             for other_st in WORKFLOW_STAGES:
                 if other_st == single_res["stage"]:
                     continue
+                target_tag = (
+                    active_word_tag
+                    if other_st == "word" and active_word_tag != active_tag
+                    else active_tag
+                )
                 other_dir = workflow_output_directory(
-                    ds_name, other_st, sub_tag, sd, mode="train"
+                    ds_name,
+                    other_st,
+                    sub_tag,
+                    sd,
+                    mode="train",
+                    exp_tag=target_tag,
+                    ignore_implicit_tag=(other_st == "word" and target_tag == ""),
                 )
                 other_eval_file = other_dir / f"evaluation_{split}.json"
                 if not other_eval_file.is_file():
                     smoke_other = workflow_output_directory(
-                        ds_name, other_st, sub_tag, sd, mode="smoke"
+                        ds_name,
+                        other_st,
+                        sub_tag,
+                        sd,
+                        mode="smoke",
+                        exp_tag=target_tag,
+                        ignore_implicit_tag=(other_st == "word" and target_tag == ""),
                     ) / f"evaluation_{split}.json"
                     if smoke_other.is_file():
                         other_eval_file = smoke_other
+                if not other_eval_file.is_file() and target_tag and other_st == "word":
+                    fallback_other = workflow_output_directory(
+                        ds_name, other_st, sub_tag, sd, mode="train", ignore_implicit_tag=True
+                    ) / f"evaluation_{split}.json"
+                    if fallback_other.is_file():
+                        other_eval_file = fallback_other
                 if other_eval_file.is_file():
                     try:
                         discovered[other_st] = json.loads(
@@ -2593,32 +2785,70 @@ def run_evaluation_workflow(
         subject=subject,
         num_subjects=num_subjects,
         subjects=subjects,
+        exp_tag=exp_tag,
+        word_exp_tag=word_exp_tag,
         config_path=config_path,
     )
     ds_name = subset_spec["dataset"]
     sub_tag = subset_spec["subset_tag"]
     sd = int(base_cfg["training"]["seed"])
+    base_root, resolved_exp_tag = _resolve_results_root_and_exp_tag(
+        base_cfg["workflow"].get("exp_tag", exp_tag)
+    )
+    has_explicit_word_tag, resolved_word_exp_tag = _resolve_word_exp_tag(word_exp_tag)
 
-    available_stages: list[str] = []
+    available_stages: list[tuple[str, str, bool]] = []
     for st in WORKFLOW_STAGES:
-        for mode_candidate in ("train", "smoke"):
-            cand_dir = workflow_output_directory(
-                ds_name, st, sub_tag, sd, mode=mode_candidate
-            )
-            if (cand_dir / "best.ckpt").is_file() or (cand_dir / "best.pt").is_file():
-                available_stages.append(st)
+        candidate_tags: list[tuple[str, bool]] = []
+        if st == "word" and has_explicit_word_tag:
+            candidate_tags.append((resolved_word_exp_tag, resolved_word_exp_tag == ""))
+        else:
+            candidate_tags.append((resolved_exp_tag, False))
+            if st == "word" and resolved_exp_tag:
+                candidate_tags.append(("", True))
+
+        found = False
+        for tag_cand, ignore_imp in candidate_tags:
+            for mode_candidate in ("train", "smoke"):
+                cand_dir = workflow_output_directory(
+                    ds_name,
+                    st,
+                    sub_tag,
+                    sd,
+                    mode=mode_candidate,
+                    exp_tag=tag_cand,
+                    ignore_implicit_tag=ignore_imp,
+                )
+                if (cand_dir / "best.ckpt").is_file() or (cand_dir / "best.pt").is_file():
+                    available_stages.append((st, tag_cand, ignore_imp))
+                    found = True
+                    break
+            if found:
                 break
 
     if not available_stages:
         expected_dir = workflow_output_directory(
-            ds_name, "word", sub_tag, sd, mode="train"
+            ds_name, "word", sub_tag, sd, mode="train", exp_tag=resolved_exp_tag
         )
         raise FileNotFoundError(
             f"未找到数据集 {ds_name} (subset={sub_tag}, seed={sd}) 任何已训练阶段的检查点（如 {expected_dir / 'best.ckpt'}）。"
         )
 
     stage_results: dict[str, dict] = {}
-    for st in available_stages:
+    for st, st_tag, st_ignore_imp in available_stages:
+        stage_out_dir = (
+            workflow_output_directory(
+                ds_name,
+                st,
+                sub_tag,
+                sd,
+                mode="train",
+                exp_tag="",
+                ignore_implicit_tag=True,
+            )
+            if st_ignore_imp
+            else None
+        )
         stage_results[st] = _evaluate_single_stage(
             ds_name,
             stage=st,
@@ -2631,18 +2861,23 @@ def run_evaluation_workflow(
             num_workers=num_workers,
             precision=precision,
             require_cache=require_cache,
+            output_dir=stage_out_dir,
+            exp_tag=st_tag,
+            word_exp_tag=word_exp_tag,
             config_path=None,
             plot=plot,
             show_progress=show_progress,
             max_eval_rows=max_eval_rows,
         )
 
+    dataset_eval_root = base_root / ds_name
+    if resolved_exp_tag:
+        dataset_eval_root = dataset_eval_root / resolved_exp_tag
     comp_dir = (
         Path(output_dir).resolve()
         if output_dir is not None
         else (
-            results_root()
-            / ds_name
+            dataset_eval_root
             / f"evaluation_{split}"
             / sub_tag
             / f"seed-{sd:03d}"
@@ -2664,10 +2899,12 @@ def run_evaluation_workflow(
     multi_summary = {
         "status": "multi_stage_evaluation_completed",
         "dataset": ds_name,
+        "exp_tag": resolved_exp_tag,
+        "word_exp_tag": resolved_word_exp_tag if has_explicit_word_tag else resolved_exp_tag,
         "split": split,
         "seed": sd,
         "subset": subset_spec,
-        "evaluated_stages": available_stages,
+        "evaluated_stages": [st for st, _, _ in available_stages],
         "stages": stage_results,
         "output_dir": str(comp_dir),
         "figures": comp_figs,

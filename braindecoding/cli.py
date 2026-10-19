@@ -398,7 +398,17 @@ def _add_training_workflow_args(
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="可选显式指定输出目录（默认按数据集/阶段/受试者子集自动隔离）",
+        help="可选显式指定输出目录（默认按数据集/实验标签/阶段/受试者子集自动隔离）",
+    )
+    parser.add_argument(
+        "--exp-tag",
+        default=None,
+        help="可选超参数实验标签（如 lr1e-4_bs128），输出路径为 <results_dir>/<dataset>/<exp_tag>/<stage>/...",
+    )
+    parser.add_argument(
+        "--word-exp-tag",
+        default=None,
+        help="context (2.1) / revision (2.2) 阶段可选指定从哪个阶段 1 实验标签加载 word 检查点（如 lr1e-4_bs128；填 default 加载根目录 word）",
     )
     parser.add_argument(
         "--word-checkpoint",
@@ -471,6 +481,16 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
         "--output-dir",
         default=None,
         help="可选显式指定评估结果与图表输出目录",
+    )
+    parser.add_argument(
+        "--exp-tag",
+        default=None,
+        help="可选超参数实验标签（如 lr1e-4_bs128），自动定位 <results_dir>/<dataset>/<exp_tag>/<stage>/...",
+    )
+    parser.add_argument(
+        "--word-exp-tag",
+        default=None,
+        help="跨阶段对比评估时可选指定阶段 1 (word) 所在的实验标签（如 lr1e-4_bs128；填 default 定位根目录 word）",
     )
     parser.add_argument(
         "--eval-batch-size",
@@ -555,6 +575,8 @@ def _workflow_train(args, *, mode: str) -> int:
         resume=args.resume,
         mode=mode,
         output_dir=args.output_dir,
+        exp_tag=getattr(args, "exp_tag", None),
+        word_exp_tag=getattr(args, "word_exp_tag", None),
         word_checkpoint=args.word_checkpoint,
         max_train_rows=args.max_train_rows,
         max_val_rows=args.max_val_rows,
@@ -585,6 +607,8 @@ def _workflow_eval(args) -> int:
         require_cache=args.require_cache,
         checkpoint_path=args.checkpoint,
         output_dir=args.output_dir,
+        exp_tag=getattr(args, "exp_tag", None),
+        word_exp_tag=getattr(args, "word_exp_tag", None),
         config_path=args.config,
         all_stages=args.all_stages,
         plot=not bool(getattr(args, "no_plot", False)),

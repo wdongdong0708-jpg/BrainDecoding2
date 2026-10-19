@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-10-18T16:23:26Z",
+  "updated_at": "2026-10-19T09:58:35Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "1ddbcba347120ff1fa6f4f68da135a642f7ec2fb41abbf1a472d330427b60bd0",
-      "size": 94954,
-      "normalized_sha256": "1ddbcba347120ff1fa6f4f68da135a642f7ec2fb41abbf1a472d330427b60bd0"
+      "sha256": "01f17b7aa82885d55cc8dac3882bdb3fea97bdf5124cb297a30384b4aaaf9813",
+      "size": 95145,
+      "normalized_sha256": "01f17b7aa82885d55cc8dac3882bdb3fea97bdf5124cb297a30384b4aaaf9813"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "braindecoding/cli.py": {
       "role": "index",
-      "sha256": "ed4c5fe7e21f910da8da0fb5ac82f3d2865b3f4048b72c319f8a62b174c88a9d",
-      "size": 26774,
-      "normalized_sha256": "ed4c5fe7e21f910da8da0fb5ac82f3d2865b3f4048b72c319f8a62b174c88a9d"
+      "sha256": "0d6a5a4aa0ed86735a82102143bf1b904e6535c0b0eabc4ac64cc77c55abaec3",
+      "size": 27883,
+      "normalized_sha256": "0d6a5a4aa0ed86735a82102143bf1b904e6535c0b0eabc4ac64cc77c55abaec3"
     },
     "braindecoding/config.py": {
       "role": "index",
@@ -527,9 +527,9 @@
     },
     "braindecoding/training/workflow_runner.py": {
       "role": "index",
-      "sha256": "b83169114ff62a1641f00f7bf859340584643ae49c14e5416ebe5a278589be33",
-      "size": 105105,
-      "normalized_sha256": "b83169114ff62a1641f00f7bf859340584643ae49c14e5416ebe5a278589be33"
+      "sha256": "27593b8233230236e5847a93ffee617d2f898100213ba36cf07296864923105a",
+      "size": 114394,
+      "normalized_sha256": "27593b8233230236e5847a93ffee617d2f898100213ba36cf07296864923105a"
     },
     "configs/decoding/revision_gain_evaluation.yaml": {
       "role": "index",
@@ -1060,15 +1060,15 @@
     },
     "scripts/colab/colab_gpu_evaluation.ipynb": {
       "role": "index",
-      "sha256": "2a3d7893e4138d26dee80b19af7ab391db18b82930675ec4c74b022507c21b99",
-      "size": 8516,
-      "normalized_sha256": "2a3d7893e4138d26dee80b19af7ab391db18b82930675ec4c74b022507c21b99"
+      "sha256": "04451f7f80542048bce4df4e347a396950dfcad06b452f2e1616d8fc05b2efa1",
+      "size": 9731,
+      "normalized_sha256": "04451f7f80542048bce4df4e347a396950dfcad06b452f2e1616d8fc05b2efa1"
     },
     "scripts/colab/colab_gpu_train.ipynb": {
       "role": "index",
-      "sha256": "b2391876a806a09c11c1d071cc857cc2f4ef7fe002fd5ec1532e2e7e8339c864",
-      "size": 8072,
-      "normalized_sha256": "b2391876a806a09c11c1d071cc857cc2f4ef7fe002fd5ec1532e2e7e8339c864"
+      "sha256": "2b3ffa61fd10721f671762fad5b061151b5ccc132e356c1fa1f86ab70bf46cad",
+      "size": 9206,
+      "normalized_sha256": "2b3ffa61fd10721f671762fad5b061151b5ccc132e356c1fa1f86ab70bf46cad"
     },
     "scripts/colab_setup.py": {
       "role": "index",

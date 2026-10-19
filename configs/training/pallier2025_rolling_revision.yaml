@@ -91,10 +91,10 @@ training:
   seed: 0
   device: auto
   epochs: 30
-  batch_size: 256
+  batch_size: 128
   eval_batch_size: 512
   validation_query_batch_size: 512
-  learning_rate: 0.0004
+  learning_rate: 1e-4
   weight_decay: 0.0
   minimum_learning_rate: 0.0
   max_grad_norm: 0.0
