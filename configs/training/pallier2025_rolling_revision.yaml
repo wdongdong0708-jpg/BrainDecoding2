@@ -103,7 +103,7 @@ training:
   minimum_learning_rate: 0.0
   max_grad_norm: 0.0
   num_workers: 0
-  patience: 10
+  patience: 5
   precision: bf16-mixed
   amp: true
   amp_dtype: bfloat16

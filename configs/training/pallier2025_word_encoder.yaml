@@ -93,12 +93,12 @@ training:
   batch_size: 256
   eval_batch_size: 512
   validation_query_batch_size: 512
-  learning_rate: 0.0004
+  learning_rate: 4e-4
   weight_decay: 0.0
   minimum_learning_rate: 0.0
   max_grad_norm: 0.0
   num_workers: 0
-  patience: 10
+  patience: 5
   precision: bf16-mixed
   amp: true
   amp_dtype: bfloat16
