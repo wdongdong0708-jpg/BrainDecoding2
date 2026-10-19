@@ -327,6 +327,9 @@ def _add_subject_subset_args(parser: argparse.ArgumentParser) -> None:
 def _add_training_workflow_args(
     parser: argparse.ArgumentParser, *, default_epochs: int | None = None
 ) -> None:
+    parser._negative_number_matcher = re.compile(
+        r"^-\d+(?:\.\d+)?(?:,\s*[+-]?\d+(?:\.\d+)?)*$"
+    )
     parser.add_argument(
         "--config",
         "-c",
@@ -385,6 +388,18 @@ def _add_training_workflow_args(
         default=None,
         choices=("bf16-mixed", "fp16-mixed", "fp16", "fp32"),
         help="混合精度模式（默认从 YAML 读取或使用 bf16-mixed）",
+    )
+    parser.add_argument(
+        "--window-seconds",
+        type=float,
+        default=None,
+        help="可选切换单字神经信号窗口长度（秒，如 0.5、1.0、1.25、1.5、2.0；默认从 YAML 读取，标准为 1.0 秒 = 50 采样点 @ 50Hz）",
+    )
+    parser.add_argument(
+        "--window-start-offset-seconds",
+        type=float,
+        default=None,
+        help="可选切换相对词起始时刻的窗口起点偏移（秒，默认 0.0）",
     )
     parser.add_argument(
         "--require-cache",
@@ -515,6 +530,18 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
         help="混合精度模式（默认 bf16-mixed）",
     )
     parser.add_argument(
+        "--window-seconds",
+        type=float,
+        default=None,
+        help="可选覆写评估时切取的单字神经信号窗口长度（秒；未指定时自动沿用检查点或 YAML 配置）",
+    )
+    parser.add_argument(
+        "--window-start-offset-seconds",
+        type=float,
+        default=None,
+        help="可选覆写相对词起始时刻的窗口起点偏移（秒；未指定时自动沿用检查点或 YAML 配置）",
+    )
+    parser.add_argument(
         "--require-cache",
         action="store_true",
         help="要求必须命中预处理特征缓存，缺失时立即报错",
@@ -590,6 +617,10 @@ def _workflow_train(args, *, mode: str) -> int:
         learning_rate=args.learning_rate,
         num_workers=args.num_workers,
         precision=args.precision,
+        window_seconds=getattr(args, "window_seconds", None),
+        window_start_offset_seconds=getattr(
+            args, "window_start_offset_seconds", None
+        ),
         require_cache=args.require_cache,
         resume=args.resume,
         mode=mode,
@@ -636,6 +667,10 @@ def _workflow_eval(args) -> int:
         eval_batch_size=args.eval_batch_size,
         num_workers=args.num_workers,
         precision=args.precision,
+        window_seconds=getattr(args, "window_seconds", None),
+        window_start_offset_seconds=getattr(
+            args, "window_start_offset_seconds", None
+        ),
         require_cache=args.require_cache,
         checkpoint_path=args.checkpoint,
         output_dir=args.output_dir,

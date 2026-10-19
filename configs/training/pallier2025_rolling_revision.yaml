@@ -8,6 +8,10 @@ workflow:
   stage: revision
   subject: all
   precision: bf16-mixed
+  # 单字脑信号时间窗长度（秒，50Hz 连续信号在线切窗，无需重打缓存；可改为 0.5 / 0.75 / 1.0 / 1.25 / 1.5 / 2.0 等）
+  window_seconds: 0.5
+  # 相对于词起始时刻的窗口起点偏移（秒，默认 0.0 表示从词 onset 开始切取）
+  window_start_offset_seconds: 0.0
 
 experiment:
   output_group: unified_rolling_v2

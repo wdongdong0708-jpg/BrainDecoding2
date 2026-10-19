@@ -88,8 +88,10 @@ def normalize_french_word(word) -> str:
 
 
 def word_window_contract(dataset_config: dict | None = None) -> dict:
-    """返回冻结的 1 秒输入与 3 秒资格窗口合同。"""
+    """返回词级神经信号窗口与 3 秒资格窗口合同（默认 1.0 秒，支持通过 window_seconds 切换）。"""
     config = dataset_config or {}
+    if isinstance(config.get("dataset"), dict) and "window_seconds" not in config:
+        config = config["dataset"]
     sampling_rate = float(
         config.get("target_sampling_rate_hz", TARGET_SAMPLING_RATE_HZ)
     )
@@ -114,15 +116,20 @@ def word_window_contract(dataset_config: dict | None = None) -> dict:
         "continuous_signal_includes_baseline": False,
         "continuous_signal_includes_clamp": False,
     }
-    if contract["window_samples"] != 50 or contract["baseline_samples"] != 25:
-        raise ValueError("Pallier2025 正式窗口必须是 50 样本，baseline 必须是 25 样本。")
+    if contract["window_samples"] <= 0:
+        raise ValueError(
+            f"Pallier2025 窗口样本数必须为正整数，当前为 {contract['window_samples']} "
+            f"(window_seconds={window_seconds})。"
+        )
+    if contract["baseline_samples"] < 0:
+        raise ValueError("Pallier2025 baseline 样本数不能为负数。")
     if contract["eligibility_window_seconds"] != 3.0:
         raise ValueError("Pallier2025 正式事件资格窗口必须为 3 秒。")
     return contract
 
 
 def extract_word_window(signal, onset_seconds, signal_metadata, dataset_config=None):
-    """从 continuous product 提取 1 秒窗口，再做 baseline 与 clamp。"""
+    """从 continuous product 提取指定时长窗口，再做 baseline 与 clamp。"""
     contract = word_window_contract(dataset_config)
     start = recording_onset_to_sample(
         float(onset_seconds) + contract["window_start_offset_seconds"],
@@ -135,10 +142,12 @@ def extract_word_window(signal, onset_seconds, signal_metadata, dataset_config=N
     if continuous.ndim != 2 or start < 0 or stop > continuous.shape[1]:
         raise ValueError("Pallier2025 词窗口超出 canonical continuous signal。")
     window = continuous[:, start:stop].astype(np.float32, copy=True)
-    baseline = window[:, : contract["baseline_samples"]].mean(
-        axis=1, keepdims=True
-    )
-    window -= baseline
+    effective_baseline = min(int(contract["baseline_samples"]), int(window.shape[1]))
+    if effective_baseline > 0:
+        baseline = window[:, :effective_baseline].mean(
+            axis=1, keepdims=True
+        )
+        window -= baseline
     np.clip(window, -contract["clamp"], contract["clamp"], out=window)
     return window
 
@@ -1159,6 +1168,7 @@ class Pallier2025WordDataset(Dataset):
         self.meg_cache_dir = Path(meg_cache_dir)
         self.zero_meg = bool(zero_meg)
         contract = word_window_contract(dataset_config)
+        self.window_seconds = float(contract["window_seconds"])
         self.window_samples = int(contract["window_samples"])
         self._baseline_samples = int(contract["baseline_samples"])
         self._clamp = float(contract["clamp"])
@@ -1291,10 +1301,15 @@ class Pallier2025WordDataset(Dataset):
                 (self.channel_count, self.window_samples), dtype=np.float32
             )
         recording = _open_signal_product(self._signal_path_strs[idx])
+        if recording.ndim != 2 or recording.shape[1] < self.window_samples:
+            raise ValueError("Pallier2025 词窗口超出 canonical continuous signal。")
         start = int(self._window_starts[idx])
         stop = start + self.window_samples
-        if recording.ndim != 2 or start < 0 or stop > recording.shape[1]:
-            raise ValueError("Pallier2025 词窗口超出 canonical continuous signal。")
+        if start < 0 or stop > recording.shape[1]:
+            if self.window_samples == 50 and self._window_offset_seconds == 0.0:
+                raise ValueError("Pallier2025 词窗口超出 canonical continuous signal。")
+            start = max(0, min(start, int(recording.shape[1]) - self.window_samples))
+            stop = start + self.window_samples
         if self.temporal_shift_samples != 0:
             valid_span = int(recording.shape[1]) - self.window_samples + 1
             if valid_span <= 2 * self.window_samples:
@@ -1312,10 +1327,12 @@ class Pallier2025WordDataset(Dataset):
             start = int(shifted_start)
             stop = start + self.window_samples
         window = recording[:, start:stop].astype(np.float32, copy=True)
-        baseline = window[:, : self._baseline_samples].mean(
-            axis=1, keepdims=True
-        )
-        window -= baseline
+        effective_baseline = min(self._baseline_samples, int(window.shape[1]))
+        if effective_baseline > 0:
+            baseline = window[:, :effective_baseline].mean(
+                axis=1, keepdims=True
+            )
+            window -= baseline
         np.clip(window, -self._clamp, self._clamp, out=window)
         return window
 

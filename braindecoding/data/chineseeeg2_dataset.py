@@ -1277,8 +1277,6 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
             raise FileNotFoundError(
                 f"缺少原始记录头文件或缓存通道坐标元数据：{first_source}"
             )
-        self.window_samples = int(self.table["target_sample_count"].iloc[0])
-        self.clamp = self.dataset_config.get("clamp", 5.0)
         if "target_sampling_rate_hz" in self.table.columns and len(self.table) > 0:
             self.sampling_rate_hz = float(
                 self.table["target_sampling_rate_hz"].iloc[0]
@@ -1287,6 +1285,28 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
             self.sampling_rate_hz = float(
                 self.dataset_config.get("target_sampling_rate_hz", 50.0)
             )
+        self._default_window_samples = int(self.table["target_sample_count"].iloc[0])
+        configured_window_seconds = self.dataset_config.get("window_seconds")
+        if configured_window_seconds is not None:
+            self.window_seconds = float(configured_window_seconds)
+            self.window_samples = int(
+                round(self.window_seconds * self.sampling_rate_hz)
+            )
+        else:
+            self.window_samples = self._default_window_samples
+            self.window_seconds = float(self.window_samples) / self.sampling_rate_hz
+        if self.window_samples <= 0:
+            raise ValueError(
+                f"ChineseEEG2 窗口样本数必须为正整数，当前为 {self.window_samples} "
+                f"(window_seconds={self.window_seconds})。"
+            )
+        self._window_offset_seconds = float(
+            self.dataset_config.get("window_start_offset_seconds", 0.0)
+        )
+        self._window_offset_samples = int(
+            round(self._window_offset_seconds * self.sampling_rate_hz)
+        )
+        self.clamp = self.dataset_config.get("clamp", 5.0)
         self.temporal_shift_seconds = float(temporal_shift_seconds)
         self.temporal_shift_samples = int(
             round(self.temporal_shift_seconds * self.sampling_rate_hz)
@@ -1322,6 +1342,8 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
         self._window_starts = self.table["window_start_target_sample"].to_numpy(
             dtype=np.int64, copy=True
         )
+        if self._window_offset_samples != 0:
+            self._window_starts = self._window_starts + self._window_offset_samples
         self._embedding_tensors = {
             word: torch.from_numpy(np.array(vec, dtype=np.float32, copy=True))
             for word, vec in self.embedding_map.items()
@@ -1352,10 +1374,20 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
         recording = _打开处理后记录(self._cache_path_strs[idx])
         start = int(self._window_starts[idx])
         stop = start + self.window_samples
-        if start < 0 or stop > recording.shape[1]:
+        if recording.ndim != 2 or recording.shape[1] < self.window_samples:
             raise IndexError(
                 f"事件窗口越界：{self._event_ids[idx]} [{start}, {stop}) / {recording.shape[1]}"
             )
+        if start < 0 or stop > recording.shape[1]:
+            if (
+                self.window_samples == self._default_window_samples
+                and self._window_offset_samples == 0
+            ):
+                raise IndexError(
+                    f"事件窗口越界：{self._event_ids[idx]} [{start}, {stop}) / {recording.shape[1]}"
+                )
+            start = max(0, min(start, int(recording.shape[1]) - self.window_samples))
+            stop = start + self.window_samples
         if self.temporal_shift_samples != 0:
             valid_span = int(recording.shape[1]) - self.window_samples + 1
             if valid_span <= 2 * self.window_samples:

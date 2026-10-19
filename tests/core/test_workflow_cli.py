@@ -576,4 +576,229 @@ def test_plot_negative_control_figures(tmp_path):
     assert Path(comp_figs["stage_control_comparison_pdf"]).is_file()
 
 
+def test_compute_encoded_evaluation_metrics_full_vocab_and_k0_k1_k2_horizons():
+    import types
+    import numpy as np
+    import pandas as pd
+    import torch
+    from braindecoding.results import load_vocabulary_assets
+    from braindecoding.training.workflow_runner import (
+        _compute_encoded_evaluation_metrics,
+    )
 
+    manifests = load_vocabulary_assets(PROJECT_ROOT / "data/manifests/pallier2025")
+    vocab50 = list(manifests[50]["vocabulary"])
+    vocab150 = list(manifests[150]["vocabulary"])
+    extra_words = [f"extra_word_{i:03d}" for i in range(50)]
+    full_vocabulary = sorted(set(vocab150 + extra_words))
+
+    rng = np.random.default_rng(42)
+    dim = 64
+    embedding_map = {}
+    for w in full_vocabulary:
+        vec = rng.standard_normal(dim).astype(np.float32)
+        vec /= np.linalg.norm(vec)
+        embedding_map[w] = vec
+
+    n_events = 24
+    event_words = [vocab50[i % 12] for i in range(n_events)]
+    event_ids = [f"evt-{i:03d}" for i in range(n_events)]
+    subject_ids = ["sub-01" if i < 12 else "sub-02" for i in range(n_events)]
+
+    class _DummyDataset:
+        def __init__(self, emb_map, tbl):
+            self.embedding_map = emb_map
+            self.table = tbl
+
+        def __len__(self):
+            return len(self.table)
+
+    dummy_ds = _DummyDataset(
+        embedding_map,
+        pd.DataFrame({"event_id": event_ids, "subject_id": subject_ids}),
+    )
+    targets = torch.tensor(
+        np.stack([embedding_map[w] for w in event_words]), dtype=torch.float32
+    )
+    noise_k0 = torch.tensor(
+        rng.standard_normal((n_events, dim)).astype(np.float32)
+    )
+    preds_k0 = torch.nn.functional.normalize(0.35 * targets + 0.65 * noise_k0, dim=1)
+    preds_k1 = torch.nn.functional.normalize(0.75 * targets + 0.25 * noise_k0, dim=1)
+    preds_k2 = torch.nn.functional.normalize(targets.clone(), dim=1)
+
+    mask_k0 = torch.ones(n_events, dtype=torch.bool)
+    mask_k1 = torch.ones(n_events, dtype=torch.bool)
+    mask_k2 = torch.ones(n_events, dtype=torch.bool)
+    mask_k1[[11, 23]] = False
+    mask_k2[[10, 11, 22, 23]] = False
+
+    encoded_revision = {
+        "predictions": preds_k2,
+        "targets": targets,
+        "words": event_words,
+        "event_ids": event_ids,
+        "revision_predictions": {0: preds_k0, 1: preds_k1, 2: preds_k2},
+        "revision_availability_masks": {0: mask_k0, 1: mask_k1, 2: mask_k2},
+    }
+    cfg = {
+        "experiment": {"dataset": "pallier2025"},
+        "dataset": {"subjects": ["sub-01", "sub-02"]},
+    }
+
+    rev_metrics = _compute_encoded_evaluation_metrics(
+        encoded_revision,
+        dummy_ds,
+        full_vocabulary,
+        vocab50,
+        cfg,
+        stage="revision",
+        split="test",
+    )
+
+    fv_sweep = rev_metrics["vocabulary_sweep"]["full_vocab"]
+    assert fv_sweep["candidate_count"] == len(full_vocabulary)
+    assert fv_sweep["query_count"] == int(mask_k2.sum().item())
+    assert fv_sweep["macro_top10"] == pytest.approx(1.0)
+    assert fv_sweep["micro_top10"] == pytest.approx(1.0)
+    assert fv_sweep["macro_top5"] == pytest.approx(1.0)
+    assert fv_sweep["macro_top1"] == pytest.approx(1.0)
+    assert fv_sweep["mrr"] == pytest.approx(1.0)
+    assert fv_sweep["median_rank"] == pytest.approx(1.0)
+
+    horizons = rev_metrics["revision_horizons"]
+    assert set(horizons.keys()) == {"K0", "K1", "K2"}
+    assert horizons["K0"]["common_full_vocab_macro_top10"] > 0.0
+    assert (
+        horizons["K1"]["common_full_vocab_macro_top10"]
+        >= horizons["K0"]["common_full_vocab_macro_top10"]
+    )
+    assert horizons["K2"]["common_full_vocab_macro_top10"] == pytest.approx(1.0)
+    assert horizons["K2"]["common_full_vocab_micro_top10"] == pytest.approx(1.0)
+    assert horizons["K2"]["common_full_vocab_macro_top1"] == pytest.approx(1.0)
+    assert horizons["K2"]["common_full_vocab_mrr"] == pytest.approx(1.0)
+    assert horizons["K2"]["common_full_vocab_median_rank"] == pytest.approx(1.0)
+
+    raw_fv_horizons = rev_metrics["full_vocabulary"]["horizons"]
+    for h_key in ("0", "1", "2", "k0", "k1", "k2"):
+        assert h_key in raw_fv_horizons
+        assert "common_targets" in raw_fv_horizons[h_key]
+        assert "all_targets" in raw_fv_horizons[h_key]
+
+    encoded_word = {
+        "predictions": preds_k2,
+        "targets": targets,
+        "words": event_words,
+        "event_ids": event_ids,
+    }
+    word_metrics = _compute_encoded_evaluation_metrics(
+        encoded_word,
+        dummy_ds,
+        full_vocabulary,
+        vocab50,
+        cfg,
+        stage="word",
+        split="test",
+    )
+    word_fv_sweep = word_metrics["vocabulary_sweep"]["full_vocab"]
+    assert word_fv_sweep["query_count"] == n_events
+    assert word_fv_sweep["macro_top10"] == pytest.approx(1.0)
+    assert word_fv_sweep["micro_top10"] == pytest.approx(1.0)
+    assert word_fv_sweep["macro_top1"] == pytest.approx(1.0)
+    assert word_fv_sweep["mrr"] == pytest.approx(1.0)
+    assert word_fv_sweep["median_rank"] == pytest.approx(1.0)
+
+
+def test_configurable_window_seconds_and_offset(monkeypatch):
+    import numpy as np
+    from braindecoding.data.pallier2025_dataset import (
+        extract_word_window,
+        word_window_contract,
+    )
+
+    # 1. Default 1.0s window in YAML training configs
+    cfg_default, _ = build_workflow_config(
+        config_path="configs/training/pallier2025_word_encoder.yaml",
+        seed=0,
+    )
+    assert cfg_default["dataset"]["window_seconds"] == pytest.approx(1.0)
+    assert cfg_default["dataset"].get("window_start_offset_seconds", 0.0) == pytest.approx(0.0)
+    assert cfg_default["workflow"]["window_seconds"] == pytest.approx(1.0)
+    assert cfg_default["workflow"]["window_samples"] == 50
+
+    # 2. Explicit override via build_workflow_config arguments
+    cfg_150, _ = build_workflow_config(
+        config_path="configs/training/pallier2025_word_encoder.yaml",
+        seed=0,
+        window_seconds=1.5,
+        window_start_offset_seconds=0.1,
+    )
+    assert cfg_150["dataset"]["window_seconds"] == pytest.approx(1.5)
+    assert cfg_150["dataset"]["window_start_offset_seconds"] == pytest.approx(0.1)
+    assert cfg_150["workflow"]["window_seconds"] == pytest.approx(1.5)
+    assert cfg_150["workflow"]["window_samples"] == 75
+    assert cfg_150["workflow"]["window_start_offset_seconds"] == pytest.approx(0.1)
+
+    # 3. Override via environment variables
+    monkeypatch.setenv("BRAINDECODING_WINDOW_SECONDS", "0.5")
+    monkeypatch.setenv("BRAINDECODING_WINDOW_START_OFFSET_SECONDS", "-0.04")
+    cfg_env, _ = build_workflow_config(
+        config_path="configs/training/chineseeeg2_word_encoder.yaml",
+        seed=0,
+    )
+    assert cfg_env["dataset"]["window_seconds"] == pytest.approx(0.5)
+    assert cfg_env["dataset"]["window_start_offset_seconds"] == pytest.approx(-0.04)
+    assert cfg_env["workflow"]["window_samples"] == 25
+    monkeypatch.delenv("BRAINDECODING_WINDOW_SECONDS", raising=False)
+    monkeypatch.delenv("BRAINDECODING_WINDOW_START_OFFSET_SECONDS", raising=False)
+
+    # 4. CLI argument parsing for train, smoke, and eval-run
+    parser = cli.build_parser()
+    train_args = parser.parse_args(
+        [
+            "train",
+            "--config",
+            "configs/training/pallier2025_word_encoder.yaml",
+            "--window-seconds",
+            "1.25",
+            "--window-start-offset-seconds",
+            "-0.1",
+        ]
+    )
+    assert train_args.window_seconds == pytest.approx(1.25)
+    assert train_args.window_start_offset_seconds == pytest.approx(-0.1)
+
+    eval_args = parser.parse_args(
+        [
+            "eval-run",
+            "--dataset",
+            "pallier2025",
+            "--window-seconds",
+            "0.75",
+        ]
+    )
+    assert eval_args.window_seconds == pytest.approx(0.75)
+
+    # 5. Dynamic window slicing on 50Hz continuous signal (0.5s -> 25 samples, 1.5s -> 75 samples)
+    c_short = word_window_contract({"window_seconds": 0.5})
+    assert c_short["window_samples"] == 25
+    assert c_short["baseline_samples"] == 25
+
+    c_long = word_window_contract(cfg_150["dataset"])
+    assert c_long["window_samples"] == 75
+    assert c_long["baseline_samples"] == 25
+
+    fake_signal = np.ones((4, 200), dtype=np.float32)
+    meta = {
+        "source_first_samp": 0,
+        "source_sampling_rate_hz": 1000.0,
+        "output_sampling_rate_hz": 50.0,
+    }
+    win_short = extract_word_window(
+        fake_signal, 0.5, meta, dataset_config={"window_seconds": 0.5}
+    )
+    assert win_short.shape == (4, 25)
+    win_long = extract_word_window(
+        fake_signal, 0.5, meta, dataset_config={"window_seconds": 1.5}
+    )
+    assert win_long.shape == (4, 75)

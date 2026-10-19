@@ -39,7 +39,11 @@ from braindecoding.data import chineseeeg2_dataset as chineseeeg2
 from braindecoding.data import pallier2025_dataset as pallier2025
 from braindecoding.data import text_embeddings as text_data
 from braindecoding.data.derived_cache import sha256_file, stable_sha256
-from braindecoding.evaluation.retrieval_metrics import fixed_vocabulary_retrieval_metrics
+from braindecoding.evaluation.retrieval_metrics import (
+    fixed_vocabulary_retrieval_metrics,
+    mean_by_target,
+    retrieval_ranks,
+)
 from braindecoding.experiment import file_sha256
 from braindecoding.losses import build_siglip_loss
 from braindecoding.models import build_brain_embedding_model
@@ -403,6 +407,119 @@ def _infer_dataset_and_stage_from_yaml(
     return final_dataset, final_stage
 
 
+def _resolve_window_settings(
+    active_yaml: dict | None,
+    cfg: dict,
+    *,
+    window_seconds: float | None = None,
+    window_start_offset_seconds: float | None = None,
+    explicit_yaml: dict | None = None,
+) -> dict:
+    """解析神经信号窗口长度（秒）与起点偏移（秒），优先级：CLI/显式参数 > 环境变量 > YAML 配置 > 默认值(1.0s, 0.0s)。"""
+    ds_cfg = cfg.setdefault("dataset", {})
+    wf_yaml = (
+        active_yaml.get("workflow")
+        if isinstance(active_yaml, dict) and isinstance(active_yaml.get("workflow"), dict)
+        else {}
+    )
+    ds_yaml = (
+        active_yaml.get("dataset")
+        if isinstance(active_yaml, dict) and isinstance(active_yaml.get("dataset"), dict)
+        else {}
+    )
+    exp_wf_yaml = (
+        explicit_yaml.get("workflow")
+        if isinstance(explicit_yaml, dict)
+        and isinstance(explicit_yaml.get("workflow"), dict)
+        else {}
+    )
+    exp_ds_yaml = (
+        explicit_yaml.get("dataset")
+        if isinstance(explicit_yaml, dict)
+        and isinstance(explicit_yaml.get("dataset"), dict)
+        else {}
+    )
+
+    env_win = os.environ.get("BRAINDECODING_WINDOW_SECONDS", "").strip()
+    env_off = os.environ.get("BRAINDECODING_WINDOW_START_OFFSET_SECONDS", "").strip()
+    has_env_win = bool(env_win and env_win.lower() not in {"none", "default"})
+    has_env_off = bool(env_off and env_off.lower() not in {"none", "default"})
+
+    yaml_win = (
+        wf_yaml.get("window_seconds")
+        if wf_yaml.get("window_seconds") is not None
+        else (
+            ds_yaml.get("window_seconds")
+            if ds_yaml.get("window_seconds") is not None
+            else ds_cfg.get("window_seconds")
+        )
+    )
+    yaml_off = (
+        wf_yaml.get("window_start_offset_seconds")
+        if wf_yaml.get("window_start_offset_seconds") is not None
+        else (
+            ds_yaml.get("window_start_offset_seconds")
+            if ds_yaml.get("window_start_offset_seconds") is not None
+            else ds_cfg.get("window_start_offset_seconds")
+        )
+    )
+
+    if window_seconds is not None:
+        resolved_win = float(window_seconds)
+    elif has_env_win:
+        resolved_win = float(env_win)
+    elif yaml_win is not None:
+        resolved_win = float(yaml_win)
+    else:
+        resolved_win = 1.0
+
+    if window_start_offset_seconds is not None:
+        resolved_off = float(window_start_offset_seconds)
+    elif has_env_off:
+        resolved_off = float(env_off)
+    elif yaml_off is not None:
+        resolved_off = float(yaml_off)
+    else:
+        resolved_off = 0.0
+
+    sampling_rate_hz = float(ds_cfg.get("target_sampling_rate_hz", 50.0))
+    window_samples = int(round(resolved_win * sampling_rate_hz))
+    if resolved_win <= 0.0 or window_samples <= 0:
+        raise ValueError(
+            f"window_seconds 必须为正数且对应至少 1 个采样点，当前 window_seconds={resolved_win} "
+            f"(window_samples={window_samples} @ {sampling_rate_hz}Hz)。"
+        )
+
+    exp_yaml_win = (
+        exp_wf_yaml.get("window_seconds")
+        if exp_wf_yaml.get("window_seconds") is not None
+        else exp_ds_yaml.get("window_seconds")
+    )
+    exp_yaml_off = (
+        exp_wf_yaml.get("window_start_offset_seconds")
+        if exp_wf_yaml.get("window_start_offset_seconds") is not None
+        else exp_ds_yaml.get("window_start_offset_seconds")
+    )
+    explicit_override = (
+        window_seconds is not None
+        or window_start_offset_seconds is not None
+        or has_env_win
+        or has_env_off
+        or (exp_yaml_win is not None and abs(float(exp_yaml_win) - 1.0) > 1e-9)
+        or (exp_yaml_off is not None and abs(float(exp_yaml_off) - 0.0) > 1e-9)
+    )
+
+    ds_cfg["window_seconds"] = resolved_win
+    ds_cfg["window_start_offset_seconds"] = resolved_off
+    return {
+        "window_seconds": resolved_win,
+        "window_start_offset_seconds": resolved_off,
+        "window_samples": window_samples,
+        "sampling_rate_hz": sampling_rate_hz,
+        "explicit_override": bool(explicit_override),
+    }
+
+
 def build_workflow_config(
     dataset: str | None = None,
     *,
@@ -417,6 +534,8 @@ def build_workflow_config(
     learning_rate: float | None = None,
     num_workers: int | None = None,
     precision: str | None = None,
+    window_seconds: float | None = None,
+    window_start_offset_seconds: float | None = None,
     mode: str = "train",
     output_dir: str | Path | None = None,
     exp_tag: str | None = None,
@@ -426,7 +545,7 @@ def build_workflow_config(
     max_val_rows: int | None = None,
     config_path: str | Path | None = None,
 ) -> tuple[dict, dict]:
-    """构建支持灵活受试者子集、自定义 YAML 配置与环境变量路径解耦的训练配置。"""
+    """构建支持灵活受试者子集、可切换窗口长度、自定义 YAML 配置与环境变量路径解耦的训练配置。"""
     ensure_default_environment()
     explicit_cfg_path: Path | None = None
     explicit_yaml: dict | None = None
@@ -492,6 +611,7 @@ def build_workflow_config(
             "workflow",
             "experiment",
             "training",
+            "dataset",
         ):
             if isinstance(explicit_yaml.get(overlay_key), dict):
                 cfg.setdefault(overlay_key, {})
@@ -515,6 +635,14 @@ def build_workflow_config(
         ):
             cfg["control"] = copy.deepcopy(active_yaml["control"])
     yaml_tc = dict(cfg.get("training", {}))
+
+    window_info = _resolve_window_settings(
+        active_yaml,
+        cfg,
+        window_seconds=window_seconds,
+        window_start_offset_seconds=window_start_offset_seconds,
+        explicit_yaml=explicit_yaml,
+    )
 
     yaml_exp_tag = None
     yaml_word_exp_tag = None
@@ -771,6 +899,11 @@ def build_workflow_config(
         "config_path": normalize_project_relative(active_config_path),
         "precision": precision_label,
         "amp_dtype": amp_dtype_name,
+        "window_seconds": window_info["window_seconds"],
+        "window_start_offset_seconds": window_info["window_start_offset_seconds"],
+        "window_samples": window_info["window_samples"],
+        "sampling_rate_hz": window_info["sampling_rate_hz"],
+        "window_explicitly_overridden": window_info["explicit_override"],
         "subset": subset_spec,
         "environment": {
             "BRAINDECODING_DATA_DIR": str(data_root()),
@@ -778,6 +911,8 @@ def build_workflow_config(
             "BRAINDECODING_RESULTS_DIR": str(results_root()),
             "BRAINDECODING_EXP_TAG": resolved_exp_tag,
             "BRAINDECODING_WORD_EXP_TAG": resolved_word_exp_tag if has_explicit_word_tag else "",
+            "BRAINDECODING_WINDOW_SECONDS": str(window_info["window_seconds"]),
+            "BRAINDECODING_WINDOW_START_OFFSET_SECONDS": str(window_info["window_start_offset_seconds"]),
             "BRAINDECODING_MODEL_DIR": str(model_root()),
         },
     }
@@ -1029,6 +1164,239 @@ def validate_subset_population(cfg: dict, train_ds, val_ds) -> tuple:
     return vocabulary, vocab50, expected_counts, observed
 
 
+def _score_full_vocabulary_population(
+    ranks: np.ndarray,
+    words: np.ndarray,
+    subjects: np.ndarray,
+    covered: np.ndarray,
+    candidate_count: int,
+) -> dict:
+    """计算指定查询子集（all_targets 或 common_targets）的全词表检索指标。"""
+    n_queries = int(len(ranks))
+    cand_count = max(1, int(candidate_count))
+    if n_queries == 0:
+        return {
+            "query_count": 0,
+            "candidate_count": cand_count,
+            "target_count": 0,
+            "oov_queries": 0,
+            "in_vocabulary_rate": 0.0,
+            "subject_equal_macro_recall_at_1": 0.0,
+            "subject_equal_macro_recall_at_5": 0.0,
+            "subject_equal_macro_recall_at_10": 0.0,
+            "subject_macro_top10": 0.0,
+            "word_macro_recall_at_1": 0.0,
+            "word_macro_recall_at_5": 0.0,
+            "word_macro_recall_at_10": 0.0,
+            "macro_recall_at_1": 0.0,
+            "macro_recall_at_5": 0.0,
+            "macro_recall_at_10": 0.0,
+            "micro_recall_at_1": 0.0,
+            "micro_recall_at_5": 0.0,
+            "micro_recall_at_10": 0.0,
+            "mean_reciprocal_rank": 0.0,
+            "median_rank": float(cand_count) / 2.0,
+        }
+
+    unique_subjects = sorted(set(subjects.tolist()))
+    metrics: dict[str, int | float] = {
+        "query_count": n_queries,
+        "candidate_count": cand_count,
+        "target_count": int(len(set(words.tolist()))),
+        "oov_queries": int((~covered).sum()),
+        "in_vocabulary_rate": float(np.mean(covered)),
+    }
+    for k in (1, 5, 10):
+        hits = (ranks <= float(k)).astype(np.float64)
+        micro_k = float(np.mean(hits))
+        word_macro_k = float(mean_by_target(hits, words))
+        subj_macro_k = (
+            float(
+                np.mean(
+                    [
+                        float(np.mean(hits[subjects == subj]))
+                        for subj in unique_subjects
+                        if np.any(subjects == subj)
+                    ]
+                )
+            )
+            if unique_subjects
+            else micro_k
+        )
+        metrics[f"micro_recall_at_{k}"] = micro_k
+        metrics[f"word_macro_recall_at_{k}"] = word_macro_k
+        metrics[f"macro_recall_at_{k}"] = word_macro_k
+        metrics[f"subject_equal_macro_recall_at_{k}"] = subj_macro_k
+    metrics["subject_macro_top10"] = float(
+        metrics["subject_equal_macro_recall_at_10"]
+    )
+    reciprocal = np.where(np.isfinite(ranks) & (ranks > 0.0), 1.0 / ranks, 0.0)
+    metrics["mean_reciprocal_rank"] = float(np.mean(reciprocal))
+    raw_median = float(np.median(ranks))
+    if np.isfinite(raw_median):
+        metrics["median_rank"] = raw_median
+    else:
+        bounded_ranks = np.where(np.isfinite(ranks), ranks, float(cand_count))
+        metrics["median_rank"] = float(np.median(bounded_ranks))
+    return metrics
+
+
+def _compute_full_vocabulary_horizon_details(
+    strict_encoded: dict,
+    eval_ds,
+    vocabulary: list[str],
+) -> dict[str, dict]:
+    """按各延迟视野（0 / 1 / 2）计算全训练词表的 all_targets 与 common_targets 完整检索指标。"""
+    vocab_list = [str(w) for w in vocabulary]
+    cand_count = max(1, len(vocab_list))
+    words = np.asarray([str(w) for w in strict_encoded["words"]], dtype=object)
+    bank = (
+        np.stack(
+            [np.asarray(eval_ds.embedding_map[w], dtype=np.float32) for w in vocab_list]
+        )
+        if vocab_list
+        else np.zeros((0, 1), dtype=np.float32)
+    )
+    covered = (
+        np.isin(words, vocab_list)
+        if vocab_list
+        else np.zeros(len(words), dtype=bool)
+    )
+    subject_map = dict(
+        zip(
+            eval_ds.table["event_id"].astype(str),
+            eval_ds.table["subject_id"].astype(str),
+        )
+    )
+    fallback_subjects = eval_ds.table["subject_id"].astype(str).to_numpy()
+    subjects = np.asarray(
+        [
+            subject_map.get(
+                str(eid),
+                str(fallback_subjects[idx])
+                if idx < len(fallback_subjects)
+                else "unknown",
+            )
+            for idx, eid in enumerate(strict_encoded["event_ids"])
+        ],
+        dtype=object,
+    )
+    rev_preds = strict_encoded["revision_predictions"]
+    rev_masks = strict_encoded["revision_availability_masks"]
+    common_mask = np.logical_and.reduce(
+        [m.detach().cpu().numpy().astype(bool) for m in rev_masks.values()]
+    )
+
+    horizons_detail: dict[str, dict] = {}
+    for delay in sorted(rev_preds):
+        pred_tensor = rev_preds[delay]
+        avail_mask = rev_masks[delay].detach().cpu().numpy().astype(bool)
+        ranks = np.full(len(words), np.inf, dtype=np.float64)
+        if covered.any() and len(vocab_list) > 0:
+            ranks[covered] = retrieval_ranks(
+                pred_tensor[covered],
+                words[covered],
+                bank,
+                vocab_list,
+            )
+        all_mask = avail_mask if avail_mask.any() else np.ones(len(words), dtype=bool)
+        com_mask = common_mask if common_mask.any() else all_mask
+        all_stats = _score_full_vocabulary_population(
+            ranks[all_mask],
+            words[all_mask],
+            subjects[all_mask],
+            covered[all_mask],
+            cand_count,
+        )
+        common_stats = _score_full_vocabulary_population(
+            ranks[com_mask],
+            words[com_mask],
+            subjects[com_mask],
+            covered[com_mask],
+            cand_count,
+        )
+        per_subj: dict[str, dict] = {}
+        for subj in sorted(set(subjects.tolist())):
+            s_mask = com_mask & (subjects == subj)
+            if not s_mask.any():
+                s_mask = all_mask & (subjects == subj)
+            if not s_mask.any():
+                continue
+            r_s = ranks[s_mask]
+            per_subj[str(subj)] = {
+                "n": int(s_mask.sum()),
+                "top1": float(np.mean(r_s <= 1.0)),
+                "top10": float(np.mean(r_s <= 10.0)),
+            }
+        horizons_detail[str(delay)] = {
+            "subject_macro_top10": float(
+                common_stats["subject_equal_macro_recall_at_10"]
+            ),
+            "per_subject": per_subj,
+            "all_targets": all_stats,
+            "common_targets": common_stats,
+        }
+    return horizons_detail
+
+
+def _build_enriched_full_vocabulary_metrics(
+    strict_encoded: dict,
+    eval_ds,
+    vocabulary: list[str],
+) -> dict:
+    """构建同时兼容历史 k0/k1/k2 与数值键 0/1/2 且包含 all_targets/common_targets 的全词表指标字典。"""
+    horizon_details = _compute_full_vocabulary_horizon_details(
+        strict_encoded, eval_ds, vocabulary
+    )
+    try:
+        base_full = full_vocabulary_metrics(strict_encoded, eval_ds, vocabulary)
+    except ValueError:
+        selection_vals = [
+            float(d["subject_macro_top10"]) for d in horizon_details.values()
+        ]
+        common_mask = np.logical_and.reduce(
+            [
+                m.detach().cpu().numpy().astype(bool)
+                for m in strict_encoded["revision_availability_masks"].values()
+            ]
+        )
+        words = np.asarray([str(w) for w in strict_encoded["words"]], dtype=object)
+        covered = np.isin(words, [str(w) for w in vocabulary])
+        base_full = {
+            "selection_score": float(np.mean(selection_vals))
+            if selection_vals
+            else 0.0,
+            "horizons": {},
+            "candidate_count": int(len(vocabulary)),
+            "all_reference_words_retained": True,
+            "reference_count": int(len(words)),
+            "common_count": int(common_mask.sum()),
+            "reference_in_vocabulary": float(np.mean(covered))
+            if len(words) > 0
+            else 0.0,
+        }
+
+    horizons_dict = dict(base_full.get("horizons") or {})
+    for delay_str, detail in horizon_details.items():
+        k_key = f"k{delay_str}"
+        existing_k = dict(horizons_dict.get(k_key) or {})
+        merged = {**detail, **existing_k}
+        merged["all_targets"] = detail["all_targets"]
+        merged["common_targets"] = detail["common_targets"]
+        if "subject_macro_top10" in existing_k:
+            merged["common_targets"] = {
+                **detail["common_targets"],
+                "subject_equal_macro_recall_at_10": float(
+                    existing_k["subject_macro_top10"]
+                ),
+                "subject_macro_top10": float(existing_k["subject_macro_top10"]),
+            }
+        horizons_dict[k_key] = merged
+        horizons_dict[str(delay_str)] = merged
+    base_full["horizons"] = horizons_dict
+    return base_full
+
+
 def _evaluate_subset_validation(
     model,
     val_loader,
@@ -1129,7 +1497,9 @@ def _evaluate_subset_validation(
         }
     )
     strict = strict_bank_metrics(strict_encoded, val_ds, vocab50)
-    full_vocab = full_vocabulary_metrics(encoded, val_ds, vocabulary)
+    full_vocab = _build_enriched_full_vocabulary_metrics(
+        strict_encoded, val_ds, vocabulary
+    )
     result = {
         "legacy": legacy_metrics,
         "strict_vocab50": strict,
@@ -1336,6 +1706,8 @@ def run_training_workflow(
     learning_rate: float | None = None,
     num_workers: int | None = None,
     precision: str | None = None,
+    window_seconds: float | None = None,
+    window_start_offset_seconds: float | None = None,
     require_cache: bool = False,
     resume: str | None = None,
     mode: str = "train",
@@ -1363,6 +1735,8 @@ def run_training_workflow(
         learning_rate=learning_rate,
         num_workers=num_workers,
         precision=precision,
+        window_seconds=window_seconds,
+        window_start_offset_seconds=window_start_offset_seconds,
         mode=mode,
         output_dir=output_dir,
         exp_tag=exp_tag,
@@ -1531,6 +1905,10 @@ def run_training_workflow(
     sep = "=" * 96
     thin_sep = "-" * 96
     stage_label = STAGE_DISPLAY_NAMES.get(stage, stage)
+    win_sec = float(getattr(train_ds, "window_seconds", cfg["dataset"].get("window_seconds", 1.0)))
+    win_samp = int(getattr(train_ds, "window_samples", round(win_sec * 50.0)))
+    sr_hz = float(getattr(train_ds, "sampling_rate_hz", cfg["dataset"].get("target_sampling_rate_hz", 50.0)))
+    win_off = float(cfg["dataset"].get("window_start_offset_seconds", 0.0))
     print(
         f"\n{sep}\n"
         f" BrainDecoding Training  |  dataset={dataset}  |  stage={stage} ({stage_label})  |  mode={mode}\n"
@@ -1538,6 +1916,7 @@ def run_training_workflow(
         f" Config File : {cfg['workflow']['config_path']}\n"
         f" GPU / AMP   : {gpu_name} ({gpu_total_gb:.1f} GB)  |  precision={tc['precision']} (TF32=on)\n"
         f" Subset      : {subset_spec['subset_tag']} ({subset_spec['subject_count']}/{subset_spec['total_canonical_subjects']} subjects)  |  seed={seed}\n"
+        f" Window      : {win_sec:.2f}s ({win_samp} samples @ {sr_hz:.0f}Hz, start_offset={win_off:+.2f}s)\n"
         f" DataLoader  : train={len(train_ds):,} rows ({len(train_loader)} batches @ bs={tc['batch_size']})"
         f"  |  val={len(val_ds):,} rows (eval_bs={tc.get('eval_batch_size', tc['batch_size'])}, workers={tc.get('num_workers', 0)})\n"
         f" Optimizer   : AdamW (lr={float(tc['learning_rate']):.2e}, wd={float(tc.get('weight_decay', 1e-4)):.1e})"
@@ -1659,6 +2038,9 @@ def run_training_workflow(
                     "selection": selection,
                     "precision": tc["precision"],
                     "amp_dtype": tc["amp_dtype"],
+                    "window_seconds": win_sec,
+                    "window_samples": win_samp,
+                    "window_start_offset_seconds": win_off,
                     "model_state": cpu_state_dict(model),
                     "loss_state": cpu_state_dict(loss_module),
                     "model_config": cfg["model"],
@@ -1692,6 +2074,9 @@ def run_training_workflow(
             "completed_epochs": epoch + 1,
             "precision": tc["precision"],
             "amp_dtype": tc["amp_dtype"],
+            "window_seconds": win_sec,
+            "window_samples": win_samp,
+            "window_start_offset_seconds": win_off,
             "subject_ids": list(subset_spec["subjects"]),
             "subset": subset_spec,
             "model_state": cpu_state_dict(model),
@@ -1757,6 +2142,9 @@ def run_training_workflow(
         "seed": int(seed),
         "precision": tc["precision"],
         "amp_dtype": tc["amp_dtype"],
+        "window_seconds": win_sec,
+        "window_samples": win_samp,
+        "window_start_offset_seconds": win_off,
         "subset": subset_spec,
         "subjects_file": str(subjects_file),
         "population": population,
@@ -1786,6 +2174,9 @@ def run_training_workflow(
             "mode": mode,
             "seed": int(seed),
             "precision": tc["precision"],
+            "window_seconds": win_sec,
+            "window_samples": win_samp,
+            "window_start_offset_seconds": win_off,
             "subset_tag": subset_spec["subset_tag"],
             "subjects": subset_spec["subjects"],
             "completed_epochs": len(history),
@@ -1804,6 +2195,9 @@ def run_training_workflow(
             "stage": stage,
             "seed": int(seed),
             "precision": tc["precision"],
+            "window_seconds": win_sec,
+            "window_samples": win_samp,
+            "window_start_offset_seconds": win_off,
             "subset": subset_spec,
             "population": population,
             "completed_epochs": len(history),
@@ -1921,17 +2315,30 @@ def _compute_encoded_evaluation_metrics(
         }
     )
     strict50 = strict_bank_metrics(strict_encoded, eval_ds, vocab50)
-    full_vocab = full_vocabulary_metrics(encoded, eval_ds, vocabulary)
+    full_vocab = _build_enriched_full_vocabulary_metrics(
+        strict_encoded, eval_ds, vocabulary
+    )
 
-    full_horizon_key = "2" if (revision and "2" in full_vocab.get("horizons", {})) else "0"
-    full_block = full_vocab.get("horizons", {}).get(full_horizon_key, {}).get(
+    full_horizon_key = (
+        str(max(strict_encoded["revision_predictions"]))
+        if revision
+        else "0"
+    )
+    full_horizon_entry = (
+        full_vocab.get("horizons", {}).get(full_horizon_key)
+        or full_vocab.get("horizons", {}).get(f"k{full_horizon_key}")
+        or {}
+    )
+    full_block = full_horizon_entry.get(
         "common_targets" if revision else "all_targets", {}
     )
     full_cand_count = max(1, int(len(vocabulary)))
     vocab_Sweep["full_vocab"] = {
         "label": f"Full Vocab ({full_cand_count})",
         "candidate_count": full_cand_count,
-        "supported_candidates": full_cand_count,
+        "supported_candidates": int(
+            full_block.get("target_count", full_cand_count)
+        ),
         "query_count": int(full_block.get("query_count", len(eval_words))),
         "macro_top1": float(full_block.get("word_macro_recall_at_1", 0.0)),
         "macro_top5": float(full_block.get("word_macro_recall_at_5", 0.0)),
@@ -1940,6 +2347,9 @@ def _compute_encoded_evaluation_metrics(
                 "subject_equal_macro_recall_at_10",
                 full_vocab.get("selection_score", 0.0),
             )
+        ),
+        "word_macro_top10": float(
+            full_block.get("word_macro_recall_at_10", 0.0)
         ),
         "micro_top1": float(full_block.get("micro_recall_at_1", 0.0)),
         "micro_top5": float(full_block.get("micro_recall_at_5", 0.0)),
@@ -1989,11 +2399,13 @@ def _compute_encoded_evaluation_metrics(
             d_key = str(delay)
             s50_common = strict50.get(d_key, {}).get("common_targets", {})
             s50_all = strict50.get(d_key, {}).get("all_targets", {})
-            fv_common = (
-                full_vocab.get("horizons", {})
-                .get(d_key, {})
-                .get("common_targets", {})
+            fv_horizon = (
+                full_vocab.get("horizons", {}).get(d_key)
+                or full_vocab.get("horizons", {}).get(f"k{d_key}")
+                or {}
             )
+            fv_common = fv_horizon.get("common_targets", {})
+            fv_all = fv_horizon.get("all_targets", {})
             revision_horizons[f"K{delay}"] = {
                 "delay": int(delay),
                 "label": f"K{delay} (+{delay}w)",
@@ -2010,10 +2422,31 @@ def _compute_encoded_evaluation_metrics(
                     s50_all.get("macro_recall_at_10", 0.0)
                 ),
                 "common_full_vocab_macro_top10": float(
-                    fv_common.get("subject_equal_macro_recall_at_10", 0.0)
+                    fv_common.get(
+                        "subject_equal_macro_recall_at_10",
+                        fv_horizon.get("subject_macro_top10", 0.0),
+                    )
+                ),
+                "common_full_vocab_word_macro_top10": float(
+                    fv_common.get("word_macro_recall_at_10", 0.0)
                 ),
                 "common_full_vocab_micro_top10": float(
                     fv_common.get("micro_recall_at_10", 0.0)
+                ),
+                "common_full_vocab_macro_top1": float(
+                    fv_common.get("word_macro_recall_at_1", 0.0)
+                ),
+                "common_full_vocab_micro_top1": float(
+                    fv_common.get("micro_recall_at_1", 0.0)
+                ),
+                "common_full_vocab_mrr": float(
+                    fv_common.get("mean_reciprocal_rank", 0.0)
+                ),
+                "common_full_vocab_median_rank": float(
+                    fv_common.get("median_rank", full_cand_count / 2.0)
+                ),
+                "all_full_vocab_macro_top10": float(
+                    fv_all.get("subject_equal_macro_recall_at_10", 0.0)
                 ),
             }
 
@@ -2237,6 +2670,18 @@ def _extract_control_summary_row(
                 "common_full_vocab_macro_top10": float(
                     horizons[h_key].get("common_full_vocab_macro_top10", 0.0)
                 ),
+                "common_full_vocab_micro_top10": float(
+                    horizons[h_key].get("common_full_vocab_micro_top10", 0.0)
+                ),
+                "common_full_vocab_macro_top1": float(
+                    horizons[h_key].get("common_full_vocab_macro_top1", 0.0)
+                ),
+                "common_full_vocab_mrr": float(
+                    horizons[h_key].get("common_full_vocab_mrr", 0.0)
+                ),
+                "common_full_vocab_median_rank": float(
+                    horizons[h_key].get("common_full_vocab_median_rank", 0.0)
+                ),
             }
             for h_key in ("K0", "K1", "K2")
             if h_key in horizons
@@ -2380,6 +2825,9 @@ def _print_evaluation_report(eval_result: dict) -> None:
     subset = eval_result["subset"]
     ckpt_info = eval_result["checkpoint"]
     sweep = eval_result["metrics"]["vocabulary_sweep"]
+    win_sec = float(eval_result.get("window_seconds", 1.0))
+    win_samp = int(eval_result.get("window_samples", round(win_sec * 50.0)))
+    win_off = float(eval_result.get("window_start_offset_seconds", 0.0))
 
     print(
         f"\n{sep}\n"
@@ -2387,6 +2835,7 @@ def _print_evaluation_report(eval_result: dict) -> None:
         f"{thin_sep}\n"
         f" Checkpoint  : {ckpt_info['path']} (epoch {ckpt_info['epoch']})\n"
         f" Subset      : {subset['subset_tag']} ({subset['subject_count']}/{subset['total_canonical_subjects']} subjects)  |  seed={eval_result['seed']}\n"
+        f" Window      : {win_sec:.2f}s ({win_samp} samples @ 50Hz, start_offset={win_off:+.2f}s)\n"
         f" Split Rows  : {eval_result['metrics']['total_events']:,} total events ({eval_result['metrics']['evaluated_events']:,} evaluated)\n"
         f"{sep}\n"
         f" {'Vocabulary Scale':<22} | {'Queries':>8} | {'Macro Top10':>11} | {'Micro Top10':>11} | {'Macro Top1':>10} | {'MRR':>8} | {'Med Rank':>8} | {'Chance Top10':>12}\n"
@@ -3289,6 +3738,8 @@ def _evaluate_single_stage(
     eval_batch_size: int | None = None,
     num_workers: int | None = None,
     precision: str | None = None,
+    window_seconds: float | None = None,
+    window_start_offset_seconds: float | None = None,
     require_cache: bool = False,
     checkpoint_path: str | Path | None = None,
     output_dir: str | Path | None = None,
@@ -3316,6 +3767,8 @@ def _evaluate_single_stage(
         eval_batch_size=eval_batch_size,
         num_workers=num_workers,
         precision=precision,
+        window_seconds=window_seconds,
+        window_start_offset_seconds=window_start_offset_seconds,
         mode="train",
         output_dir=output_dir,
         exp_tag=exp_tag,
@@ -3391,6 +3844,32 @@ def _evaluate_single_stage(
         torch.backends.cudnn.allow_tf32 = True
 
     set_seed(seed)
+    checkpoint = load_checkpoint(ckpt_file, map_location="cpu")
+    if not bool(cfg["workflow"].get("window_explicitly_overridden", False)):
+        ckpt_cfg_ds = (
+            checkpoint.get("config", {}).get("dataset", {})
+            if isinstance(checkpoint.get("config"), dict)
+            else {}
+        )
+        ckpt_win = checkpoint.get(
+            "window_seconds",
+            ckpt_cfg_ds.get("window_seconds") if isinstance(ckpt_cfg_ds, dict) else None,
+        )
+        ckpt_off = checkpoint.get(
+            "window_start_offset_seconds",
+            ckpt_cfg_ds.get("window_start_offset_seconds")
+            if isinstance(ckpt_cfg_ds, dict)
+            else None,
+        )
+        if ckpt_win is not None:
+            cfg["dataset"]["window_seconds"] = float(ckpt_win)
+            cfg["workflow"]["window_seconds"] = float(ckpt_win)
+            sr_hz = float(cfg["workflow"].get("sampling_rate_hz", 50.0))
+            cfg["workflow"]["window_samples"] = int(round(float(ckpt_win) * sr_hz))
+        if ckpt_off is not None:
+            cfg["dataset"]["window_start_offset_seconds"] = float(ckpt_off)
+            cfg["workflow"]["window_start_offset_seconds"] = float(ckpt_off)
+
     task = pallier_task if dataset == "pallier2025" else chinese_task
     read_fn = task.dataset_module.load_event_table
     build_fn = task.build_dataset
@@ -3434,7 +3913,6 @@ def _evaluate_single_stage(
         else chinese_task.frozen_vocabulary(cfg["cache"]["event_table"])
     )
 
-    checkpoint = load_checkpoint(ckpt_file, map_location="cpu")
     model_cfg = checkpoint.get("model_config", cfg["model"])
     ckpt_subjects = list(checkpoint.get("subject_ids", selected_subjects))
     subject_count = max(len(ckpt_subjects), eval_ds.subject_count)
@@ -3591,6 +4069,13 @@ def _evaluate_single_stage(
             training_history = []
 
     out.mkdir(parents=True, exist_ok=True)
+    eval_win_sec = float(
+        getattr(eval_ds, "window_seconds", cfg["dataset"].get("window_seconds", 1.0))
+    )
+    eval_win_samp = int(
+        getattr(eval_ds, "window_samples", round(eval_win_sec * 50.0))
+    )
+    eval_win_off = float(cfg["dataset"].get("window_start_offset_seconds", 0.0))
     eval_result = {
         "status": "evaluation_completed",
         "dataset": dataset,
@@ -3601,6 +4086,9 @@ def _evaluate_single_stage(
         "split": split,
         "seed": seed,
         "precision": tc["precision"],
+        "window_seconds": eval_win_sec,
+        "window_samples": eval_win_samp,
+        "window_start_offset_seconds": eval_win_off,
         "subset": subset_spec,
         "checkpoint": {
             "path": str(ckpt_file),
@@ -3645,6 +4133,8 @@ def run_evaluation_workflow(
     eval_batch_size: int | None = None,
     num_workers: int | None = None,
     precision: str | None = None,
+    window_seconds: float | None = None,
+    window_start_offset_seconds: float | None = None,
     require_cache: bool = False,
     checkpoint_path: str | Path | None = None,
     output_dir: str | Path | None = None,
@@ -3675,6 +4165,8 @@ def run_evaluation_workflow(
             eval_batch_size=eval_batch_size,
             num_workers=num_workers,
             precision=precision,
+            window_seconds=window_seconds,
+            window_start_offset_seconds=window_start_offset_seconds,
             require_cache=require_cache,
             checkpoint_path=checkpoint_path,
             output_dir=output_dir,
@@ -3755,6 +4247,8 @@ def run_evaluation_workflow(
         subject=subject,
         num_subjects=num_subjects,
         subjects=subjects,
+        window_seconds=window_seconds,
+        window_start_offset_seconds=window_start_offset_seconds,
         exp_tag=exp_tag,
         word_exp_tag=word_exp_tag,
         config_path=config_path,
@@ -3842,6 +4336,8 @@ def run_evaluation_workflow(
             eval_batch_size=eval_batch_size,
             num_workers=num_workers,
             precision=precision,
+            window_seconds=window_seconds,
+            window_start_offset_seconds=window_start_offset_seconds,
             require_cache=require_cache,
             output_dir=stage_out_dir,
             exp_tag=st_tag,
@@ -3888,6 +4384,9 @@ def run_evaluation_workflow(
         "word_exp_tag": resolved_word_exp_tag if has_explicit_word_tag else resolved_exp_tag,
         "split": split,
         "seed": sd,
+        "window_seconds": float(base_cfg["workflow"]["window_seconds"]),
+        "window_samples": int(base_cfg["workflow"]["window_samples"]),
+        "window_start_offset_seconds": float(base_cfg["workflow"]["window_start_offset_seconds"]),
         "subset": subset_spec,
         "evaluated_stages": [st for st, _, _ in available_stages],
         "stages": stage_results,
