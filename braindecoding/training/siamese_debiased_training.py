@@ -559,6 +559,236 @@ def preextract_frozen_cnn_features(
     }
 
 
+def _can_use_fast_padded_transformer(model) -> bool:
+    """检查模型是否可直接运行零 Python 循环的 2D 张量填充 Transformer 极速路径。"""
+    ctx = getattr(model, "context_transformer", None)
+    if ctx is None:
+        return False
+    if getattr(model, "pre_transformer_trajectory", None) is not None:
+        return False
+    return (
+        getattr(ctx, "query_window_left_radius", None) is None
+        and not bool(getattr(ctx, "chunk_summary_enabled", False))
+        and getattr(ctx, "physical_time_gap_bias", None) is None
+        and getattr(ctx, "event_time_interaction_bias", None) is None
+        and hasattr(ctx, "encoder")
+    )
+
+
+def _run_fast_padded_transformer(
+    ctx,
+    padded: torch.Tensor,
+    mask: torch.Tensor,
+    *,
+    causal_override: bool | None = None,
+) -> torch.Tensor:
+    """在已构建好的 [G, L_max, D] 填充张量与 [G, L_max] 掩码上直接执行 Transformer（零 Python 循环）。"""
+    max_length = int(padded.shape[1])
+    attention_bias = None
+    if ctx.local_relative_position_bias is not None:
+        attention_bias = ctx.local_relative_position_bias(
+            max_length,
+            device=padded.device,
+            dtype=padded.dtype,
+            heads=(
+                ctx.total_attention_heads
+                if ctx.local_attention_heads
+                else None
+            ),
+            active_heads=(
+                ctx.local_attention_heads
+                if ctx.local_attention_heads
+                else None
+            ),
+        )
+        if ctx.adaptive_directional_bias_gate is not None:
+            directional_gates = ctx.adaptive_directional_bias_gate(padded)
+            positions = torch.arange(max_length, device=padded.device)
+            relative = positions[None, :] - positions[:, None]
+            directional_scale = torch.ones(
+                (padded.shape[0], max_length, max_length),
+                device=padded.device,
+                dtype=padded.dtype,
+            )
+            directional_scale = torch.where(
+                relative[None] < 0,
+                directional_gates[:, :, 0, None],
+                directional_scale,
+            )
+            directional_scale = torch.where(
+                relative[None] > 0,
+                directional_gates[:, :, 1, None],
+                directional_scale,
+            )
+            attention_bias = attention_bias * directional_scale[:, None]
+    attention_mask = ctx.local_global_attention_mask(max_length, padded.device)
+    encoded = padded
+    use_causal_attention = (
+        ctx.causal_attention
+        if causal_override is None
+        else bool(causal_override)
+    )
+    for _ in range(ctx.shared_passes):
+        encoder_kwargs = {
+            "mask": mask,
+            "attn_mask": attention_mask,
+            "attn_bias": attention_bias,
+        }
+        if use_causal_attention:
+            encoder_kwargs["causal"] = True
+        encoded = ctx.encoder(encoded, **encoder_kwargs)
+    return encoded
+
+
+def build_padded_revision_window_plan(
+    model,
+    group_indices: torch.Tensor,
+    *,
+    cutoff_generator=None,
+    cutoff_policy: str = "all",
+) -> dict[str, torch.Tensor]:
+    """在 CPU NumPy 中一次性构建 2D 局部窗口填充索引矩阵 [G, L_max] 与掩码，彻底消除逐窗口 CUDA 小算子循环。"""
+    if not getattr(model, "prefix_revision_enabled", False):
+        raise ValueError("模型未启用共享前缀回修。")
+    if cutoff_policy not in {"sample_one", "all"}:
+        raise ValueError("回修截止位置策略必须是 sample_one 或 all。")
+
+    device = group_indices.device
+    batch_len = int(len(group_indices))
+    windows: list[list[int]] = []
+    target_group_indices: list[int] = []
+    target_col_indices: list[int] = []
+    revision_rows: list[int] = []
+    revision_delays: list[int] = []
+    virtual_group = 0
+
+    for indices in model._ordered_groups(group_indices):
+        cutoffs = (
+            range(len(indices))
+            if cutoff_policy == "all"
+            else (
+                int(
+                    torch.randint(
+                        0,
+                        len(indices),
+                        (1,),
+                        generator=cutoff_generator,
+                    ).item()
+                ),
+            )
+        )
+        for cutoff in cutoffs:
+            if model.prefix_revision_protocol == "full_prefix":
+                win_indices = indices[: cutoff + 1]
+                windows.append(win_indices)
+                for delay in model.prefix_revision_horizons:
+                    target_position = cutoff - delay
+                    if target_position < 0:
+                        continue
+                    target_group_indices.append(virtual_group)
+                    target_col_indices.append(target_position)
+                    revision_rows.append(indices[target_position])
+                    revision_delays.append(delay)
+                virtual_group += 1
+                continue
+
+            for delay in model.prefix_revision_horizons:
+                target_position = cutoff - delay
+                if target_position < 0:
+                    continue
+                start, stop, target_offset = model._revision_window_bounds(
+                    target_position, delay, len(indices)
+                )
+                if stop != cutoff + 1:
+                    raise RuntimeError("局部窗口滚动回修训练边界不一致。")
+                win_indices = indices[start:stop]
+                windows.append(win_indices)
+                target_group_indices.append(virtual_group)
+                target_col_indices.append(target_offset)
+                revision_rows.append(indices[target_position])
+                revision_delays.append(delay)
+                virtual_group += 1
+
+    num_windows = len(windows)
+    max_win_len = max((len(w) for w in windows), default=1)
+    # 填充位统一指向 batch_len（即 F.pad(z_batch, (0, 0, 0, 1)) 末尾的全零行）
+    win_idx_np = np.full((num_windows, max_win_len), batch_len, dtype=np.int64)
+    mask_np = np.zeros((num_windows, max_win_len), dtype=np.bool_)
+    for g, w in enumerate(windows):
+        w_len = len(w)
+        win_idx_np[g, :w_len] = w
+        mask_np[g, :w_len] = True
+
+    return {
+        "win_idx_2d": torch.from_numpy(win_idx_np).to(
+            device=device, dtype=torch.long, non_blocking=True
+        ),
+        "mask_2d": torch.from_numpy(mask_np).to(
+            device=device, dtype=torch.bool, non_blocking=True
+        ),
+        "target_group_idx": torch.as_tensor(
+            target_group_indices, device=device, dtype=torch.long
+        ),
+        "target_col_idx": torch.as_tensor(
+            target_col_indices, device=device, dtype=torch.long
+        ),
+        "revision_rows": torch.as_tensor(
+            revision_rows, device=device, dtype=torch.long
+        ),
+        "revision_delays": torch.as_tensor(
+            revision_delays, device=device, dtype=torch.long
+        ),
+    }
+
+
+def build_padded_context_group_plan(
+    model,
+    group_indices: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    """为 Stage 2.1 (context) 构建 2D 句子填充索引矩阵与逆向还原索引。"""
+    device = group_indices.device
+    batch_len = int(len(group_indices))
+    if getattr(model, "context_mode", "grouped") == "singleton":
+        group_values = list(range(batch_len))
+    else:
+        group_values = group_indices.detach().cpu().tolist()
+
+    groups: dict[int, list[int]] = {}
+    for row_index, group in enumerate(group_values):
+        groups.setdefault(int(group), []).append(row_index)
+
+    group_list = list(groups.values())
+    num_groups = len(group_list)
+    max_len = max((len(g) for g in group_list), default=1)
+    win_idx_np = np.full((num_groups, max_len), batch_len, dtype=np.int64)
+    mask_np = np.zeros((num_groups, max_len), dtype=np.bool_)
+    row_to_group = np.zeros(batch_len, dtype=np.int64)
+    row_to_col = np.zeros(batch_len, dtype=np.int64)
+
+    for g_idx, rows in enumerate(group_list):
+        g_len = len(rows)
+        win_idx_np[g_idx, :g_len] = rows
+        mask_np[g_idx, :g_len] = True
+        for col_idx, r in enumerate(rows):
+            row_to_group[r] = g_idx
+            row_to_col[r] = col_idx
+
+    return {
+        "win_idx_2d": torch.from_numpy(win_idx_np).to(
+            device=device, dtype=torch.long, non_blocking=True
+        ),
+        "mask_2d": torch.from_numpy(mask_np).to(
+            device=device, dtype=torch.bool, non_blocking=True
+        ),
+        "row_to_group": torch.from_numpy(row_to_group).to(
+            device=device, dtype=torch.long, non_blocking=True
+        ),
+        "row_to_col": torch.from_numpy(row_to_col).to(
+            device=device, dtype=torch.long, non_blocking=True
+        ),
+    }
+
+
 def build_revision_window_plan(
     model,
     group_indices: torch.Tensor,
@@ -574,7 +804,7 @@ def build_revision_window_plan(
 
     device = group_indices.device
     flat_batch_positions: list[int] = []
-    prefix_groups: list[torch.Tensor] = []
+    prefix_groups_np: list[np.ndarray] = []
     revision_rows: list[int] = []
     revision_delays: list[int] = []
     prefix_target_locations: list[int] = []
@@ -600,13 +830,8 @@ def build_revision_window_plan(
             if model.prefix_revision_protocol == "full_prefix":
                 win_indices = indices[: cutoff + 1]
                 flat_batch_positions.extend(win_indices)
-                prefix_groups.append(
-                    torch.full(
-                        (len(win_indices),),
-                        virtual_group,
-                        device=device,
-                        dtype=group_indices.dtype,
-                    )
+                prefix_groups_np.append(
+                    np.full(len(win_indices), virtual_group, dtype=np.int64)
                 )
                 for delay in model.prefix_revision_horizons:
                     target_position = cutoff - delay
@@ -630,13 +855,8 @@ def build_revision_window_plan(
                     raise RuntimeError("局部窗口滚动回修训练边界不一致。")
                 win_indices = indices[start:stop]
                 flat_batch_positions.extend(win_indices)
-                prefix_groups.append(
-                    torch.full(
-                        (len(win_indices),),
-                        virtual_group,
-                        device=device,
-                        dtype=group_indices.dtype,
-                    )
+                prefix_groups_np.append(
+                    np.full(len(win_indices), virtual_group, dtype=np.int64)
                 )
                 prefix_target_locations.append(cursor + target_offset)
                 revision_rows.append(indices[target_position])
@@ -646,7 +866,9 @@ def build_revision_window_plan(
 
     return (
         torch.as_tensor(flat_batch_positions, device=device, dtype=torch.long),
-        torch.cat(prefix_groups, dim=0),
+        torch.from_numpy(np.concatenate(prefix_groups_np, axis=0)).to(
+            device=device, dtype=group_indices.dtype
+        ),
         torch.as_tensor(
             prefix_target_locations, device=device, dtype=torch.long
         ),
@@ -664,6 +886,7 @@ def forward_revision_from_preextracted(
     cutoff_generator=None,
     cutoff_policy: str = "all",
     synchronize_dropout_rng: bool = True,
+    padded_plan: dict[str, torch.Tensor] | None = None,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor | None,
@@ -671,6 +894,82 @@ def forward_revision_from_preextracted(
     torch.Tensor,
 ]:
     """在预提取 CNN 特征上运行共享上下文 Transformer，返回 (y_clean, y_shift_mean, revision_rows, revision_delays)。"""
+    if _can_use_fast_padded_transformer(model):
+        plan = (
+            padded_plan
+            if padded_plan is not None
+            else build_padded_revision_window_plan(
+                model,
+                group_indices,
+                cutoff_generator=cutoff_generator,
+                cutoff_policy=cutoff_policy,
+            )
+        )
+        win_idx_2d = plan["win_idx_2d"]
+        mask_2d = plan["mask_2d"]
+        target_group_idx = plan["target_group_idx"]
+        target_col_idx = plan["target_col_idx"]
+        revision_rows = plan["revision_rows"]
+        revision_delays = plan["revision_delays"]
+
+        clean_padded = F.pad(clean_z_batch, (0, 0, 0, 1))[win_idx_2d]
+        cpu_rng_state = (
+            torch.get_rng_state() if synchronize_dropout_rng else None
+        )
+        cuda_device = (
+            clean_padded.device.index
+            if (synchronize_dropout_rng and clean_padded.is_cuda)
+            else None
+        )
+        cuda_rng_state = (
+            torch.cuda.get_rng_state(cuda_device)
+            if cuda_device is not None
+            else None
+        )
+
+        clean_revised = _run_fast_padded_transformer(
+            model.context_transformer,
+            clean_padded,
+            mask_2d,
+            causal_override=False,
+        )
+        y_clean = F.normalize(
+            clean_revised[target_group_idx, target_col_idx], dim=-1
+        )
+
+        if not shifted_z_batches:
+            return y_clean, None, revision_rows, revision_delays
+
+        fork_devices = [] if cuda_device is None else [cuda_device]
+        y_shift_list: list[torch.Tensor] = []
+        for shift_z in shifted_z_batches:
+            shift_padded = F.pad(shift_z, (0, 0, 0, 1))[win_idx_2d]
+            if synchronize_dropout_rng and cpu_rng_state is not None:
+                with torch.random.fork_rng(devices=fork_devices):
+                    torch.set_rng_state(cpu_rng_state)
+                    if cuda_rng_state is not None:
+                        torch.cuda.set_rng_state(cuda_rng_state, cuda_device)
+                    shift_revised = _run_fast_padded_transformer(
+                        model.context_transformer,
+                        shift_padded,
+                        mask_2d,
+                        causal_override=False,
+                    )
+            else:
+                shift_revised = _run_fast_padded_transformer(
+                    model.context_transformer,
+                    shift_padded,
+                    mask_2d,
+                    causal_override=False,
+                )
+            y_shift_m = F.normalize(
+                shift_revised[target_group_idx, target_col_idx], dim=-1
+            )
+            y_shift_list.append(y_shift_m)
+
+        y_shift_mean = torch.stack(y_shift_list, dim=0).mean(dim=0)
+        return y_clean, y_shift_mean, revision_rows, revision_delays
+
     (
         window_positions,
         prefix_group_indices,
@@ -751,8 +1050,66 @@ def forward_context_from_preextracted(
     *,
     shifted_z_batches: list[torch.Tensor] | None = None,
     synchronize_dropout_rng: bool = True,
+    padded_plan: dict[str, torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """针对 Stage 2.1 (context) 在预提取 CNN 特征上运行共享 Transformer，返回 (y_clean, y_shift_mean)。"""
+    if _can_use_fast_padded_transformer(model):
+        plan = (
+            padded_plan
+            if padded_plan is not None
+            else build_padded_context_group_plan(model, group_indices)
+        )
+        win_idx_2d = plan["win_idx_2d"]
+        mask_2d = plan["mask_2d"]
+        row_to_group = plan["row_to_group"]
+        row_to_col = plan["row_to_col"]
+
+        clean_padded = F.pad(clean_z_batch, (0, 0, 0, 1))[win_idx_2d]
+        cpu_rng_state = (
+            torch.get_rng_state() if synchronize_dropout_rng else None
+        )
+        cuda_device = (
+            clean_padded.device.index
+            if (synchronize_dropout_rng and clean_padded.is_cuda)
+            else None
+        )
+        cuda_rng_state = (
+            torch.cuda.get_rng_state(cuda_device)
+            if cuda_device is not None
+            else None
+        )
+
+        clean_encoded = _run_fast_padded_transformer(
+            model.context_transformer, clean_padded, mask_2d
+        )
+        y_clean = F.normalize(clean_encoded[row_to_group, row_to_col], dim=-1)
+
+        if not shifted_z_batches:
+            return y_clean, None
+
+        fork_devices = [] if cuda_device is None else [cuda_device]
+        y_shift_list: list[torch.Tensor] = []
+        for shift_z in shifted_z_batches:
+            shift_padded = F.pad(shift_z, (0, 0, 0, 1))[win_idx_2d]
+            if synchronize_dropout_rng and cpu_rng_state is not None:
+                with torch.random.fork_rng(devices=fork_devices):
+                    torch.set_rng_state(cpu_rng_state)
+                    if cuda_rng_state is not None:
+                        torch.cuda.set_rng_state(cuda_rng_state, cuda_device)
+                    shift_encoded = _run_fast_padded_transformer(
+                        model.context_transformer, shift_padded, mask_2d
+                    )
+            else:
+                shift_encoded = _run_fast_padded_transformer(
+                    model.context_transformer, shift_padded, mask_2d
+                )
+            y_shift_list.append(
+                F.normalize(shift_encoded[row_to_group, row_to_col], dim=-1)
+            )
+
+        y_shift_mean = torch.stack(y_shift_list, dim=0).mean(dim=0)
+        return y_clean, y_shift_mean
+
     clean_input = clean_z_batch
     if model.context_mode == "singleton":
         group_indices = torch.arange(
@@ -1253,6 +1610,60 @@ def _forward_prefix_revisions_from_z(
     batch_size = int(
         getattr(model, "prefix_revision_validation_query_batch_size", 512)
     )
+    if _can_use_fast_padded_transformer(model):
+        n_rows = int(len(brain_embedding))
+        z_pad = F.pad(brain_embedding, (0, 0, 0, 1))
+        for delay in model.prefix_revision_horizons:
+            delayed = torch.empty_like(brain_embedding)
+            for start in range(0, n_rows, batch_size):
+                stop = min(start + batch_size, n_rows)
+                chunk_len = stop - start
+                windows: list[list[int]] = []
+                target_cols: list[int] = []
+                for row_index in range(start, stop):
+                    indices, position = row_to_group[row_index]
+                    window_start, window_stop, target_offset = (
+                        model._revision_window_bounds(
+                            position, delay, len(indices)
+                        )
+                    )
+                    windows.append(indices[window_start:window_stop])
+                    target_cols.append(int(target_offset))
+                max_w_len = max((len(w) for w in windows), default=1)
+                win_idx_np = np.full(
+                    (chunk_len, max_w_len), n_rows, dtype=np.int64
+                )
+                mask_np = np.zeros((chunk_len, max_w_len), dtype=np.bool_)
+                for g, w in enumerate(windows):
+                    w_len = len(w)
+                    win_idx_np[g, :w_len] = w
+                    mask_np[g, :w_len] = True
+                win_idx_2d = torch.from_numpy(win_idx_np).to(
+                    device=brain_embedding.device, dtype=torch.long
+                )
+                mask_2d = torch.from_numpy(mask_np).to(
+                    device=brain_embedding.device, dtype=torch.bool
+                )
+                target_col_t = torch.as_tensor(
+                    target_cols,
+                    device=brain_embedding.device,
+                    dtype=torch.long,
+                )
+                row_arange = torch.arange(
+                    chunk_len, device=brain_embedding.device, dtype=torch.long
+                )
+                revised = _run_fast_padded_transformer(
+                    model.context_transformer,
+                    z_pad[win_idx_2d],
+                    mask_2d,
+                    causal_override=False,
+                )
+                delayed[start:stop] = F.normalize(
+                    revised[row_arange, target_col_t], dim=-1
+                )
+            outputs[int(delay)] = delayed
+        return outputs
+
     for delay in model.prefix_revision_horizons:
         delayed = torch.empty_like(brain_embedding)
         for start in range(0, len(brain_embedding), batch_size):
