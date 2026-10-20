@@ -21,7 +21,7 @@ workflow:
   subject: all
   precision: bf16-mixed
   # 继承 ../pallier2025_rolling_revision.yaml 的 window_seconds（当前 0.5s，也可改为 1.0s）
-  window_seconds: 0.5
+  window_seconds: 1
   window_start_offset_seconds: 0.0
 
 training:
@@ -38,7 +38,7 @@ training:
 siamese_debiased:
   enabled: true
   # 前向孪生共模扣除权重 eta_train（建议尝试 0.8 或 0.5）
-  eta_train: 0.8
+  eta_train: 1
   # 错位零化正则权重 lambda_null（惩罚错位分支在中心化训练词表上的非均匀打分）
   lambda_null: 10.0
   # 同受试者、同连续录音内的圆周时间错位候选池（秒）
