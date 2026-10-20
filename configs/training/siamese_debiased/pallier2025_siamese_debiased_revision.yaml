@@ -44,7 +44,7 @@ siamese_debiased:
   # 同受试者、同连续录音内的圆周时间错位候选池（秒）
   shift_seconds: [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
   # 每个训练 step 从 6 个平移量中随机抽取的分支数 M（预提取 CNN 后可设为 2 或 6）
-  shifts_per_step: 2
+  shifts_per_step: 6
   # Clean 与 Shifted 分支通过共享 Transformer 时同步 Dropout RNG 掩码，确保纯时序特征精确相消
   synchronize_dropout_rng: true
   # 启动前一次性预提取冻结 Stage-1 CNN 特征（提速 5-8 倍）

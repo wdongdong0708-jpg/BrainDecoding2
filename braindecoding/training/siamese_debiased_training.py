@@ -400,6 +400,198 @@ def _preextracted_cache_path(
     return cache_dir / f"{subset_tag}_{win_tag}_{digest}.pt"
 
 
+def _build_static_revision_train_table(
+    model,
+    sentence_indices: torch.Tensor,
+    device: torch.device,
+) -> dict[str, torch.Tensor] | None:
+    """在训练开始前一次性构建全数据集行级局部修订窗口 GPU 静态查表 [N, H, L_max]。
+
+    当 preserve_complete_groups=True 且 cutoff_policy='all' 时，每个训练步无需任何
+    CPU/Python 循环即可直接在 GPU 显存中完成 Clean 与 Shifted 分支的 2D 窗口索引。
+    """
+    if not getattr(model, "prefix_revision_enabled", False):
+        return None
+    if getattr(model, "prefix_revision_protocol", "local_window") == "full_prefix":
+        return None
+
+    horizons = tuple(int(d) for d in getattr(model, "prefix_revision_horizons", (0, 1, 2)))
+    num_horizons = len(horizons)
+    history_radius = int(getattr(model, "prefix_revision_history_radius", 2))
+    max_win_len = history_radius + max(horizons, default=0) + 1
+    n_rows = int(len(sentence_indices))
+
+    groups = model._ordered_groups(sentence_indices)
+    win_idx_np = np.full((n_rows, num_horizons, max_win_len), n_rows, dtype=np.int64)
+    mask_np = np.zeros((n_rows, num_horizons, max_win_len), dtype=np.bool_)
+    target_col_np = np.zeros((n_rows, num_horizons), dtype=np.int64)
+    valid_delay_np = np.zeros((n_rows, num_horizons), dtype=np.bool_)
+    group_pos_np = np.zeros(n_rows, dtype=np.int64)
+
+    for indices in groups:
+        g_len = len(indices)
+        for cutoff, global_row in enumerate(indices):
+            group_pos_np[global_row] = cutoff
+            for h_idx, delay in enumerate(horizons):
+                target_pos = cutoff - delay
+                if target_pos < 0:
+                    continue
+                start, stop, target_offset = model._revision_window_bounds(
+                    target_pos, delay, g_len
+                )
+                w = indices[start:stop]
+                w_len = len(w)
+                win_idx_np[global_row, h_idx, :w_len] = w
+                mask_np[global_row, h_idx, :w_len] = True
+                target_col_np[global_row, h_idx] = int(target_offset)
+                valid_delay_np[global_row, h_idx] = True
+
+    return {
+        "row_win_global_idx": torch.from_numpy(win_idx_np).to(
+            device=device, dtype=torch.long
+        ),
+        "row_win_mask": torch.from_numpy(mask_np).to(
+            device=device, dtype=torch.bool
+        ),
+        "row_target_col": torch.from_numpy(target_col_np).to(
+            device=device, dtype=torch.long
+        ),
+        "row_valid_delay": torch.from_numpy(valid_delay_np).to(
+            device=device, dtype=torch.bool
+        ),
+        "row_group_pos": torch.from_numpy(group_pos_np).to(
+            device=device, dtype=torch.long
+        ),
+        "horizons_tensor": torch.as_tensor(
+            horizons, device=device, dtype=torch.long
+        ),
+    }
+
+
+def _build_static_revision_eval_table(
+    model,
+    sentence_indices: torch.Tensor,
+    device: torch.device,
+) -> dict[int, dict[str, torch.Tensor]] | None:
+    """在训练开始前一次性构建验证集/评估集各延迟视野的 GPU 静态窗口查表。"""
+    if not getattr(model, "prefix_revision_enabled", False):
+        return None
+    if getattr(model, "prefix_revision_protocol", "local_window") == "full_prefix":
+        return None
+
+    horizons = tuple(int(d) for d in getattr(model, "prefix_revision_horizons", (0, 1, 2)))
+    history_radius = int(getattr(model, "prefix_revision_history_radius", 2))
+    n_rows = int(len(sentence_indices))
+    groups = model._ordered_groups(sentence_indices)
+    avail_masks = model.revision_availability_masks(sentence_indices)
+
+    table_by_delay: dict[int, dict[str, torch.Tensor]] = {}
+    for delay in horizons:
+        max_w_len = history_radius + int(delay) + 1
+        win_idx_np = np.full((n_rows, max_w_len), n_rows, dtype=np.int64)
+        mask_np = np.zeros((n_rows, max_w_len), dtype=np.bool_)
+        target_col_np = np.zeros(n_rows, dtype=np.int64)
+
+        for indices in groups:
+            g_len = len(indices)
+            for position, global_row in enumerate(indices):
+                start, stop, target_offset = model._revision_window_bounds(
+                    position, delay, g_len
+                )
+                w = indices[start:stop]
+                w_len = len(w)
+                win_idx_np[global_row, :w_len] = w
+                mask_np[global_row, :w_len] = True
+                target_col_np[global_row] = int(target_offset)
+
+        table_by_delay[int(delay)] = {
+            "win_global_idx": torch.from_numpy(win_idx_np).to(
+                device=device, dtype=torch.long
+            ),
+            "win_mask": torch.from_numpy(mask_np).to(
+                device=device, dtype=torch.bool
+            ),
+            "target_col": torch.from_numpy(target_col_np).to(
+                device=device, dtype=torch.long
+            ),
+            "avail_mask": avail_masks[int(delay)].to(
+                device=device, dtype=torch.bool
+            ),
+        }
+    return table_by_delay
+
+
+def _finalize_gpu_preextracted_bundle(
+    model,
+    train_ds,
+    val_ds,
+    train_clean_z: torch.Tensor,
+    train_shifted_z: dict[float, torch.Tensor],
+    val_clean_z: torch.Tensor,
+    device: torch.device,
+    *,
+    cache_file: Path | None,
+    loaded_from_disk: bool,
+    elapsed: float,
+) -> dict:
+    """将预提取张量、尾部零填充视图及全数据集静态 GPU 窗口查表常驻于 GPU 显存。"""
+    train_meta = _extract_static_dataset_metadata(train_ds, device)
+    val_meta = _extract_static_dataset_metadata(val_ds, device)
+
+    train_clean_z = train_clean_z.to(device=device, dtype=torch.float32).contiguous()
+    val_clean_z = val_clean_z.to(device=device, dtype=torch.float32).contiguous()
+    train_shifted_z = {
+        float(k): v.to(device=device, dtype=torch.float32).contiguous()
+        for k, v in train_shifted_z.items()
+    }
+
+    train_clean_z_pad = F.pad(train_clean_z, (0, 0, 0, 1)).contiguous()
+    val_clean_z_pad = F.pad(val_clean_z, (0, 0, 0, 1)).contiguous()
+    train_shifted_z_pad = {
+        float(k): F.pad(v, (0, 0, 0, 1)).contiguous()
+        for k, v in train_shifted_z.items()
+    }
+
+    train_static_rev = _build_static_revision_train_table(
+        model, train_meta["sentence_indices"], device
+    )
+    val_static_rev = _build_static_revision_eval_table(
+        model, val_meta["sentence_indices"], device
+    )
+    val_meta["clean_z_pad"] = val_clean_z_pad
+    val_meta["static_revision_table"] = val_static_rev
+
+    total_vram_bytes = (
+        train_clean_z_pad.numel() * train_clean_z_pad.element_size()
+        + val_clean_z_pad.numel() * val_clean_z_pad.element_size()
+        + sum(t.numel() * t.element_size() for t in train_shifted_z_pad.values())
+    )
+    vram_mb = total_vram_bytes / (1024.0 * 1024.0)
+    src_tag = f"Loaded from {cache_file}" if loaded_from_disk else "Extracted & cached"
+    print(
+        f" [Pre-Extract Cache] {src_tag} in {elapsed:.2f}s | "
+        f"Resident in GPU VRAM ({device}): {vram_mb:.1f} MB "
+        f"(train={len(train_ds):,}, shifts={len(train_shifted_z)}, val={len(val_ds):,}; "
+        f"raw MEG DataLoader & cnn(x) 100% bypassed)",
+        flush=True,
+    )
+    return {
+        "train_clean_z": train_clean_z,
+        "train_clean_z_pad": train_clean_z_pad,
+        "train_shifted_z": train_shifted_z,
+        "train_shifted_z_pad": train_shifted_z_pad,
+        "val_clean_z": val_clean_z,
+        "val_clean_z_pad": val_clean_z_pad,
+        "train_meta": train_meta,
+        "val_meta": val_meta,
+        "train_static_revision_table": train_static_rev,
+        "val_static_revision_table": val_static_rev,
+        "cache_file": str(cache_file) if cache_file is not None else None,
+        "loaded_from_disk": bool(loaded_from_disk),
+        "seconds": float(elapsed),
+    }
+
+
 def preextract_frozen_cnn_features(
     model,
     train_ds,
@@ -444,36 +636,19 @@ def preextract_frozen_cnn_features(
                     and len(saved["train_clean_z"]) == len(train_ds)
                     and len(saved["val_clean_z"]) == len(val_ds)
                 ):
-                    train_clean_z = saved["train_clean_z"].to(
-                        device=device, dtype=torch.float32
-                    )
-                    val_clean_z = saved["val_clean_z"].to(
-                        device=device, dtype=torch.float32
-                    )
-                    train_shifted_z = {
-                        float(k): v.to(device=device, dtype=torch.float32)
-                        for k, v in (saved.get("train_shifted_z") or {}).items()
-                    }
                     elapsed = time.perf_counter() - t0
-                    print(
-                        f" [Pre-Extract Cache] Loaded frozen CNN features from {cache_file} in {elapsed:.2f}s "
-                        f"(train={len(train_ds):,}, shifts={len(train_shifted_z)}, val={len(val_ds):,})",
-                        flush=True,
+                    return _finalize_gpu_preextracted_bundle(
+                        model,
+                        train_ds,
+                        val_ds,
+                        saved["train_clean_z"],
+                        saved.get("train_shifted_z") or {},
+                        saved["val_clean_z"],
+                        device,
+                        cache_file=cache_file,
+                        loaded_from_disk=True,
+                        elapsed=elapsed,
                     )
-                    return {
-                        "train_clean_z": train_clean_z,
-                        "train_shifted_z": train_shifted_z,
-                        "val_clean_z": val_clean_z,
-                        "train_meta": _extract_static_dataset_metadata(
-                            train_ds, device
-                        ),
-                        "val_meta": _extract_static_dataset_metadata(
-                            val_ds, device
-                        ),
-                        "cache_file": str(cache_file),
-                        "loaded_from_disk": True,
-                        "seconds": float(elapsed),
-                    }
             except Exception:
                 pass
 
@@ -539,24 +714,18 @@ def preextract_frozen_cnn_features(
             pass
 
     elapsed = time.perf_counter() - t0
-    print(
-        f" [Pre-Extract Cache] Completed frozen CNN pre-extraction in {elapsed:.1f}s "
-        f"(train={len(train_ds):,}, shifts={len(train_shifted_cpu)}, val={len(val_ds):,})",
-        flush=True,
+    return _finalize_gpu_preextracted_bundle(
+        model,
+        train_ds,
+        val_ds,
+        train_clean_cpu,
+        train_shifted_cpu,
+        val_clean_cpu,
+        device,
+        cache_file=cache_file,
+        loaded_from_disk=False,
+        elapsed=elapsed,
     )
-    return {
-        "train_clean_z": train_clean_cpu.to(device=device, dtype=torch.float32),
-        "train_shifted_z": {
-            float(k): v.to(device=device, dtype=torch.float32)
-            for k, v in train_shifted_cpu.items()
-        },
-        "val_clean_z": val_clean_cpu.to(device=device, dtype=torch.float32),
-        "train_meta": _extract_static_dataset_metadata(train_ds, device),
-        "val_meta": _extract_static_dataset_metadata(val_ds, device),
-        "cache_file": str(cache_file) if cache_file is not None else None,
-        "loaded_from_disk": False,
-        "seconds": float(elapsed),
-    }
 
 
 def _can_use_fast_padded_transformer(model) -> bool:
@@ -575,14 +744,281 @@ def _can_use_fast_padded_transformer(model) -> bool:
     )
 
 
+def _can_use_direct_layer_loop(
+    ctx,
+    *,
+    use_causal_attention: bool,
+) -> bool:
+    """检查是否可直接执行零冗余同步、支持末层单目标剪枝与多分支共享 Dropout 的原生层循环。"""
+    enc = getattr(ctx, "encoder", None)
+    if enc is None:
+        return False
+    return (
+        getattr(ctx, "local_relative_position_bias", None) is None
+        and int(getattr(ctx, "local_attention_heads", 0)) == 0
+        and getattr(ctx, "hierarchical_attention_radii", None) is None
+        and int(getattr(ctx, "shared_passes", 1)) == 1
+        and not bool(use_causal_attention)
+        and not bool(getattr(enc, "residual_attn", False))
+        and not bool(getattr(enc, "add_value_residual", False))
+        and getattr(enc, "rel_pos", None) is None
+    )
+
+
+def _apply_rotary_pos_emb_fast(
+    t: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+) -> torch.Tensor:
+    """在不触发 float32 强制回退的前提下应用部分旋转位置编码（与 x_transformers 逐位等价）。"""
+    rot_dim = int(cos.shape[-1])
+    t_rot, t_unrot = t[..., :rot_dim], t[..., rot_dim:]
+    t_reshaped = t_rot.reshape(*t_rot.shape[:-1], rot_dim // 2, 2)
+    t1, t2 = t_reshaped.unbind(dim=-1)
+    t_half = torch.stack((-t2, t1), dim=-1).reshape_as(t_rot)
+    t_rot = (t_rot * cos) + (t_half * sin)
+    return torch.cat((t_rot, t_unrot), dim=-1)
+
+
+def _apply_siamese_shared_dropout(
+    attn: torch.Tensor,
+    dropout_module: torch.nn.Module,
+    *,
+    num_branches: int,
+    synchronize_dropout_rng: bool,
+) -> torch.Tensor:
+    """在单次融合前向中为 Clean 与 M 个 Shifted 分支施加完全相同的注意力/前馈 Dropout 掩码。"""
+    p = float(getattr(dropout_module, "p", 0.0))
+    if not dropout_module.training or p <= 0.0:
+        return attn
+    if num_branches <= 1 or not synchronize_dropout_rng:
+        return dropout_module(attn)
+    branch_g = attn.shape[0] // num_branches
+    reshaped = attn.view(num_branches, branch_g, *attn.shape[1:])
+    shared_mask = F.dropout(
+        torch.ones_like(reshaped[:1]),
+        p=p,
+        training=True,
+        inplace=False,
+    )
+    return (reshaped * shared_mask).view_as(attn)
+
+
+def _run_ff_with_shared_dropout(
+    block: torch.nn.Module,
+    x_norm: torch.Tensor,
+    *,
+    num_branches: int,
+    synchronize_dropout_rng: bool,
+) -> torch.Tensor:
+    """在前馈层中支持跨孪生分支共享 Dropout 掩码（当 ff_dropout=0 时零开销直通）。"""
+    if not block.training or num_branches <= 1 or not synchronize_dropout_rng:
+        return block(x_norm)
+    ff_seq = getattr(block, "ff", None)
+    if ff_seq is None or not any(
+        isinstance(m, torch.nn.Dropout) and float(getattr(m, "p", 0.0)) > 0.0
+        for m in ff_seq.modules()
+    ):
+        return block(x_norm)
+    h = x_norm
+    for mod in ff_seq:
+        if isinstance(mod, torch.nn.Sequential):
+            for sub in mod:
+                if isinstance(sub, torch.nn.Dropout):
+                    h = _apply_siamese_shared_dropout(
+                        h,
+                        sub,
+                        num_branches=num_branches,
+                        synchronize_dropout_rng=synchronize_dropout_rng,
+                    )
+                else:
+                    h = sub(h)
+        elif isinstance(mod, torch.nn.Dropout):
+            h = _apply_siamese_shared_dropout(
+                h,
+                mod,
+                num_branches=num_branches,
+                synchronize_dropout_rng=synchronize_dropout_rng,
+            )
+        else:
+            h = mod(h)
+    return h
+
+
 def _run_fast_padded_transformer(
     ctx,
     padded: torch.Tensor,
     mask: torch.Tensor,
     *,
     causal_override: bool | None = None,
+    target_col_idx: torch.Tensor | None = None,
+    num_branches: int = 1,
+    synchronize_dropout_rng: bool = True,
 ) -> torch.Tensor:
-    """在已构建好的 [G, L_max, D] 填充张量与 [G, L_max] 掩码上直接执行 Transformer（零 Python 循环）。"""
+    """在已构建好的 [G, L_max, D] 填充张量与 [G, L_max] 掩码上直接执行 Transformer（零 Python 循环）。
+
+    当传入 `target_col_idx`（形状 [G]）且满足直接层循环条件时，第 16 层（末层）仅对
+    每个窗口的目标词位计算 Query、输出投影与 FeedForward，省去末层 80% 冗余计算并直接返回 [G, D]。
+    """
+    use_causal_attention = (
+        ctx.causal_attention
+        if causal_override is None
+        else bool(causal_override)
+    )
+    if _can_use_direct_layer_loop(ctx, use_causal_attention=use_causal_attention):
+        enc = ctx.encoder
+        bsz, max_len, dim = padded.shape
+        work_dtype = (
+            torch.get_autocast_gpu_dtype()
+            if (padded.is_cuda and torch.is_autocast_enabled())
+            else padded.dtype
+        )
+        x = padded.to(dtype=work_dtype)
+        pos = torch.arange(max_len, device=x.device)
+        if enc.rotary_pos_emb is not None:
+            freqs, _ = enc.rotary_pos_emb(pos)
+            if freqs.ndim == 3:
+                freqs = freqs[0]
+            cos_full = freqs.cos().to(dtype=work_dtype)[None, None, :, :]
+            sin_full = freqs.sin().to(dtype=work_dtype)[None, None, :, :]
+            if target_col_idx is not None:
+                cos_t = (
+                    cos_full[:, :, target_col_idx, :]
+                    .squeeze(0)
+                    .transpose(0, 1)
+                    .unsqueeze(2)
+                )
+                sin_t = (
+                    sin_full[:, :, target_col_idx, :]
+                    .squeeze(0)
+                    .transpose(0, 1)
+                    .unsqueeze(2)
+                )
+            else:
+                cos_t = sin_t = None
+        else:
+            cos_full = sin_full = cos_t = sin_t = None
+
+        key_mask = mask[:, None, None, :]
+        mask_3d = mask.unsqueeze(-1)
+        num_layers = len(enc.layers)
+        row_arange = (
+            torch.arange(bsz, device=x.device, dtype=torch.long)
+            if target_col_idx is not None
+            else None
+        )
+
+        for ind, (layer_type, layer_tuple) in enumerate(
+            zip(enc.layer_types, enc.layers)
+        ):
+            norms, block, residual_fn = layer_tuple
+            pre_norm, post_branch_norm, post_main_norm = norms
+            is_last_attn = target_col_idx is not None and ind == num_layers - 2
+            is_last_ff = target_col_idx is not None and ind == num_layers - 1
+
+            if is_last_attn:
+                residual = x[row_arange, target_col_idx].unsqueeze(1)
+                x_norm = (
+                    pre_norm(x).to(dtype=work_dtype)
+                    if pre_norm is not None
+                    else x
+                )
+                q_in = x_norm[row_arange, target_col_idx].unsqueeze(1)
+                heads = int(block.heads)
+                q = block.to_q(q_in).view(bsz, 1, heads, -1).transpose(1, 2)
+                k = block.to_k(x_norm).view(bsz, max_len, heads, -1).transpose(1, 2)
+                v = block.to_v(x_norm).view(bsz, max_len, heads, -1).transpose(1, 2)
+                if cos_full is not None:
+                    q = _apply_rotary_pos_emb_fast(q, cos_t, sin_t)
+                    k = _apply_rotary_pos_emb_fast(k, cos_full, sin_full)
+                scale = q.shape[-1] ** -0.5
+                sim = torch.matmul(q, k.transpose(-1, -2)) * scale
+                sim = sim.masked_fill(~key_mask, -torch.finfo(sim.dtype).max)
+                attn = F.softmax(sim, dim=-1).to(dtype=work_dtype)
+                attn = _apply_siamese_shared_dropout(
+                    attn,
+                    block.attend.attn_dropout,
+                    num_branches=num_branches,
+                    synchronize_dropout_rng=synchronize_dropout_rng,
+                )
+                out = torch.matmul(attn, v).transpose(1, 2).reshape(bsz, 1, -1)
+                out = block.to_out(out)
+                if post_branch_norm is not None:
+                    out = post_branch_norm(out)
+                x = residual_fn(out, residual).to(dtype=work_dtype)
+                if post_main_norm is not None:
+                    x = post_main_norm(x).to(dtype=work_dtype)
+            elif is_last_ff:
+                residual = x
+                x_norm = (
+                    pre_norm(x).to(dtype=work_dtype)
+                    if pre_norm is not None
+                    else x
+                )
+                out = _run_ff_with_shared_dropout(
+                    block,
+                    x_norm,
+                    num_branches=num_branches,
+                    synchronize_dropout_rng=synchronize_dropout_rng,
+                )
+                if post_branch_norm is not None:
+                    out = post_branch_norm(out)
+                x = residual_fn(out, residual).to(dtype=work_dtype)
+                if post_main_norm is not None:
+                    x = post_main_norm(x).to(dtype=work_dtype)
+            elif layer_type == "a":
+                residual = x
+                x_norm = (
+                    pre_norm(x).to(dtype=work_dtype)
+                    if pre_norm is not None
+                    else x
+                )
+                heads = int(block.heads)
+                q = block.to_q(x_norm).view(bsz, max_len, heads, -1).transpose(1, 2)
+                k = block.to_k(x_norm).view(bsz, max_len, heads, -1).transpose(1, 2)
+                v = block.to_v(x_norm).view(bsz, max_len, heads, -1).transpose(1, 2)
+                if cos_full is not None:
+                    q = _apply_rotary_pos_emb_fast(q, cos_full, sin_full)
+                    k = _apply_rotary_pos_emb_fast(k, cos_full, sin_full)
+                scale = q.shape[-1] ** -0.5
+                sim = torch.matmul(q, k.transpose(-1, -2)) * scale
+                sim = sim.masked_fill(~key_mask, -torch.finfo(sim.dtype).max)
+                attn = F.softmax(sim, dim=-1).to(dtype=work_dtype)
+                attn = _apply_siamese_shared_dropout(
+                    attn,
+                    block.attend.attn_dropout,
+                    num_branches=num_branches,
+                    synchronize_dropout_rng=synchronize_dropout_rng,
+                )
+                out = torch.matmul(attn, v).transpose(1, 2).reshape(bsz, max_len, -1)
+                out = block.to_out(out) * mask_3d
+                if post_branch_norm is not None:
+                    out = post_branch_norm(out)
+                x = residual_fn(out, residual).to(dtype=work_dtype)
+                if post_main_norm is not None:
+                    x = post_main_norm(x).to(dtype=work_dtype)
+            else:
+                residual = x
+                x_norm = (
+                    pre_norm(x).to(dtype=work_dtype)
+                    if pre_norm is not None
+                    else x
+                )
+                out = _run_ff_with_shared_dropout(
+                    block,
+                    x_norm,
+                    num_branches=num_branches,
+                    synchronize_dropout_rng=synchronize_dropout_rng,
+                )
+                if post_branch_norm is not None:
+                    out = post_branch_norm(out)
+                x = residual_fn(out, residual).to(dtype=work_dtype)
+                if post_main_norm is not None:
+                    x = post_main_norm(x).to(dtype=work_dtype)
+
+        x = enc.final_norm(x)
+        return x.squeeze(1) if target_col_idx is not None else x
+
     max_length = int(padded.shape[1])
     attention_bias = None
     if ctx.local_relative_position_bias is not None:
@@ -623,11 +1059,6 @@ def _run_fast_padded_transformer(
             attention_bias = attention_bias * directional_scale[:, None]
     attention_mask = ctx.local_global_attention_mask(max_length, padded.device)
     encoded = padded
-    use_causal_attention = (
-        ctx.causal_attention
-        if causal_override is None
-        else bool(causal_override)
-    )
     for _ in range(ctx.shared_passes):
         encoder_kwargs = {
             "mask": mask,
@@ -637,6 +1068,11 @@ def _run_fast_padded_transformer(
         if use_causal_attention:
             encoder_kwargs["causal"] = True
         encoded = ctx.encoder(encoded, **encoder_kwargs)
+    if target_col_idx is not None:
+        row_arange = torch.arange(
+            encoded.shape[0], device=encoded.device, dtype=torch.long
+        )
+        return encoded[row_arange, target_col_idx]
     return encoded
 
 
@@ -879,7 +1315,7 @@ def build_revision_window_plan(
 
 def forward_revision_from_preextracted(
     model,
-    clean_z_batch: torch.Tensor,
+    clean_z_batch: torch.Tensor | None,
     group_indices: torch.Tensor,
     *,
     shifted_z_batches: list[torch.Tensor] | None = None,
@@ -905,14 +1341,78 @@ def forward_revision_from_preextracted(
                 cutoff_policy=cutoff_policy,
             )
         )
-        win_idx_2d = plan["win_idx_2d"]
         mask_2d = plan["mask_2d"]
         target_group_idx = plan["target_group_idx"]
         target_col_idx = plan["target_col_idx"]
         revision_rows = plan["revision_rows"]
         revision_delays = plan["revision_delays"]
 
-        clean_padded = F.pad(clean_z_batch, (0, 0, 0, 1))[win_idx_2d]
+        if "clean_padded" in plan:
+            clean_padded = plan["clean_padded"]
+            shifted_padded_list = plan.get("shifted_padded_list")
+        else:
+            win_idx_2d = plan["win_idx_2d"]
+            clean_padded = F.pad(clean_z_batch, (0, 0, 0, 1))[win_idx_2d]
+            shifted_padded_list = (
+                [F.pad(shift_z, (0, 0, 0, 1))[win_idx_2d] for shift_z in shifted_z_batches]
+                if shifted_z_batches
+                else None
+            )
+
+        g_len = int(clean_padded.shape[0])
+        can_prune_last_layer = int(target_col_idx.shape[0]) == g_len
+
+        if not shifted_padded_list:
+            clean_out = _run_fast_padded_transformer(
+                model.context_transformer,
+                clean_padded,
+                mask_2d,
+                causal_override=False,
+                target_col_idx=target_col_idx if can_prune_last_layer else None,
+            )
+            if can_prune_last_layer:
+                y_clean = F.normalize(clean_out, dim=-1)
+            else:
+                y_clean = F.normalize(
+                    clean_out[target_group_idx, target_col_idx], dim=-1
+                )
+            return y_clean, None, revision_rows, revision_delays
+
+        if _can_use_direct_layer_loop(
+            model.context_transformer, use_causal_attention=False
+        ):
+            num_branches = 1 + len(shifted_padded_list)
+            all_padded = torch.cat([clean_padded, *shifted_padded_list], dim=0)
+            all_mask = mask_2d.repeat(num_branches, 1)
+            all_target_col = (
+                target_col_idx.repeat(num_branches)
+                if can_prune_last_layer
+                else None
+            )
+            all_out = _run_fast_padded_transformer(
+                model.context_transformer,
+                all_padded,
+                all_mask,
+                causal_override=False,
+                target_col_idx=all_target_col,
+                num_branches=num_branches,
+                synchronize_dropout_rng=synchronize_dropout_rng,
+            )
+            if can_prune_last_layer:
+                all_norm = F.normalize(all_out, dim=-1).view(
+                    num_branches, g_len, -1
+                )
+            else:
+                all_reshaped = all_out.view(
+                    num_branches, g_len, all_out.shape[1], all_out.shape[2]
+                )
+                all_norm = F.normalize(
+                    all_reshaped[:, target_group_idx, target_col_idx], dim=-1
+                )
+            y_clean = all_norm[0]
+            y_shift_mean = all_norm[1:].mean(dim=0)
+            return y_clean, y_shift_mean, revision_rows, revision_delays
+
         cpu_rng_state = (
             torch.get_rng_state() if synchronize_dropout_rng else None
         )
@@ -937,13 +1437,9 @@ def forward_revision_from_preextracted(
             clean_revised[target_group_idx, target_col_idx], dim=-1
         )
 
-        if not shifted_z_batches:
-            return y_clean, None, revision_rows, revision_delays
-
         fork_devices = [] if cuda_device is None else [cuda_device]
         y_shift_list: list[torch.Tensor] = []
-        for shift_z in shifted_z_batches:
-            shift_padded = F.pad(shift_z, (0, 0, 0, 1))[win_idx_2d]
+        for shift_padded in shifted_padded_list:
             if synchronize_dropout_rng and cpu_rng_state is not None:
                 with torch.random.fork_rng(devices=fork_devices):
                     torch.set_rng_state(cpu_rng_state)
@@ -1065,6 +1561,41 @@ def forward_context_from_preextracted(
         row_to_col = plan["row_to_col"]
 
         clean_padded = F.pad(clean_z_batch, (0, 0, 0, 1))[win_idx_2d]
+        if not shifted_z_batches:
+            clean_encoded = _run_fast_padded_transformer(
+                model.context_transformer, clean_padded, mask_2d
+            )
+            y_clean = F.normalize(
+                clean_encoded[row_to_group, row_to_col], dim=-1
+            )
+            return y_clean, None
+
+        if _can_use_direct_layer_loop(
+            model.context_transformer,
+            use_causal_attention=bool(
+                model.context_transformer.causal_attention
+            ),
+        ):
+            shifted_padded_list = [
+                F.pad(shift_z, (0, 0, 0, 1))[win_idx_2d]
+                for shift_z in shifted_z_batches
+            ]
+            num_branches = 1 + len(shifted_padded_list)
+            g_len = int(clean_padded.shape[0])
+            all_padded = torch.cat([clean_padded, *shifted_padded_list], dim=0)
+            all_mask = mask_2d.repeat(num_branches, 1)
+            all_encoded = _run_fast_padded_transformer(
+                model.context_transformer,
+                all_padded,
+                all_mask,
+                num_branches=num_branches,
+                synchronize_dropout_rng=synchronize_dropout_rng,
+            ).view(num_branches, g_len, clean_padded.shape[1], -1)
+            all_norm = F.normalize(
+                all_encoded[:, row_to_group, row_to_col], dim=-1
+            )
+            return all_norm[0], all_norm[1:].mean(dim=0)
+
         cpu_rng_state = (
             torch.get_rng_state() if synchronize_dropout_rng else None
         )
@@ -1083,9 +1614,6 @@ def forward_context_from_preextracted(
             model.context_transformer, clean_padded, mask_2d
         )
         y_clean = F.normalize(clean_encoded[row_to_group, row_to_col], dim=-1)
-
-        if not shifted_z_batches:
-            return y_clean, None
 
         fork_devices = [] if cuda_device is None else [cuda_device]
         y_shift_list: list[torch.Tensor] = []
@@ -1197,8 +1725,14 @@ def train_one_epoch_siamese_debiased(
     sync_rng = bool(siamese_config.get("synchronize_dropout_rng", True))
 
     train_clean_z: torch.Tensor = preextracted_cache["train_clean_z"]
+    train_clean_z_pad: torch.Tensor | None = preextracted_cache.get(
+        "train_clean_z_pad"
+    )
     train_shifted_z: dict[float, torch.Tensor] = preextracted_cache.get(
         "train_shifted_z", {}
+    )
+    train_shifted_z_pad: dict[float, torch.Tensor] = preextracted_cache.get(
+        "train_shifted_z_pad", {}
     )
     shift_keys = sorted(train_shifted_z.keys())
     if siamese_enabled and not shift_keys:
@@ -1213,6 +1747,9 @@ def train_one_epoch_siamese_debiased(
     train_meta = preextracted_cache["train_meta"]
     targets_all: torch.Tensor = train_meta["targets"]
     sentence_indices_all: torch.Tensor = train_meta["sentence_indices"]
+    static_rev_table: dict[str, torch.Tensor] | None = preextracted_cache.get(
+        "train_static_revision_table"
+    )
 
     seed = int(training_config.get("seed", 0))
     prefix_generator = torch.Generator(device="cpu")
@@ -1229,6 +1766,17 @@ def train_one_epoch_siamese_debiased(
         if prefix_revision_enabled
         else ()
     )
+    use_static_rev_table = (
+        prefix_revision_enabled
+        and static_rev_table is not None
+        and train_clean_z_pad is not None
+        and cutoff_policy == "all"
+        and bool(getattr(batch_sampler, "preserve_complete_groups", False))
+        and _can_use_fast_padded_transformer(model)
+    )
+    trainable_model_params = [
+        p for p in model.parameters() if p.requires_grad
+    ]
 
     total_loss_sum = 0.0
     siglip_loss_sum = 0.0
@@ -1259,11 +1807,10 @@ def train_one_epoch_siamese_debiased(
             idx_tensor = torch.as_tensor(
                 batch_indices, device=device, dtype=torch.long
             )
-            clean_z_batch = train_clean_z[idx_tensor]
             batch_targets = targets_all[idx_tensor]
             batch_sentence_indices = sentence_indices_all[idx_tensor]
 
-            shifted_z_batches: list[torch.Tensor] | None = None
+            chosen_keys: list[float] = []
             if siamese_enabled:
                 if shifts_per_step >= len(shift_keys):
                     chosen_keys = shift_keys
@@ -1272,9 +1819,58 @@ def train_one_epoch_siamese_debiased(
                         len(shift_keys), generator=shift_sample_generator
                     )[:shifts_per_step].tolist()
                     chosen_keys = [shift_keys[i] for i in perm]
-                shifted_z_batches = [
-                    train_shifted_z[k][idx_tensor] for k in chosen_keys
+
+            if use_static_rev_table:
+                valid_2d = static_rev_table["row_valid_delay"][idx_tensor]
+                win_global_2d = static_rev_table["row_win_global_idx"][
+                    idx_tensor
+                ][valid_2d]
+                mask_2d = static_rev_table["row_win_mask"][idx_tensor][
+                    valid_2d
                 ]
+                target_col_idx = static_rev_table["row_target_col"][
+                    idx_tensor
+                ][valid_2d]
+                horizons_t = static_rev_table["horizons_tensor"]
+                b_arange = torch.arange(
+                    len(idx_tensor), device=device, dtype=torch.long
+                ).unsqueeze(1)
+                revision_delays_plan = horizons_t.unsqueeze(0).expand(
+                    len(idx_tensor), -1
+                )[valid_2d]
+                revision_rows_plan = (b_arange - horizons_t.unsqueeze(0))[
+                    valid_2d
+                ]
+                clean_padded = train_clean_z_pad[win_global_2d]
+                shifted_padded_list = (
+                    [
+                        train_shifted_z_pad[k][win_global_2d]
+                        for k in chosen_keys
+                    ]
+                    if siamese_enabled
+                    else None
+                )
+                padded_plan = {
+                    "clean_padded": clean_padded,
+                    "shifted_padded_list": shifted_padded_list,
+                    "mask_2d": mask_2d,
+                    "target_group_idx": torch.arange(
+                        len(target_col_idx), device=device, dtype=torch.long
+                    ),
+                    "target_col_idx": target_col_idx,
+                    "revision_rows": revision_rows_plan,
+                    "revision_delays": revision_delays_plan,
+                }
+                clean_z_batch = None
+                shifted_z_batches = None
+            else:
+                padded_plan = None
+                clean_z_batch = train_clean_z[idx_tensor]
+                shifted_z_batches = (
+                    [train_shifted_z[k][idx_tensor] for k in chosen_keys]
+                    if siamese_enabled
+                    else None
+                )
 
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(
@@ -1296,6 +1892,7 @@ def train_one_epoch_siamese_debiased(
                         cutoff_generator=prefix_generator,
                         cutoff_policy=cutoff_policy,
                         synchronize_dropout_rng=sync_rng,
+                        padded_plan=padded_plan,
                     )
                     if siamese_enabled and y_shift_mean is not None:
                         y_tilde = F.normalize(
@@ -1309,7 +1906,8 @@ def train_one_epoch_siamese_debiased(
                     horizon_null_losses = []
                     for delay in horizons:
                         delay_mask = revision_delays == delay
-                        if not bool(delay_mask.any()):
+                        d_count = int(delay_mask.sum())
+                        if d_count == 0:
                             continue
                         d_siglip = loss_module.forward_rectangular(
                             y_tilde[delay_mask],
@@ -1332,7 +1930,7 @@ def train_one_epoch_siamese_debiased(
                         horizon_siglip_losses.append(d_siglip)
                         horizon_null_losses.append(d_null)
 
-                        revision_delay_counts[delay] += int(delay_mask.sum())
+                        revision_delay_counts[delay] += d_count
                         revision_delay_siglip_sums[delay] += float(
                             d_siglip.detach()
                         )
@@ -1383,10 +1981,12 @@ def train_one_epoch_siamese_debiased(
 
             scaler.scale(loss).backward()
             max_grad_norm = float(training_config.get("max_grad_norm", 0.0))
-            if max_grad_norm > 0:
+            if max_grad_norm > 0 and trainable_model_params:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), max_grad_norm
+                    trainable_model_params,
+                    max_grad_norm,
+                    foreach=True if device.type == "cuda" else None,
                 )
             previous_scale = float(scaler.get_scale())
             scaler.step(optimizer)
@@ -1499,6 +2099,17 @@ def encode_from_preextracted_cnn(
         "recording_ids", [""] * len(words_all)
     )
     local_context_radius = int(getattr(model, "local_context_radius", 1))
+    clean_z_pad: torch.Tensor | None = meta.get("clean_z_pad")
+    static_eval_table: dict[int, dict[str, torch.Tensor]] | None = meta.get(
+        "static_revision_table"
+    )
+    use_static_eval_table = (
+        prefix_revision_enabled
+        and static_eval_table is not None
+        and clean_z_pad is not None
+        and bool(getattr(batch_sampler, "preserve_complete_groups", False))
+        and _can_use_fast_padded_transformer(model)
+    )
 
     predictions = []
     targets = []
@@ -1522,7 +2133,6 @@ def encode_from_preextracted_cnn(
             idx_tensor = torch.as_tensor(
                 batch_indices, device=device, dtype=torch.long
             )
-            z_batch = clean_z_all[idx_tensor]
             t_batch = targets_all[idx_tensor]
             subj_batch = subject_indices_all[idx_tensor]
             sent_batch = sentence_indices_all[idx_tensor]
@@ -1533,13 +2143,33 @@ def encode_from_preextracted_cnn(
                 enabled=use_amp,
             ):
                 if prefix_revision_enabled:
-                    delayed = _forward_prefix_revisions_from_z(
-                        model, z_batch, sent_batch
-                    )
-                    masks = model.revision_availability_masks(sent_batch)
+                    if use_static_eval_table:
+                        delayed: dict[int, torch.Tensor] = {}
+                        masks: dict[int, torch.Tensor] = {}
+                        for d in horizons:
+                            d_tbl = static_eval_table[int(d)]
+                            win_idx_2d = d_tbl["win_global_idx"][idx_tensor]
+                            mask_2d = d_tbl["win_mask"][idx_tensor]
+                            target_col_t = d_tbl["target_col"][idx_tensor]
+                            masks[int(d)] = d_tbl["avail_mask"][idx_tensor]
+                            revised = _run_fast_padded_transformer(
+                                model.context_transformer,
+                                clean_z_pad[win_idx_2d],
+                                mask_2d,
+                                causal_override=False,
+                                target_col_idx=target_col_t,
+                            )
+                            delayed[int(d)] = F.normalize(revised, dim=-1)
+                    else:
+                        z_batch = clean_z_all[idx_tensor]
+                        delayed = _forward_prefix_revisions_from_z(
+                            model, z_batch, sent_batch
+                        )
+                        masks = model.revision_availability_masks(sent_batch)
                     maximum_delay = max(delayed)
                     out_batch = delayed[maximum_delay]
                 else:
+                    z_batch = clean_z_all[idx_tensor]
                     out_batch, _ = forward_context_from_preextracted(
                         model,
                         z_batch,
@@ -1649,18 +2279,14 @@ def _forward_prefix_revisions_from_z(
                     device=brain_embedding.device,
                     dtype=torch.long,
                 )
-                row_arange = torch.arange(
-                    chunk_len, device=brain_embedding.device, dtype=torch.long
-                )
                 revised = _run_fast_padded_transformer(
                     model.context_transformer,
                     z_pad[win_idx_2d],
                     mask_2d,
                     causal_override=False,
+                    target_col_idx=target_col_t,
                 )
-                delayed[start:stop] = F.normalize(
-                    revised[row_arange, target_col_t], dim=-1
-                )
+                delayed[start:stop] = F.normalize(revised, dim=-1)
             outputs[int(delay)] = delayed
         return outputs
 
