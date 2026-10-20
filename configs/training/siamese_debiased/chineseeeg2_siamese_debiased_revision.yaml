@@ -27,7 +27,7 @@ siamese_debiased:
   eta_train: 0.8
   lambda_null: 10.0
   shift_seconds: [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
-  shifts_per_step: 2
+  shifts_per_step: 6 # M越大越好
   synchronize_dropout_rng: true
   preextract_frozen_cnn: true
   cache_preextracted_to_disk: true
