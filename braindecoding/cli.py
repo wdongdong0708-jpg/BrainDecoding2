@@ -562,6 +562,11 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
         help="同时评估全零脑磁/脑电信号负对照（Zero-Signal Control）",
     )
     parser.add_argument(
+        "--subtraction-etas",
+        default=None,
+        help="探索性留一法共模扣除（Leave-One-Out Common-Mode Subtraction）权重列表（如 0.5,0.8,1.0），自动在 1 Clean + 6 Shifted 预测向量上扣除共模时序偏置",
+    )
+    parser.add_argument(
         "--max-eval-rows",
         type=int,
         default=None,
@@ -680,6 +685,7 @@ def _workflow_eval(args) -> int:
         control_config_path=control_cfg,
         shift_seconds=getattr(args, "shift_seconds", None),
         zero_signal_control=bool(getattr(args, "zero_signal_control", False)),
+        subtraction_etas=getattr(args, "subtraction_etas", None),
         all_stages=args.all_stages,
         plot=not bool(getattr(args, "no_plot", False)),
         show_progress=not bool(getattr(args, "no_progress", False)),

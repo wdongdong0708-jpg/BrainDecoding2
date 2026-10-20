@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-10-19T16:47:44Z",
+  "updated_at": "2026-10-20T05:21:31Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "59f684c2efb740be48602e9578b8c11a67c5a6209220f8802ac3f7687c046232",
-      "size": 98436,
-      "normalized_sha256": "59f684c2efb740be48602e9578b8c11a67c5a6209220f8802ac3f7687c046232"
+      "sha256": "0fd28e7ae92c21b9141e247dd650338af8fc4346411d2ea580b5ec1f6c5e8e23",
+      "size": 101198,
+      "normalized_sha256": "0fd28e7ae92c21b9141e247dd650338af8fc4346411d2ea580b5ec1f6c5e8e23"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "braindecoding/cli.py": {
       "role": "index",
-      "sha256": "e52190abd95661d102cf0dad63c222b4f8ef11edab70b7f587baa8c858e0d732",
-      "size": 30901,
-      "normalized_sha256": "e52190abd95661d102cf0dad63c222b4f8ef11edab70b7f587baa8c858e0d732"
+      "sha256": "ab11bec0328c0d9005dd54915a507c4a279358add88da331bb5d4a51cc9dc273",
+      "size": 31245,
+      "normalized_sha256": "ab11bec0328c0d9005dd54915a507c4a279358add88da331bb5d4a51cc9dc273"
     },
     "braindecoding/config.py": {
       "role": "index",
@@ -224,6 +224,12 @@
       "sha256": "55e5a27858587bbfc1a140011ab0a9cf726af2d11b83d36caab9a5c44928a14a",
       "size": 25658,
       "normalized_sha256": "bfb171f75182bbca458cb7972d1b62e84e81b2b604adafc5729d711a733922e6"
+    },
+    "braindecoding/evaluation/common_mode_subtraction_evaluation.py": {
+      "role": "index",
+      "sha256": "0aff4f3634aeec9ee8ede389d48809a8d3eaf5961bd1118d3fe47118116efe65",
+      "size": 33870,
+      "normalized_sha256": "0aff4f3634aeec9ee8ede389d48809a8d3eaf5961bd1118d3fe47118116efe65"
     },
     "braindecoding/evaluation/context_heldout_evaluation.py": {
       "role": "index",
@@ -527,9 +533,27 @@
     },
     "braindecoding/training/workflow_runner.py": {
       "role": "index",
-      "sha256": "02f679836656d5a7357675198d42916707d4d2e70bf3c730efdd34a65e370f59",
-      "size": 171152,
-      "normalized_sha256": "02f679836656d5a7357675198d42916707d4d2e70bf3c730efdd34a65e370f59"
+      "sha256": "e1315290c4c2a58c66023950dbbb0c9922f96fb6200f42b652b51f55eb6c3b6e",
+      "size": 175884,
+      "normalized_sha256": "e1315290c4c2a58c66023950dbbb0c9922f96fb6200f42b652b51f55eb6c3b6e"
+    },
+    "configs/controls/common_mode_subtraction/chineseeeg2_common_mode_subtraction_control.yaml": {
+      "role": "index",
+      "sha256": "694ee75c494aaa62ac44429f3b0522e1bf398e11aa7b8ecbd299aa860ad93003",
+      "size": 577,
+      "normalized_sha256": "694ee75c494aaa62ac44429f3b0522e1bf398e11aa7b8ecbd299aa860ad93003"
+    },
+    "configs/controls/common_mode_subtraction/common_mode_subtraction_control.yaml": {
+      "role": "index",
+      "sha256": "b9f6016d9754c0deaab76e354f082ce305e1c3fef861c04a4d2cee65d523432d",
+      "size": 1911,
+      "normalized_sha256": "b9f6016d9754c0deaab76e354f082ce305e1c3fef861c04a4d2cee65d523432d"
+    },
+    "configs/controls/common_mode_subtraction/pallier2025_common_mode_subtraction_control.yaml": {
+      "role": "index",
+      "sha256": "dff7904dda2e2538cc72046de228444a97cbe3dee0fcd568924420aba5ce1180",
+      "size": 549,
+      "normalized_sha256": "dff7904dda2e2538cc72046de228444a97cbe3dee0fcd568924420aba5ce1180"
     },
     "configs/controls/temporal_shift/chineseeeg2_temporal_shift_control.yaml": {
       "role": "index",
@@ -683,21 +707,21 @@
     },
     "configs/training/pallier2025_context_transformer.yaml": {
       "role": "index",
-      "sha256": "c5aa72568ffaf12cfbc377012c686dc94438b209fac586df9bd5d0a91295d214",
-      "size": 3580,
-      "normalized_sha256": "c5aa72568ffaf12cfbc377012c686dc94438b209fac586df9bd5d0a91295d214"
+      "sha256": "ef53690ba94c04e8f7a56d3a79d4026e534b089d1e397a59b2204bf709197ed3",
+      "size": 3579,
+      "normalized_sha256": "ef53690ba94c04e8f7a56d3a79d4026e534b089d1e397a59b2204bf709197ed3"
     },
     "configs/training/pallier2025_rolling_revision.yaml": {
       "role": "index",
-      "sha256": "ea9c570c78c973d6de41dbfb88f25e33f5463bcee47a626029684d24926da56e",
-      "size": 3656,
-      "normalized_sha256": "ea9c570c78c973d6de41dbfb88f25e33f5463bcee47a626029684d24926da56e"
+      "sha256": "48c6f4e5bc599feb69b2b87bdcf76b6c734114ebb6a35703537d87b8ee3f5c5b",
+      "size": 3655,
+      "normalized_sha256": "48c6f4e5bc599feb69b2b87bdcf76b6c734114ebb6a35703537d87b8ee3f5c5b"
     },
     "configs/training/pallier2025_word_encoder.yaml": {
       "role": "index",
-      "sha256": "26597882933dd972ef99affd68813b48c7d82aa73a732599c75706fe44ed1e79",
-      "size": 3147,
-      "normalized_sha256": "26597882933dd972ef99affd68813b48c7d82aa73a732599c75706fe44ed1e79"
+      "sha256": "54723dc6f86e07753f63655a29f0577ed59b2d43fb58b315f8f2ff237570593e",
+      "size": 3144,
+      "normalized_sha256": "54723dc6f86e07753f63655a29f0577ed59b2d43fb58b315f8f2ff237570593e"
     },
     "configs/training/rolling_revision_protocol.yaml": {
       "role": "index",
@@ -1096,15 +1120,15 @@
     },
     "scripts/colab/colab_gpu_evaluation.ipynb": {
       "role": "index",
-      "sha256": "da5d8d7a0470553b52c4c1b945e3692f679591a0ddfdc0b32cd0b60175d08f14",
-      "size": 12945,
-      "normalized_sha256": "da5d8d7a0470553b52c4c1b945e3692f679591a0ddfdc0b32cd0b60175d08f14"
+      "sha256": "500e7e9b035eb64a8fad7f229fefff81aafa24a10d8aa3661ec324dbe658dc73",
+      "size": 13556,
+      "normalized_sha256": "500e7e9b035eb64a8fad7f229fefff81aafa24a10d8aa3661ec324dbe658dc73"
     },
     "scripts/colab/colab_gpu_train.ipynb": {
       "role": "index",
-      "sha256": "afebcfd17c91bfc76a7a7b23d973326e6e063802d60577b3b742c85a5bfd92df",
-      "size": 10540,
-      "normalized_sha256": "afebcfd17c91bfc76a7a7b23d973326e6e063802d60577b3b742c85a5bfd92df"
+      "sha256": "3debf9b97897abfa48f8d195782257bb9ea6de6809fd2bc20a0ea471fb7ae02f",
+      "size": 10549,
+      "normalized_sha256": "3debf9b97897abfa48f8d195782257bb9ea6de6809fd2bc20a0ea471fb7ae02f"
     },
     "scripts/colab_setup.py": {
       "role": "index",

@@ -2509,8 +2509,14 @@ def _resolve_control_specification(
     control_config_path: str | Path | None = None,
     shift_seconds: str | Iterable[float | int | str] | None = None,
     zero_signal_control: bool = False,
+    subtraction_etas: str | Iterable[float | int | str] | None = None,
 ) -> dict:
     """合并 CLI 参数、独立对照 YAML 配置（configs/controls/...）与主配置中的负对照设置。"""
+    from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+        DEFAULT_SUBTRACTION_ETAS,
+        parse_eta_values,
+    )
+
     resolved_ctrl_path: Path | None = None
     ctrl_yaml: dict = {}
     if control_config_path is not None and str(control_config_path).strip():
@@ -2557,12 +2563,38 @@ def _resolve_control_specification(
     merged_control = {**cfg_control, **yaml_control}
     merged_eval = {**cfg_eval, **yaml_eval}
 
+    cms_raw = (
+        merged_control.get("common_mode_subtraction")
+        if isinstance(merged_control.get("common_mode_subtraction"), dict)
+        else (
+            merged_eval.get("common_mode_subtraction")
+            if isinstance(merged_eval.get("common_mode_subtraction"), dict)
+            else {}
+        )
+    )
+    cms_enabled = (
+        subtraction_etas is not None
+        or bool(cms_raw.get("enabled", False))
+        or str(merged_control.get("control_type", "")).strip().lower()
+        == "common_mode_subtraction"
+        or str(merged_eval.get("negative_control", "")).strip().lower()
+        == "common_mode_subtraction"
+    )
+    cms_etas = parse_eta_values(
+        subtraction_etas
+        if subtraction_etas is not None
+        else cms_raw.get("eta_values", DEFAULT_SUBTRACTION_ETAS)
+    )
+    cms_normalize = bool(cms_raw.get("normalize_before_subtraction", True))
+
     if shift_seconds is not None:
         shifts = _parse_shift_seconds_list(shift_seconds)
     elif "shift_seconds" in merged_control:
         shifts = _parse_shift_seconds_list(merged_control.get("shift_seconds"))
     elif "shift_seconds" in merged_eval:
         shifts = _parse_shift_seconds_list(merged_eval.get("shift_seconds"))
+    elif cms_enabled:
+        shifts = [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
     else:
         shifts = []
 
@@ -2573,7 +2605,7 @@ def _resolve_control_specification(
         or str(merged_control.get("control_type", "")).strip().lower()
         == "zero_signal"
     )
-    enabled = bool(shifts) or enable_zero
+    enabled = bool(shifts) or enable_zero or cms_enabled
     if not enabled:
         return {
             "enabled": False,
@@ -2582,12 +2614,22 @@ def _resolve_control_specification(
             "config_path": None,
             "shift_seconds": [],
             "include_zero_signal": False,
+            "common_mode_subtraction": {
+                "enabled": False,
+                "mode": "leave_one_out",
+                "eta_values": [],
+                "normalize_before_subtraction": True,
+            },
         }
 
     default_type = (
-        "temporal_shift"
-        if shifts and not enable_zero
-        else ("zero_signal" if enable_zero and not shifts else "combined_control")
+        "common_mode_subtraction"
+        if cms_enabled
+        else (
+            "temporal_shift"
+            if shifts and not enable_zero
+            else ("zero_signal" if enable_zero and not shifts else "combined_control")
+        )
     )
     control_type = str(merged_control.get("control_type") or default_type)
     control_name = str(
@@ -2621,6 +2663,12 @@ def _resolve_control_specification(
             merged_control.get("include_clean_reference", True)
         ),
         "include_zero_signal": bool(enable_zero),
+        "common_mode_subtraction": {
+            "enabled": bool(cms_enabled),
+            "mode": str(cms_raw.get("mode", "leave_one_out")),
+            "eta_values": cms_etas,
+            "normalize_before_subtraction": cms_normalize,
+        },
     }
 
 
@@ -3749,11 +3797,12 @@ def _evaluate_single_stage(
     control_config_path: str | Path | None = None,
     shift_seconds: str | Iterable[float | int | str] | None = None,
     zero_signal_control: bool = False,
+    subtraction_etas: str | Iterable[float | int | str] | None = None,
     plot: bool = True,
     show_progress: bool = True,
     max_eval_rows: int | None = None,
 ) -> dict:
-    """对单个训练阶段（word / context / revision）执行验证集或测试集评估（含可选负对照）并生成图表。"""
+    """对单个训练阶段（word / context / revision）执行验证集或测试集评估（含可选负对照与探索性留一法共模扣除）并生成图表。"""
     if split not in {"val", "test"}:
         raise ValueError(f"评估 split 只能是 'val' 或 'test'，收到：{split!r}")
 
@@ -3780,6 +3829,7 @@ def _evaluate_single_stage(
         control_config_path=control_config_path,
         shift_seconds=shift_seconds,
         zero_signal_control=zero_signal_control,
+        subtraction_etas=subtraction_etas,
     )
     dataset = subset_spec["dataset"]
     stage = cfg["workflow"]["stage"]
@@ -3955,6 +4005,11 @@ def _evaluate_single_stage(
         "conditions": [],
         "shifted_aggregate": {},
     }
+    cms_cfg = control_spec.get("common_mode_subtraction") or {}
+    cms_enabled = bool(cms_cfg.get("enabled", False))
+    shifted_encoded_by_shift: list[tuple[float, str, str, dict]] = []
+    shifted_ds_by_shift: dict[float, object] = {}
+
     if control_spec["enabled"]:
         clean_summary = negative_controls_result["clean_reference"]
         shifted_summaries: list[dict] = []
@@ -4006,7 +4061,14 @@ def _evaluate_single_stage(
                     "metrics": shift_metrics,
                 }
             )
-            del shift_ds, shift_loader, shift_encoded
+            if cms_enabled:
+                shifted_encoded_by_shift.append(
+                    (float(shift_sec), cond_key, cond_label, shift_encoded)
+                )
+                shifted_ds_by_shift[float(shift_sec)] = shift_ds
+                del shift_loader
+            else:
+                del shift_ds, shift_loader, shift_encoded
 
         if control_spec.get("include_zero_signal", False):
             zero_ds = build_fn(cfg, eval_table, zero_signal=True)
@@ -4110,11 +4172,60 @@ def _evaluate_single_stage(
         figs = plot_evaluation_figures(eval_result, out / "figures")
         eval_result["figures"].update(figs)
 
+    if cms_enabled and len(shifted_encoded_by_shift) >= 2:
+        from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+            run_common_mode_subtraction_sweep,
+        )
+
+        cms_report = run_common_mode_subtraction_sweep(
+            dataset=dataset,
+            stage=stage,
+            split=split,
+            seed=seed,
+            exp_tag=resolved_exp_tag,
+            word_exp_tag=resolved_word_exp_tag,
+            clean_encoded=encoded,
+            shifted_encoded_by_shift=shifted_encoded_by_shift,
+            eval_ds=eval_ds,
+            shifted_ds_by_shift=shifted_ds_by_shift,
+            vocabulary=vocabulary,
+            vocab50=vocab50,
+            cfg=cfg,
+            eta_values=cms_cfg.get("eta_values", (0.5, 0.8, 1.0)),
+            normalize_inputs=bool(
+                cms_cfg.get("normalize_before_subtraction", True)
+            ),
+            baseline_clean_summary=negative_controls_result["clean_reference"],
+            baseline_condition_entries=negative_controls_result["conditions"],
+            baseline_shifted_aggregate=negative_controls_result["shifted_aggregate"],
+            compute_metrics_fn=_compute_encoded_evaluation_metrics,
+            extract_summary_row_fn=_extract_control_summary_row,
+            summarize_shifted_fn=_summarize_shifted_conditions,
+            output_dir=out,
+            plot=plot,
+            print_report=True,
+        )
+        eval_result["exploratory_common_mode_subtraction_json"] = cms_report.get(
+            "exploratory_json"
+        )
+        eval_result["exploratory_common_mode_subtraction_summary"] = {
+            "eta_grid": cms_report["eta_grid"],
+            "best_eta_by_clean_vocab50_top10": cms_report[
+                "best_eta_by_clean_vocab50_top10"
+            ],
+            "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
+                "best_eta_by_clean_minus_shifted_vocab50_top10"
+            ],
+        }
+        eval_result["figures"].update(cms_report.get("figures", {}))
+        shifted_encoded_by_shift.clear()
+        shifted_ds_by_shift.clear()
+
     eval_json_path = out / f"evaluation_{split}.json"
     save_json(eval_json_path, eval_result)
     eval_result["evaluation_json"] = str(eval_json_path)
 
-    del model, eval_ds, eval_loader, checkpoint
+    del model, eval_ds, eval_loader, checkpoint, encoded
     gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -4144,12 +4255,13 @@ def run_evaluation_workflow(
     control_config_path: str | Path | None = None,
     shift_seconds: str | Iterable[float | int | str] | None = None,
     zero_signal_control: bool = False,
+    subtraction_etas: str | Iterable[float | int | str] | None = None,
     all_stages: bool = False,
     plot: bool = True,
     show_progress: bool = True,
     max_eval_rows: int | None = None,
 ) -> dict:
-    """运行验证集 (val) 或测试集 (test) 评估与可视化工作流（支持单阶段、全阶段对比及时间错位/全零信号负对照）。"""
+    """运行验证集 (val) 或测试集 (test) 评估与可视化工作流（支持单阶段、全阶段对比、负对照及探索性留一法共模扣除）。"""
     if split not in {"val", "test"}:
         raise ValueError(f"评估 split 只能是 'val' 或 'test'，收到：{split!r}")
 
@@ -4176,6 +4288,7 @@ def run_evaluation_workflow(
             control_config_path=control_config_path,
             shift_seconds=shift_seconds,
             zero_signal_control=zero_signal_control,
+            subtraction_etas=subtraction_etas,
             plot=plot,
             show_progress=show_progress,
             max_eval_rows=max_eval_rows,
@@ -4346,6 +4459,7 @@ def run_evaluation_workflow(
             control_config_path=effective_control_config_path,
             shift_seconds=shift_seconds,
             zero_signal_control=zero_signal_control,
+            subtraction_etas=subtraction_etas,
             plot=plot,
             show_progress=show_progress,
             max_eval_rows=max_eval_rows,

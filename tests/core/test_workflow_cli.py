@@ -716,15 +716,16 @@ def test_configurable_window_seconds_and_offset(monkeypatch):
         word_window_contract,
     )
 
-    # 1. Default 1.0s window in YAML training configs
+    # 1. Window seconds configured in YAML training configs
     cfg_default, _ = build_workflow_config(
         config_path="configs/training/pallier2025_word_encoder.yaml",
         seed=0,
     )
-    assert cfg_default["dataset"]["window_seconds"] == pytest.approx(1.0)
+    expected_yaml_win = float(cfg_default["workflow"]["window_seconds"])
+    assert expected_yaml_win > 0.0
+    assert cfg_default["dataset"]["window_seconds"] == pytest.approx(expected_yaml_win)
     assert cfg_default["dataset"].get("window_start_offset_seconds", 0.0) == pytest.approx(0.0)
-    assert cfg_default["workflow"]["window_seconds"] == pytest.approx(1.0)
-    assert cfg_default["workflow"]["window_samples"] == 50
+    assert cfg_default["workflow"]["window_samples"] == int(round(expected_yaml_win * 50.0))
 
     # 2. Explicit override via build_workflow_config arguments
     cfg_150, _ = build_workflow_config(
@@ -802,3 +803,220 @@ def test_configurable_window_seconds_and_offset(monkeypatch):
         fake_signal, 0.5, meta, dataset_config={"window_seconds": 1.5}
     )
     assert win_long.shape == (4, 75)
+
+
+def test_leave_one_out_common_mode_subtraction_evaluation(tmp_path):
+    import json
+    import pandas as pd
+    import torch
+    from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+        apply_leave_one_out_subtraction_to_encoded,
+        apply_leave_one_out_subtraction_to_tensors,
+        run_common_mode_subtraction_sweep,
+    )
+    from braindecoding.training.workflow_runner import (
+        _compute_encoded_evaluation_metrics,
+        _extract_control_summary_row,
+        _resolve_control_specification,
+        _summarize_shifted_conditions,
+    )
+
+    # 1. Verify decoupled YAML config resolution & CLI argument parsing
+    base_cfg, _ = build_workflow_config(
+        config_path="configs/training/pallier2025_rolling_revision.yaml",
+        seed=0,
+    )
+    spec_cms = _resolve_control_specification(
+        base_cfg,
+        control_config_path="configs/controls/common_mode_subtraction/common_mode_subtraction_control.yaml",
+    )
+    assert spec_cms["enabled"] is True
+    assert spec_cms["control_type"] == "common_mode_subtraction"
+    assert spec_cms["shift_seconds"] == [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+    assert spec_cms["common_mode_subtraction"]["enabled"] is True
+    assert spec_cms["common_mode_subtraction"]["mode"] == "leave_one_out"
+    assert spec_cms["common_mode_subtraction"]["eta_values"] == [0.5, 0.8, 1.0]
+
+    parser = cli.build_parser()
+    eval_args = parser.parse_args(
+        [
+            "eval-run",
+            "--dataset",
+            "pallier2025",
+            "--control-config",
+            "configs/controls/common_mode_subtraction/pallier2025_common_mode_subtraction_control.yaml",
+            "--subtraction-etas",
+            "0.5,0.8,1.0",
+        ]
+    )
+    assert eval_args.subtraction_etas == "0.5,0.8,1.0"
+
+    # 2. Verify exact Leave-One-Out mathematical formula (1/6 for Clean, 1/5 for each Shifted without self-leakage)
+    shift_keys = [
+        "shift_-120s",
+        "shift_-60s",
+        "shift_-30s",
+        "shift_+30s",
+        "shift_+60s",
+        "shift_+120s",
+    ]
+    clean_vec = torch.tensor([[10.0, 2.0]], dtype=torch.float32)
+    shifted_vecs = {
+        "shift_-120s": torch.tensor([[1.0, 0.0]], dtype=torch.float32),
+        "shift_-60s": torch.tensor([[2.0, 0.0]], dtype=torch.float32),
+        "shift_-30s": torch.tensor([[3.0, 0.0]], dtype=torch.float32),
+        "shift_+30s": torch.tensor([[4.0, 0.0]], dtype=torch.float32),
+        "shift_+60s": torch.tensor([[5.0, 0.0]], dtype=torch.float32),
+        "shift_+120s": torch.tensor([[6.0, 0.0]], dtype=torch.float32),
+    }
+    deb_clean, deb_shifted = apply_leave_one_out_subtraction_to_tensors(
+        clean_vec, shifted_vecs, eta=0.8, normalize_inputs=False
+    )
+    # Mean of all 6 shifted is (1+2+3+4+5+6)/6 = 3.5 -> clean_x = 10.0 - 0.8 * 3.5 = 7.2
+    assert torch.allclose(deb_clean, torch.tensor([[7.2, 2.0]]))
+    # For shift_-120s (val=1.0), mean of other 5 is (2+3+4+5+6)/5 = 4.0 -> 1.0 - 0.8 * 4.0 = -2.2
+    assert torch.allclose(
+        deb_shifted["shift_-120s"], torch.tensor([[-2.2, 0.0]])
+    )
+    # For shift_+120s (val=6.0), mean of other 5 is (1+2+3+4+5)/5 = 3.0 -> 6.0 - 0.8 * 3.0 = 3.6
+    assert torch.allclose(
+        deb_shifted["shift_+120s"], torch.tensor([[3.6, 0.0]])
+    )
+
+    # 3. End-to-end sweep on revision (K0/K1/K2) with a shared temporal common-mode bias
+    from braindecoding.results import load_vocabulary_assets
+
+    manifests = load_vocabulary_assets(PROJECT_ROOT / "data/manifests/pallier2025")
+    vocab50 = list(manifests[50]["vocabulary"])
+    vocab150 = list(manifests[150]["vocabulary"])
+    extra_words = [f"extra_word_{i:03d}" for i in range(20)]
+    full_vocabulary = sorted(set(vocab150 + extra_words))
+
+    dim = 32
+    gen = torch.Generator().manual_seed(1234)
+    bank = torch.nn.functional.normalize(
+        torch.randn(len(full_vocabulary), dim, generator=gen), dim=-1
+    )
+    word_to_vec = {
+        w: bank[i].numpy() for i, w in enumerate(full_vocabulary)
+    }
+
+    n_events = 12
+    event_words = [vocab50[i % 10] for i in range(n_events)]
+    event_ids = [f"evt-{i:03d}" for i in range(n_events)]
+    subject_ids = ["sub-01" if i < 6 else "sub-02" for i in range(n_events)]
+    targets = torch.stack(
+        [torch.from_numpy(word_to_vec[w]) for w in event_words], dim=0
+    )
+
+    # Inject a dominant common-mode temporal bias shared across Clean and all 6 Shifted conditions
+    common_bias = torch.nn.functional.normalize(
+        torch.randn(n_events, dim, generator=gen), dim=-1
+    ) * 3.0
+    clean_signal = targets + common_bias
+    mask_all = torch.ones(n_events, dtype=torch.bool)
+
+    clean_encoded = {
+        "predictions": clean_signal.clone(),
+        "targets": targets,
+        "words": event_words,
+        "event_ids": event_ids,
+        "revision_predictions": {
+            0: clean_signal.clone(),
+            1: clean_signal.clone(),
+            2: clean_signal.clone(),
+        },
+        "revision_availability_masks": {0: mask_all, 1: mask_all, 2: mask_all},
+    }
+
+    shifts = [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+    shifted_encoded_by_shift = []
+    for idx, sec in enumerate(shifts):
+        key = f"shift_{int(sec):+d}s"
+        label = f"Shift {int(sec):+d}s"
+        noise = (
+            torch.nn.functional.normalize(
+                torch.randn(n_events, dim, generator=gen), dim=-1
+            )
+            * 0.05
+        )
+        s_vec = common_bias + noise
+        s_enc = {
+            "predictions": s_vec.clone(),
+            "targets": targets,
+            "words": event_words,
+            "event_ids": event_ids,
+            "revision_predictions": {
+                0: s_vec.clone(),
+                1: s_vec.clone(),
+                2: s_vec.clone(),
+            },
+            "revision_availability_masks": {0: mask_all, 1: mask_all, 2: mask_all},
+        }
+        shifted_encoded_by_shift.append((sec, key, label, s_enc))
+
+    class _DummyDataset:
+        def __init__(self, emb_map, tbl):
+            self.embedding_map = emb_map
+            self.table = tbl
+
+        def __len__(self):
+            return len(self.table)
+
+    dummy_ds = _DummyDataset(
+        word_to_vec,
+        pd.DataFrame({"event_id": event_ids, "subject_id": subject_ids}),
+    )
+    cfg = {
+        "experiment": {"dataset": "pallier2025"},
+        "dataset": {"subjects": ["sub-01", "sub-02"]},
+        "evaluation": {"candidate_limit": 50},
+    }
+
+    report = run_common_mode_subtraction_sweep(
+        dataset="pallier2025",
+        stage="revision",
+        split="test",
+        seed=0,
+        exp_tag="unit_test",
+        word_exp_tag="unit_test",
+        clean_encoded=clean_encoded,
+        shifted_encoded_by_shift=shifted_encoded_by_shift,
+        eval_ds=dummy_ds,
+        shifted_ds_by_shift={sec: dummy_ds for sec in shifts},
+        vocabulary=full_vocabulary,
+        vocab50=vocab50,
+        cfg=cfg,
+        eta_values=[0.5, 0.8, 1.0],
+        normalize_inputs=False,
+        compute_metrics_fn=_compute_encoded_evaluation_metrics,
+        extract_summary_row_fn=_extract_control_summary_row,
+        summarize_shifted_fn=_summarize_shifted_conditions,
+        output_dir=tmp_path,
+        plot=True,
+        print_report=True,
+    )
+
+    assert report["eta_grid"] == [0.0, 0.5, 0.8, 1.0]
+    assert report["formula"]["clean_divisor"] == 6
+    assert report["formula"]["shifted_loo_divisor"] == 5
+    # With eta=1.0, common_bias is canceled out on Clean (0s) and recovery reaches 100%
+    eta0_top1 = report["sweep"][0]["clean_reference"]["vocab50_macro_top1"]
+    eta1_top1 = report["sweep"][-1]["clean_reference"]["vocab50_macro_top1"]
+    assert eta1_top1 == pytest.approx(1.0)
+    assert eta1_top1 > eta0_top1
+
+    # Check K0/K1/K2 horizons are populated in every eta sweep entry
+    for item in report["sweep"]:
+        horizons = item["clean_reference"]["horizons"]
+        for hk in ("K0", "K1", "K2"):
+            assert hk in horizons
+            assert "common_full_vocab_macro_top10" in horizons[hk]
+
+    # Verify decoupled exploratory JSON and figure artifacts exist in tmp_path
+    exp_json_path = tmp_path / "exploratory" / "common_mode_subtraction_test.json"
+    assert exp_json_path.is_file()
+    saved_payload = json.loads(exp_json_path.read_text(encoding="utf-8"))
+    assert saved_payload["experiment_type"] == "exploratory_leave_one_out_common_mode_subtraction"
+    assert (tmp_path / "figures" / "common_mode_subtraction_test.png").is_file()
+
