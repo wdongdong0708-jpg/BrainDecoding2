@@ -1020,3 +1020,377 @@ def test_leave_one_out_common_mode_subtraction_evaluation(tmp_path):
     assert saved_payload["experiment_type"] == "exploratory_leave_one_out_common_mode_subtraction"
     assert (tmp_path / "figures" / "common_mode_subtraction_test.png").is_file()
 
+
+def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
+    import numpy as np
+    import torch
+    from braindecoding.losses import build_siglip_loss
+    from braindecoding.models import build_brain_embedding_model
+    from braindecoding.optimizers import build_adamw_for_modules
+    from braindecoding.training.siamese_debiased_training import (
+        build_centered_vocabulary_bank,
+        compute_shift_null_loss,
+        encode_from_preextracted_cnn,
+        forward_revision_from_preextracted,
+        preextract_frozen_cnn_features,
+        resolve_siamese_debiased_config,
+        train_one_epoch_siamese_debiased,
+    )
+    from braindecoding.training.word_encoder_training import (
+        SentenceBatchSampler,
+        encode_loader,
+    )
+
+    # 1. Verify decoupled YAML configs under configs/training/siamese_debiased/
+    siamese_configs = [
+        (
+            "configs/training/siamese_debiased/pallier2025_siamese_debiased_revision.yaml",
+            "pallier2025",
+            "revision",
+            0.5,
+        ),
+        (
+            "configs/training/siamese_debiased/pallier2025_siamese_debiased_context.yaml",
+            "pallier2025",
+            "context",
+            0.5,
+        ),
+        (
+            "configs/training/siamese_debiased/chineseeeg2_siamese_debiased_revision.yaml",
+            "chineseeeg2_littleprince",
+            "revision",
+            1.0,
+        ),
+    ]
+    for rel_path, expected_ds, expected_stage, expected_win in siamese_configs:
+        full_p = PROJECT_ROOT / rel_path
+        assert full_p.is_file(), f"缺少孪生去偏训练配置: {rel_path}"
+        cfg, sub = build_workflow_config(config_path=rel_path, seed=0)
+        assert sub["dataset"] == expected_ds
+        assert cfg["workflow"]["stage"] == expected_stage
+        assert cfg["workflow"]["window_seconds"] == pytest.approx(expected_win)
+        assert cfg["training"]["learning_rate"] == pytest.approx(1e-4)
+        assert cfg["training"]["weight_decay"] == pytest.approx(0.01)
+        assert cfg["training"]["freeze_brain_encoder_epochs"] >= cfg["training"]["epochs"]
+        siam = cfg["workflow"]["siamese_debiased"]
+        assert siam["enabled"] is True
+        assert siam["eta_train"] == pytest.approx(0.8)
+        assert siam["lambda_null"] == pytest.approx(10.0)
+        assert siam["shifts_per_step"] == 2
+        assert siam["shift_seconds"] == [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+        assert siam["preextract_frozen_cnn"] is True
+
+    # 2. Verify CLI argument parsing & override in build_workflow_config
+    parser = cli.build_parser()
+    train_args = parser.parse_args(
+        [
+            "train",
+            "--config",
+            "configs/training/pallier2025_rolling_revision.yaml",
+            "--siamese-debiased",
+            "--eta-train",
+            "0.5",
+            "--lambda-null",
+            "12.0",
+            "--shifts-per-step",
+            "6",
+            "--preextract-frozen-cnn",
+        ]
+    )
+    assert train_args.siamese_debiased is True
+    assert train_args.eta_train == pytest.approx(0.5)
+    assert train_args.lambda_null == pytest.approx(12.0)
+    assert train_args.shifts_per_step == 6
+    assert train_args.preextract_frozen_cnn is True
+
+    cfg_override, _ = build_workflow_config(
+        config_path="configs/training/pallier2025_rolling_revision.yaml",
+        seed=0,
+        eta_train=0.5,
+        lambda_null=12.0,
+        shifts_per_step=6,
+    )
+    assert cfg_override["workflow"]["siamese_debiased"]["enabled"] is True
+    assert cfg_override["workflow"]["siamese_debiased"]["eta_train"] == pytest.approx(0.5)
+    assert cfg_override["workflow"]["siamese_debiased"]["lambda_null"] == pytest.approx(12.0)
+    assert cfg_override["workflow"]["siamese_debiased"]["shifts_per_step"] == 6
+
+    # Reject stage=word with siamese_debiased
+    with pytest.raises(ValueError, match="仅适用于 context"):
+        build_workflow_config(
+            config_path="configs/training/pallier2025_word_encoder.yaml",
+            siamese_debiased=True,
+        )
+
+    # 3. Verify centered vocabulary bank & shift-null loss properties
+    dim = 32
+    vocab = [f"w_{i:02d}" for i in range(16)]
+    rng = np.random.default_rng(7)
+    emb_map = {}
+    for w in vocab:
+        v = rng.standard_normal(dim).astype(np.float32)
+        v /= np.linalg.norm(v)
+        emb_map[w] = v
+
+    class _DummySignalDataset(torch.utils.data.Dataset):
+        def __init__(self, n_rows: int):
+            self.embedding_map = emb_map
+            self.channel_count = 8
+            self.window_samples = 25
+            self.sampling_rate_hz = 50.0
+            self.temporal_shift_seconds = 0.0
+            self.temporal_shift_samples = 0
+            self._words = tuple(vocab[i % len(vocab)] for i in range(n_rows))
+            self._event_ids = tuple(f"ev-{i:03d}" for i in range(n_rows))
+            self._embedding_tensors = {
+                w: torch.from_numpy(vec) for w, vec in emb_map.items()
+            }
+            self._subject_index_tensors = torch.tensor(
+                [i % 2 for i in range(n_rows)], dtype=torch.long
+            )
+            # 2 sentences of 6 words each
+            self._sentence_index_tensors = torch.tensor(
+                [i // 6 for i in range(n_rows)], dtype=torch.long
+            )
+            self.sentence_uids = [f"sent-{i // 6}" for i in range(n_rows)]
+            # Deterministic synthetic continuous signal per row + shift
+            self._base_signals = torch.randn(
+                n_rows, self.channel_count, self.window_samples,
+                generator=torch.Generator().manual_seed(99),
+            )
+
+        def __len__(self):
+            return len(self._words)
+
+        def __getitem__(self, idx):
+            i = int(idx)
+            w = self._words[i]
+            shift_offset = int(self.temporal_shift_samples)
+            shifted_idx = (i + shift_offset) % len(self._words)
+            sig = self._base_signals[shifted_idx]
+            return {
+                "meg": sig.clone(),
+                "text_embedding": self._embedding_tensors[w],
+                "subject_index": self._subject_index_tensors[i],
+                "sentence_index": self._sentence_index_tensors[i],
+                "word": w,
+                "event_id": self._event_ids[i],
+                "recording_id": "rec-01",
+            }
+
+    device = torch.device("cpu")
+    train_ds = _DummySignalDataset(12)
+    val_ds = _DummySignalDataset(6)
+
+    centered_bank = build_centered_vocabulary_bank(train_ds, vocab, device)
+    assert centered_bank.shape == (len(vocab), dim)
+    # Column-wise mean of centered vocabulary bank must be strictly 0
+    assert torch.allclose(
+        centered_bank.mean(dim=0), torch.zeros(dim), atol=1e-6
+    )
+    zero_null = compute_shift_null_loss(torch.zeros(4, dim), centered_bank)
+    assert float(zero_null) == pytest.approx(0.0, abs=1e-7)
+    nonzero_null = compute_shift_null_loss(centered_bank[:4], centered_bank)
+    assert float(nonzero_null) > 0.0
+
+    # 4. Build miniature revision model and verify dual-branch gradient flow + synchronized dropout RNG
+    model_cfg = {
+        "embedding_dimension": dim,
+        "use_transformer": True,
+        "context_mode": "grouped",
+        "conv": {
+            "merger_channels": 8,
+            "merger_position_dimension": 8,
+            "merger_per_subject": False,
+            "merger_dropout": 0.0,
+            "initial_linear": 16,
+            "hidden": 16,
+            "depth": 2,
+            "kernel_size": 3,
+            "dilation_growth": 2,
+            "dilation_period": 2,
+            "dropout_input": 0.0,
+            "convolution_dropout": 0.0,
+            "batch_norm": True,
+            "gelu": True,
+            "skip": True,
+            "glu_every": 0,
+            "glu_context": 0,
+            "temporal_attention_hidden": 16,
+        },
+        "transformer": {
+            "depth": 2,
+            "heads": 4,
+            "attention_dropout": 0.2,
+            "feedforward_dropout": 0.2,
+            "use_scalenorm": True,
+            "use_rmsnorm": False,
+            "rotary_position_embedding": True,
+            "residual_attention": False,
+            "scale_residual": True,
+        },
+        "local_window_revision": {
+            "enabled": True,
+            "history_radius": 2,
+            "horizons": [0, 1, 2],
+            "validation_query_batch_size": 32,
+        },
+    }
+    ch_pos = np.linspace(0.1, 0.9, 8 * 2, dtype=np.float32).reshape(8, 2)
+    model = build_brain_embedding_model(8, ch_pos, 2, model_cfg).to(device)
+    loss_module = build_siglip_loss(
+        {
+            "name": "SigLip",
+            "initial_temperature": 10.0,
+            "initial_bias": -10.0,
+            "identical_candidates_threshold": 0.999,
+        }
+    ).to(device)
+
+    # Freeze brain_encoder
+    for p in model.brain_encoder.parameters():
+        p.requires_grad_(False)
+    model.brain_encoder.eval()
+    model.context_transformer.train()
+
+    # Verify synchronized dropout RNG: if clean_z == shift_z, y_clean must equal y_shift_mean even with dropout=0.2 in train() mode!
+    dummy_z = torch.nn.functional.normalize(torch.randn(12, dim), dim=-1)
+    sent_idx = train_ds._sentence_index_tensors
+    y_clean, y_shift_mean, rev_rows, rev_delays = forward_revision_from_preextracted(
+        model,
+        dummy_z,
+        sent_idx,
+        shifted_z_batches=[dummy_z.clone(), dummy_z.clone()],
+        cutoff_policy="all",
+        synchronize_dropout_rng=True,
+    )
+    assert y_shift_mean is not None
+    assert y_clean.requires_grad is True
+    assert y_shift_mean.requires_grad is True
+    assert y_shift_mean.grad_fn is not None
+    assert torch.allclose(y_clean, y_shift_mean, atol=1e-6)
+
+    # 5. Pre-extract frozen CNN features (Clean + 6 Shifted) and verify disk cache reload
+    shifts = [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+    pre_cache = preextract_frozen_cnn_features(
+        model,
+        train_ds,
+        val_ds,
+        dataset="pallier2025",
+        subset_tag="unit-test",
+        word_ckpt_sha256="",
+        window_seconds=0.5,
+        shift_seconds=shifts,
+        device=device,
+        batch_size=8,
+        amp=False,
+        cache_to_disk=False,
+        show_progress=False,
+    )
+    assert pre_cache["train_clean_z"].shape == (12, dim)
+    assert pre_cache["val_clean_z"].shape == (6, dim)
+    assert len(pre_cache["train_shifted_z"]) == 6
+    assert train_ds.temporal_shift_seconds == 0.0
+    assert train_ds.temporal_shift_samples == 0
+
+    # 6. Verify encode_from_preextracted_cnn matches encode_loader bit-for-bit on validation set
+    val_sampler = SentenceBatchSampler(
+        val_ds.sentence_uids,
+        batch_size=6,
+        shuffle=False,
+        seed=0,
+        preserve_complete_groups=True,
+    )
+    val_loader = torch.utils.data.DataLoader(val_ds, batch_sampler=val_sampler)
+    enc_standard = encode_loader(
+        model, val_loader, device, amp=False, show_progress=False
+    )
+    enc_fast = encode_from_preextracted_cnn(
+        model,
+        val_sampler,
+        pre_cache["val_clean_z"],
+        pre_cache["val_meta"],
+        device,
+        amp=False,
+        show_progress=False,
+    )
+    assert torch.allclose(
+        enc_standard["predictions"], enc_fast["predictions"], atol=1e-5
+    )
+    for d in (0, 1, 2):
+        assert torch.allclose(
+            enc_standard["revision_predictions"][d],
+            enc_fast["revision_predictions"][d],
+            atol=1e-5,
+        )
+
+    # 7. Run 1 epoch of train_one_epoch_siamese_debiased and verify brain_encoder remains untouched while Transformer updates
+    train_sampler = SentenceBatchSampler(
+        train_ds.sentence_uids,
+        batch_size=6,
+        shuffle=True,
+        seed=0,
+        preserve_complete_groups=True,
+    )
+    tc = {
+        "seed": 0,
+        "epochs": 2,
+        "batch_size": 6,
+        "learning_rate": 1e-3,
+        "weight_decay": 0.01,
+        "amp": False,
+        "amp_dtype": "float32",
+        "revision_cutoff_policy": "all",
+    }
+    siamese_cfg = resolve_siamese_debiased_config(
+        {},
+        siamese_debiased=True,
+        eta_train=0.8,
+        lambda_null=10.0,
+        shifts_per_step=2,
+    )
+    optimizer = build_adamw_for_modules([model, loss_module], tc)
+    scaler = torch.amp.GradScaler("cuda", enabled=False)
+
+    cnn_before = {
+        k: v.detach().clone() for k, v in model.brain_encoder.state_dict().items()
+    }
+    tf_before = {
+        k: v.detach().clone()
+        for k, v in model.context_transformer.state_dict().items()
+    }
+
+    loss_val, updates, batches, diag = train_one_epoch_siamese_debiased(
+        model,
+        loss_module,
+        train_sampler,
+        pre_cache,
+        optimizer,
+        scaler,
+        device,
+        tc,
+        siamese_cfg,
+        centered_vocab_bank=centered_bank,
+        epoch_index=0,
+        show_progress=False,
+    )
+    assert np.isfinite(loss_val)
+    assert updates == 2
+    assert batches == 2
+    assert diag["siamese_debiased_enabled"] is True
+    assert diag["eta_train"] == pytest.approx(0.8)
+    assert diag["lambda_null"] == pytest.approx(10.0)
+    assert diag["siglip_loss"] > 0.0
+    assert diag["shift_null_loss"] >= 0.0
+    assert set(diag["prefix_revision"]["delay_counts"].keys()) == {0, 1, 2}
+
+    # Brain encoder weights must be 100% unchanged, Transformer weights must have updated
+    for k, v in model.brain_encoder.state_dict().items():
+        assert torch.equal(v, cnn_before[k])
+    tf_changed = any(
+        not torch.allclose(v, tf_before[k])
+        for k, v in model.context_transformer.state_dict().items()
+    )
+    assert tf_changed is True
+
+

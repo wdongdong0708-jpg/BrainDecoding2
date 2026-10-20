@@ -453,6 +453,36 @@ def _add_training_workflow_args(
         action="store_true",
         help="禁用 tqdm 实时进度条（仅输出每轮汇总表格）",
     )
+    parser.add_argument(
+        "--siamese-debiased",
+        action="store_true",
+        default=None,
+        help="启用孪生共模抵消（Siamese Common-Mode Rejection）+ 错位零化正则（Shift-Null Regularization）与冻结 CNN 特征预提取极速训练",
+    )
+    parser.add_argument(
+        "--eta-train",
+        type=float,
+        default=None,
+        help="孪生共模扣除权重 eta_train（如 0.8 或 0.5；传入时自动启用孪生去偏训练）",
+    )
+    parser.add_argument(
+        "--lambda-null",
+        type=float,
+        default=None,
+        help="错位零化正则系数 lambda_null（如 10.0；传入时自动启用孪生去偏训练）",
+    )
+    parser.add_argument(
+        "--shifts-per-step",
+        type=int,
+        default=None,
+        help="每个训练步从 6 个时间错位中随机抽取的同构错位分支数量 M（如 2 或 6）",
+    )
+    parser.add_argument(
+        "--preextract-frozen-cnn",
+        action="store_true",
+        default=None,
+        help="在 Stage 2.1/2.2 冻结 CNN 训练启动前一次性预提取并缓存 Stage-1 CNN 特征，将单轮训练提速 5-8 倍",
+    )
 
 
 def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
@@ -638,6 +668,11 @@ def _workflow_train(args, *, mode: str) -> int:
         overwrite=args.overwrite,
         show_progress=not bool(getattr(args, "no_progress", False)),
         config_path=args.config,
+        siamese_debiased=getattr(args, "siamese_debiased", None),
+        eta_train=getattr(args, "eta_train", None),
+        lambda_null=getattr(args, "lambda_null", None),
+        shifts_per_step=getattr(args, "shifts_per_step", None),
+        preextract_frozen_cnn=getattr(args, "preextract_frozen_cnn", None),
     )
     return 0
 

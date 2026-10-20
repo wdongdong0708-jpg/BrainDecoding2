@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-10-20T05:21:31Z",
+  "updated_at": "2026-10-20T07:00:35Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "0fd28e7ae92c21b9141e247dd650338af8fc4346411d2ea580b5ec1f6c5e8e23",
-      "size": 101198,
-      "normalized_sha256": "0fd28e7ae92c21b9141e247dd650338af8fc4346411d2ea580b5ec1f6c5e8e23"
+      "sha256": "6749d4689b74e43f9d3179838e8de3cb12099ccb4f7ae4ef30af32daa6bca61b",
+      "size": 103768,
+      "normalized_sha256": "6749d4689b74e43f9d3179838e8de3cb12099ccb4f7ae4ef30af32daa6bca61b"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "braindecoding/cli.py": {
       "role": "index",
-      "sha256": "ab11bec0328c0d9005dd54915a507c4a279358add88da331bb5d4a51cc9dc273",
-      "size": 31245,
-      "normalized_sha256": "ab11bec0328c0d9005dd54915a507c4a279358add88da331bb5d4a51cc9dc273"
+      "sha256": "6d98aa5c92abe595d672d8618052fc9849aa478488e28496b778581bb51b88fb",
+      "size": 32726,
+      "normalized_sha256": "6d98aa5c92abe595d672d8618052fc9849aa478488e28496b778581bb51b88fb"
     },
     "braindecoding/config.py": {
       "role": "index",
@@ -501,6 +501,12 @@
       "size": 18506,
       "normalized_sha256": "bf9c0bf6f993868db4c717e7e469249921d5ca0dbc7ec5f3f28c3530a5be90df"
     },
+    "braindecoding/training/siamese_debiased_training.py": {
+      "role": "index",
+      "sha256": "db4ca713ec4693dd3a26f3ebdff8758dac1e100d7b061f212b331ea90e6b4a8f",
+      "size": 49153,
+      "normalized_sha256": "db4ca713ec4693dd3a26f3ebdff8758dac1e100d7b061f212b331ea90e6b4a8f"
+    },
     "braindecoding/training/synthetic_timing_control.py": {
       "role": "index",
       "sha256": "08fa9199fc06fe970c5b838eaaebb3d93ce8c7be1f8ca81523785a58c298332d",
@@ -533,9 +539,9 @@
     },
     "braindecoding/training/workflow_runner.py": {
       "role": "index",
-      "sha256": "e1315290c4c2a58c66023950dbbb0c9922f96fb6200f42b652b51f55eb6c3b6e",
-      "size": 175884,
-      "normalized_sha256": "e1315290c4c2a58c66023950dbbb0c9922f96fb6200f42b652b51f55eb6c3b6e"
+      "sha256": "5a2eebbee980cec38199eb6006773acdbd9060a31d4371966c50da2be94be3a9",
+      "size": 183069,
+      "normalized_sha256": "5a2eebbee980cec38199eb6006773acdbd9060a31d4371966c50da2be94be3a9"
     },
     "configs/controls/common_mode_subtraction/chineseeeg2_common_mode_subtraction_control.yaml": {
       "role": "index",
@@ -728,6 +734,24 @@
       "sha256": "5fb7ab5618a22e3d7522b2618f87aa8bbdaf59a56c0bdb0efadf8de98b91b3b3",
       "size": 7769,
       "normalized_sha256": "5fb7ab5618a22e3d7522b2618f87aa8bbdaf59a56c0bdb0efadf8de98b91b3b3"
+    },
+    "configs/training/siamese_debiased/chineseeeg2_siamese_debiased_revision.yaml": {
+      "role": "index",
+      "sha256": "e86171475cd143bf074a45ebf1311e502b44348ec50322b50df8cdf17c1ef6c6",
+      "size": 982,
+      "normalized_sha256": "e86171475cd143bf074a45ebf1311e502b44348ec50322b50df8cdf17c1ef6c6"
+    },
+    "configs/training/siamese_debiased/pallier2025_siamese_debiased_context.yaml": {
+      "role": "index",
+      "sha256": "4d84dc0441829e31f8a0d9c065f5fd58c009259c9e9b250af9fff311ffc6f797",
+      "size": 914,
+      "normalized_sha256": "4d84dc0441829e31f8a0d9c065f5fd58c009259c9e9b250af9fff311ffc6f797"
+    },
+    "configs/training/siamese_debiased/pallier2025_siamese_debiased_revision.yaml": {
+      "role": "index",
+      "sha256": "52f8ec891f8ff4ade9aa5a930a48082d9c3d3827cbb3f00d91d70ee871dbef90",
+      "size": 2617,
+      "normalized_sha256": "52f8ec891f8ff4ade9aa5a930a48082d9c3d3827cbb3f00d91d70ee871dbef90"
     },
     "configs/training/synthetic_timing_control.yaml": {
       "role": "index",
@@ -1120,15 +1144,15 @@
     },
     "scripts/colab/colab_gpu_evaluation.ipynb": {
       "role": "index",
-      "sha256": "500e7e9b035eb64a8fad7f229fefff81aafa24a10d8aa3661ec324dbe658dc73",
-      "size": 13556,
-      "normalized_sha256": "500e7e9b035eb64a8fad7f229fefff81aafa24a10d8aa3661ec324dbe658dc73"
+      "sha256": "3e62d81566f4e1e3eeffb9e87e89fd770bef381d82614660523cea2e954a509d",
+      "size": 13638,
+      "normalized_sha256": "3e62d81566f4e1e3eeffb9e87e89fd770bef381d82614660523cea2e954a509d"
     },
     "scripts/colab/colab_gpu_train.ipynb": {
       "role": "index",
-      "sha256": "3debf9b97897abfa48f8d195782257bb9ea6de6809fd2bc20a0ea471fb7ae02f",
-      "size": 10549,
-      "normalized_sha256": "3debf9b97897abfa48f8d195782257bb9ea6de6809fd2bc20a0ea471fb7ae02f"
+      "sha256": "8acab3f91a53eaaba10ee817bace4c8df976c873a2ba2a7940319c546e7b33da",
+      "size": 12192,
+      "normalized_sha256": "8acab3f91a53eaaba10ee817bace4c8df976c873a2ba2a7940319c546e7b33da"
     },
     "scripts/colab_setup.py": {
       "role": "index",

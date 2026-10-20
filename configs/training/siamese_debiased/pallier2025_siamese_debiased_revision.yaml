@@ -1,0 +1,53 @@
+# Pallier2025 法语 MEG 阶段 2.2：孪生共模抵消 + 错位零化正则 + 冻结 CNN 预提取极速训练配置
+# （Siamese Common-Mode Rejection + Shift-Null Regularization + Pre-Extracted Frozen CNN 8x Speedup）
+#
+# 核心机制：
+#   1. 冻结 CNN 特征预提取（Pre-Extraction Cache）：
+#      在 Epoch 1 开始前一次性提取 Clean (0s) 与 6 个时间错位 (-120s, -60s, -30s, +30s, +60s, +120s)
+#      的 Stage-1 CNN 归一化向量并缓存在显存/磁盘，每轮训练从 ~372s 降至 <25s。
+#   2. 机制 1 — 前向孪生共模扣除（Siamese Common-Mode Subtraction, 双分支梯度连通不 detach）：
+#      y_tilde_i^(r) = Norm( y_i^(r, clean) - eta_train * (1/M) * sum_{m=1..M} y_i^(r, shift_m) )
+#   3. 机制 2 — 错位零化正则（Shift-Null Regularization）：
+#      L_null^(r) = (1/B) * sum_i || (E_V - e_bar) * y_bar_i^(r, shift) ||_2^2
+#      L_total = (1/|D_b|) * sum_{r in D_b} ( L_SigLIP(y_tilde^(r), E_target) + lambda_null * L_null^(r) )
+#
+# 启动命令：
+#   python -u -m braindecoding train --config configs/training/siamese_debiased/pallier2025_siamese_debiased_revision.yaml --require-cache --resume auto
+extends: ../pallier2025_rolling_revision.yaml
+
+workflow:
+  dataset: pallier2025
+  stage: revision
+  subject: all
+  precision: bf16-mixed
+  # 继承 ../pallier2025_rolling_revision.yaml 的 window_seconds（当前 0.5s，也可改为 1.0s）
+  window_seconds: 0.5
+  window_start_offset_seconds: 0.0
+
+training:
+  epochs: 30
+  batch_size: 128
+  eval_batch_size: 512
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  patience: 6
+  freeze_brain_encoder_epochs: 30
+  preserve_complete_groups: true
+  revision_cutoff_policy: all
+
+siamese_debiased:
+  enabled: true
+  # 前向孪生共模扣除权重 eta_train（建议尝试 0.8 或 0.5）
+  eta_train: 0.8
+  # 错位零化正则权重 lambda_null（惩罚错位分支在中心化训练词表上的非均匀打分）
+  lambda_null: 10.0
+  # 同受试者、同连续录音内的圆周时间错位候选池（秒）
+  shift_seconds: [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+  # 每个训练 step 从 6 个平移量中随机抽取的分支数 M（预提取 CNN 后可设为 2 或 6）
+  shifts_per_step: 2
+  # Clean 与 Shifted 分支通过共享 Transformer 时同步 Dropout RNG 掩码，确保纯时序特征精确相消
+  synchronize_dropout_rng: true
+  # 启动前一次性预提取冻结 Stage-1 CNN 特征（提速 5-8 倍）
+  preextract_frozen_cnn: true
+  # 将预提取的冻结 CNN 特征缓存在本地 BRAINDECODING_CACHE_DIR，后续切换超参 1 秒直读
+  cache_preextracted_to_disk: true

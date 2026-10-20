@@ -1,0 +1,31 @@
+# Pallier2025 法语 MEG 阶段 2.1：全局上下文 Transformer 孪生共模抵消 + 错位零化正则 + 冻结 CNN 预提取训练配置
+# 启动命令：
+#   python -u -m braindecoding train --config configs/training/siamese_debiased/pallier2025_siamese_debiased_context.yaml --require-cache --resume auto
+extends: ../pallier2025_context_transformer.yaml
+
+workflow:
+  dataset: pallier2025
+  stage: context
+  subject: all
+  precision: bf16-mixed
+  window_seconds: 0.5
+  window_start_offset_seconds: 0.0
+
+training:
+  epochs: 30
+  batch_size: 128
+  eval_batch_size: 512
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  patience: 6
+  freeze_brain_encoder_epochs: 30
+
+siamese_debiased:
+  enabled: true
+  eta_train: 0.8
+  lambda_null: 10.0
+  shift_seconds: [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+  shifts_per_step: 2
+  synchronize_dropout_rng: true
+  preextract_frozen_cnn: true
+  cache_preextracted_to_disk: true

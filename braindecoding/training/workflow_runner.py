@@ -544,6 +544,11 @@ def build_workflow_config(
     max_train_rows: int | None = None,
     max_val_rows: int | None = None,
     config_path: str | Path | None = None,
+    siamese_debiased: bool | None = None,
+    eta_train: float | None = None,
+    lambda_null: float | None = None,
+    shifts_per_step: int | None = None,
+    preextract_frozen_cnn: bool | None = None,
 ) -> tuple[dict, dict]:
     """构建支持灵活受试者子集、可切换窗口长度、自定义 YAML 配置与环境变量路径解耦的训练配置。"""
     ensure_default_environment()
@@ -612,6 +617,7 @@ def build_workflow_config(
             "experiment",
             "training",
             "dataset",
+            "siamese_debiased",
         ):
             if isinstance(explicit_yaml.get(overlay_key), dict):
                 cfg.setdefault(overlay_key, {})
@@ -634,6 +640,12 @@ def build_workflow_config(
             active_yaml.get("control"), dict
         ):
             cfg["control"] = copy.deepcopy(active_yaml["control"])
+        if isinstance(active_yaml, dict) and isinstance(
+            active_yaml.get("siamese_debiased"), dict
+        ):
+            cfg["siamese_debiased"] = copy.deepcopy(
+                active_yaml["siamese_debiased"]
+            )
     yaml_tc = dict(cfg.get("training", {}))
 
     window_info = _resolve_window_settings(
@@ -876,6 +888,38 @@ def build_workflow_config(
                     tc["warm_start_exp_tag"] = ""
             tc["pretrained_brain_encoder_checkpoint"] = str(candidate_ckpt)
 
+    from braindecoding.training.siamese_debiased_training import (
+        resolve_siamese_debiased_config,
+    )
+
+    siamese_spec = resolve_siamese_debiased_config(
+        cfg,
+        siamese_debiased=siamese_debiased,
+        eta_train=eta_train,
+        lambda_null=lambda_null,
+        shifts_per_step=shifts_per_step,
+        preextract_frozen_cnn=preextract_frozen_cnn,
+    )
+    if (
+        siamese_spec["enabled"] or siamese_spec["preextract_frozen_cnn"]
+    ) and stage not in ("context", "revision"):
+        raise ValueError(
+            "孪生共模抵消与冻结 CNN 预提取仅适用于 context (Stage 2.1) 或 revision (Stage 2.2) 阶段。"
+        )
+    if (
+        siamese_spec["enabled"] or siamese_spec["preextract_frozen_cnn"]
+    ) and stage in ("context", "revision"):
+        tc["freeze_brain_encoder_epochs"] = max(
+            int(tc.get("freeze_brain_encoder_epochs", 0)),
+            int(tc["epochs"]),
+        )
+    if (
+        siamese_spec["enabled"]
+        or siamese_spec["preextract_frozen_cnn"]
+        or "siamese_debiased" in cfg
+    ):
+        cfg["siamese_debiased"] = siamese_spec
+
     cfg["evaluation"]["selection_metric"] = (
         cfg.get("evaluation", {}).get("selection_metric")
         or adapter.get(f"main_selection_metric_{stage}", adapter["main_selection_metric_word"])
@@ -904,6 +948,7 @@ def build_workflow_config(
         "window_samples": window_info["window_samples"],
         "sampling_rate_hz": window_info["sampling_rate_hz"],
         "window_explicitly_overridden": window_info["explicit_override"],
+        "siamese_debiased": siamese_spec,
         "subset": subset_spec,
         "environment": {
             "BRAINDECODING_DATA_DIR": str(data_root()),
@@ -1409,20 +1454,38 @@ def _evaluate_subset_validation(
     device: torch.device,
     show_progress: bool = False,
     progress_desc: str | None = None,
+    preextracted_cache: dict | None = None,
 ) -> dict:
     """在所选受试者子集验证集上计算检索指标（支持 bf16-mixed / fp16 / fp32）。"""
     dataset = cfg["experiment"]["dataset"]
     amp_enabled = bool(cfg["training"].get("amp", True))
     amp_dtype = resolve_amp_dtype(cfg["training"])
-    encoded = encode_loader(
-        model,
-        val_loader,
-        device,
-        amp=amp_enabled,
-        amp_dtype=amp_dtype,
-        show_progress=show_progress,
-        progress_desc=progress_desc,
-    )
+    if preextracted_cache is not None:
+        from braindecoding.training.siamese_debiased_training import (
+            encode_from_preextracted_cnn,
+        )
+
+        encoded = encode_from_preextracted_cnn(
+            model,
+            val_loader.batch_sampler,
+            preextracted_cache["val_clean_z"],
+            preextracted_cache["val_meta"],
+            device,
+            amp=amp_enabled,
+            amp_dtype=amp_dtype,
+            show_progress=show_progress,
+            progress_desc=progress_desc,
+        )
+    else:
+        encoded = encode_loader(
+            model,
+            val_loader,
+            device,
+            amp=amp_enabled,
+            amp_dtype=amp_dtype,
+            show_progress=show_progress,
+            progress_desc=progress_desc,
+        )
     if len(encoded["event_ids"]) != len(val_ds):
         raise ValueError(
             f"验证集编码事件数不匹配：{len(encoded['event_ids'])} vs {len(val_ds)}"
@@ -1720,6 +1783,11 @@ def run_training_workflow(
     overwrite: bool = False,
     show_progress: bool = True,
     config_path: str | Path | None = None,
+    siamese_debiased: bool | None = None,
+    eta_train: float | None = None,
+    lambda_null: float | None = None,
+    shifts_per_step: int | None = None,
+    preextract_frozen_cnn: bool | None = None,
 ) -> dict:
     """运行 smoke 冒烟测试或 train 正式训练工作流。"""
     cfg, subset_spec = build_workflow_config(
@@ -1745,6 +1813,11 @@ def run_training_workflow(
         max_train_rows=max_train_rows,
         max_val_rows=max_val_rows,
         config_path=config_path,
+        siamese_debiased=siamese_debiased,
+        eta_train=eta_train,
+        lambda_null=lambda_null,
+        shifts_per_step=shifts_per_step,
+        preextract_frozen_cnn=preextract_frozen_cnn,
     )
     dataset = subset_spec["dataset"]
     stage = cfg["workflow"]["stage"]
@@ -1934,6 +2007,76 @@ def run_training_workflow(
             f" Resumed     : {resumed_from} (starting from epoch {start_epoch + 1}/{max_epochs})",
             flush=True,
         )
+
+    siamese_spec = dict(cfg["workflow"].get("siamese_debiased") or {})
+    siamese_enabled = bool(siamese_spec.get("enabled", False))
+    all_epochs_frozen = (
+        warm_start_stage
+        and int(tc.get("freeze_brain_encoder_epochs", 0)) >= max_epochs
+    )
+    use_preextracted_cnn = bool(
+        all_epochs_frozen
+        and (siamese_enabled or bool(siamese_spec.get("preextract_frozen_cnn", False)))
+    )
+    if siamese_enabled:
+        print(
+            f" Siamese Deb : enabled (eta_train={float(siamese_spec.get('eta_train', 0.8)):.2f}, "
+            f"lambda_null={float(siamese_spec.get('lambda_null', 10.0)):.2f}, "
+            f"M={int(siamese_spec.get('shifts_per_step', 2))}/{len(siamese_spec.get('shift_seconds', ()))} shifts, "
+            f"preextract_cnn={use_preextracted_cnn})",
+            flush=True,
+        )
+    elif use_preextracted_cnn:
+        print(
+            " Pre-Extract : Frozen Stage-1 CNN feature cache enabled (Clean 0s)",
+            flush=True,
+        )
+
+    preextracted_cache: dict | None = None
+    centered_vocab_bank: torch.Tensor | None = None
+    if use_preextracted_cnn and start_epoch < max_epochs:
+        from braindecoding.training.siamese_debiased_training import (
+            build_centered_vocabulary_bank,
+            preextract_frozen_cnn_features,
+            train_one_epoch_siamese_debiased,
+        )
+
+        pallier_task.set_brain_encoder_trainable(model, False)
+        word_ckpt_sha = ""
+        if initialization and initialization.get("sha256"):
+            word_ckpt_sha = str(initialization["sha256"])
+        else:
+            src_ckpt_str = str(tc.get("pretrained_brain_encoder_checkpoint", ""))
+            if src_ckpt_str and Path(src_ckpt_str).is_file():
+                word_ckpt_sha = str(file_sha256(src_ckpt_str) or "")
+        preextracted_cache = preextract_frozen_cnn_features(
+            model,
+            train_ds,
+            val_ds,
+            dataset=dataset,
+            subset_tag=subset_spec["subset_tag"],
+            word_ckpt_sha256=word_ckpt_sha,
+            window_seconds=win_sec,
+            window_start_offset_seconds=win_off,
+            shift_seconds=(
+                siamese_spec.get("shift_seconds", ()) if siamese_enabled else ()
+            ),
+            device=device,
+            batch_size=int(tc.get("eval_batch_size", tc["batch_size"])),
+            amp=bool(tc.get("amp", True)),
+            amp_dtype=amp_dtype,
+            cache_to_disk=bool(
+                siamese_spec.get("cache_preextracted_to_disk", True)
+                and tc.get("max_train_rows") is None
+                and tc.get("max_val_rows") is None
+            ),
+            show_progress=show_progress,
+        )
+        if siamese_enabled and float(siamese_spec.get("lambda_null", 0.0)) > 0.0:
+            centered_vocab_bank = build_centered_vocabulary_bank(
+                train_ds, vocabulary, device
+            )
+
     print(
         f"{sep}\n"
         f" {'Epoch':^7} | {'Train Loss':^10} | {'Val Top10(50)':^13} | {'Val Top10(Full)':^15} | {'LR':^9} | {'VRAM (Alloc/Res)':^18} | {'Time':^7} | Status\n"
@@ -1948,21 +2091,44 @@ def run_training_workflow(
         pallier_task.set_brain_encoder_trainable(model, not frozen)
         epoch_lr = float(optimizer.param_groups[0]["lr"])
 
-        train_loss, epoch_updates, batches_seen, diagnostics = train_one_epoch(
-            model,
-            loss_module,
-            train_loader,
-            optimizer,
-            scaler,
-            device,
-            tc,
-            freeze_brain_encoder=frozen,
-            return_stats=True,
-            return_diagnostics=True,
-            epoch_index=epoch,
-            show_progress=show_progress,
-            progress_desc=f"Epoch {epoch + 1:02d}/{max_epochs:02d} [train]",
-        )
+        if preextracted_cache is not None and frozen:
+            train_loss, epoch_updates, batches_seen, diagnostics = (
+                train_one_epoch_siamese_debiased(
+                    model,
+                    loss_module,
+                    train_sampler,
+                    preextracted_cache,
+                    optimizer,
+                    scaler,
+                    device,
+                    tc,
+                    siamese_spec,
+                    centered_vocab_bank=centered_vocab_bank,
+                    epoch_index=epoch,
+                    show_progress=show_progress,
+                    progress_desc=(
+                        f"Epoch {epoch + 1:02d}/{max_epochs:02d} [siamese]"
+                        if siamese_enabled
+                        else f"Epoch {epoch + 1:02d}/{max_epochs:02d} [cached]"
+                    ),
+                )
+            )
+        else:
+            train_loss, epoch_updates, batches_seen, diagnostics = train_one_epoch(
+                model,
+                loss_module,
+                train_loader,
+                optimizer,
+                scaler,
+                device,
+                tc,
+                freeze_brain_encoder=frozen,
+                return_stats=True,
+                return_diagnostics=True,
+                epoch_index=epoch,
+                show_progress=show_progress,
+                progress_desc=f"Epoch {epoch + 1:02d}/{max_epochs:02d} [train]",
+            )
         if not np.isfinite(train_loss):
             raise RuntimeError(f"Epoch {epoch + 1} 训练损失出现非有限值：{train_loss}")
         total_updates += int(epoch_updates)
@@ -1978,6 +2144,9 @@ def run_training_workflow(
             device=device,
             show_progress=show_progress,
             progress_desc=f"Epoch {epoch + 1:02d}/{max_epochs:02d} [val]  ",
+            preextracted_cache=(
+                preextracted_cache if (preextracted_cache is not None and frozen) else None
+            ),
         )
         scheduler.step()
 
@@ -2101,6 +2270,11 @@ def run_training_workflow(
             status_str = f"stale {stale_epochs}/{patience}"
         if frozen:
             status_str += " [frozen]"
+        if siamese_enabled and isinstance(diagnostics, dict) and "shift_null_loss" in diagnostics:
+            status_str += (
+                f" [sig={float(diagnostics.get('siglip_loss', train_loss)):.3f},"
+                f"null={float(diagnostics.get('shift_null_loss', 0.0)):.4f}]"
+            )
 
         epoch_col = f"{epoch + 1:02d}/{max_epochs:02d}"
         vram_col = f"{peak_alloc_mb:6.0f} / {peak_reserved_mb:5.0f} MB"
@@ -2145,6 +2319,7 @@ def run_training_workflow(
         "window_seconds": win_sec,
         "window_samples": win_samp,
         "window_start_offset_seconds": win_off,
+        "siamese_debiased": siamese_spec,
         "subset": subset_spec,
         "subjects_file": str(subjects_file),
         "population": population,
@@ -2177,6 +2352,7 @@ def run_training_workflow(
             "window_seconds": win_sec,
             "window_samples": win_samp,
             "window_start_offset_seconds": win_off,
+            "siamese_debiased": siamese_spec,
             "subset_tag": subset_spec["subset_tag"],
             "subjects": subset_spec["subjects"],
             "completed_epochs": len(history),
@@ -2198,6 +2374,7 @@ def run_training_workflow(
             "window_seconds": win_sec,
             "window_samples": win_samp,
             "window_start_offset_seconds": win_off,
+            "siamese_debiased": siamese_spec,
             "subset": subset_spec,
             "population": population,
             "completed_epochs": len(history),
@@ -2232,6 +2409,8 @@ def run_training_workflow(
         val_ds,
         train_loader,
         val_loader,
+        preextracted_cache,
+        centered_vocab_bank,
     )
     gc.collect()
     torch.cuda.empty_cache()
