@@ -1895,8 +1895,10 @@ def train_one_epoch_siamese_debiased(
                         padded_plan=padded_plan,
                     )
                     if siamese_enabled and y_shift_mean is not None:
+                        # 阻断主对比损失向错位分支回传 -eta_train 反向梯度（防止错位分支反向拟合 -E_target 投机），
+                        # 错位分支仅受下方 compute_shift_null_loss 的零化正则约束。
                         y_tilde = F.normalize(
-                            y_clean - eta_train * y_shift_mean, dim=-1
+                            y_clean - eta_train * y_shift_mean.detach(), dim=-1
                         )
                     else:
                         y_tilde = y_clean
@@ -1958,8 +1960,9 @@ def train_one_epoch_siamese_debiased(
                         synchronize_dropout_rng=sync_rng,
                     )
                     if siamese_enabled and y_shift_mean is not None:
+                        # 阻断主对比损失向错位分支回传 -eta_train 反向梯度，错位分支仅受 L_null 零化约束
                         y_tilde = F.normalize(
-                            y_clean - eta_train * y_shift_mean, dim=-1
+                            y_clean - eta_train * y_shift_mean.detach(), dim=-1
                         )
                     else:
                         y_tilde = y_clean

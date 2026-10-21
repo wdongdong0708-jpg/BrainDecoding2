@@ -1267,6 +1267,25 @@ def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
     assert y_shift_mean.grad_fn is not None
     assert torch.allclose(y_clean, y_shift_mean, atol=1e-6)
 
+    # Verify that y_tilde = F.normalize(y_clean - eta_train * y_shift_mean.detach(), dim=-1)
+    # blocks main-loss gradients into y_shift_mean while compute_shift_null_loss still differentiates y_shift_mean
+    y_tilde_detached = torch.nn.functional.normalize(
+        y_clean - 0.8 * y_shift_mean.detach(), dim=-1
+    )
+    grad_from_main = torch.autograd.grad(
+        y_tilde_detached.sum(),
+        y_shift_mean,
+        retain_graph=True,
+        allow_unused=True,
+    )[0]
+    assert grad_from_main is None
+    null_loss_check = compute_shift_null_loss(y_shift_mean, centered_bank)
+    grad_from_null = torch.autograd.grad(
+        null_loss_check, y_shift_mean, retain_graph=False
+    )[0]
+    assert grad_from_null is not None
+    assert float(grad_from_null.abs().max()) > 0.0
+
     # 5. Pre-extract frozen CNN features (Clean + 6 Shifted) and verify disk cache reload
     shifts = [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
     pre_cache = preextract_frozen_cnn_features(

@@ -37,8 +37,8 @@ training:
 
 siamese_debiased:
   enabled: true
-  # 前向孪生共模扣除权重 eta_train（建议尝试 0.8 或 0.5）
-  eta_train: 1
+  # 前向孪生共模扣除权重 eta_train（计算 y_tilde 时对 y_shift_mean 施加 .detach()，阻断主损失向错位分支回传负梯度）
+  eta_train: 0.8
   # 错位零化正则权重 lambda_null（惩罚错位分支在中心化训练词表上的非均匀打分）
   lambda_null: 10.0
   # 同受试者、同连续录音内的圆周时间错位候选池（秒）
