@@ -584,7 +584,7 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--shift-seconds",
         default=None,
-        help="可选逗号分隔的时间错位秒数列表（如 -120,-60,-30,30,60,120），以真实错位脑磁/脑电信号作为词级检索负对照",
+        help="可选逗号分隔的时间错位秒数列表（如 -15,-30,-45,-60,-90,-120），以真实错位脑磁/脑电信号作为词级检索负对照",
     )
     parser.add_argument(
         "--zero-signal-control",

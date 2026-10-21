@@ -9,8 +9,8 @@
 control:
   name: temporal_shift_negative_control
   control_type: temporal_shift
-  description: Feed real MEG/EEG signals circularly shifted by +-30s, +-60s, +-120s within the same subject and recording as negative controls for word-level retrieval.
-  shift_seconds: [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+  description: Feed real MEG/EEG signals circularly shifted by purely historical causal windows (-15s, -30s, -45s, -60s, -90s, -120s) within the same subject and recording as negative controls for word-level retrieval.
+  shift_seconds: [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
   shift_mode: deterministic_circular
   same_subject: true
   same_recording: true
@@ -20,5 +20,5 @@ control:
 
 evaluation:
   negative_control: temporal_shift
-  shift_seconds: [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+  shift_seconds: [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
   zero_signal_control: false

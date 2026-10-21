@@ -1,5 +1,5 @@
 # 留一法共模时序偏置扣除（Leave-One-Out Common-Mode Subtraction）探索性负对照配置
-# 基于单次前向编码得到的 1 个 Clean (0s) 与 6 个时间错位 Shifted (-120s, -60s, -30s, +30s, +60s, +120s) 预测，
+# 基于单次前向编码得到的 1 个 Clean (0s) 与 6 个纯历史因果时间错位 Shifted (-15s, -30s, -45s, -60s, -90s, -120s) 预测，
 # 在不重新训练模型、不增加额外 GPU 前向传播的前提下，扫描扣除权重 eta in [0.5, 0.8, 1.0]（及 0.0 基线）：
 #   - Clean (0s)   : s_tilde^(0)       = s^(0)       - eta * (1/6) * sum_{delta != 0} s^(delta)
 #   - Shifted (dk) : s_tilde^(delta_k) = s^(delta_k) - eta * (1/5) * sum_{delta not in {0, delta_k}} s^(delta)
@@ -13,8 +13,8 @@ extends: ../temporal_shift/temporal_shift_control.yaml
 control:
   name: common_mode_subtraction_negative_control
   control_type: common_mode_subtraction
-  description: Leave-one-out common-mode temporal bias subtraction across +-30s, +-60s, +-120s shifted neural predictions for Clean (1/6 mean) and Shifted (1/5 leave-one-out mean).
-  shift_seconds: [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+  description: Leave-one-out common-mode temporal bias subtraction across purely historical causal windows (-15s, -30s, -45s, -60s, -90s, -120s) for Clean (1/6 mean) and Shifted (1/5 leave-one-out mean).
+  shift_seconds: [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
   shift_mode: deterministic_circular
   same_subject: true
   same_recording: true
@@ -29,7 +29,7 @@ control:
 
 evaluation:
   negative_control: common_mode_subtraction
-  shift_seconds: [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+  shift_seconds: [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
   zero_signal_control: false
   common_mode_subtraction:
     enabled: true

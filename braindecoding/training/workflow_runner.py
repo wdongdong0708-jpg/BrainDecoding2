@@ -2773,7 +2773,7 @@ def _resolve_control_specification(
     elif "shift_seconds" in merged_eval:
         shifts = _parse_shift_seconds_list(merged_eval.get("shift_seconds"))
     elif cms_enabled:
-        shifts = [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+        shifts = [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
     else:
         shifts = []
 

@@ -387,7 +387,7 @@ def test_decoupled_control_configs_and_temporal_shift_specification():
     spec_pal = _resolve_control_specification(cfg_pal)
     assert spec_pal["enabled"] is True
     assert spec_pal["control_type"] == "temporal_shift"
-    assert spec_pal["shift_seconds"] == [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+    assert spec_pal["shift_seconds"] == [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
     assert spec_pal["same_subject"] is True
     assert spec_pal["same_recording"] is True
 
@@ -400,7 +400,7 @@ def test_decoupled_control_configs_and_temporal_shift_specification():
         control_config_path="configs/controls/temporal_shift/temporal_shift_control.yaml",
     )
     assert spec_cn["enabled"] is True
-    assert spec_cn["shift_seconds"] == [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+    assert spec_cn["shift_seconds"] == [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
 
     spec_zero = _resolve_control_specification(
         cfg_cn,
@@ -832,7 +832,7 @@ def test_leave_one_out_common_mode_subtraction_evaluation(tmp_path):
     )
     assert spec_cms["enabled"] is True
     assert spec_cms["control_type"] == "common_mode_subtraction"
-    assert spec_cms["shift_seconds"] == [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+    assert spec_cms["shift_seconds"] == [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
     assert spec_cms["common_mode_subtraction"]["enabled"] is True
     assert spec_cms["common_mode_subtraction"]["mode"] == "leave_one_out"
     assert spec_cms["common_mode_subtraction"]["eta_values"] == [0.5, 0.8, 1.0]
@@ -1074,7 +1074,7 @@ def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
         assert 0.0 < float(siam["eta_train"]) <= 1.5
         assert float(siam["lambda_null"]) >= 0.0
         assert 1 <= int(siam["shifts_per_step"]) <= len(siam["shift_seconds"])
-        assert siam["shift_seconds"] == [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+        assert siam["shift_seconds"] == [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
         assert siam["preextract_frozen_cnn"] is True
 
     # 2. Verify CLI argument parsing & override in build_workflow_config
@@ -1287,7 +1287,7 @@ def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
     assert float(grad_from_null.abs().max()) > 0.0
 
     # 5. Pre-extract frozen CNN features (Clean + 6 Shifted) and verify disk cache reload
-    shifts = [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+    shifts = [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
     pre_cache = preextract_frozen_cnn_features(
         model,
         train_ds,
@@ -1408,5 +1408,74 @@ def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
         for k, v in model.context_transformer.state_dict().items()
     )
     assert tf_changed is True
+
+    # 8. Verify circular modulo wrapping (and zero clamping) for negative timestamps in the first 0..120s of a recording
+    from braindecoding.data.chineseeeg2_dataset import ChineseEEG2LittlePrinceWordDataset
+    from braindecoding.data.pallier2025_dataset import Pallier2025WordDataset
+
+    rec_samples = 15000  # 300 seconds @ 50Hz
+    win_samples = 50     # 1.0 second @ 50Hz
+    valid_span = rec_samples - win_samples + 1
+    # Linear ramp signal so every starting sample index has a unique mean/offset signature
+    ramp_signal_path = tmp_path / "ramp_recording.npy"
+    ramp_array = np.broadcast_to(
+        np.arange(rec_samples, dtype=np.float32)[None, :], (4, rec_samples)
+    ).copy()
+    np.save(ramp_signal_path, ramp_array)
+
+    # Test an early word event at t_onset = 2.0s (start = 100 samples), where t_idx + shift_idx < 0 for all 6 negative shifts
+    early_start_sample = 100
+    pal_dummy = object.__new__(Pallier2025WordDataset)
+    pal_dummy.zero_meg = False
+    pal_dummy.channel_count = 4
+    pal_dummy.window_samples = win_samples
+    pal_dummy._baseline_samples = 0
+    pal_dummy._clamp = 1e9
+    pal_dummy._window_offset_seconds = 0.0
+    pal_dummy.sampling_rate_hz = 50.0
+    pal_dummy._signal_path_strs = (str(ramp_signal_path),)
+    pal_dummy._window_starts = np.asarray([early_start_sample], dtype=np.int64)
+
+    cn_dummy = object.__new__(ChineseEEG2LittlePrinceWordDataset)
+    cn_dummy.zero_eeg = False
+    cn_dummy.channel_count = 4
+    cn_dummy.window_samples = win_samples
+    cn_dummy._default_window_samples = win_samples
+    cn_dummy._window_offset_samples = 0
+    cn_dummy.clamp = None
+    cn_dummy.sampling_rate_hz = 50.0
+    cn_dummy._cache_path_strs = (str(ramp_signal_path),)
+    cn_dummy._window_starts = np.asarray([early_start_sample], dtype=np.int64)
+    cn_dummy._event_ids = ("ev-000",)
+
+    pal_first_samples = []
+    cn_first_samples = []
+    for delta_sec in (-15.0, -30.0, -45.0, -60.0, -90.0, -120.0):
+        shift_samp = int(round(delta_sec * 50.0))
+        assert early_start_sample + shift_samp < 0
+        expected_wrapped_start = (early_start_sample + shift_samp) % valid_span
+        assert expected_wrapped_start > 0
+
+        pal_dummy.temporal_shift_seconds = delta_sec
+        pal_dummy.temporal_shift_samples = shift_samp
+        pal_win = pal_dummy.read_meg(0)
+        assert pal_win.shape == (4, win_samples)
+        pal_first_samples.append(float(pal_win[0, 0]))
+        assert float(pal_win[0, 0]) == pytest.approx(float(expected_wrapped_start))
+
+        cn_dummy.temporal_shift_seconds = delta_sec
+        cn_dummy.temporal_shift_samples = shift_samp
+        cn_win = cn_dummy.读取脑电(0)
+        assert cn_win.shape == (4, win_samples)
+        cn_first_samples.append(float(cn_win[0, 0]))
+        assert float(cn_win[0, 0]) == pytest.approx(float(expected_wrapped_start))
+
+    # All 6 negative shifts must wrap to 6 strictly distinct, non-overlapping positions (never clamped to 0)
+    assert len(set(pal_first_samples)) == 6
+    assert len(set(cn_first_samples)) == 6
+    assert 0.0 not in pal_first_samples
+    for a, b in zip(pal_first_samples, pal_first_samples[1:]):
+        assert abs(a - b) >= win_samples
+
 
 

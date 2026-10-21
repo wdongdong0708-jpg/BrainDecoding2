@@ -24,7 +24,7 @@ siamese_debiased:
   enabled: true
   eta_train: 0.8
   lambda_null: 10.0
-  shift_seconds: [-120.0, -60.0, -30.0, 30.0, 60.0, 120.0]
+  shift_seconds: [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
   shifts_per_step: 6
   synchronize_dropout_rng: true
   preextract_frozen_cnn: true

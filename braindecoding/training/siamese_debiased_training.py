@@ -3,11 +3,11 @@
 本模块完全独立于主训练循环（word_encoder_training.py）与核心模型定义（embedding.py），
 专门用于 Stage 2.1 (context) 与 Stage 2.2 (revision) 冻结 Stage-1 CNN 时的探索性去偏训练与 5–8 倍加速：
 1. 预提取冻结 CNN 特征缓存（Pre-Extraction Cache）：
-   在训练启动前一次性提取 Clean (0s) 与 6 个时间错位 (-120s, -60s, -30s, +30s, +60s, +120s)
+   在训练启动前一次性提取 Clean (0s) 与 6 个纯历史因果时间错位 (-15s, -30s, -45s, -60s, -90s, -120s)
    的 Stage-1 CNN 归一化向量，训练期间无需重复运行 306 通道膨胀卷积网络。
-2. 机制 1 — 前向孪生共模扣除（Siamese Common-Mode Subtraction，保持双分支梯度连通不 detach）：
-   y_tilde_i^(r) = Norm( y_i^(r, clean) - eta_train * (1 / M) * sum_{m=1..M} y_i^(r, shift_m) )
-3. 机制 2 — 错位零化正则（Shift-Null Regularization）：
+2. 机制 1 — 前向孪生共模扣除（Siamese Common-Mode Subtraction，对 y_shift_mean 施加 .detach() 阻断主损失反向梯度）：
+   y_tilde_i^(r) = Norm( y_i^(r, clean) - eta_train * ( (1 / M) * sum_{m=1..M} y_i^(r, shift_m) ).detach() )
+3. 机制 2 — 错位零化正则（Shift-Null Regularization，对未 detach 的 y_bar^(r, shift) 施加零化约束）：
    L_null^(r) = (1 / B_r) * sum_{i=1..B_r} || (E_V - e_bar) * y_bar_i^(r, shift) ||_2^2
    L_total = (1 / |D_b|) * sum_{r in D_b} ( L_SigLIP(y_tilde^(r), E_target) + lambda_null * L_null^(r) )
 """
@@ -34,12 +34,12 @@ from braindecoding.training.word_encoder_training import (
 )
 
 DEFAULT_SIAMESE_SHIFT_SECONDS: tuple[float, ...] = (
-    -120.0,
-    -60.0,
+    -15.0,
     -30.0,
-    30.0,
-    60.0,
-    120.0,
+    -45.0,
+    -60.0,
+    -90.0,
+    -120.0,
 )
 
 
