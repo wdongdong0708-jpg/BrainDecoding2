@@ -1029,6 +1029,7 @@ def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
     from braindecoding.optimizers import build_adamw_for_modules
     from braindecoding.training.siamese_debiased_training import (
         build_centered_vocabulary_bank,
+        compute_norm_damped_debiased_embedding,
         compute_shift_null_loss,
         encode_from_preextracted_cnn,
         forward_revision_from_preextracted,
@@ -1267,18 +1268,38 @@ def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
     assert y_shift_mean.grad_fn is not None
     assert torch.allclose(y_clean, y_shift_mean, atol=1e-6)
 
-    # Verify that y_tilde = F.normalize(y_clean - eta_train * y_shift_mean.detach(), dim=-1)
-    # blocks main-loss gradients into y_shift_mean while compute_shift_null_loss still differentiates y_shift_mean
-    y_tilde_detached = torch.nn.functional.normalize(
-        y_clean - 0.8 * y_shift_mean.detach(), dim=-1
+    # Verify Norm-Damped Detach (compute_norm_damped_debiased_embedding):
+    # 1) Forward value is 100% identical to standard L2 normalization of (y_clean - eta * y_shift_mean.detach());
+    # 2) Blocks main-loss gradients into y_shift_mean while compute_shift_null_loss still differentiates y_shift_mean;
+    # 3) Cancels the 1 / ||u||_2 Jacobian amplification so backward gradient is pure tangent-space projection (I - y_tilde * y_tilde^T).
+    y_tilde_damped = compute_norm_damped_debiased_embedding(
+        y_clean, y_shift_mean, eta_train=0.8
     )
+    u_ref = y_clean - 0.8 * y_shift_mean.detach()
+    y_tilde_ref = u_ref / u_ref.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-6)
+    assert torch.allclose(y_tilde_damped, y_tilde_ref, atol=1e-7)
+
     grad_from_main = torch.autograd.grad(
-        y_tilde_detached.sum(),
+        y_tilde_damped.sum(),
         y_shift_mean,
         retain_graph=True,
         allow_unused=True,
     )[0]
     assert grad_from_main is None
+
+    upstream_g = torch.randn_like(y_tilde_damped)
+    grad_clean_damped = torch.autograd.grad(
+        (y_tilde_damped * upstream_g).sum(),
+        y_clean,
+        retain_graph=True,
+    )[0]
+    # Pure tangent projection: g - (g . y_tilde) * y_tilde (without 1 / ||u||_2 amplification)
+    expected_tangent_grad = upstream_g - (
+        (upstream_g * y_tilde_ref.detach()).sum(dim=-1, keepdim=True)
+        * y_tilde_ref.detach()
+    )
+    assert torch.allclose(grad_clean_damped, expected_tangent_grad, atol=1e-5)
+
     null_loss_check = compute_shift_null_loss(y_shift_mean, centered_bank)
     grad_from_null = torch.autograd.grad(
         null_loss_check, y_shift_mean, retain_graph=False

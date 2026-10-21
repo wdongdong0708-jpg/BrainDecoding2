@@ -5,8 +5,11 @@
 1. 预提取冻结 CNN 特征缓存（Pre-Extraction Cache）：
    在训练启动前一次性提取 Clean (0s) 与 6 个纯历史因果时间错位 (-15s, -30s, -45s, -60s, -90s, -120s)
    的 Stage-1 CNN 归一化向量，训练期间无需重复运行 306 通道膨胀卷积网络。
-2. 机制 1 — 前向孪生共模扣除（Siamese Common-Mode Subtraction，对 y_shift_mean 施加 .detach() 阻断主损失反向梯度）：
-   y_tilde_i^(r) = Norm( y_i^(r, clean) - eta_train * ( (1 / M) * sum_{m=1..M} y_i^(r, shift_m) ).detach() )
+2. 机制 1 — 雅可比模长阻尼重缩放的孪生共模扣除（Norm-Damped Detach Common-Mode Subtraction）：
+   u_i^(r) = y_i^(r, clean) - eta_train * ( (1 / M) * sum_{m=1..M} y_i^(r, shift_m) ).detach()
+   u_norm = || u_i^(r) ||_2.clamp(min=1e-6),  y_tilde_i^(r) = u_i^(r) / u_norm
+   y_tilde_i^(r) = y_tilde_i^(r).detach() + u_norm.detach() * (y_tilde_i^(r) - y_tilde_i^(r).detach())
+   既阻断主损失向错位分支回传负梯度，又通过 u_norm.detach() 1:1 约分抵消 L2 归一化分母 1 / ||u||_2 的等效学习率放大。
 3. 机制 2 — 错位零化正则（Shift-Null Regularization，对未 detach 的 y_bar^(r, shift) 施加零化约束）：
    L_null^(r) = (1 / B_r) * sum_{i=1..B_r} || (E_V - e_bar) * y_bar_i^(r, shift) ||_2^2
    L_total = (1 / |D_b|) * sum_{r in D_b} ( L_SigLIP(y_tilde^(r), E_target) + lambda_null * L_null^(r) )
@@ -229,6 +232,34 @@ def compute_shift_null_loss(
     projections = queries @ bank.T
     # 每个样本在中心化词表空间上的 L2 范数平方，再对 batch 求均值
     return (projections * projections).sum(dim=-1).mean()
+
+
+def compute_norm_damped_debiased_embedding(
+    y_clean: torch.Tensor,
+    y_shift_mean: torch.Tensor,
+    eta_train: float,
+) -> torch.Tensor:
+    """雅可比模长阻尼重缩放（Norm-Damped Detach）计算孪生共模去偏表征 y_tilde。
+
+    1. 计算扣除后的差向量（保留 y_shift_mean.detach() 阻断反向作弊）：
+       u = y_clean - eta_train * y_shift_mean.detach()
+    2. 计算模长并执行 L2 归一化：
+       u_norm = u.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-6)
+       y_tilde = u / u_norm
+    3. 直通梯度阻尼（前向数值 100% 不变，反向梯度乘回 u_norm.detach()）：
+       精确抵消 L2 归一化分母产生的 1 / ||u||_2 梯度爆炸，使反向求导仅保留球面切空间投影 (I - y_tilde * y_tilde^T)。
+    """
+    # 1. 计算扣除后的差向量（保留 y_shift_mean.detach() 阻断反向作弊）
+    u = y_clean - float(eta_train) * y_shift_mean.detach()
+
+    # 2. 计算模长并执行 L2 归一化
+    u_norm = u.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-6)
+    y_tilde = u / u_norm
+
+    # 3. 【核心修复】直通梯度阻尼：前向数值 100% 不变，反向梯度乘回 u_norm.detach()
+    # 精确抵消 L2 归一化分母产生的 1 / ||u||_2 梯度爆炸，将等效学习率死死锁在设定值！
+    y_tilde = y_tilde.detach() + u_norm.detach() * (y_tilde - y_tilde.detach())
+    return y_tilde
 
 
 @torch.inference_mode()
@@ -1895,10 +1926,11 @@ def train_one_epoch_siamese_debiased(
                         padded_plan=padded_plan,
                     )
                     if siamese_enabled and y_shift_mean is not None:
-                        # 阻断主对比损失向错位分支回传 -eta_train 反向梯度（防止错位分支反向拟合 -E_target 投机），
-                        # 错位分支仅受下方 compute_shift_null_loss 的零化正则约束。
-                        y_tilde = F.normalize(
-                            y_clean - eta_train * y_shift_mean.detach(), dim=-1
+                        # 雅可比模长阻尼重缩放（Norm-Damped Detach）：
+                        # 1) 对 y_shift_mean 施加 .detach() 阻断主损失向错位分支回传 -eta_train 反向梯度；
+                        # 2) 用 u_norm.detach() 1:1 约分抵消 L2 归一化分母 1 / ||u||_2 造成的等效学习率放大。
+                        y_tilde = compute_norm_damped_debiased_embedding(
+                            y_clean, y_shift_mean, eta_train
                         )
                     else:
                         y_tilde = y_clean
@@ -1960,9 +1992,9 @@ def train_one_epoch_siamese_debiased(
                         synchronize_dropout_rng=sync_rng,
                     )
                     if siamese_enabled and y_shift_mean is not None:
-                        # 阻断主对比损失向错位分支回传 -eta_train 反向梯度，错位分支仅受 L_null 零化约束
-                        y_tilde = F.normalize(
-                            y_clean - eta_train * y_shift_mean.detach(), dim=-1
+                        # 雅可比模长阻尼重缩放（Norm-Damped Detach）
+                        y_tilde = compute_norm_damped_debiased_embedding(
+                            y_clean, y_shift_mean, eta_train
                         )
                     else:
                         y_tilde = y_clean

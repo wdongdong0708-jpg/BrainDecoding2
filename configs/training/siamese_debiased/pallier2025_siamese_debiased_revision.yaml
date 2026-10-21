@@ -5,8 +5,9 @@
 #   1. 冻结 CNN 特征预提取（Pre-Extraction Cache）：
 #      在 Epoch 1 开始前一次性提取 Clean (0s) 与 6 个纯历史因果时间错位 (-15s, -30s, -45s, -60s, -90s, -120s)
 #      的 Stage-1 CNN 归一化向量并缓存在显存/磁盘，每轮训练从 ~372s 降至 <25s。
-#   2. 机制 1 — 前向孪生共模扣除（Siamese Common-Mode Subtraction, 对 y_shift_mean 施加 .detach()）：
-#      y_tilde_i^(r) = Norm( y_i^(r, clean) - eta_train * ( (1/M) * sum_{m=1..M} y_i^(r, shift_m) ).detach() )
+#   2. 机制 1 — 雅可比模长阻尼重缩放的孪生共模扣除（Norm-Damped Detach Common-Mode Subtraction）：
+#      u = y_clean - eta_train * y_shift_mean.detach(),  y_tilde = u / ||u||_2
+#      y_tilde = y_tilde.detach() + ||u||_2.detach() * (y_tilde - y_tilde.detach())
 #   3. 机制 2 — 错位零化正则（Shift-Null Regularization）：
 #      L_null^(r) = (1/B) * sum_i || (E_V - e_bar) * y_bar_i^(r, shift) ||_2^2
 #      L_total = (1/|D_b|) * sum_{r in D_b} ( L_SigLIP(y_tilde^(r), E_target) + lambda_null * L_null^(r) )
