@@ -20,6 +20,7 @@ decoding:
   architecture: scheme_1_committed_k2_draft_k1_k0
   beam_width: 5
   candidate_top_k: 20
+  segment_batch_size: 32
   states:
     - S0
     - K0
@@ -37,6 +38,7 @@ calibration:
   split: val
   use_calibration_partition: true
   calibration_fraction: 0.2
+  max_calibration_segments: 64
   adjacent_components_per_block: 5
   metric: composite
   enforce_monotonic_lambda: true

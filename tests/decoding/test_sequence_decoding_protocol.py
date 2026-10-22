@@ -93,9 +93,18 @@ class _ToyCausalLanguageModel(nn.Module):
 
         ids_clamped = input_ids.clamp(0, self.vocab_size - 1)
         logits = self.transition[ids_clamped].float()
-        pos_offsets = torch.arange(
-            past_len, past_len + seq_len, device=input_ids.device, dtype=torch.float32
-        ).view(1, seq_len, 1)
+        position_ids = kwargs.get("position_ids")
+        if position_ids is not None:
+            pos_offsets = position_ids.to(
+                device=input_ids.device, dtype=torch.float32
+            ).unsqueeze(-1)
+        else:
+            pos_offsets = torch.arange(
+                past_len,
+                past_len + seq_len,
+                device=input_ids.device,
+                dtype=torch.float32,
+            ).view(1, seq_len, 1)
         logits = logits + 0.01 * pos_offsets
 
         new_k = input_ids.unsqueeze(1).unsqueeze(-1).float().repeat(1, 2, 1, 4)
@@ -565,5 +574,80 @@ def test_build_segment_inventory_supports_chinese_canonical_columns():
     assert segments[1]["event_ids"] == ["ev-3", "ev-4"]
     assert segments[1]["reference_words"] == ["prince", "parle"]
     assert segments[1]["in_vocabulary_mask"] == [True, False]
+
+
+def test_batched_segment_decoding_and_transition_cache_equivalence() -> None:
+    """验证跨句段锁步批处理解码与单句段解码输出 100% 一致，且重复解码命中转移缓存零额外 Forward。"""
+    from braindecoding.decoding.rolling_beam_search import (
+        decode_segments_static_batched,
+        decode_segments_streaming_batched,
+    )
+
+    vocabulary, scorer_single, _ = _build_toy_french_scorer()
+    _, scorer_batched, model_batched = _build_toy_french_scorer()
+    vocab_size = len(vocabulary)
+    rng = np.random.default_rng(1234)
+
+    seg_dicts = []
+    for seg_len in (3, 5, 4):
+        seg_dicts.append(
+            {
+                "K0": compute_neural_log_probabilities(
+                    rng.standard_normal((seg_len, vocab_size)).astype(np.float32),
+                    temperature=0.1,
+                ),
+                "K1": compute_neural_log_probabilities(
+                    rng.standard_normal((seg_len, vocab_size)).astype(np.float32),
+                    temperature=0.1,
+                ),
+                "K2": compute_neural_log_probabilities(
+                    rng.standard_normal((seg_len, vocab_size)).astype(np.float32),
+                    temperature=0.1,
+                ),
+            }
+        )
+
+    lam_weights = {"K0": 0.2, "K1": 0.15, "K2": 0.1}
+    single_stream = [
+        decode_segment_streaming(
+            sd, vocabulary, scorer_single, language_weights=lam_weights, beam_width=3, candidate_top_k=5
+        )
+        for sd in seg_dicts
+    ]
+    batched_stream = decode_segments_streaming_batched(
+        seg_dicts, vocabulary, scorer_batched, language_weights=lam_weights, beam_width=3, candidate_top_k=5
+    )
+    for s_res, b_res in zip(single_stream, batched_stream):
+        assert s_res["final_words"] == b_res["final_words"]
+        assert s_res["committed_k2_words"] == b_res["committed_k2_words"]
+        assert s_res["initial_k0_words"] == b_res["initial_k0_words"]
+
+    calls_before_repeat = len(model_batched.forward_calls)
+    batched_stream_repeat = decode_segments_streaming_batched(
+        seg_dicts, vocabulary, scorer_batched, language_weights=lam_weights, beam_width=3, candidate_top_k=5
+    )
+    assert len(model_batched.forward_calls) == calls_before_repeat
+    assert scorer_batched.stats["transition_cache_hits"] > 0
+    for b_res, r_res in zip(batched_stream, batched_stream_repeat):
+        assert b_res["final_words"] == r_res["final_words"]
+
+    single_static = [
+        decode_segment_static(
+            sd["K2"], vocabulary, scorer_single, language_weight=0.15, beam_width=3, candidate_top_k=5
+        )
+        for sd in seg_dicts
+    ]
+    batched_static = decode_segments_static_batched(
+        [sd["K2"] for sd in seg_dicts],
+        vocabulary,
+        scorer_batched,
+        language_weight=0.15,
+        beam_width=3,
+        candidate_top_k=5,
+    )
+    for s_res, b_res in zip(single_static, batched_static):
+        assert s_res["final_words"] == b_res["final_words"]
+        assert np.isclose(s_res["score"], b_res["score"], atol=1e-6)
+
 
 

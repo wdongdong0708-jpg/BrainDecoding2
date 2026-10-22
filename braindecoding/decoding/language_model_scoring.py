@@ -157,6 +157,45 @@ def _stack_kv_caches(
     return _from_legacy_kv_tuples(tuple(batched_layers), reference_cache)
 
 
+def _stack_padded_kv_caches(
+    caches: Sequence[tuple[tuple[torch.Tensor, torch.Tensor], ...]],
+    reference_cache: object,
+) -> tuple[object, list[int], int]:
+    """将多个可能具有不同序列长度的单样本 KV-Cache 左填充对齐并沿 batch 维度 (dim=0) 拼接。"""
+    past_lengths = [int(c[0][0].shape[2]) for c in caches]
+    max_past_len = max(past_lengths)
+    min_past_len = min(past_lengths)
+    num_layers = len(caches[0])
+    batched_layers: list[tuple[torch.Tensor, torch.Tensor]] = []
+
+    if min_past_len == max_past_len:
+        for layer_idx in range(num_layers):
+            k_cat = torch.cat([c[layer_idx][0] for c in caches], dim=0)
+            v_cat = torch.cat([c[layer_idx][1] for c in caches], dim=0)
+            batched_layers.append((k_cat, v_cat))
+    else:
+        for layer_idx in range(num_layers):
+            k_list: list[torch.Tensor] = []
+            v_list: list[torch.Tensor] = []
+            for c, p_len in zip(caches, past_lengths):
+                k_t, v_t = c[layer_idx]
+                pad_left = max_past_len - p_len
+                if pad_left > 0:
+                    k_t = F_nn.pad(k_t, (0, 0, pad_left, 0), value=0.0)
+                    v_t = F_nn.pad(v_t, (0, 0, pad_left, 0), value=0.0)
+                k_list.append(k_t)
+                v_list.append(v_t)
+            batched_layers.append(
+                (torch.cat(k_list, dim=0), torch.cat(v_list, dim=0))
+            )
+
+    return (
+        _from_legacy_kv_tuples(tuple(batched_layers), reference_cache),
+        past_lengths,
+        max_past_len,
+    )
+
+
 def _unstack_kv_cache(
     batched_cache: object,
     batch_size: int,
@@ -176,15 +215,41 @@ def _unstack_kv_cache(
     return per_item
 
 
+def _unstack_padded_kv_cache(
+    batched_cache: object,
+    past_lengths: Sequence[int],
+    step_lengths: Sequence[int],
+    max_past_len: int,
+) -> list[tuple[tuple[torch.Tensor, torch.Tensor], ...]]:
+    """将左填充历史 + 右填充当前步的批量 past_key_values 切片还原为各样本真实长度的 ((k, v), ...) 元组。"""
+    legacy = _to_legacy_kv_tuples(batched_cache)
+    per_item: list[tuple[tuple[torch.Tensor, torch.Tensor], ...]] = []
+    for item_idx, (p_len, s_len) in enumerate(zip(past_lengths, step_lengths)):
+        start_col = max_past_len - int(p_len)
+        end_col = max_past_len + int(s_len)
+        item_layers = tuple(
+            (
+                layer_k[item_idx : item_idx + 1, :, start_col:end_col, :].contiguous(),
+                layer_v[item_idx : item_idx + 1, :, start_col:end_col, :].contiguous(),
+            )
+            for layer_k, layer_v in legacy
+        )
+        per_item.append(item_layers)
+    return per_item
+
+
 @dataclass
 class PrefixCacheState:
-    """束搜索单个前缀束的语言模型增量缓存状态。"""
+    """束搜索单个前缀束的语言模型增量缓存状态（支持按需惰性物化与跨步/跨搜索复用）。"""
 
     words: tuple[str, ...]
-    past_key_values: tuple[tuple[torch.Tensor, torch.Tensor], ...]
-    last_log_probs: torch.Tensor
+    past_key_values: tuple[tuple[torch.Tensor, torch.Tensor], ...] | None
+    last_log_probs: torch.Tensor | None
     token_length: int
     context_kind: str
+    parent_state: PrefixCacheState | None = None
+    step_token_ids: tuple[int, ...] = ()
+
 
 
 class PreTokenizedVocabulary:
@@ -282,14 +347,50 @@ class CachedVocabularyLanguageScorer:
             for ctx, tensor in self.vocab_table.first_token_by_context.items()
         }
         self.max_batch_size = int(self.settings.get("score_batch_size", 128))
+        self.max_prefix_cache_states = int(
+            self.settings.get("max_prefix_cache_states", 64)
+        )
+        self.max_transition_cache_prefixes = int(
+            self.settings.get("max_transition_cache_prefixes", 200000)
+        )
         self._reference_cache_type: object = None
         self._prompt_cache_state: PrefixCacheState | None = None
+        self._prefix_state_cache: OrderedDict[tuple[str, ...], PrefixCacheState] = (
+            OrderedDict()
+        )
+        self._transition_score_cache: OrderedDict[
+            tuple[str, ...], dict[int, float]
+        ] = OrderedDict()
         self.stats = {
             "single_token_lookups": 0,
             "multi_token_evaluations": 0,
             "incremental_forward_batches": 0,
             "prefix_advance_batches": 0,
+            "transition_cache_hits": 0,
+            "prefix_cache_hits": 0,
         }
+
+    def _cache_prefix_state(self, state: PrefixCacheState) -> None:
+        if state.past_key_values is None or state.last_log_probs is None:
+            return
+        key = state.words
+        self._prefix_state_cache[key] = state
+        self._prefix_state_cache.move_to_end(key)
+        while len(self._prefix_state_cache) > self.max_prefix_cache_states:
+            self._prefix_state_cache.popitem(last=False)
+
+    def _get_transition_bucket(self, words: tuple[str, ...]) -> dict[int, float]:
+        bucket = self._transition_score_cache.get(words)
+        if bucket is not None:
+            self._transition_score_cache.move_to_end(words)
+            return bucket
+        bucket = {}
+        self._transition_score_cache[words] = bucket
+        while (
+            len(self._transition_score_cache) > self.max_transition_cache_prefixes
+        ):
+            self._transition_score_cache.popitem(last=False)
+        return bucket
 
     @torch.inference_mode()
     def init_prompt_state(self) -> PrefixCacheState:
@@ -316,7 +417,143 @@ class CachedVocabularyLanguageScorer:
             token_length=len(self.prompt_ids),
             context_kind=init_ctx,
         )
+        self._cache_prefix_state(self._prompt_cache_state)
         return self._prompt_cache_state
+
+    @torch.inference_mode()
+    def _ensure_states_materialized(
+        self,
+        states: Sequence[PrefixCacheState],
+    ) -> None:
+        """按需批量物化惰性 PrefixCacheState 的 past_key_values 与 last_log_probs。"""
+        pending_by_words: dict[tuple[str, ...], list[PrefixCacheState]] = (
+            defaultdict(list)
+        )
+        for st in states:
+            if st.past_key_values is not None and st.last_log_probs is not None:
+                continue
+            cached = self._prefix_state_cache.get(st.words)
+            if (
+                cached is not None
+                and cached.past_key_values is not None
+                and cached.last_log_probs is not None
+            ):
+                self._prefix_state_cache.move_to_end(st.words)
+                st.past_key_values = cached.past_key_values
+                st.last_log_probs = cached.last_log_probs
+                st.parent_state = None
+                st.step_token_ids = ()
+                self.stats["prefix_cache_hits"] += 1
+                continue
+            pending_by_words[st.words].append(st)
+
+        if not pending_by_words:
+            return
+
+        unique_specs: list[
+            tuple[
+                tuple[str, ...],
+                PrefixCacheState,
+                tuple[int, ...],
+                list[PrefixCacheState],
+            ]
+        ] = []
+        for words_key, st_group in pending_by_words.items():
+            rep = st_group[0]
+            parent = rep.parent_state or self.init_prompt_state()
+            step_toks = rep.step_token_ids
+            if parent.past_key_values is None:
+                self._ensure_states_materialized([parent])
+            if not step_toks:
+                for target_st in st_group:
+                    target_st.past_key_values = parent.past_key_values
+                    target_st.last_log_probs = parent.last_log_probs
+                    target_st.parent_state = None
+                continue
+            unique_specs.append((words_key, parent, step_toks, st_group))
+
+        for start in range(0, len(unique_specs), self.max_batch_size):
+            batch = unique_specs[start : start + self.max_batch_size]
+            bsz = len(batch)
+            parent_kvs = [item[1].past_key_values for item in batch]
+            batched_kv, past_lengths, max_past_len = _stack_padded_kv_caches(
+                parent_kvs, self._reference_cache_type
+            )
+            step_lengths = [len(item[2]) for item in batch]
+            max_step_len = max(step_lengths)
+            min_step_len = min(step_lengths)
+            min_past_len = min(past_lengths)
+
+            input_ids = torch.zeros(
+                (bsz, max_step_len), dtype=torch.long, device=self.device
+            )
+            position_ids = torch.zeros(
+                (bsz, max_step_len), dtype=torch.long, device=self.device
+            )
+            need_mask = (min_past_len != max_past_len) or (
+                min_step_len != max_step_len
+            )
+            attention_mask = (
+                torch.zeros(
+                    (bsz, max_past_len + max_step_len),
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                if need_mask
+                else None
+            )
+
+            for row_i, (_, _, step_toks, _) in enumerate(batch):
+                p_len = past_lengths[row_i]
+                s_len = len(step_toks)
+                input_ids[row_i, :s_len] = torch.tensor(
+                    step_toks, dtype=torch.long, device=self.device
+                )
+                pos_seq = torch.arange(
+                    p_len, p_len + s_len, dtype=torch.long, device=self.device
+                )
+                position_ids[row_i, :s_len] = pos_seq
+                if s_len < max_step_len:
+                    position_ids[row_i, s_len:] = p_len + s_len - 1
+                if attention_mask is not None:
+                    pad_left = max_past_len - p_len
+                    attention_mask[row_i, pad_left : max_past_len + s_len] = 1
+
+            model_kwargs: dict = {
+                "input_ids": input_ids,
+                "past_key_values": batched_kv,
+                "position_ids": position_ids,
+                "use_cache": True,
+            }
+            if attention_mask is not None:
+                model_kwargs["attention_mask"] = attention_mask
+
+            outputs = self.model(**model_kwargs)
+            self.stats["prefix_advance_batches"] += 1
+            unstacked_kvs = _unstack_padded_kv_cache(
+                outputs.past_key_values,
+                past_lengths,
+                step_lengths,
+                max_past_len,
+            )
+            last_indices = torch.tensor(
+                [s_len - 1 for s_len in step_lengths],
+                dtype=torch.long,
+                device=self.device,
+            )
+            batch_rows = torch.arange(bsz, dtype=torch.long, device=self.device)
+            last_logits = outputs.logits[batch_rows, last_indices, :].float()
+            last_lps = F_nn.log_softmax(last_logits, dim=-1)
+
+            for row_i, (_, _, _, st_group) in enumerate(batch):
+                kv_i = unstacked_kvs[row_i]
+                lp_i = last_lps[row_i]
+                for target_st in st_group:
+                    target_st.past_key_values = kv_i
+                    target_st.last_log_probs = lp_i
+                    target_st.parent_state = None
+                    target_st.step_token_ids = ()
+                self._cache_prefix_state(st_group[0])
 
     @torch.inference_mode()
     def score_candidates_with_cache(
@@ -324,11 +561,12 @@ class CachedVocabularyLanguageScorer:
         prefix_states: Sequence[PrefixCacheState],
         candidate_word_indices: Sequence[Sequence[int]],
     ) -> list[np.ndarray]:
-        """利用前缀 KV-Cache 批量增量计算每个前缀束下各候选词的精确对数概率 log P_LM(w | u)。
+        """利用前缀 KV-Cache 与转移概率缓存批量增量计算每个前缀束下各候选词的精确对数概率 log P_LM(w | u)。
 
+        - 已缓存转移 `(u, w)`：直接从 `_transition_score_cache` O(1) 命中返回，0 次 GPU 调用；
         - 单 Token 候选词：直接从 `prefix_state.last_log_probs[t_0]` O(1) 索引取值，0 次 Forward；
         - 多 Token 候选词：首 Token 从 `last_log_probs[t_0]` 取值，剩余 1~3 个后缀 Token
-          复用 `prefix_state.past_key_values` 组装为 Batch 执行增量 Forward。
+          按唯一 `(u, tok_ids)` 去重后通过左填充 KV-Cache 组装为单次 Batch 增量 Forward。
         """
         if len(prefix_states) != len(candidate_word_indices):
             raise ValueError(
@@ -338,86 +576,169 @@ class CachedVocabularyLanguageScorer:
             np.zeros(len(cands), dtype=np.float64)
             for cands in candidate_word_indices
         ]
-        # 收集所有多 Token 候选词请求：(beam_idx, cand_pos, prefix_state, token_tuple)
-        multi_requests_by_past_len: dict[
-            int, list[tuple[int, int, PrefixCacheState, tuple[int, ...]]]
-        ] = defaultdict(list)
+
+        missing_by_beam: dict[int, list[tuple[int, int]]] = {}
+        states_to_materialize: list[PrefixCacheState] = []
 
         for beam_idx, (state, cand_indices) in enumerate(
             zip(prefix_states, candidate_word_indices)
         ):
             if not cand_indices:
                 continue
+            cached_bucket = self._transition_score_cache.get(state.words)
+            out_row = results[beam_idx]
+            beam_misses: list[tuple[int, int]] = []
+            if cached_bucket is not None:
+                self._transition_score_cache.move_to_end(state.words)
+                for pos, word_idx in enumerate(cand_indices):
+                    w_id = int(word_idx)
+                    if w_id in cached_bucket:
+                        out_row[pos] = cached_bucket[w_id]
+                        self.stats["transition_cache_hits"] += 1
+                    else:
+                        beam_misses.append((pos, w_id))
+            else:
+                beam_misses = [
+                    (pos, int(word_idx))
+                    for pos, word_idx in enumerate(cand_indices)
+                ]
+
+            if beam_misses:
+                missing_by_beam[beam_idx] = beam_misses
+                states_to_materialize.append(state)
+
+        if not missing_by_beam:
+            return results
+
+        self._ensure_states_materialized(states_to_materialize)
+
+        # 去重收集所有多 Token 候选词请求：
+        # key = (state.words, int(word_idx)) -> (state, tok_ids, first_lp, [(beam_idx, pos), ...])
+        unique_multi_requests: dict[
+            tuple[tuple[str, ...], int],
+            tuple[
+                PrefixCacheState,
+                tuple[int, ...],
+                float,
+                list[tuple[int, int]],
+            ],
+        ] = {}
+
+        for beam_idx, beam_misses in missing_by_beam.items():
+            state = prefix_states[beam_idx]
             ctx = state.context_kind
             log_probs_0 = state.last_log_probs
             tokens_list = self.vocab_table.tokens_by_context[ctx]
             out_row = results[beam_idx]
+            bucket = self._get_transition_bucket(state.words)
 
-            for pos, word_idx in enumerate(cand_indices):
-                token_ids = tokens_list[int(word_idx)]
+            for pos, word_idx in beam_misses:
+                if word_idx in bucket:
+                    out_row[pos] = bucket[word_idx]
+                    self.stats["transition_cache_hits"] += 1
+                    continue
+                token_ids = tokens_list[word_idx]
                 first_lp = float(log_probs_0[token_ids[0]].item())
                 out_row[pos] = first_lp
                 if len(token_ids) == 1:
+                    bucket[word_idx] = first_lp
                     self.stats["single_token_lookups"] += 1
                 else:
-                    self.stats["multi_token_evaluations"] += 1
-                    multi_requests_by_past_len[state.token_length].append(
-                        (beam_idx, pos, state, token_ids)
-                    )
+                    req_key = (state.words, word_idx)
+                    if req_key not in unique_multi_requests:
+                        self.stats["multi_token_evaluations"] += 1
+                        unique_multi_requests[req_key] = (
+                            state,
+                            token_ids,
+                            first_lp,
+                            [(beam_idx, pos)],
+                        )
+                    else:
+                        unique_multi_requests[req_key][3].append((beam_idx, pos))
 
-        # 按前缀 token_length 分组执行零 KV 填充的批量增量 Forward
-        for past_len, group_reqs in multi_requests_by_past_len.items():
-            for start in range(0, len(group_reqs), self.max_batch_size):
-                batch_reqs = group_reqs[start : start + self.max_batch_size]
-                bsz = len(batch_reqs)
-                # 每个多 Token 词需输入前 m-1 个 Token 以预测第 1..m-1 个后缀 Token
-                step_Lengths = [len(req[3]) - 1 for req in batch_reqs]
-                max_step_len = max(step_Lengths)
+        if not unique_multi_requests:
+            return results
 
-                input_ids = torch.zeros(
-                    (bsz, max_step_len), dtype=torch.long, device=self.device
-                )
-                for row_i, (_, _, _, tok_ids) in enumerate(batch_reqs):
-                    step_tokens = tok_ids[:-1]
-                    input_ids[row_i, : len(step_tokens)] = torch.tensor(
-                        step_tokens, dtype=torch.long, device=self.device
-                    )
+        multi_items = list(unique_multi_requests.items())
+        for start in range(0, len(multi_items), self.max_batch_size):
+            batch_items = multi_items[start : start + self.max_batch_size]
+            bsz = len(batch_items)
+            batch_kvs = [item[1][0].past_key_values for item in batch_items]
+            batched_kv, past_lengths, max_past_len = _stack_padded_kv_caches(
+                batch_kvs, self._reference_cache_type
+            )
+            step_lengths = [len(item[1][1]) - 1 for item in batch_items]
+            max_step_len = max(step_lengths)
+            min_step_len = min(step_lengths)
+            min_past_len = min(past_lengths)
 
-                position_ids = (
-                    torch.arange(
-                        past_len,
-                        past_len + max_step_len,
-                        dtype=torch.long,
-                        device=self.device,
-                    )
-                    .unsqueeze(0)
-                    .expand(bsz, max_step_len)
+            input_ids = torch.zeros(
+                (bsz, max_step_len), dtype=torch.long, device=self.device
+            )
+            position_ids = torch.zeros(
+                (bsz, max_step_len), dtype=torch.long, device=self.device
+            )
+            need_mask = (min_past_len != max_past_len) or (
+                min_step_len != max_step_len
+            )
+            attention_mask = (
+                torch.zeros(
+                    (bsz, max_past_len + max_step_len),
+                    dtype=torch.long,
+                    device=self.device,
                 )
-                batched_kv = _stack_kv_caches(
-                    [req[2].past_key_values for req in batch_reqs],
-                    self._reference_cache_type,
-                )
-                outputs = self.model(
-                    input_ids=input_ids,
-                    past_key_values=batched_kv,
-                    position_ids=position_ids,
-                    use_cache=False,
-                )
-                self.stats["incremental_forward_batches"] += 1
-                step_log_probs = F_nn.log_softmax(outputs.logits.float(), dim=-1)
+                if need_mask
+                else None
+            )
 
-                for row_i, (beam_idx, pos, _, tok_ids) in enumerate(batch_reqs):
-                    suffix_targets = tok_ids[1:]
-                    n_suf = len(suffix_targets)
-                    target_tensor = torch.tensor(
-                        suffix_targets, dtype=torch.long, device=self.device
-                    ).unsqueeze(-1)
-                    gathered = (
-                        step_log_probs[row_i, :n_suf, :]
-                        .gather(-1, target_tensor)
-                        .squeeze(-1)
-                    )
-                    results[beam_idx][pos] += float(gathered.double().sum().item())
+            for row_i, (_, (_, tok_ids, _, _)) in enumerate(batch_items):
+                p_len = past_lengths[row_i]
+                step_tokens = tok_ids[:-1]
+                s_len = len(step_tokens)
+                input_ids[row_i, :s_len] = torch.tensor(
+                    step_tokens, dtype=torch.long, device=self.device
+                )
+                pos_seq = torch.arange(
+                    p_len, p_len + s_len, dtype=torch.long, device=self.device
+                )
+                position_ids[row_i, :s_len] = pos_seq
+                if s_len < max_step_len:
+                    position_ids[row_i, s_len:] = p_len + s_len - 1
+                if attention_mask is not None:
+                    pad_left = max_past_len - p_len
+                    attention_mask[row_i, pad_left : max_past_len + s_len] = 1
+
+            model_kwargs: dict = {
+                "input_ids": input_ids,
+                "past_key_values": batched_kv,
+                "position_ids": position_ids,
+                "use_cache": False,
+            }
+            if attention_mask is not None:
+                model_kwargs["attention_mask"] = attention_mask
+
+            outputs = self.model(**model_kwargs)
+            self.stats["incremental_forward_batches"] += 1
+            step_log_probs = F_nn.log_softmax(outputs.logits.float(), dim=-1)
+
+            for row_i, ((words_key, word_idx), (_, tok_ids, first_lp, targets_list)) in enumerate(
+                batch_items
+            ):
+                suffix_targets = tok_ids[1:]
+                n_suf = len(suffix_targets)
+                target_tensor = torch.tensor(
+                    suffix_targets, dtype=torch.long, device=self.device
+                ).unsqueeze(-1)
+                gathered = (
+                    step_log_probs[row_i, :n_suf, :]
+                    .gather(-1, target_tensor)
+                    .squeeze(-1)
+                )
+                total_lp = first_lp + float(gathered.double().sum().item())
+                bucket = self._get_transition_bucket(words_key)
+                bucket[word_idx] = total_lp
+                for beam_idx, pos in targets_list:
+                    results[beam_idx][pos] = total_lp
 
         return results
 
@@ -428,6 +749,7 @@ class CachedVocabularyLanguageScorer:
         top_k: int = 20,
     ) -> np.ndarray:
         """供 LM-Only 基线使用：利用当前前缀的 last_log_probs 从闭集词表 V 中零开销筛选首 Token Top-M 候选并精排返回 Top-K 词索引。"""
+        self._ensure_states_materialized([prefix_state])
         k = min(int(top_k), len(self.vocabulary))
         shortlist_m = min(max(k * 2, 40), len(self.vocabulary))
         first_tok_ids = self.first_token_device_map[prefix_state.context_kind]
@@ -445,71 +767,59 @@ class CachedVocabularyLanguageScorer:
         self,
         advancement_requests: Sequence[tuple[PrefixCacheState, int]],
     ) -> list[PrefixCacheState]:
-        """对选中的 (PrefixCacheState, word_index) 列表增量推进 1 个词的 KV-Cache 与末位对数概率。"""
+        """对选中的 (PrefixCacheState, word_index) 列表推进 1 个词状态（优先复用缓存或创建惰性状态，按需批量物化）。"""
         if not advancement_requests:
             return []
 
-        advanced_states: list[PrefixCacheState | None] = [None] * len(
-            advancement_requests
-        )
-        # 按 (past_len, word_token_len) 分组，同组可一次 Batch Forward 无损更新 KV-Cache
-        grouped: dict[
-            tuple[int, int],
-            list[tuple[int, PrefixCacheState, int, tuple[int, ...]]],
-        ] = defaultdict(list)
+        advanced_states: list[PrefixCacheState] = []
+        for state, word_idx in advancement_requests:
+            w_id = int(word_idx)
+            word_str = self.vocabulary[w_id]
+            new_words = state.words + (word_str,)
 
-        for req_idx, (state, word_idx) in enumerate(advancement_requests):
-            tok_ids = self.vocab_table.token_ids_for(
-                int(word_idx), state.context_kind
-            )
-            grouped[(state.token_length, len(tok_ids))].append(
-                (req_idx, state, int(word_idx), tok_ids)
-            )
+            cached = self._prefix_state_cache.get(new_words)
+            if (
+                cached is not None
+                and cached.past_key_values is not None
+                and cached.last_log_probs is not None
+            ):
+                self._prefix_state_cache.move_to_end(new_words)
+                self.stats["prefix_cache_hits"] += 1
+                advanced_states.append(cached)
+                continue
 
-        for (past_len, step_len), items in grouped.items():
-            bsz = len(items)
-            input_ids = torch.tensor(
-                [item[3] for item in items],
-                dtype=torch.long,
-                device=self.device,
-            )
-            position_ids = (
-                torch.arange(
-                    past_len,
-                    past_len + step_len,
-                    dtype=torch.long,
-                    device=self.device,
-                )
-                .unsqueeze(0)
-                .expand(bsz, step_len)
-            )
-            batched_kv = _stack_kv_caches(
-                [item[1].past_key_values for item in items],
-                self._reference_cache_type,
-            )
-            outputs = self.model(
-                input_ids=input_ids,
-                past_key_values=batched_kv,
-                position_ids=position_ids,
-                use_cache=True,
-            )
-            self.stats["prefix_advance_batches"] += 1
-            unstacked_kvs = _unstack_kv_cache(outputs.past_key_values, bsz)
-            last_lps = F_nn.log_softmax(outputs.logits[:, -1, :].float(), dim=-1)
+            tok_ids = self.vocab_table.token_ids_for(w_id, state.context_kind)
+            new_ctx = prefix_context_kind(new_words, self.language)
 
-            for row_i, (req_idx, state, word_idx, tok_ids) in enumerate(items):
-                word_str = self.vocabulary[word_idx]
-                new_words = state.words + (word_str,)
-                new_ctx = prefix_context_kind(new_words, self.language)
-                advanced_states[req_idx] = PrefixCacheState(
+            if state.past_key_values is not None and state.last_log_probs is not None:
+                parent_ref = state
+                pending_tokens = tok_ids
+            else:
+                cached_parent = self._prefix_state_cache.get(state.words)
+                if (
+                    cached_parent is not None
+                    and cached_parent.past_key_values is not None
+                    and cached_parent.last_log_probs is not None
+                ):
+                    parent_ref = cached_parent
+                    pending_tokens = tok_ids
+                else:
+                    parent_ref = state.parent_state or self.init_prompt_state()
+                    pending_tokens = state.step_token_ids + tok_ids
+
+            advanced_states.append(
+                PrefixCacheState(
                     words=new_words,
-                    past_key_values=unstacked_kvs[row_i],
-                    last_log_probs=last_lps[row_i],
-                    token_length=past_len + step_len,
+                    past_key_values=None,
+                    last_log_probs=None,
+                    token_length=state.token_length + len(tok_ids),
                     context_kind=new_ctx,
+                    parent_state=parent_ref,
+                    step_token_ids=pending_tokens,
                 )
+            )
 
-        return [st for st in advanced_states if st is not None]
+        return advanced_states
 
 
 def resolve_language_model_path(model_name_or_path: str | Path | None = None) -> str:
@@ -536,6 +846,7 @@ def load_causal_language_model(
 ):
     """加载 Qwen3-8B-Base（或 Qwen3-4B-Base）因果语言模型与分词器。"""
     import importlib.util
+    import time
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     resolved = resolve_language_model_path(model_name_or_path)
@@ -557,6 +868,11 @@ def load_causal_language_model(
     else:
         dtype = torch.float32
 
+    t0 = time.perf_counter()
+    print(
+        f"[S3-LM] 正在加载语言模型与分词器: {resolved} (device={torch_device}, dtype={dtype})...",
+        flush=True,
+    )
     tokenizer = AutoTokenizer.from_pretrained(
         resolved, local_files_only=local_files_only
     )
@@ -573,6 +889,10 @@ def load_causal_language_model(
         )
         .to(torch_device)
         .eval()
+    )
+    print(
+        f"[S3-LM] 语言模型加载完成 ({resolved})，耗时 {time.perf_counter() - t0:.1f}s",
+        flush=True,
     )
     return model, tokenizer
 

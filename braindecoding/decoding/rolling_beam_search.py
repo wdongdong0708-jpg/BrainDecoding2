@@ -622,6 +622,710 @@ def decode_segment_static(
     }
 
 
+def decode_segments_static_batched(
+    segment_log_probs_list: Sequence[np.ndarray],
+    vocabulary: Sequence[str],
+    scorer: CachedVocabularyLanguageScorer,
+    *,
+    language_weight: float = 0.15,
+    beam_width: int = 5,
+    candidate_top_k: int = 20,
+) -> list[dict]:
+    """跨多个句段按时间步同步批量执行静态束搜索，大幅合并 GPU 前向与 KV-Cache 批处理调用。"""
+    if not segment_log_probs_list:
+        return []
+    vocab_tuple = tuple(str(w) for w in vocabulary)
+    vocab_size = len(vocab_tuple)
+    b_width = max(1, int(beam_width))
+    k_top = min(max(1, int(candidate_top_k)), vocab_size)
+    lam = float(language_weight)
+
+    num_segs = len(segment_log_probs_list)
+    scores_matrices = [
+        np.asarray(mat, dtype=np.float64) for mat in segment_log_probs_list
+    ]
+    seg_lengths = [mat.shape[0] for mat in scores_matrices]
+
+    if abs(lam) <= 1e-12:
+        results: list[dict] = []
+        for mat in scores_matrices:
+            if mat.shape[0] == 0:
+                results.append(
+                    {"final_words": [], "score": 0.0, "elapsed_seconds": 0.0}
+                )
+                continue
+            top1 = np.argmax(mat, axis=-1)
+            words = [vocab_tuple[int(i)] for i in top1]
+            score_sum = float(
+                sum(mat[r, int(top1[r])] for r in range(mat.shape[0]))
+            )
+            results.append(
+                {
+                    "final_words": words,
+                    "score": score_sum,
+                    "neural_score_sum": score_sum,
+                    "lm_score_sum": 0.0,
+                    "elapsed_seconds": 0.0,
+                }
+            )
+        return results
+
+    started = time.perf_counter()
+    cand_matrices = [
+        select_top_k_neural_candidates(mat, top_k=k_top)[0]
+        if mat.shape[0] > 0
+        else np.zeros((0, k_top), dtype=np.int64)
+        for mat in scores_matrices
+    ]
+    prompt_state = scorer.init_prompt_state()
+    beams_by_seg: list[list[BeamHypothesis]] = [
+        [
+            BeamHypothesis(
+                words=(),
+                word_indices=(),
+                cache_state=prompt_state,
+                score=0.0,
+                neural_score_sum=0.0,
+                lm_score_sum=0.0,
+            )
+        ]
+        for _ in range(num_segs)
+    ]
+
+    max_len = max(seg_lengths) if seg_lengths else 0
+    for pos in range(max_len):
+        active_segs = [s_idx for s_idx in range(num_segs) if pos < seg_lengths[s_idx]]
+        if not active_segs:
+            break
+
+        flat_states: list[PrefixCacheState] = []
+        flat_cands: list[list[int]] = []
+        seg_slices: list[tuple[int, int, int, list[int]]] = []
+
+        for s_idx in active_segs:
+            s_beams = beams_by_seg[s_idx]
+            row_cands = cand_matrices[s_idx][pos].tolist()
+            start_offset = len(flat_states)
+            for b in s_beams:
+                flat_states.append(b.cache_state)
+                flat_cands.append(row_cands)
+            seg_slices.append(
+                (s_idx, start_offset, len(flat_states), row_cands)
+            )
+
+        flat_lm_scores = scorer.score_candidates_with_cache(
+            flat_states, flat_cands
+        )
+
+        selected_by_seg: dict[
+            int,
+            list[
+                tuple[
+                    float,
+                    float,
+                    float,
+                    int,
+                    int,
+                    tuple[str, ...],
+                    tuple[int, ...],
+                ]
+            ],
+        ] = {}
+        flat_adv_reqs: list[tuple[PrefixCacheState, int]] = []
+        adv_slices: list[tuple[int, int, int]] = []
+
+        for s_idx, start_off, end_off, row_cands in seg_slices:
+            s_beams = beams_by_seg[s_idx]
+            s_lm_rows = flat_lm_scores[start_off:end_off]
+            s_mat = scores_matrices[s_idx]
+            expanded: list[
+                tuple[
+                    float,
+                    float,
+                    float,
+                    int,
+                    int,
+                    tuple[str, ...],
+                    tuple[int, ...],
+                ]
+            ] = []
+            for b_idx, (beam, lm_row) in enumerate(zip(s_beams, s_lm_rows)):
+                for c_pos, w_id in enumerate(row_cands):
+                    n_lp = float(s_mat[pos, w_id])
+                    lm_lp = float(lm_row[c_pos])
+                    step_score = n_lp + lam * lm_lp
+                    new_total = beam.score + step_score
+                    w_str = vocab_tuple[w_id]
+                    expanded.append(
+                        (
+                            new_total,
+                            beam.neural_score_sum + n_lp,
+                            beam.lm_score_sum + lm_lp,
+                            b_idx,
+                            int(w_id),
+                            beam.words + (w_str,),
+                            beam.word_indices + (int(w_id),),
+                        )
+                    )
+            expanded.sort(key=lambda item: (-item[0], item[5]))
+            selected = expanded[:b_width]
+            selected_by_seg[s_idx] = selected
+
+            if pos < seg_lengths[s_idx] - 1:
+                adv_start = len(flat_adv_reqs)
+                for item in selected:
+                    flat_adv_reqs.append(
+                        (s_beams[item[3]].cache_state, item[4])
+                    )
+                adv_slices.append((s_idx, adv_start, len(flat_adv_reqs)))
+            else:
+                beams_by_seg[s_idx] = [
+                    BeamHypothesis(
+                        words=item[5],
+                        word_indices=item[6],
+                        cache_state=s_beams[item[3]].cache_state,
+                        score=item[0],
+                        neural_score_sum=item[1],
+                        lm_score_sum=item[2],
+                    )
+                    for item in selected
+                ]
+
+        if flat_adv_reqs:
+            flat_adv_caches = scorer.advance_prefix_states(flat_adv_reqs)
+            for s_idx, adv_start, adv_end in adv_slices:
+                selected = selected_by_seg[s_idx]
+                adv_caches = flat_adv_caches[adv_start:adv_end]
+                beams_by_seg[s_idx] = [
+                    BeamHypothesis(
+                        words=item[5],
+                        word_indices=item[6],
+                        cache_state=adv_cache,
+                        score=item[0],
+                        neural_score_sum=item[1],
+                        lm_score_sum=item[2],
+                    )
+                    for item, adv_cache in zip(selected, adv_caches)
+                ]
+
+    per_seg_elapsed = round(
+        (time.perf_counter() - started) / max(1, num_segs), 4
+    )
+    outputs: list[dict] = []
+    for s_idx in range(num_segs):
+        if seg_lengths[s_idx] == 0:
+            outputs.append(
+                {"final_words": [], "score": 0.0, "elapsed_seconds": 0.0}
+            )
+            continue
+        winner = beams_by_seg[s_idx][0]
+        outputs.append(
+            {
+                "final_words": list(winner.words),
+                "score": float(winner.score),
+                "neural_score_sum": float(winner.neural_score_sum),
+                "lm_score_sum": float(winner.lm_score_sum),
+                "elapsed_seconds": per_seg_elapsed,
+            }
+        )
+    return outputs
+
+
+def decode_segments_streaming_batched(
+    segment_log_probs_by_state_list: Sequence[dict[str, np.ndarray]],
+    vocabulary: Sequence[str],
+    scorer: CachedVocabularyLanguageScorer,
+    *,
+    language_weights: dict[str, float],
+    beam_width: int = 5,
+    candidate_top_k: int = 20,
+    reference_words_list: Sequence[Sequence[str] | None] | None = None,
+) -> list[dict]:
+    """跨多个句段按到达时间步同步批量执行方案一流式解码（K2 定稿主干 + K1/K0 草稿延伸）。"""
+    if not segment_log_probs_by_state_list:
+        return []
+    started = time.perf_counter()
+    num_segs = len(segment_log_probs_by_state_list)
+    vocab_tuple = tuple(str(w) for w in vocabulary)
+    vocab_size = len(vocab_tuple)
+    b_width = max(1, int(beam_width))
+    k_top = min(max(1, int(candidate_top_k)), vocab_size)
+
+    lam_k0 = float(language_weights.get("K0", 0.2))
+    lam_k1 = float(language_weights.get("K1", 0.15))
+    lam_k2 = float(language_weights.get("K2", 0.1))
+
+    k0_mats: list[np.ndarray] = []
+    k1_mats: list[np.ndarray] = []
+    k2_mats: list[np.ndarray] = []
+    k0_cands_list: list[np.ndarray] = []
+    k1_cands_list: list[np.ndarray] = []
+    k2_cands_list: list[np.ndarray] = []
+    seg_lengths: list[int] = []
+
+    for seg_dict in segment_log_probs_by_state_list:
+        k0_m = np.asarray(seg_dict["K0"], dtype=np.float64)
+        k1_m = np.asarray(seg_dict["K1"], dtype=np.float64)
+        k2_m = np.asarray(seg_dict["K2"], dtype=np.float64)
+        s_len = k0_m.shape[0]
+        seg_lengths.append(s_len)
+        k0_mats.append(k0_m)
+        k1_mats.append(k1_m)
+        k2_mats.append(k2_m)
+        if s_len > 0:
+            k0_cands_list.append(
+                select_top_k_neural_candidates(k0_m, top_k=k_top)[0]
+            )
+            k1_cands_list.append(
+                select_top_k_neural_candidates(k1_m, top_k=k_top)[0]
+            )
+            k2_cands_list.append(
+                select_top_k_neural_candidates(k2_m, top_k=k_top)[0]
+            )
+        else:
+            empty_c = np.zeros((0, k_top), dtype=np.int64)
+            k0_cands_list.append(empty_c)
+            k1_cands_list.append(empty_c)
+            k2_cands_list.append(empty_c)
+
+    prompt_state = scorer.init_prompt_state()
+    backbone_beams_by_seg: list[list[BeamHypothesis]] = [
+        [
+            BeamHypothesis(
+                words=(),
+                word_indices=(),
+                cache_state=prompt_state,
+                score=0.0,
+                neural_score_sum=0.0,
+                lm_score_sum=0.0,
+            )
+        ]
+        for _ in range(num_segs)
+    ]
+
+    trajectories_by_seg: list[list[dict]] = []
+    for s_idx, s_len in enumerate(seg_lengths):
+        refs = (
+            reference_words_list[s_idx]
+            if reference_words_list is not None
+            and s_idx < len(reference_words_list)
+            else None
+        )
+        trajectories_by_seg.append(
+            [
+                {
+                    "word_index": pos,
+                    "reference_word": (
+                        str(refs[pos])
+                        if refs is not None and pos < len(refs)
+                        else None
+                    ),
+                    "k0_word": None,
+                    "k0_word_id": None,
+                    "k0_score": None,
+                    "k1_word": None,
+                    "k1_word_id": None,
+                    "k1_score": None,
+                    "k1_old_score": None,
+                    "k1_delta_score": None,
+                    "k1_candidate_scores": {},
+                    "k2_word": None,
+                    "k2_word_id": None,
+                    "k2_score": None,
+                    "k2_old_score": None,
+                    "k2_delta_score": None,
+                    "k2_candidate_scores": {},
+                }
+                for pos in range(s_len)
+            ]
+        )
+
+    screen_history_by_seg: list[list[dict]] = [[] for _ in range(num_segs)]
+    prev_screen_ids_by_seg: list[list[int]] = [[] for _ in range(num_segs)]
+
+    max_len = max(seg_lengths) if seg_lengths else 0
+    for arrival_t in range(max_len):
+        active_segs = [
+            s_idx for s_idx in range(num_segs) if arrival_t < seg_lengths[s_idx]
+        ]
+        if not active_segs:
+            break
+
+        step_updates_by_seg: dict[int, list[dict]] = {
+            s_idx: [] for s_idx in active_segs
+        }
+
+        # ------------------------------------------------------------------
+        # 1. 批量定稿主干 K2 扩展（arrival_t >= 2）
+        # ------------------------------------------------------------------
+        k2_segs = [s_idx for s_idx in active_segs if arrival_t >= 2]
+        if k2_segs:
+            commit_pos = arrival_t - 2
+            flat_k2_states: list[PrefixCacheState] = []
+            flat_k2_cands: list[list[int]] = []
+            k2_meta: list[
+                tuple[int, int, int, list[int], list[list[int]], int | None]
+            ] = []
+
+            for s_idx in k2_segs:
+                s_beams = backbone_beams_by_seg[s_idx]
+                cands_k2 = k2_cands_list[s_idx][commit_pos].tolist()
+                traj_pos = trajectories_by_seg[s_idx][commit_pos]
+                old_k0_id = traj_pos["k0_word_id"]
+                old_k1_id = traj_pos["k1_word_id"]
+                prev_ids = prev_screen_ids_by_seg[s_idx]
+                prev_disp_id = (
+                    prev_ids[commit_pos]
+                    if commit_pos < len(prev_ids)
+                    else old_k1_id
+                )
+                extra_ids = [
+                    idx
+                    for idx in (old_k0_id, old_k1_id, prev_disp_id)
+                    if idx is not None and idx not in cands_k2
+                ]
+                cand_lists_per_beam = [
+                    cands_k2 + (extra_ids if b_idx == 0 else [])
+                    for b_idx in range(len(s_beams))
+                ]
+                start_off = len(flat_k2_states)
+                for b, c_list in zip(s_beams, cand_lists_per_beam):
+                    flat_k2_states.append(b.cache_state)
+                    flat_k2_cands.append(c_list)
+                k2_meta.append(
+                    (
+                        s_idx,
+                        start_off,
+                        len(flat_k2_states),
+                        cands_k2,
+                        cand_lists_per_beam,
+                        prev_disp_id,
+                    )
+                )
+
+            flat_k2_lm_scores = scorer.score_candidates_with_cache(
+                flat_k2_states, flat_k2_cands
+            )
+
+            flat_k2_adv_reqs: list[tuple[PrefixCacheState, int]] = []
+            k2_adv_slices: list[
+                tuple[
+                    int,
+                    int,
+                    int,
+                    list[tuple],
+                    dict[int, float],
+                    int | None,
+                ]
+            ] = []
+
+            for (
+                s_idx,
+                start_off,
+                end_off,
+                cands_k2,
+                cand_lists_per_beam,
+                prev_disp_id,
+            ) in k2_meta:
+                s_beams = backbone_beams_by_seg[s_idx]
+                lm_scores_per_beam = flat_k2_lm_scores[start_off:end_off]
+                k2_mat = k2_mats[s_idx]
+
+                top1_k2_step_scores: dict[int, float] = {}
+                for w_id, lm_val in zip(
+                    cand_lists_per_beam[0], lm_scores_per_beam[0]
+                ):
+                    top1_k2_step_scores[int(w_id)] = float(
+                        k2_mat[commit_pos, w_id]
+                    ) + lam_k2 * float(lm_val)
+
+                expanded: list[tuple] = []
+                for b_idx, beam in enumerate(s_beams):
+                    lm_row = lm_scores_per_beam[b_idx]
+                    for c_pos, w_id in enumerate(cands_k2):
+                        n_lp = float(k2_mat[commit_pos, w_id])
+                        lm_lp = float(lm_row[c_pos])
+                        step_score = n_lp + lam_k2 * lm_lp
+                        new_total = beam.score + step_score
+                        w_str = vocab_tuple[w_id]
+                        expanded.append(
+                            (
+                                new_total,
+                                beam.neural_score_sum + n_lp,
+                                beam.lm_score_sum + lm_lp,
+                                b_idx,
+                                int(w_id),
+                                beam.words + (w_str,),
+                                beam.word_indices + (int(w_id),),
+                            )
+                        )
+                expanded.sort(key=lambda item: (-item[0], item[5]))
+                selected = expanded[:b_width]
+
+                adv_start = len(flat_k2_adv_reqs)
+                for item in selected:
+                    flat_k2_adv_reqs.append(
+                        (s_beams[item[3]].cache_state, item[4])
+                    )
+                k2_adv_slices.append(
+                    (
+                        s_idx,
+                        adv_start,
+                        len(flat_k2_adv_reqs),
+                        selected,
+                        top1_k2_step_scores,
+                        prev_disp_id,
+                    )
+                )
+
+            flat_k2_adv_caches = scorer.advance_prefix_states(flat_k2_adv_reqs)
+            for (
+                s_idx,
+                adv_start,
+                adv_end,
+                selected,
+                top1_k2_step_scores,
+                prev_disp_id,
+            ) in k2_adv_slices:
+                adv_caches = flat_k2_adv_caches[adv_start:adv_end]
+                backbone_beams_by_seg[s_idx] = [
+                    BeamHypothesis(
+                        words=item[5],
+                        word_indices=item[6],
+                        cache_state=adv_cache,
+                        score=item[0],
+                        neural_score_sum=item[1],
+                        lm_score_sum=item[2],
+                    )
+                    for item, adv_cache in zip(selected, adv_caches)
+                ]
+                committed_word_id = backbone_beams_by_seg[s_idx][0].word_indices[
+                    commit_pos
+                ]
+                committed_word = backbone_beams_by_seg[s_idx][0].words[
+                    commit_pos
+                ]
+                k2_mat = k2_mats[s_idx]
+                new_k2_step_score = top1_k2_step_scores.get(
+                    committed_word_id,
+                    float(k2_mat[commit_pos, committed_word_id]),
+                )
+                old_k2_step_score = top1_k2_step_scores.get(
+                    int(prev_disp_id)
+                    if prev_disp_id is not None
+                    else committed_word_id,
+                    new_k2_step_score,
+                )
+                delta_k2 = float(new_k2_step_score - old_k2_step_score)
+
+                traj_k2 = trajectories_by_seg[s_idx][commit_pos]
+                traj_k2["k2_word"] = committed_word
+                traj_k2["k2_word_id"] = int(committed_word_id)
+                traj_k2["k2_score"] = float(new_k2_step_score)
+                traj_k2["k2_old_score"] = float(old_k2_step_score)
+                traj_k2["k2_delta_score"] = delta_k2
+                traj_k2["k2_candidate_scores"] = {
+                    vocab_tuple[k_id]: float(val)
+                    for k_id, val in top1_k2_step_scores.items()
+                }
+                prev_word_str = (
+                    vocab_tuple[int(prev_disp_id)]
+                    if prev_disp_id is not None
+                    else committed_word
+                )
+                step_updates_by_seg[s_idx].append(
+                    {
+                        "word_index": commit_pos,
+                        "state": "K2",
+                        "old_word": prev_word_str,
+                        "new_word": committed_word,
+                        "changed": bool(prev_word_str != committed_word),
+                        "new_score": float(new_k2_step_score),
+                        "old_score": float(old_k2_step_score),
+                        "delta_score": delta_k2,
+                    }
+                )
+
+        # ------------------------------------------------------------------
+        # 2. 批量尾部草稿延伸：词位 arrival_t - 1 (状态 K1)
+        # ------------------------------------------------------------------
+        tail_cache_by_seg: dict[int, PrefixCacheState] = {
+            s_idx: backbone_beams_by_seg[s_idx][0].cache_state
+            for s_idx in active_segs
+        }
+        draft_k1_word_by_seg: dict[int, str | None] = {
+            s_idx: None for s_idx in active_segs
+        }
+        draft_k1_id_by_seg: dict[int, int | None] = {
+            s_idx: None for s_idx in active_segs
+        }
+
+        k1_segs = [s_idx for s_idx in active_segs if arrival_t >= 1]
+        if k1_segs:
+            k1_pos = arrival_t - 1
+            flat_k1_states: list[PrefixCacheState] = []
+            flat_k1_cands: list[list[int]] = []
+            k1_meta: list[tuple[int, list[int], list[int], int | None]] = []
+
+            for s_idx in k1_segs:
+                cands_k1 = k1_cands_list[s_idx][k1_pos].tolist()
+                old_k0_id = trajectories_by_seg[s_idx][k1_pos]["k0_word_id"]
+                extra_k1 = [int(old_k0_id)] if old_k0_id is not None else []
+                all_eval = list(dict.fromkeys(cands_k1 + extra_k1))
+                flat_k1_states.append(tail_cache_by_seg[s_idx])
+                flat_k1_cands.append(all_eval)
+                k1_meta.append((s_idx, cands_k1, all_eval, old_k0_id))
+
+            flat_k1_lm_scores = scorer.score_candidates_with_cache(
+                flat_k1_states, flat_k1_cands
+            )
+
+            flat_k1_adv_reqs: list[tuple[PrefixCacheState, int]] = []
+            for (s_idx, cands_k1, all_eval, old_k0_id), lm_row in zip(
+                k1_meta, flat_k1_lm_scores
+            ):
+                k1_row_lp = k1_mats[s_idx][k1_pos]
+                k1_scores_map: dict[int, float] = {
+                    int(w_idx): float(k1_row_lp[w_idx]) + lam_k1 * float(lm_val)
+                    for w_idx, lm_val in zip(all_eval, lm_row)
+                }
+                best_k1_id = int(
+                    max(cands_k1, key=lambda idx: (k1_scores_map[idx], -idx))
+                )
+                best_k1_score = k1_scores_map[best_k1_id]
+                draft_k1_id_by_seg[s_idx] = best_k1_id
+                draft_k1_word = vocab_tuple[best_k1_id]
+                draft_k1_word_by_seg[s_idx] = draft_k1_word
+
+                old_k1_score = k1_scores_map.get(
+                    int(old_k0_id) if old_k0_id is not None else best_k1_id,
+                    best_k1_score,
+                )
+                delta_k1 = float(best_k1_score - old_k1_score)
+
+                traj_k1 = trajectories_by_seg[s_idx][k1_pos]
+                traj_k1["k1_word"] = draft_k1_word
+                traj_k1["k1_word_id"] = best_k1_id
+                traj_k1["k1_score"] = float(best_k1_score)
+                traj_k1["k1_old_score"] = float(old_k1_score)
+                traj_k1["k1_delta_score"] = delta_k1
+                traj_k1["k1_candidate_scores"] = {
+                    vocab_tuple[k_id]: float(val)
+                    for k_id, val in k1_scores_map.items()
+                }
+
+                old_k0_str = (
+                    vocab_tuple[int(old_k0_id)]
+                    if old_k0_id is not None
+                    else draft_k1_word
+                )
+                step_updates_by_seg[s_idx].append(
+                    {
+                        "word_index": k1_pos,
+                        "state": "K1",
+                        "old_word": old_k0_str,
+                        "new_word": draft_k1_word,
+                        "changed": bool(old_k0_str != draft_k1_word),
+                        "new_score": float(best_k1_score),
+                        "old_score": float(old_k1_score),
+                        "delta_score": delta_k1,
+                    }
+                )
+                flat_k1_adv_reqs.append((tail_cache_by_seg[s_idx], best_k1_id))
+
+            flat_k1_adv_caches = scorer.advance_prefix_states(flat_k1_adv_reqs)
+            for (s_idx, _, _, _), adv_cache in zip(k1_meta, flat_k1_adv_caches):
+                tail_cache_by_seg[s_idx] = adv_cache
+
+        # ------------------------------------------------------------------
+        # 3. 批量尾部草稿延伸：词位 arrival_t (状态 K0 初判显示)
+        # ------------------------------------------------------------------
+        k0_pos = arrival_t
+        flat_k0_states = [tail_cache_by_seg[s_idx] for s_idx in active_segs]
+        flat_k0_cands = [
+            k0_cands_list[s_idx][k0_pos].tolist() for s_idx in active_segs
+        ]
+        flat_k0_lm_scores = scorer.score_candidates_with_cache(
+            flat_k0_states, flat_k0_cands
+        )
+
+        for s_idx, cands_k0, lm_row in zip(
+            active_segs, flat_k0_cands, flat_k0_lm_scores
+        ):
+            k0_row_lp = k0_mats[s_idx][k0_pos]
+            k0_scores_map = {
+                int(w_idx): float(k0_row_lp[w_idx]) + lam_k0 * float(lm_val)
+                for w_idx, lm_val in zip(cands_k0, lm_row)
+            }
+            draft_k0_id = int(
+                max(cands_k0, key=lambda idx: (k0_scores_map[idx], -idx))
+            )
+            best_k0_score = k0_scores_map[draft_k0_id]
+            draft_k0_word = vocab_tuple[draft_k0_id]
+
+            traj_k0 = trajectories_by_seg[s_idx][k0_pos]
+            traj_k0["k0_word"] = draft_k0_word
+            traj_k0["k0_word_id"] = draft_k0_id
+            traj_k0["k0_score"] = float(best_k0_score)
+
+            top1_backbone = backbone_beams_by_seg[s_idx][0]
+            committed_prefix_words = list(top1_backbone.words)
+            committed_prefix_ids = list(top1_backbone.word_indices)
+
+            current_screen_words = list(committed_prefix_words)
+            current_screen_ids = list(committed_prefix_ids)
+            d_k1_w = draft_k1_word_by_seg[s_idx]
+            d_k1_id = draft_k1_id_by_seg[s_idx]
+            if d_k1_w is not None and d_k1_id is not None:
+                current_screen_words.append(d_k1_w)
+                current_screen_ids.append(d_k1_id)
+            current_screen_words.append(draft_k0_word)
+            current_screen_ids.append(draft_k0_id)
+
+            screen_history_by_seg[s_idx].append(
+                {
+                    "arrival_step": arrival_t,
+                    "committed_prefix": committed_prefix_words,
+                    "draft_k1_word": d_k1_w,
+                    "draft_k0_word": draft_k0_word,
+                    "screen_words": current_screen_words,
+                    "updates": step_updates_by_seg[s_idx],
+                }
+            )
+            prev_screen_ids_by_seg[s_idx] = current_screen_ids
+
+    per_seg_elapsed = round(
+        (time.perf_counter() - started) / max(1, num_segs), 4
+    )
+    outputs: list[dict] = []
+    for s_idx in range(num_segs):
+        if seg_lengths[s_idx] == 0:
+            outputs.append(
+                {
+                    "final_words": [],
+                    "committed_k2_words": [],
+                    "initial_k0_words": [],
+                    "screen_history": [],
+                    "position_trajectories": [],
+                    "elapsed_seconds": 0.0,
+                }
+            )
+            continue
+        hist = screen_history_by_seg[s_idx]
+        trajs = trajectories_by_seg[s_idx]
+        outputs.append(
+            {
+                "final_words": list(hist[-1]["screen_words"]),
+                "committed_k2_words": list(backbone_beams_by_seg[s_idx][0].words),
+                "initial_k0_words": [str(t["k0_word"]) for t in trajs],
+                "screen_history": hist,
+                "position_trajectories": trajs,
+                "elapsed_seconds": per_seg_elapsed,
+            }
+        )
+    return outputs
+
+
 def decode_dataset_segments(
     exported_payload: dict,
     scorer: CachedVocabularyLanguageScorer,
@@ -631,11 +1335,16 @@ def decode_dataset_segments(
     alignment: str = "clean",
     beam_width: int = 5,
     candidate_top_k: int = 20,
+    segment_batch_size: int = 32,
     partition_filter: str | None = None,
     max_segments: int | None = None,
+    show_progress: bool = False,
+    progress_desc: str | None = None,
     progress_callback: Callable[[int, int, float], None] | None = None,
 ) -> dict:
     """对导出的 .pt 神经得分载荷批量执行指定条件（S3, S0, K0, K1, K2, F, LM-Only）的句段解码。"""
+    from tqdm.auto import tqdm
+
     vocabulary = list(exported_payload["vocabulary"])
     segments = [
         seg
@@ -662,129 +1371,169 @@ def decode_dataset_segments(
     started = time.perf_counter()
     final_sentences: list[dict] = []
     screen_histories: list[dict] = []
+    batch_sz = max(1, int(segment_batch_size))
+    pbar = (
+        tqdm(
+            total=len(segments),
+            desc=progress_desc or f"S3 Decode [{condition} | {alignment}]",
+            unit="seg",
+            leave=True,
+        )
+        if show_progress and segments
+        else None
+    )
 
-    if cond_upper == "LM-ONLY":
-        # LM-Only 与受试者及脑信号无关，相同句长 L 仅需解码一次即可复用
-        length_cache: dict[int, dict] = {}
-        _, lm_weight = _get_state_params("K0")
-        for idx, seg in enumerate(segments):
-            seg_len = len(seg["event_indices"])
-            if seg_len not in length_cache:
-                length_cache[seg_len] = decode_segment_static(
-                    None,
+    try:
+        if cond_upper == "LM-ONLY":
+            # LM-Only 与受试者及脑信号无关，相同句长 L 仅需解码一次即可复用
+            length_cache: dict[int, dict] = {}
+            _, lm_weight = _get_state_params("K0")
+            for idx, seg in enumerate(segments):
+                seg_len = len(seg["event_indices"])
+                if seg_len not in length_cache:
+                    length_cache[seg_len] = decode_segment_static(
+                        None,
+                        vocabulary,
+                        scorer,
+                        language_weight=1.0 if lm_weight <= 0 else lm_weight,
+                        beam_width=beam_width,
+                        candidate_top_k=candidate_top_k,
+                        segment_length=seg_len,
+                        pure_language_model=True,
+                    )
+                dec = length_cache[seg_len]
+                final_sentences.append(
+                    {
+                        "segment_index": seg["segment_index"],
+                        "group_id": seg["group_id"],
+                        "subject_id": seg["subject_id"],
+                        "recording_id": seg["recording_id"],
+                        "scope": seg["scope"],
+                        "block_id": seg.get("block_id", seg["scope"]),
+                        "reference_words": list(seg["reference_words"]),
+                        "predicted_words": list(dec["final_words"]),
+                        "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
+                        "elapsed_seconds": dec["elapsed_seconds"],
+                    }
+                )
+                if pbar is not None:
+                    pbar.update(1)
+                if progress_callback is not None:
+                    progress_callback(
+                        idx + 1, len(segments), time.perf_counter() - started
+                    )
+        elif cond_upper == "S3":
+            t_k0, lam_k0 = _get_state_params("K0")
+            t_k1, lam_k1 = _get_state_params("K1")
+            t_k2, lam_k2 = _get_state_params("K2")
+
+            full_lp_k0 = compute_neural_log_probabilities(score_bank["K0"], t_k0)
+            full_lp_k1 = compute_neural_log_probabilities(score_bank["K1"], t_k1)
+            full_lp_k2 = compute_neural_log_probabilities(score_bank["K2"], t_k2)
+            lam_map = {"K0": lam_k0, "K1": lam_k1, "K2": lam_k2}
+
+            for start_i in range(0, len(segments), batch_sz):
+                batch_segs = segments[start_i : start_i + batch_sz]
+                batch_lp_dicts = [
+                    {
+                        "K0": full_lp_k0[seg["event_indices"]],
+                        "K1": full_lp_k1[seg["event_indices"]],
+                        "K2": full_lp_k2[seg["event_indices"]],
+                    }
+                    for seg in batch_segs
+                ]
+                batch_refs = [seg["reference_words"] for seg in batch_segs]
+                batch_decs = decode_segments_streaming_batched(
+                    batch_lp_dicts,
                     vocabulary,
                     scorer,
-                    language_weight=1.0 if lm_weight <= 0 else lm_weight,
+                    language_weights=lam_map,
                     beam_width=beam_width,
                     candidate_top_k=candidate_top_k,
-                    segment_length=seg_len,
-                    pure_language_model=True,
+                    reference_words_list=batch_refs,
                 )
-            dec = length_cache[seg_len]
-            final_sentences.append(
-                {
-                    "segment_index": seg["segment_index"],
-                    "group_id": seg["group_id"],
-                    "subject_id": seg["subject_id"],
-                    "recording_id": seg["recording_id"],
-                    "scope": seg["scope"],
-                    "block_id": seg.get("block_id", seg["scope"]),
-                    "reference_words": list(seg["reference_words"]),
-                    "predicted_words": list(dec["final_words"]),
-                    "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
-                    "elapsed_seconds": dec["elapsed_seconds"],
-                }
+                for seg, dec in zip(batch_segs, batch_decs):
+                    final_sentences.append(
+                        {
+                            "segment_index": seg["segment_index"],
+                            "group_id": seg["group_id"],
+                            "subject_id": seg["subject_id"],
+                            "recording_id": seg["recording_id"],
+                            "scope": seg["scope"],
+                            "block_id": seg.get("block_id", seg["scope"]),
+                            "reference_words": list(seg["reference_words"]),
+                            "predicted_words": list(dec["final_words"]),
+                            "initial_k0_words": list(dec["initial_k0_words"]),
+                            "committed_k2_words": list(dec["committed_k2_words"]),
+                            "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
+                            "elapsed_seconds": dec["elapsed_seconds"],
+                        }
+                    )
+                    screen_histories.append(
+                        {
+                            "segment_index": seg["segment_index"],
+                            "group_id": seg["group_id"],
+                            "subject_id": seg["subject_id"],
+                            "reference_words": list(seg["reference_words"]),
+                            "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
+                            "screen_history": dec["screen_history"],
+                            "position_trajectories": dec["position_trajectories"],
+                        }
+                    )
+                if pbar is not None:
+                    pbar.update(len(batch_segs))
+                if progress_callback is not None:
+                    progress_callback(
+                        len(final_sentences),
+                        len(segments),
+                        time.perf_counter() - started,
+                    )
+        elif cond_upper in {"S0", "K0", "K1", "K2", "F"}:
+            t_r, lam_r = _get_state_params(cond_upper)
+            full_lp = compute_neural_log_probabilities(score_bank[cond_upper], t_r)
+            for start_i in range(0, len(segments), batch_sz):
+                batch_segs = segments[start_i : start_i + batch_sz]
+                batch_mats = [
+                    full_lp[seg["event_indices"]] for seg in batch_segs
+                ]
+                batch_decs = decode_segments_static_batched(
+                    batch_mats,
+                    vocabulary,
+                    scorer,
+                    language_weight=lam_r,
+                    beam_width=beam_width,
+                    candidate_top_k=candidate_top_k,
+                )
+                for seg, dec in zip(batch_segs, batch_decs):
+                    final_sentences.append(
+                        {
+                            "segment_index": seg["segment_index"],
+                            "group_id": seg["group_id"],
+                            "subject_id": seg["subject_id"],
+                            "recording_id": seg["recording_id"],
+                            "scope": seg["scope"],
+                            "block_id": seg.get("block_id", seg["scope"]),
+                            "reference_words": list(seg["reference_words"]),
+                            "predicted_words": list(dec["final_words"]),
+                            "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
+                            "elapsed_seconds": dec["elapsed_seconds"],
+                        }
+                    )
+                if pbar is not None:
+                    pbar.update(len(batch_segs))
+                if progress_callback is not None:
+                    progress_callback(
+                        len(final_sentences),
+                        len(segments),
+                        time.perf_counter() - started,
+                    )
+        else:
+            raise ValueError(
+                f"不支持的解码条件 {condition!r}，可选：'S3', 'S0', 'K0', 'K1', 'K2', 'F', 'LM-Only'"
             )
-            if progress_callback is not None:
-                progress_callback(idx + 1, len(segments), time.perf_counter() - started)
-    elif cond_upper == "S3":
-        t_k0, lam_k0 = _get_state_params("K0")
-        t_k1, lam_k1 = _get_state_params("K1")
-        t_k2, lam_k2 = _get_state_params("K2")
-
-        full_lp_k0 = compute_neural_log_probabilities(score_bank["K0"], t_k0)
-        full_lp_k1 = compute_neural_log_probabilities(score_bank["K1"], t_k1)
-        full_lp_k2 = compute_neural_log_probabilities(score_bank["K2"], t_k2)
-        lam_map = {"K0": lam_k0, "K1": lam_k1, "K2": lam_k2}
-
-        for idx, seg in enumerate(segments):
-            ev_idx = seg["event_indices"]
-            seg_lp = {
-                "K0": full_lp_k0[ev_idx],
-                "K1": full_lp_k1[ev_idx],
-                "K2": full_lp_k2[ev_idx],
-            }
-            dec = decode_segment_streaming(
-                seg_lp,
-                vocabulary,
-                scorer,
-                language_weights=lam_map,
-                beam_width=beam_width,
-                candidate_top_k=candidate_top_k,
-                reference_words=seg["reference_words"],
-            )
-            final_sentences.append(
-                {
-                    "segment_index": seg["segment_index"],
-                    "group_id": seg["group_id"],
-                    "subject_id": seg["subject_id"],
-                    "recording_id": seg["recording_id"],
-                    "scope": seg["scope"],
-                    "block_id": seg.get("block_id", seg["scope"]),
-                    "reference_words": list(seg["reference_words"]),
-                    "predicted_words": list(dec["final_words"]),
-                    "initial_k0_words": list(dec["initial_k0_words"]),
-                    "committed_k2_words": list(dec["committed_k2_words"]),
-                    "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
-                    "elapsed_seconds": dec["elapsed_seconds"],
-                }
-            )
-            screen_histories.append(
-                {
-                    "segment_index": seg["segment_index"],
-                    "group_id": seg["group_id"],
-                    "subject_id": seg["subject_id"],
-                    "reference_words": list(seg["reference_words"]),
-                    "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
-                    "screen_history": dec["screen_history"],
-                    "position_trajectories": dec["position_trajectories"],
-                }
-            )
-            if progress_callback is not None:
-                progress_callback(idx + 1, len(segments), time.perf_counter() - started)
-    elif cond_upper in {"S0", "K0", "K1", "K2", "F"}:
-        t_r, lam_r = _get_state_params(cond_upper)
-        full_lp = compute_neural_log_probabilities(score_bank[cond_upper], t_r)
-        for idx, seg in enumerate(segments):
-            ev_idx = seg["event_indices"]
-            dec = decode_segment_static(
-                full_lp[ev_idx],
-                vocabulary,
-                scorer,
-                language_weight=lam_r,
-                beam_width=beam_width,
-                candidate_top_k=candidate_top_k,
-            )
-            final_sentences.append(
-                {
-                    "segment_index": seg["segment_index"],
-                    "group_id": seg["group_id"],
-                    "subject_id": seg["subject_id"],
-                    "recording_id": seg["recording_id"],
-                    "scope": seg["scope"],
-                    "block_id": seg.get("block_id", seg["scope"]),
-                    "reference_words": list(seg["reference_words"]),
-                    "predicted_words": list(dec["final_words"]),
-                    "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
-                    "elapsed_seconds": dec["elapsed_seconds"],
-                }
-            )
-            if progress_callback is not None:
-                progress_callback(idx + 1, len(segments), time.perf_counter() - started)
-    else:
-        raise ValueError(
-            f"不支持的解码条件 {condition!r}，可选：'S3', 'S0', 'K0', 'K1', 'K2', 'F', 'LM-Only'"
-        )
+    finally:
+        if pbar is not None:
+            pbar.close()
 
     total_elapsed = time.perf_counter() - started
     mean_sec = total_elapsed / max(1, len(segments))

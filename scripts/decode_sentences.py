@@ -285,6 +285,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     beam_width = int(
         args.beam_width if args.beam_width is not None else dec_cfg.get("beam_width", 5)
     )
+    segment_batch_size = int(dec_cfg.get("segment_batch_size", 32))
     cms_eta = float(
         args.cms_eta
         if args.cms_eta is not None
@@ -422,6 +423,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             language_weight_grid=lambda_grid,
             beam_width=beam_width,
             candidate_top_k=top_k,
+            segment_batch_size=segment_batch_size,
             metric_name=str(cal_cfg.get("metric", "composite")),
             enforce_monotonic_lambda=bool(
                 cal_cfg.get("enforce_monotonic_lambda", True)
@@ -430,8 +432,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 cal_cfg.get("use_calibration_partition", True)
             ),
             max_calibration_segments=args.max_segments
-            or cal_cfg.get("max_calibration_segments"),
+            or cal_cfg.get("max_calibration_segments", 64),
             output_path=calibration_path,
+            show_progress=show_progress,
         )
         results_summary["calibration_path"] = str(calibration_path)
         results_summary["state_hyperparameters"] = calibration_res["states"]
@@ -472,7 +475,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 alignment="clean",
                 beam_width=beam_width,
                 candidate_top_k=top_k,
+                segment_batch_size=segment_batch_size,
                 max_segments=args.max_segments,
+                show_progress=show_progress,
+                progress_desc=f"S3 Decode [{baseline_mode} | {args.split}]",
             )
 
         decoded_bundles["S3_clean"] = decode_dataset_segments(
@@ -483,7 +489,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             alignment="clean",
             beam_width=beam_width,
             candidate_top_k=top_k,
+            segment_batch_size=segment_batch_size,
             max_segments=args.max_segments,
+            show_progress=show_progress,
+            progress_desc=f"S3 Decode [S3_clean | {args.split}]",
         )
         if "F" in available_clean:
             decoded_bundles["F"] = decode_dataset_segments(
@@ -494,7 +503,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 alignment="clean",
                 beam_width=beam_width,
                 candidate_top_k=top_k,
+                segment_batch_size=segment_batch_size,
                 max_segments=args.max_segments,
+                show_progress=show_progress,
+                progress_desc=f"S3 Decode [F | {args.split}]",
             )
         decoded_bundles["S3_shifted_neg75s"] = decode_dataset_segments(
             split_payload,
@@ -504,7 +516,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             alignment="shifted",
             beam_width=beam_width,
             candidate_top_k=top_k,
+            segment_batch_size=segment_batch_size,
             max_segments=args.max_segments,
+            show_progress=show_progress,
+            progress_desc=f"S3 Decode [S3_shifted_-75s | {args.split}]",
         )
 
         decoding_bundle = {
