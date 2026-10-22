@@ -2966,7 +2966,7 @@ def _summarize_shifted_conditions(
     clean_summary: dict,
     shifted_rows: list[dict],
 ) -> dict:
-    """汇总所有时间错位偏移量（如 ±30s, ±60s, ±120s）的均值、标准差与相对 Clean 的平均降幅。"""
+    """汇总所有时间错位偏移量（如 -15s, -30s, -45s, -60s, -90s, -120s）的均值、标准差与相对 Clean 的平均降幅。"""
     if not shifted_rows:
         return {}
     metric_keys = (
@@ -3169,7 +3169,7 @@ def plot_negative_control_figures(
     eval_result: dict,
     figures_dir: str | Path,
 ) -> dict[str, str]:
-    """绘制单阶段时间错位（±30s, ±60s, ±120s）/ 全零信号负对照对比图（PNG 与 PDF）。"""
+    """绘制单阶段时间错位（-15s, -30s, -45s, -60s, -90s, -120s）/ 全零信号负对照对比图（PNG 与 PDF）。"""
     neg_ctrl = eval_result.get("negative_controls") or {}
     ctrl_conditions = neg_ctrl.get("conditions") or []
     if not ctrl_conditions:
@@ -3421,7 +3421,7 @@ def plot_stage_control_comparison_figure(
     *,
     split: str = "val",
 ) -> dict[str, str]:
-    """绘制多阶段（Stage 1 / 2.1 / 2.2）在 Clean (0s) 与各时间错位负对照（±30s, ±60s, ±120s）下的对比图。"""
+    """绘制多阶段（Stage 1 / 2.1 / 2.2）在 Clean (0s) 与各时间错位负对照（-15s, -30s, -45s, -60s, -90s, -120s）下的对比图。"""
     ordered_stages = [
         s
         for s in WORKFLOW_STAGES
@@ -3438,14 +3438,23 @@ def plot_stage_control_comparison_figure(
     out_dir = Path(figures_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    first_res = stage_results[ordered_stages[0]]
-    dataset = first_res["dataset"]
-    subset_tag = first_res["subset"]["subset_tag"]
-    seed = first_res["seed"]
+    ref_res = stage_results[ordered_stages[-1]]
+    dataset = ref_res["dataset"]
+    subset_tag = ref_res["subset"]["subset_tag"]
+    seed = ref_res["seed"]
     split_upper = split.upper()
 
-    first_nc = first_res["negative_controls"]
+    first_nc = ref_res["negative_controls"]
     first_conds = first_nc["conditions"]
+    ref_cond_keys = {c["key"] for c in first_conds}
+    ordered_stages = [
+        s
+        for s in ordered_stages
+        if {c["key"] for c in (stage_results[s].get("negative_controls") or {}).get("conditions", ())}
+        & ref_cond_keys
+    ]
+    if not ordered_stages:
+        return {}
     neg_shifts = sorted(
         [
             c["summary"]
@@ -4517,9 +4526,24 @@ def run_evaluation_workflow(
                         other_eval_file = fallback_other
                 if other_eval_file.is_file():
                     try:
-                        discovered[other_st] = json.loads(
+                        other_loaded = json.loads(
                             other_eval_file.read_text(encoding="utf-8")
                         )
+                        single_nc_conds = (
+                            (single_res.get("negative_controls") or {}).get("conditions")
+                            or []
+                        )
+                        other_nc_conds = (
+                            (other_loaded.get("negative_controls") or {}).get("conditions")
+                            or []
+                        )
+                        if single_nc_conds and other_nc_conds:
+                            single_keys = {c.get("key") for c in single_nc_conds}
+                            other_keys = {c.get("key") for c in other_nc_conds}
+                            if single_keys != other_keys:
+                                other_loaded = dict(other_loaded)
+                                other_loaded["negative_controls"] = {}
+                        discovered[other_st] = other_loaded
                     except Exception:
                         pass
             if len(discovered) >= 1:

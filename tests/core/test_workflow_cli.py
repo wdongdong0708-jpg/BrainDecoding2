@@ -1498,5 +1498,13 @@ def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
     for a, b in zip(pal_first_samples, pal_first_samples[1:]):
         assert abs(a - b) >= win_samples
 
+    # 9. Verify colab_gpu_evaluation.ipynb explicitly configures and passes the purely historical causal shift grid
+    eval_nb_text = (PROJECT_ROOT / "scripts/colab/colab_gpu_evaluation.ipynb").read_text(
+        encoding="utf-8"
+    )
+    assert "SHIFT_SECONDS = '-15,-30,-45,-60,-90,-120'" in eval_nb_text
+    assert "--shift-seconds {SHIFT_SECONDS}" in eval_nb_text
+    assert "+-30s" not in eval_nb_text
+
 
 

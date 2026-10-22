@@ -1,7 +1,7 @@
 """留一法共模时序偏置扣除（Leave-One-Out Common-Mode Subtraction）探索性评估模块。
 
 本模块完全独立于主训练与标准评估代码，用于在不重新训练模型、不增加额外 GPU 前向推理的前提下，
-对每个测试词位 i 的 1 个 Clean (0s) 预测与 M 个时间错位 Shifted 预测（如 ±30s, ±60s, ±120s，M=6）
+对每个测试词位 i 的 1 个 Clean (0s) 预测与 M 个纯历史因果时间错位 Shifted 预测（如 -15s, -30s, -45s, -60s, -90s, -120s，M=6）
 执行无泄漏的留一法共模扣除（Leave-One-Out Common-Mode Subtraction）：
 
 - Clean (0s)：使用全部 M 个错位条件的均值作为共模时序偏置扣除
@@ -93,7 +93,7 @@ def apply_leave_one_out_subtraction_to_tensors(
     if num_shifts < 2:
         raise ValueError(
             f"留一法共模扣除（Leave-One-Out Common-Mode Subtraction）至少需要 2 个错位条件，"
-            f"当前仅有 {num_shifts} 个（推荐 6 个：-120s, -60s, -30s, +30s, +60s, +120s）。"
+            f"当前仅有 {num_shifts} 个（推荐 6 个：-15s, -30s, -45s, -60s, -90s, -120s）。"
         )
 
     clean_base = (
