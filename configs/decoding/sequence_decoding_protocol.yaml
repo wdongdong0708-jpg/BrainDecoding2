@@ -1,0 +1,89 @@
+protocol:
+  name: sequence_decoding_s3
+  version: 1
+  description: >
+    Stage 3 (S3) closed-vocabulary Top-K neural retrieval + KV-Cache incremental
+    language model scoring with Scheme 1 (committed K2 backbone + draft K1/K0 tail),
+    state-adaptive (T_r, lambda_r) calibration, 6-window historical CMS + unseen
+    -75s shifted negative control, 6D semantic metrics, and C-gated Pareto filtering.
+
+language_model:
+  model_name_or_path: Qwen/Qwen3-8B-Base
+  fallback_models:
+    - Qwen/Qwen3-8B-Base
+    - Qwen/Qwen3-4B-Base
+  precision: bf16-mixed
+  score_batch_size: 128
+  context_tokens: 8192
+
+decoding:
+  architecture: scheme_1_committed_k2_draft_k1_k0
+  beam_width: 5
+  candidate_top_k: 20
+  states:
+    - S0
+    - K0
+    - K1
+    - K2
+    - F
+  baselines:
+    - LM-Only
+    - S0
+    - K0
+    - S3
+    - F
+
+calibration:
+  split: val
+  use_calibration_partition: true
+  calibration_fraction: 0.2
+  adjacent_components_per_block: 5
+  metric: composite
+  enforce_monotonic_lambda: true
+  temperature_grid:
+    - 0.05
+    - 0.07
+    - 0.10
+    - 0.15
+    - 0.20
+  language_weight_grid:
+    - 0.00
+    - 0.05
+    - 0.10
+    - 0.15
+    - 0.25
+    - 0.40
+    - 0.60
+    - 1.00
+
+control:
+  common_mode_subtraction:
+    enabled: true
+    subtraction_eta: 0.8
+    background_shift_seconds:
+      - -15.0
+      - -30.0
+      - -45.0
+      - -60.0
+      - -90.0
+      - -120.0
+  shifted_negative_control:
+    control_type: unseen_historical_circular_shift
+    same_subject: true
+    same_recording: true
+    control_shift_seconds: -75.0
+
+evaluation:
+  metrics:
+    - bleu1_pct
+    - wer_pct
+    - cer_pct
+    - word_acc_pct
+    - content_word_acc_pct
+    - function_word_acc_pct
+    - bertscore_f1_pct
+  confidence_gate:
+    enabled: true
+    tau_min: 0.0
+    tau_max: 2.0
+    tau_step: 0.1

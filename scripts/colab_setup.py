@@ -47,6 +47,7 @@ PROJECT_DEPENDENCIES = (
     "x-transformers>=1.40",
     "tqdm>=4.66",
     "transformers>=4.44",
+    "accelerate>=0.33",
     "huggingface-hub>=0.24",
     "safetensors>=0.4",
     "sentencepiece>=0.2",

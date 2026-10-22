@@ -18,12 +18,13 @@ import torch
 import yaml
 
 from braindecoding import unified_rolling_v2_training as neural
-from braindecoding import unified_heldout_test_v2 as heldout
 from braindecoding.config import PROJECT_ROOT as ROOT
 from braindecoding.data.single_word_long_window import SingleWordLongWindowDataset, window_spec
+from braindecoding.experiment import file_sha256 as sha256
 from braindecoding.training.runtime import cpu_state_dict, load_checkpoint, save_checkpoint, set_seed
 from braindecoding.training.word import encode_loader, train_one_epoch
-from braindecoding.unified_sentence_v2 import digest, read, save, sha256
+import csv
+import hashlib
 
 
 ID = "single_word_long_window_test_v2"
@@ -35,6 +36,38 @@ RUNTIME = ROOT / f".cache/runs/{ID}"
 REPORT = ROOT / f"data/results/studies/{ID}"
 OUT = ROOT / f"outputs/heldout_test/{ID}"
 WINDOWS = {"long_1p27": 1.27, "long_1p5": 1.5}
+
+
+def read(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def save(path, value):
+    write_json(path, value)
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def csv_write(path, rows):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        path.write_text("", encoding="utf-8-sig")
+        return
+    with path.open("w", encoding="utf-8-sig", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _target_cache(cfg):
+    return ROOT / "data/cache/derived" / cfg["experiment"]["dataset"] / "text" / "bge_m3_eval_test" / "embeddings.npz"
+
+
+def _seed_root(dataset, seed):
+    return ROOT / "outputs/heldout_test/unified_heldout_test_v2" / dataset / f"seed-{seed:03d}"
 
 
 def native(value):
@@ -109,7 +142,7 @@ def canonical_base(cfg, split):
     original = copy.deepcopy(cfg)
     original["dataset"]["window_seconds"] = 1.
     if split == "test":
-        original["cache"]["text_embeddings"] = str(heldout.target_cache(original))
+        original["cache"]["text_embeddings"] = str(_target_cache(original))
     table = loader(original["cache"]["event_table"], split=split,
                    subjects=original["dataset"]["subjects"], trainable_only=True)
     base = builder(original, table)
@@ -253,7 +286,7 @@ def freeze():
             source_paths.add(checkpoint)
             for name in ("run_manifest.json", "training_summary.json", "resolved_config.yaml"):
                 source_paths.add(checkpoint.parent / name)
-            root = heldout.seed_root(dataset, seed)
+            root = _seed_root(dataset, seed)
             prediction, sidecar = root / "neural_predictions.npz", root / "word_metrics.json"
             side = read(sidecar)
             source = next(j for j in parent["checkpoints"] if (j["dataset"], j["seed"]) == (dataset, seed))
@@ -647,7 +680,6 @@ import time
 import numpy as np
 
 from braindecoding.full_vocabulary_context_test_v2 import full_vocab_ranks, score_ranks
-from braindecoding.unified_sentence_v2_artifacts import csv_write
 from braindecoding.word_paired_statistics_test_v2 import bootstrap_weights, metadata
 study = sys.modules[__name__]
 

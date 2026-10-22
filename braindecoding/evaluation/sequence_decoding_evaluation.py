@@ -1,0 +1,900 @@
+"""S3 序列解码协议多维语义评价指标与 C-gated 置信度门控帕累托分析器（Module 5）。
+
+核心功能：
+1. 同步输出 6 维语义与词位评价指标（全部统一以百分比 % 呈现）：
+   - 字面精确匹配：BLEU-1 (%), WER (%), CER (字符/汉字错误率 %)
+   - 词位准确率：Word Acc (%)，并拆解为 实义词（Content Words）Acc (%) 与 功能词（Function Words）Acc (%)
+   - 连续语义相似度：BERTScore (%)（Precision / Recall / F1）
+2. 置信度门控回修（C-gated）后处理：
+   - 对流式输出检验综合得分裕度：
+         Δs_i^{(r)} = s_i^{(r)}(w_i^{new} | u) - s_i^{(r)}(w_i^{old} | u) > τ_{gate}
+   - 扫描 τ_{gate} ∈ [0.0, 2.0]（步长 0.1），统计屏幕改写率、有益改对率、有害改错率与无效闪烁滤除率，
+     并自动绘制“解码质量 vs 屏幕改写率”帕累托曲线与基线/负对照对比图。
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from pathlib import Path
+from typing import Mapping, Sequence
+
+import numpy as np
+import torch
+from torch.nn import functional as F_nn
+
+from braindecoding.evaluation.statistical_significance import (
+    edit_distance,
+    sentence_metrics,
+)
+from braindecoding.training.training_runtime import save_json
+
+
+DEFAULT_TAU_GATE_GRID: tuple[float, ...] = tuple(
+    round(0.1 * i, 2) for i in range(21)
+)
+
+# 法语闭集功能词表（冠词、代词、介词、连词、助动词、否定与高频功能副词、省音功能词）
+FRENCH_FUNCTION_WORDS: frozenset[str] = frozenset(
+    {
+        "le", "la", "les", "un", "une", "du", "des", "au", "aux",
+        "de", "à", "a", "en", "dans", "sur", "sous", "pour", "par", "avec",
+        "sans", "chez", "vers", "entre", "contre", "depuis", "pendant",
+        "avant", "après", "devant", "derrière", "dès", "selon", "malgré",
+        "et", "ou", "où", "mais", "donc", "or", "ni", "car", "comme", "si",
+        "que", "qui", "quoi", "dont", "quand", "lorsque", "puisque", "quoique",
+        "je", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles",
+        "me", "te", "se", "lui", "leur", "leurs", "moi", "toi", "soi", "eux",
+        "y", "en", "ce", "cet", "cette", "ces", "cela", "ça", "ceci",
+        "celui", "celle", "ceux", "celles", "-ci", "-là",
+        "mon", "ton", "son", "ma", "ta", "sa", "mes", "tes", "ses",
+        "notre", "votre", "nos", "vos", "mien", "tien", "sien",
+        "c", "j", "l", "d", "n", "m", "s", "t", "qu", "jusqu", "lorsqu", "puisqu", "quelqu",
+        "ne", "pas", "plus", "jamais", "rien", "personne", "aucun", "aucune",
+        "très", "bien", "trop", "peu", "assez", "aussi", "encore", "déjà", "toujours",
+        "tout", "tous", "toute", "toutes", "même", "autre", "autres", "quel", "quelle", "quels", "quelles",
+        "être", "suis", "es", "est", "sommes", "êtes", "sont", "étais", "était", "étaient", "fut", "sera", "serait", "été", "étant",
+        "avoir", "ai", "as", "avons", "avez", "ont", "avais", "avait", "avaient", "eut", "aura", "aurait", "eu", "ayant",
+        "-je", "-tu", "-il", "-elle", "-on", "-nous", "-vous", "-ils", "-elles",
+        "-t-il", "-t-elle", "-t-on", "-t-ils", "-t-elles",
+        "-le", "-la", "-les", "-lui", "-leur", "-moi", "-toi", "-t", "-y", "-en",
+    }
+)
+
+# 中文闭集功能词表（助词、代词、介词、连词、语气词、副词、系词/助动词、通用量词与方位词）
+CHINESE_FUNCTION_WORDS: frozenset[str] = frozenset(
+    {
+        "的", "地", "得", "了", "着", "过", "之", "所",
+        "吗", "呢", "吧", "啊", "呀", "啦", "呐", "哇", "嘛", "罢了", "而已",
+        "我", "你", "您", "他", "她", "它", "我们", "你们", "他们", "她们", "它们", "咱们", "自己", "大家", "别人",
+        "这", "那", "这个", "那个", "这些", "那些", "这里", "那里", "这儿", "那儿", "这么", "那么", "这样", "那样",
+        "谁", "什么", "哪", "哪个", "哪些", "哪里", "哪儿", "怎么", "怎样", "怎么样", "多少", "几",
+        "在", "从", "自", "打", "向", "往", "朝", "对", "对于", "关于", "至于", "替", "给", "为", "为了",
+        "把", "被", "叫", "让", "由", "归", "管", "靠", "比", "跟", "和", "与", "同", "及", "以及",
+        "或", "或者", "还是", "但", "但是", "可", "可是", "却", "然而", "不过", "只是",
+        "而", "而且", "并且", "况且", "何况", "不但", "不仅", "不光",
+        "因为", "由于", "所以", "因此", "因而", "以致",
+        "如果", "假如", "假若", "要是", "倘若", "只要", "只有", "除非", "无论", "不管", "不论",
+        "虽然", "尽管", "固然", "即使", "就算", "哪怕", "既然", "既", "便", "就", "才", "都", "也", "还", "又", "再",
+        "不", "没", "没有", "别", "莫", "勿", "未", "非",
+        "很", "太", "更", "最", "挺", "怪", "非常", "十分", "格外", "稍微", "略微", "更加", "越发", "尤其",
+        "已经", "已", "曾经", "曾", "正在", "正", "在", "将", "将要", "就要", "立刻", "马上", "忽然", "突然",
+        "常常", "往往", "一直", "总是", "老是", "仍然", "仍旧", "依然", "果然", "居然", "竟然", "简直", "到底", "究竟",
+        "几乎", "差不多", "大概", "大约", "也许", "或许", "恐怕", "大概", "必定", "一定", "肯定", "当然",
+        "只", "光", "单", "仅仅", "总共", "一共", "统统", "一齐", "一起", "一同", "互相", "彼此",
+        "是", "有", "在", "像", "好比", "如同", "能", "能够", "会", "可以", "可能", "应该", "应当", "得", "必须", "愿意", "敢", "肯",
+        "个", "位", "只", "条", "件", "种", "类", "些", "点", "次", "回", "遍", "趟", "下", "番", "群", "伙", "双", "对", "副", "张", "座", "棵", "朵", "颗", "粒",
+        "上", "下", "左", "右", "前", "后", "里", "外", "中", "内", "间", "旁", "以上", "以下", "以前", "以后", "之内", "之外", "之间", "之中",
+    }
+)
+
+
+def is_function_word(word: str, language: str) -> bool:
+    """判断给定词是否为功能词（Function Word）。"""
+    clean = str(word).strip()
+    if not clean:
+        return True
+    if language == "zh":
+        return clean in CHINESE_FUNCTION_WORDS
+    lowered = clean.lower()
+    if lowered in FRENCH_FUNCTION_WORDS or lowered.lstrip("-") in FRENCH_FUNCTION_WORDS:
+        return True
+    return False
+
+
+def is_content_word(word: str, language: str) -> bool:
+    """判断给定词是否为实义词（Content Word）。"""
+    return not is_function_word(word, language)
+
+
+def _character_ngram_vector(word: str, dim: int = 256) -> np.ndarray:
+    """为未登录词生成确定性字符 n-gram 单位向量（仅在缺少预计算词向量时作为 BERTScore 兜底）。"""
+    text = f"<{str(word).strip().lower()}>"
+    vec = np.zeros(dim, dtype=np.float32)
+    for n in (1, 2, 3):
+        for i in range(max(1, len(text) - n + 1)):
+            gram = text[i : i + n]
+            h = hash(gram)
+            idx = h % dim
+            sign = 1.0 if (h // dim) % 2 == 0 else -1.0
+            vec[idx] += sign
+    norm = float(np.linalg.norm(vec))
+    return vec / max(norm, 1e-8)
+
+
+def compute_bertscore_percentage(
+    references: Sequence[Sequence[str]],
+    predictions: Sequence[Sequence[str]],
+    *,
+    word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
+) -> dict[str, float]:
+    """计算参考序列与预测序列之间的连续语义相似度 BERTScore（Precision / Recall / F1 %）。
+
+    对于每对句子 (r, \\hat{w})：
+      - 提取每个词的 L2 归一化稠密语义向量 e(r_i), e(\\hat{w}_j)；
+      - 计算余弦相似度矩阵 M_{i,j} = <e(r_i), e(\\hat{w}_j)>；
+      - Recall = (1/|r|) \\sum_i \\max_j M_{i,j}
+      - Precision = (1/|\\hat{w}|) \\sum_j \\max_i M_{i,j}
+      - F1 = 2 * P * R / (P + R)
+    """
+    if len(references) != len(predictions) or not references:
+        raise ValueError("references 与 predictions 必须非空且长度一致。")
+
+    norm_cache: dict[str, np.ndarray] = {}
+    fallback_dim = 256
+    if word_embedding_map:
+        first_val = next(iter(word_embedding_map.values()))
+        if isinstance(first_val, torch.Tensor):
+            fallback_dim = int(first_val.numel())
+        else:
+            fallback_dim = int(np.asarray(first_val).size)
+
+    def _get_vec(word: str) -> np.ndarray:
+        w = str(word)
+        if w in norm_cache:
+            return norm_cache[w]
+        if word_embedding_map is not None and w in word_embedding_map:
+            raw = word_embedding_map[w]
+            arr = (
+                raw.detach().cpu().numpy().astype(np.float32)
+                if isinstance(raw, torch.Tensor)
+                else np.asarray(raw, dtype=np.float32)
+            ).reshape(-1)
+            norm = float(np.linalg.norm(arr))
+            vec = arr / max(norm, 1e-8)
+        else:
+            vec = _character_ngram_vector(w, dim=fallback_dim)
+        norm_cache[w] = vec
+        return vec
+
+    p_list: list[float] = []
+    r_list: list[float] = []
+    f1_list: list[float] = []
+
+    for ref_seq, pred_seq in zip(references, predictions):
+        ref_words = [str(w) for w in ref_seq]
+        pred_words = [str(w) for w in pred_seq]
+        if not ref_words or not pred_words:
+            p_list.append(0.0)
+            r_list.append(0.0)
+            f1_list.append(0.0)
+            continue
+
+        ref_mat = np.stack([_get_vec(w) for w in ref_words], axis=0)
+        pred_mat = np.stack([_get_vec(w) for w in pred_words], axis=0)
+        sim_matrix = np.clip(ref_mat @ pred_mat.T, -1.0, 1.0)
+
+        recall = float(np.mean(np.max(sim_matrix, axis=1)))
+        precision = float(np.mean(np.max(sim_matrix, axis=0)))
+        if precision + recall > 1e-12:
+            f1 = float(2.0 * precision * recall / (precision + recall))
+        else:
+            f1 = 0.0
+
+        p_list.append(precision * 100.0)
+        r_list.append(recall * 100.0)
+        f1_list.append(f1 * 100.0)
+
+    return {
+        "bertscore_precision_pct": float(np.mean(p_list)),
+        "bertscore_recall_pct": float(np.mean(r_list)),
+        "bertscore_f1_pct": float(np.mean(f1_list)),
+    }
+
+
+def evaluate_six_dimensional_metrics(
+    segment_records: Sequence[dict],
+    *,
+    language: str,
+    word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
+) -> dict[str, float | int]:
+    """同步计算 S3 序列解码协议规定的 6 维核心评价指标：
+
+    1. BLEU-1 (%)：含句段均值 `bleu1_pct` 与语料级 `corpus_bleu1_pct`
+    2. WER (%)：词错误率 `wer_pct`
+    3. CER (%)：字符/汉字错误率 `cer_pct`
+    4. Word Acc (%)：对齐词位总准确率 `word_acc_pct`
+    5. 实义词/功能词拆解：`content_word_acc_pct` 与 `function_word_acc_pct`
+    6. BERTScore (%)：`bertscore_f1_pct`（及 Precision / Recall）
+    """
+    if not segment_records:
+        raise ValueError("segment_records 不能为空。")
+
+    chinese = language == "zh"
+    references = [
+        [str(w) for w in rec["reference_words"]] for rec in segment_records
+    ]
+    predictions = [
+        [str(w) for w in rec["predicted_words"]] for rec in segment_records
+    ]
+
+    base = sentence_metrics(references, predictions, chinese=chinese)
+
+    total_words = 0
+    total_correct = 0
+    content_total = 0
+    content_correct = 0
+    function_total = 0
+    function_correct = 0
+    in_vocab_total = 0
+    in_vocab_correct = 0
+
+    per_subject_rows: dict[str, list[dict]] = defaultdict(list)
+
+    for rec, ref_seq, pred_seq in zip(segment_records, references, predictions):
+        if len(ref_seq) != len(pred_seq):
+            raise ValueError(
+                f"参考词序列长度 ({len(ref_seq)}) 与预测词序列长度 ({len(pred_seq)}) 不一致。"
+            )
+        seg_m = sentence_metrics([ref_seq], [pred_seq], chinese=chinese)
+        in_vocab_mask = rec.get("in_vocabulary_mask") or [True] * len(ref_seq)
+
+        seg_c_tot = seg_c_hit = seg_f_tot = seg_f_hit = 0
+        for pos, (r_w, p_w) in enumerate(zip(ref_seq, pred_seq)):
+            hit = int(r_w == p_w)
+            total_words += 1
+            total_correct += hit
+            if pos < len(in_vocab_mask) and bool(in_vocab_mask[pos]):
+                in_vocab_total += 1
+                in_vocab_correct += hit
+            if is_content_word(r_w, language):
+                content_total += 1
+                content_correct += hit
+                seg_c_tot += 1
+                seg_c_hit += hit
+            else:
+                function_total += 1
+                function_correct += hit
+                seg_f_tot += 1
+                seg_f_hit += hit
+
+        subj = str(rec.get("subject_id", "default"))
+        per_subject_rows[subj].append(
+            {
+                "words": len(ref_seq),
+                "sentence_bleu1": float(seg_m["sentence_bleu1_mean"]),
+                "wer": float(seg_m["wer"]),
+                "cer": float(seg_m["cer"]),
+                "word_acc": float(seg_m["exact_word_accuracy"]),
+                "content_total": seg_c_tot,
+                "content_correct": seg_c_hit,
+                "function_total": seg_f_tot,
+                "function_correct": seg_f_hit,
+            }
+        )
+
+    bert_scores = compute_bertscore_percentage(
+        references, predictions, word_embedding_map=word_embedding_map
+    )
+
+    # 计算受试者等权宏平均 BLEU-1 (%) 与 Word Acc (%)
+    subj_bleu1_list = [
+        float(np.mean([r["sentence_bleu1"] for r in rows])) * 100.0
+        for rows in per_subject_rows.values()
+    ]
+    subj_word_acc_list = [
+        float(
+            np.average(
+                [r["word_acc"] for r in rows],
+                weights=[max(1, r["words"]) for r in rows],
+            )
+        )
+        * 100.0
+        for rows in per_subject_rows.values()
+    ]
+
+    word_acc_pct = (
+        float(total_correct / total_words * 100.0) if total_words > 0 else 0.0
+    )
+    content_acc_pct = (
+        float(content_correct / content_total * 100.0)
+        if content_total > 0
+        else 0.0
+    )
+    function_acc_pct = (
+        float(function_correct / function_total * 100.0)
+        if function_total > 0
+        else 0.0
+    )
+    in_vocab_acc_pct = (
+        float(in_vocab_correct / in_vocab_total * 100.0)
+        if in_vocab_total > 0
+        else 0.0
+    )
+
+    return {
+        "segment_count": len(segment_records),
+        "total_words": int(total_words),
+        "content_word_count": int(content_total),
+        "function_word_count": int(function_total),
+        "in_vocabulary_word_count": int(in_vocab_total),
+        "bleu1_pct": float(np.mean(subj_bleu1_list))
+        if subj_bleu1_list
+        else float(base["sentence_bleu1_mean"] * 100.0),
+        "sentence_bleu1_pct": float(base["sentence_bleu1_mean"] * 100.0),
+        "corpus_bleu1_pct": float(base["bleu1"] * 100.0),
+        "wer_pct": float(base["wer"] * 100.0),
+        "cer_pct": float(base["cer"] * 100.0),
+        "word_acc_pct": word_acc_pct,
+        "subject_equal_word_acc_pct": float(np.mean(subj_word_acc_list))
+        if subj_word_acc_list
+        else word_acc_pct,
+        "content_word_acc_pct": content_acc_pct,
+        "function_word_acc_pct": function_acc_pct,
+        "in_vocabulary_word_acc_pct": in_vocab_acc_pct,
+        "bertscore_f1_pct": float(bert_scores["bertscore_f1_pct"]),
+        "bertscore_precision_pct": float(bert_scores["bertscore_precision_pct"]),
+        "bertscore_recall_pct": float(bert_scores["bertscore_recall_pct"]),
+    }
+
+
+def apply_confidence_gate_to_segment(
+    segment_history_record: dict,
+    tau_gate: float = 0.0,
+) -> dict:
+    """对单个句段的流式轨迹应用置信度裕度门控 τ_{gate}：
+
+    仅当 Δs_i^{(r)} = s_i^{(r)}(w_i^{new} | u) - s_i^{(r)}(w_i^{disp} | u) > τ_{gate} 时
+    才触发屏幕改写，否则保留当前屏幕已显示词 w_i^{disp}。
+    """
+    tau = float(tau_gate)
+    trajectories = segment_history_record["position_trajectories"]
+    ref_words = [str(w) for w in segment_history_record["reference_words"]]
+    seg_len = len(trajectories)
+
+    final_gated_words: list[str] = []
+    initial_k0_words: list[str] = []
+
+    rewrite_opportunities = 0
+    triggered_rewrites = 0
+    beneficial_repairs = 0  # wrong -> right
+    harmful_rewrites = 0  # right -> wrong
+    invalid_flickers = 0  # wrong -> wrong
+    net_position_changes = 0
+
+    for pos, traj in enumerate(trajectories):
+        truth = ref_words[pos] if pos < len(ref_words) else None
+        k0_word = str(traj["k0_word"])
+        initial_k0_words.append(k0_word)
+        current_word = k0_word
+
+        # 阶段 1 回修：K0 -> K1（当 pos <= seg_len - 2 且存在 k1_word 时）
+        k1_word = traj.get("k1_word")
+        if k1_word is not None:
+            k1_word = str(k1_word)
+            rewrite_opportunities += 1
+            delta_k1 = float(traj.get("k1_delta_score") or 0.0)
+            if k1_word != current_word and delta_k1 > tau:
+                old_w = current_word
+                current_word = k1_word
+                triggered_rewrites += 1
+                if truth is not None:
+                    if old_w != truth and current_word == truth:
+                        beneficial_repairs += 1
+                    elif old_w == truth and current_word != truth:
+                        harmful_rewrites += 1
+                    else:
+                        invalid_flickers += 1
+
+        # 阶段 2 定稿回修：当前屏幕词 (k0_word 或 k1_word) -> K2（当 pos <= seg_len - 3 且存在 k2_word 时）
+        k2_word = traj.get("k2_word")
+        if k2_word is not None:
+            k2_word = str(k2_word)
+            rewrite_opportunities += 1
+            k2_new_score = float(traj.get("k2_score") or 0.0)
+            k2_cand_map = traj.get("k2_candidate_scores") or {}
+            if current_word in k2_cand_map:
+                k2_disp_score = float(k2_cand_map[current_word])
+                delta_k2 = k2_new_score - k2_disp_score
+            else:
+                delta_k2 = float(traj.get("k2_delta_score") or 0.0)
+
+            if k2_word != current_word and delta_k2 > tau:
+                old_w = current_word
+                current_word = k2_word
+                triggered_rewrites += 1
+                if truth is not None:
+                    if old_w != truth and current_word == truth:
+                        beneficial_repairs += 1
+                    elif old_w == truth and current_word != truth:
+                        harmful_rewrites += 1
+                    else:
+                        invalid_flickers += 1
+
+        if pos < seg_len - 1 and current_word != k0_word:
+            net_position_changes += 1
+        final_gated_words.append(current_word)
+
+    eligible_positions = max(0, seg_len - 1)
+    return {
+        "segment_index": segment_history_record["segment_index"],
+        "group_id": segment_history_record["group_id"],
+        "subject_id": segment_history_record["subject_id"],
+        "reference_words": ref_words,
+        "in_vocabulary_mask": list(
+            segment_history_record.get("in_vocabulary_mask", [True] * seg_len)
+        ),
+        "initial_k0_words": initial_k0_words,
+        "predicted_words": final_gated_words,
+        "eligible_positions": eligible_positions,
+        "rewrite_opportunities": rewrite_opportunities,
+        "triggered_rewrites": triggered_rewrites,
+        "beneficial_repairs": beneficial_repairs,
+        "harmful_rewrites": harmful_rewrites,
+        "invalid_flickers": invalid_flickers,
+        "net_position_changes": net_position_changes,
+    }
+
+
+def sweep_confidence_gate_pareto(
+    screen_histories: Sequence[dict],
+    *,
+    language: str,
+    tau_grid: Sequence[float] = DEFAULT_TAU_GATE_GRID,
+    word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
+) -> dict:
+    """扫描 τ_{gate} ∈ [0.0, 2.0]，计算每个阈值下的 6 维质量指标与屏幕改写/闪烁统计，构建帕累托前沿。"""
+    if not screen_histories:
+        raise ValueError("screen_histories 不能为空。")
+
+    taus = [float(t) for t in tau_grid]
+    curve_points: list[dict] = []
+    baseline_invalid_flickers: int | None = None
+
+    for tau in taus:
+        gated_records = [
+            apply_confidence_gate_to_segment(rec, tau_gate=tau)
+            for rec in screen_histories
+        ]
+        metrics_6d = evaluate_six_dimensional_metrics(
+            gated_records,
+            language=language,
+            word_embedding_map=word_embedding_map,
+        )
+
+        tot_opps = sum(r["rewrite_opportunities"] for r in gated_records)
+        tot_elig = sum(r["eligible_positions"] for r in gated_records)
+        tot_rewrites = sum(r["triggered_rewrites"] for r in gated_records)
+        tot_repairs = sum(r["beneficial_repairs"] for r in gated_records)
+        tot_harms = sum(r["harmful_rewrites"] for r in gated_records)
+        tot_flickers = sum(r["invalid_flickers"] for r in gated_records)
+        tot_pos_changes = sum(r["net_position_changes"] for r in gated_records)
+
+        if baseline_invalid_flickers is None:
+            baseline_invalid_flickers = max(0, tot_flickers)
+
+        denom_opps = max(1, tot_opps)
+        denom_elig = max(1, tot_elig)
+        if baseline_invalid_flickers and baseline_invalid_flickers > 0:
+            flicker_filtered_pct = float(
+                (1.0 - tot_flickers / baseline_invalid_flickers) * 100.0
+            )
+        else:
+            flicker_filtered_pct = 0.0 if abs(tau) <= 1e-12 else 100.0
+
+        point = {
+            "tau_gate": round(tau, 4),
+            "screen_rewrite_rate_pct": float(tot_rewrites / denom_opps * 100.0),
+            "position_change_rate_pct": float(
+                tot_pos_changes / denom_elig * 100.0
+            ),
+            "beneficial_repair_rate_pct": float(tot_repairs / denom_opps * 100.0),
+            "harmful_rewrite_rate_pct": float(tot_harms / denom_opps * 100.0),
+            "invalid_flicker_rate_pct": float(tot_flickers / denom_opps * 100.0),
+            "invalid_flicker_filtered_pct": flicker_filtered_pct,
+            "net_beneficial_gain_pct": float(
+                (tot_repairs - tot_harms) / denom_elig * 100.0
+            ),
+            "triggered_rewrites": int(tot_rewrites),
+            "beneficial_repairs": int(tot_repairs),
+            "harmful_rewrites": int(tot_harms),
+            "invalid_flickers": int(tot_flickers),
+            "rewrite_opportunities": int(tot_opps),
+            **metrics_6d,
+        }
+        curve_points.append(point)
+
+    # 选择推荐工作点：在保持至少 98% 无门控质量（Word Acc + BLEU-1）前提下最小化屏幕改写率，
+    # 或净有益增益 net_beneficial_gain_pct 最大的阈值点
+    unconstrained_pt = curve_points[0]
+    base_quality = (
+        0.5 * unconstrained_pt["bleu1_pct"]
+        + 0.5 * unconstrained_pt["word_acc_pct"]
+    )
+    best_point = max(
+        curve_points,
+        key=lambda pt: (
+            round(
+                0.5 * pt["bleu1_pct"]
+                + 0.5 * pt["word_acc_pct"]
+                - 0.12 * pt["invalid_flicker_rate_pct"],
+                6,
+            ),
+            -pt["screen_rewrite_rate_pct"],
+        ),
+    )
+
+    return {
+        "tau_grid": taus,
+        "recommended_tau_gate": best_point["tau_gate"],
+        "recommended_operating_point": best_point,
+        "unconstrained_operating_point": unconstrained_pt,
+        "baseline_quality_score": round(base_quality, 4),
+        "pareto_curve": curve_points,
+    }
+
+
+def plot_confidence_gate_pareto_curve(
+    pareto_result: dict,
+    output_dir: str | Path,
+    *,
+    dataset: str = "pallier2025",
+    split: str = "test",
+) -> dict[str, str]:
+    """绘制 C-gated 置信度门控“解码质量 vs 屏幕改写率”帕累托曲线与闪烁构成图。"""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    curve = pareto_result["pareto_curve"]
+    rec_pt = pareto_result["recommended_operating_point"]
+
+    taus = [pt["tau_gate"] for pt in curve]
+    rewrite_rates = [pt["screen_rewrite_rate_pct"] for pt in curve]
+    bleu1_vals = [pt["bleu1_pct"] for pt in curve]
+    word_acc_vals = [pt["word_acc_pct"] for pt in curve]
+    bert_vals = [pt["bertscore_f1_pct"] for pt in curve]
+    flicker_rates = [pt["invalid_flicker_rate_pct"] for pt in curve]
+    repair_rates = [pt["beneficial_repair_rate_pct"] for pt in curve]
+    harm_rates = [pt["harmful_rewrite_rate_pct"] for pt in curve]
+
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(13.5, 5.2), dpi=160)
+    fig.suptitle(
+        f"S3 Confidence-Gated Revision (C-gated) Pareto Analysis | {dataset} ({split.upper()})",
+        fontsize=12.5,
+        fontweight="bold",
+    )
+
+    # 左图：解码质量 vs 屏幕改写率帕累托前沿
+    ax_left.plot(
+        rewrite_rates,
+        bleu1_vals,
+        "-o",
+        color="#1f77b4",
+        linewidth=2.2,
+        markersize=5,
+        label="BLEU-1 (%)",
+    )
+    ax_left.plot(
+        rewrite_rates,
+        word_acc_vals,
+        "-s",
+        color="#2ca02c",
+        linewidth=2.2,
+        markersize=5,
+        label="Word Acc (%)",
+    )
+    ax_left.plot(
+        rewrite_rates,
+        bert_vals,
+        "-^",
+        color="#9467bd",
+        linewidth=1.8,
+        markersize=4.5,
+        alpha=0.85,
+        label="BERTScore F1 (%)",
+    )
+
+    ax_left.axvline(
+        rec_pt["screen_rewrite_rate_pct"],
+        color="#d62728",
+        linestyle="--",
+        linewidth=1.4,
+        label=f"Recommended τ={rec_pt['tau_gate']:.1f} (Rewrite={rec_pt['screen_rewrite_rate_pct']:.1f}%)",
+    )
+    for idx in (0, len(curve) // 2, len(curve) - 1):
+        pt = curve[idx]
+        ax_left.annotate(
+            f"τ={pt['tau_gate']:.1f}",
+            xy=(pt["screen_rewrite_rate_pct"], pt["bleu1_pct"]),
+            xytext=(4, 6),
+            textcoords="offset points",
+            fontsize=8,
+        )
+
+    ax_left.set_title(
+        "(A) Decoding Quality vs. Screen Rewrite Rate (Pareto Curve)",
+        fontsize=10.5,
+        fontweight="bold",
+    )
+    ax_left.set_xlabel("Screen Rewrite / Flicker Rate (%)", fontsize=10)
+    ax_left.set_ylabel("Decoding Quality (%)", fontsize=10)
+    ax_left.grid(True, linestyle=":", alpha=0.5)
+    ax_left.legend(loc="best", fontsize=8.5)
+
+    # 右图：随 τ_gate 变化的改写构成（有益改对 vs 无效闪烁 vs 有害改错）
+    ax_right.plot(
+        taus,
+        rewrite_rates,
+        "-o",
+        color="#333333",
+        linewidth=2.0,
+        markersize=4.5,
+        label="Total Screen Rewrite Rate (%)",
+    )
+    ax_right.plot(
+        taus,
+        flicker_rates,
+        "-d",
+        color="#ff7f0e",
+        linewidth=2.0,
+        markersize=4.5,
+        label="Invalid Flicker (Wrong→Wrong %)",
+    )
+    ax_right.plot(
+        taus,
+        repair_rates,
+        "-s",
+        color="#2ca02c",
+        linewidth=2.0,
+        markersize=4.5,
+        label="Beneficial Repair (Wrong→Right %)",
+    )
+    ax_right.plot(
+        taus,
+        harm_rates,
+        "-x",
+        color="#d62728",
+        linewidth=1.8,
+        markersize=4.5,
+        label="Harmful Rewrite (Right→Wrong %)",
+    )
+    ax_right.axvline(
+        rec_pt["tau_gate"],
+        color="#d62728",
+        linestyle="--",
+        linewidth=1.3,
+    )
+
+    ax_right.set_title(
+        "(B) Screen Rewrite Decomposition Across Gate Threshold τ_gate",
+        fontsize=10.5,
+        fontweight="bold",
+    )
+    ax_right.set_xlabel("Confidence Margin Threshold τ_gate", fontsize=10)
+    ax_right.set_ylabel("Rate per Revision Opportunity (%)", fontsize=10)
+    ax_right.grid(True, linestyle=":", alpha=0.5)
+    ax_right.legend(loc="best", fontsize=8.5)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    png_path = out_dir / f"pareto_confidence_gate_{split}.png"
+    pdf_path = out_dir / f"pareto_confidence_gate_{split}.pdf"
+    fig.savefig(png_path, dpi=160)
+    fig.savefig(pdf_path)
+    plt.close(fig)
+
+    return {
+        "pareto_png": str(png_path),
+        "pareto_pdf": str(pdf_path),
+    }
+
+
+def plot_baseline_and_shifted_comparison(
+    condition_metrics: Mapping[str, Mapping[str, float | int]],
+    output_dir: str | Path,
+    *,
+    dataset: str = "pallier2025",
+    split: str = "test",
+) -> dict[str, str]:
+    """绘制 LM-Only、S0、K0、S3 (C-gated)、F 及 Shifted (-75s) 的 6 维指标对比图。"""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    labels = list(condition_metrics.keys())
+    if not labels:
+        return {}
+
+    x = np.arange(len(labels))
+    width = 0.18
+
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(14.0, 5.2), dpi=160)
+    fig.suptitle(
+        f"S3 Sequence Decoding Baselines & Shifted (-75s) Control | {dataset} ({split.upper()})",
+        fontsize=12.5,
+        fontweight="bold",
+    )
+
+    bleu1 = [float(condition_metrics[k].get("bleu1_pct", 0.0)) for k in labels]
+    word_acc = [
+        float(condition_metrics[k].get("word_acc_pct", 0.0)) for k in labels
+    ]
+    content_acc = [
+        float(condition_metrics[k].get("content_word_acc_pct", 0.0))
+        for k in labels
+    ]
+    function_acc = [
+        float(condition_metrics[k].get("function_word_acc_pct", 0.0))
+        for k in labels
+    ]
+
+    ax_left.bar(
+        x - 1.5 * width, bleu1, width, label="BLEU-1 (%)", color="#1f77b4"
+    )
+    ax_left.bar(
+        x - 0.5 * width, word_acc, width, label="Word Acc (%)", color="#2ca02c"
+    )
+    ax_left.bar(
+        x + 0.5 * width,
+        content_acc,
+        width,
+        label="Content Word Acc (%)",
+        color="#ff7f0e",
+    )
+    ax_left.bar(
+        x + 1.5 * width,
+        function_acc,
+        width,
+        label="Function Word Acc (%)",
+        color="#9467bd",
+    )
+    ax_left.set_title(
+        "(A) Lexical & Content/Function Word Accuracy",
+        fontsize=10.5,
+        fontweight="bold",
+    )
+    ax_left.set_xticks(x)
+    ax_left.set_xticklabels(labels, rotation=18, ha="right", fontsize=9)
+    ax_left.set_ylabel("Accuracy / Score (%)", fontsize=10)
+    ax_left.grid(axis="y", linestyle=":", alpha=0.5)
+    ax_left.legend(loc="best", fontsize=8.5)
+
+    bert_f1 = [
+        float(condition_metrics[k].get("bertscore_f1_pct", 0.0)) for k in labels
+    ]
+    wer_vals = [float(condition_metrics[k].get("wer_pct", 0.0)) for k in labels]
+    cer_vals = [float(condition_metrics[k].get("cer_pct", 0.0)) for k in labels]
+
+    w2 = 0.24
+    ax_right.bar(
+        x - w2, bert_f1, w2, label="BERTScore F1 (%) ↑", color="#17becf"
+    )
+    ax_right.bar(x, wer_vals, w2, label="WER (%) ↓", color="#d62728", alpha=0.85)
+    ax_right.bar(
+        x + w2, cer_vals, w2, label="CER (%) ↓", color="#8c564b", alpha=0.85
+    )
+    ax_right.set_title(
+        "(B) Semantic BERTScore & Error Rates (WER / CER)",
+        fontsize=10.5,
+        fontweight="bold",
+    )
+    ax_right.set_xticks(x)
+    ax_right.set_xticklabels(labels, rotation=18, ha="right", fontsize=9)
+    ax_right.set_ylabel("Percentage (%)", fontsize=10)
+    ax_right.grid(axis="y", linestyle=":", alpha=0.5)
+    ax_right.legend(loc="best", fontsize=8.5)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    png_path = out_dir / f"baseline_and_shifted_comparison_{split}.png"
+    pdf_path = out_dir / f"baseline_and_shifted_comparison_{split}.pdf"
+    fig.savefig(png_path, dpi=160)
+    fig.savefig(pdf_path)
+    plt.close(fig)
+
+    return {
+        "comparison_png": str(png_path),
+        "comparison_pdf": str(pdf_path),
+    }
+
+
+def evaluate_and_export_sequence_decoding(
+    decoded_bundles: Mapping[str, dict],
+    *,
+    dataset: str,
+    language: str,
+    split: str,
+    output_dir: str | Path,
+    word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
+    tau_grid: Sequence[float] = DEFAULT_TAU_GATE_GRID,
+    plot: bool = True,
+) -> dict:
+    """汇总各解码条件（LM-Only, S0, K0, S3, F 及 Shifted -75s），输出 6 维指标表与 C-gated 帕累托分析。"""
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    condition_summaries: dict[str, dict] = {}
+    pareto_results: dict[str, dict] = {}
+    figure_paths: dict[str, str] = {}
+
+    for key, bundle in decoded_bundles.items():
+        records = bundle["final_sentences"]
+        metrics_6d = evaluate_six_dimensional_metrics(
+            records,
+            language=language,
+            word_embedding_map=word_embedding_map,
+        )
+        metrics_6d["mean_seconds_per_segment"] = float(
+            bundle.get("mean_seconds_per_segment", 0.0)
+        )
+        condition_summaries[key] = metrics_6d
+
+        histories = bundle.get("screen_histories") or []
+        if histories:
+            pareto = sweep_confidence_gate_pareto(
+                histories,
+                language=language,
+                tau_grid=tau_grid,
+                word_embedding_map=word_embedding_map,
+            )
+            pareto_results[key] = pareto
+            rec_pt = pareto["recommended_operating_point"]
+            condition_summaries[f"{key}_c_gated"] = {
+                k: rec_pt[k]
+                for k in metrics_6d
+                if k in rec_pt
+            }
+            condition_summaries[f"{key}_c_gated"]["recommended_tau_gate"] = (
+                rec_pt["tau_gate"]
+            )
+            condition_summaries[f"{key}_c_gated"]["screen_rewrite_rate_pct"] = (
+                rec_pt["screen_rewrite_rate_pct"]
+            )
+            condition_summaries[f"{key}_c_gated"][
+                "invalid_flicker_filtered_pct"
+            ] = rec_pt["invalid_flicker_filtered_pct"]
+            condition_summaries[f"{key}_c_gated"][
+                "mean_seconds_per_segment"
+            ] = float(bundle.get("mean_seconds_per_segment", 0.0))
+
+            if plot and key in {"S3_clean", "S3"}:
+                figure_paths.update(
+                    plot_confidence_gate_pareto_curve(
+                        pareto, out_dir, dataset=dataset, split=split
+                    )
+                )
+
+    if plot and condition_summaries:
+        figure_paths.update(
+            plot_baseline_and_shifted_comparison(
+                condition_summaries, out_dir, dataset=dataset, split=split
+            )
+        )
+
+    report = {
+        "schema_version": 1,
+        "protocol": "sequence_decoding_s3_evaluation",
+        "dataset": dataset,
+        "language": language,
+        "split": split,
+        "conditions": condition_summaries,
+        "confidence_gate_pareto": pareto_results,
+        "figures": figure_paths,
+    }
+    save_json(out_dir / f"s3_evaluation_summary_{split}.json", report)
+    return report

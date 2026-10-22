@@ -10,7 +10,7 @@ protocols:
   protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
   config: configs/training/rolling_revision_protocol.yaml
   entrypoints:
-  - python scripts/replications/run_unified_rolling_v2.py --help
+  - python scripts/decode_sentences.py --help
   - python -m braindecoding.unified_rolling_v2_training --help
   status_sources:
   - name: neural_training
@@ -25,30 +25,38 @@ protocols:
   - data/results/studies/unified_heldout_test_v2
   - data/results/studies/unified_context_baselines_v2
   - data/results/studies/unified_context_heldout_test_v2
-  - data/results/studies/full_context_sentence_test_v2
   - data/results/studies/full_vocabulary_context_test_v2
   - data/results/studies/word_paired_statistics_test_v2
-  - data/results/studies/material_block_length_sensitivity_test_v2
   - data/results/studies/single_word_long_window_test_v2
-  - data/results/studies/pure_language_baseline_test_v2
-  - data/results/studies/f_local_sentence_test_v2
   retained_dependencies:
   - configs/word_decoding/pallier2025
   - configs/word_decoding/chineseeeg2_littleprince
-  - outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1
-  - outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1
   - outputs/word_decoding/pallier2025/unified_rolling_v2
   - outputs/word_decoding/chineseeeg2_littleprince/unified_rolling_v2
   - outputs/word_decoding/unified_context_baselines_v2
-  - outputs/sentence_decoding/unified_sentence_v2
-  - outputs/sentence_decoding/unified_sentence_v2_preview
-  - outputs/sentence_decoding/unified_sentence_v2_preview_chance
-  - outputs/sentence_decoding/unified_sentence_v2_revision_gain_full
-  - outputs/heldout_test/unified_heldout_test_v2
   - outputs/heldout_test/unified_context_heldout_test_v2
-  - outputs/heldout_test/full_context_sentence_test_v2
-  - data/cache/derived/models/qwen2_5_1_5b
   - .cache/runs/unified_context_baselines_v2/plan.json
+- id: sequence_decoding_protocol
+  role: supplement
+  parent: unified_protocol_v2
+  title: 序列解码协议（S3：闭集 Top-K、KV-Cache 单遍定稿主干与状态自适应校准）
+  datasets:
+  - pallier2025
+  - chineseeeg2_littleprince
+  protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
+  config: configs/decoding/sequence_decoding_protocol.yaml
+  entrypoints:
+  - python scripts/decode_sentences.py --help
+  - brain-decoding decode-sentences --help
+  status_sources:
+  - name: sequence_decoding
+    paths:
+    - .cache/runs/sequence_decoding_protocol/status.json
+    - data/results/studies/sequence_decoding_protocol/results.json
+  reports:
+  - data/results/studies/sequence_decoding_protocol
+  retained_dependencies:
+  - configs/decoding/sequence_decoding_protocol.yaml
 - id: synthetic_timing_v1
   role: supplement
   parent: unified_protocol_v2
@@ -100,30 +108,6 @@ protocols:
   - outputs/word_decoding/chineseeeg2_littleprince/synthetic_timing_v2_shared
   - outputs/word_decoding/chineseeeg2_littleprince/synthetic_timing_v2_independent
   - data/results/exports/unified_heldout_test_v2_word_by_seed.csv
-- id: fixed_k0_rolling_search_test_v2
-  role: supplement
-  parent: unified_protocol_v2
-  title: 固定 K0 的滚动文本重搜补充实验
-  datasets:
-  - pallier2025
-  - chineseeeg2_littleprince
-  protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/evaluation/candidate_pool_search_evaluation.yaml
-  manifests:
-  - data/manifests/rolling_sentence/fixed_k0_rolling_search_test_v2.json
-  entrypoints:
-  - python -m braindecoding.fixed_k0_rolling_search_test_v2 --help
-  status_sources:
-  - name: fixed_k0_decode
-    paths:
-    - .cache/runs/fixed_k0_rolling_search_test_v2/status.json
-    - data/results/studies/fixed_k0_rolling_search_test_v2/results.json
-  reports:
-  - data/results/studies/fixed_k0_rolling_search_test_v2
-  retained_dependencies:
-  - outputs/heldout_test/fixed_k0_rolling_search_test_v2
-  - outputs/heldout_test/unified_heldout_test_v2
-  - data/results/exports/unified_heldout_test_v2_sentence_summary.json
 - id: single_word_long_window_test_v2
   role: supplement
   parent: unified_protocol_v2
@@ -149,102 +133,3 @@ protocols:
   - outputs/word_decoding/chineseeeg2_littleprince/single_word_long_window_test_v2
   - outputs/heldout_test/single_word_long_window_test_v2
   - outputs/heldout_test/unified_heldout_test_v2
-- id: pure_language_baseline_test_v2
-  role: supplement
-  parent: unified_protocol_v2
-  title: 无神经输入的纯语言模型文本对照
-  datasets:
-  - pallier2025
-  - chineseeeg2_littleprince
-  protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/evaluation/language_only_baseline_evaluation.yaml
-  manifests:
-  - data/manifests/rolling_sentence/pure_language_baseline_test_v2.json
-  entrypoints:
-  - python -m braindecoding.pure_language_baseline_test_v2 --help
-  status_sources:
-  - name: pure_language_decode
-    paths:
-    - .cache/runs/pure_language_baseline_test_v2/status.json
-    - data/results/studies/pure_language_baseline_test_v2/results.json
-  reports:
-  - data/results/studies/pure_language_baseline_test_v2
-  retained_dependencies:
-  - outputs/heldout_test/pure_language_baseline_test_v2
-  - outputs/heldout_test/unified_heldout_test_v2
-  - outputs/heldout_test/fixed_k0_rolling_search_test_v2_stable
-  - outputs/heldout_test/single_revision_c1_test_v2_stable
-  - data/cache/derived/models/qwen2_5_1_5b
-- id: f_local_sentence_test_v2
-  role: supplement
-  parent: unified_protocol_v2
-  title: 共享局部神经表示的整段搜索 F-local 对照
-  datasets:
-  - pallier2025
-  - chineseeeg2_littleprince
-  protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/evaluation/neural_only_local_evaluation.yaml
-  manifests:
-  - data/manifests/rolling_sentence/f_local_sentence_test_v2.json
-  entrypoints:
-  - python -m braindecoding.f_local_sentence_test_v2 --help
-  status_sources:
-  - name: f_local_decode
-    paths:
-    - .cache/runs/f_local_sentence_test_v2/status.json
-  reports:
-  - data/results/studies/f_local_sentence_test_v2
-  retained_dependencies:
-  - outputs/heldout_test/f_local_sentence_test_v2
-  - outputs/heldout_test/unified_heldout_test_v2
-  - outputs/heldout_test/full_context_sentence_test_v2
-  - data/cache/derived/models/qwen2_5_1_5b
-- id: pure_language_prompt_sensitivity_test_v2
-  role: supplement
-  parent: unified_protocol_v2
-  title: 纯语言模型固定提示敏感性补跑
-  datasets:
-  - pallier2025
-  - chineseeeg2_littleprince
-  protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/evaluation/language_prompt_sensitivity_evaluation.yaml
-  manifests:
-  - data/manifests/rolling_sentence/pure_language_prompt_sensitivity_test_v2.json
-  entrypoints:
-  - python -m braindecoding.pure_language_prompt_sensitivity_test_v2 --help
-  status_sources:
-  - name: language_prompt_sensitivity
-    paths:
-    - .cache/runs/pure_language_prompt_sensitivity_test_v2/status.json
-    - data/results/studies/pure_language_prompt_sensitivity_test_v2/results.json
-  reports:
-  - data/results/studies/pure_language_prompt_sensitivity_test_v2
-  retained_dependencies:
-  - outputs/heldout_test/pure_language_prompt_sensitivity_test_v2
-  - outputs/heldout_test/pure_language_baseline_test_v2
-  - data/cache/derived/models/qwen2_5_1_5b
-- id: neural_prompt_sensitivity_test_v2
-  role: supplement
-  parent: unified_protocol_v2
-  title: 同叙述提示的神经 A/C 与纯语言匹配对照
-  datasets:
-  - pallier2025
-  - chineseeeg2_littleprince
-  protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/evaluation/neural_prompt_sensitivity_evaluation.yaml
-  manifests:
-  - data/manifests/rolling_sentence/neural_prompt_sensitivity_test_v2.json
-  entrypoints:
-  - python -m braindecoding.neural_prompt_sensitivity_test_v2 --help
-  status_sources:
-  - name: neural_prompt_sensitivity
-    paths:
-    - .cache/runs/neural_prompt_sensitivity_test_v2/status.json
-    - data/results/studies/neural_prompt_sensitivity_test_v2/results.json
-  reports:
-  - data/results/studies/neural_prompt_sensitivity_test_v2
-  retained_dependencies:
-  - outputs/heldout_test/neural_prompt_sensitivity_test_v2
-  - outputs/heldout_test/unified_heldout_test_v2
-  - outputs/heldout_test/pure_language_prompt_sensitivity_test_v2
-  - data/cache/derived/models/qwen2_5_1_5b

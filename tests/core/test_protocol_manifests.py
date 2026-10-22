@@ -1,5 +1,6 @@
 """论文协议资产、来源边界和稳定哈希测试。"""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -25,7 +26,10 @@ def _vocabularies(dataset):
 
 
 def test_all_machine_manifests_have_stable_self_hashes():
-    from braindecoding.unified_sentence_v2 import digest
+    def digest(value):
+        return hashlib.sha256(
+            json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
 
     paths = sorted(MANIFEST_ROOT.rglob("*.json"))
     assert (

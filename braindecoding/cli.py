@@ -729,6 +729,14 @@ def _workflow_eval(args) -> int:
     return 0
 
 
+def _workflow_decode_sentences(args) -> int:
+    from scripts.decode_sentences import run_sequence_decoding_pipeline
+
+    summary = run_sequence_decoding_pipeline(args)
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="brain-decoding")
     parser._negative_number_matcher = re.compile(
@@ -793,6 +801,58 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_evaluation_workflow_args(eval_run_cmd)
 
+    decode_cmd = commands.add_parser(
+        "decode-sentences",
+        help="执行序列解码协议（S3：神经词表得分导出、状态自适应校准、KV-Cache 单遍定稿主干束搜索与 6 维语义/C-gated 评估）",
+    )
+    decode_cmd._negative_number_matcher = re.compile(
+        r"^-\d+(?:\.\d+)?(?:,\s*[+-]?\d+(?:\.\d+)?)*$"
+    )
+    decode_cmd.add_argument(
+        "--step",
+        choices=("export", "calibrate", "decode", "evaluate", "all"),
+        default="all",
+        help="要执行的流水线步骤（默认：all）",
+    )
+    decode_cmd.add_argument(
+        "--config",
+        "-c",
+        default="configs/decoding/sequence_decoding_protocol.yaml",
+        help="S3 序列解码协议 YAML 配置文件路径",
+    )
+    decode_cmd.add_argument(
+        "--dataset",
+        choices=("pallier2025", "chineseeeg2_littleprince"),
+        default="pallier2025",
+        help="目标数据集（默认：pallier2025）",
+    )
+    decode_cmd.add_argument(
+        "--split",
+        choices=("val", "test"),
+        default="test",
+        help="解码与评估目标划分（默认：test）",
+    )
+    decode_cmd.add_argument("--seed", type=int, default=0, help="随机种子（默认：0）")
+    _add_subject_subset_args(decode_cmd)
+    decode_cmd.add_argument("--exp-tag", default=None, help="可选神经训练实验标签")
+    decode_cmd.add_argument("--word-exp-tag", default=None, help="可选阶段 1 实验标签")
+    decode_cmd.add_argument("--window-seconds", type=float, default=None, help="可选覆写单字脑信号时间窗长度（秒）")
+    decode_cmd.add_argument("--window-start-offset-seconds", type=float, default=None, help="可选覆写相对词起始时刻的窗口起点偏移（秒）")
+    decode_cmd.add_argument("--language-model", default=None, help="可选覆写因果语言模型名称或路径")
+    decode_cmd.add_argument("--top-k", type=int, default=None, help="可选覆写神经候选词截断数量 K")
+    decode_cmd.add_argument("--beam-width", type=int, default=None, help="可选覆写定稿主干束宽 B")
+    decode_cmd.add_argument("--cms-eta", type=float, default=None, help="可选覆写共模扣除系数 eta")
+    decode_cmd.add_argument("--control-shift-seconds", type=float, default=None, help="可选覆写负对照错位秒数")
+    decode_cmd.add_argument("--max-segments", type=int, default=None, help="可选限制最大解码段落数")
+    decode_cmd.add_argument("--output-dir", default=None, help="可选显式指定输出根目录")
+    decode_cmd.add_argument("--export-path", default=None, help="可选显式指定神经词表得分 .pt 路径")
+    decode_cmd.add_argument("--calibration-path", default=None, help="可选显式指定状态校准 JSON 路径")
+    decode_cmd.add_argument("--decoding-path", default=None, help="可选显式指定解码输出 JSON 路径")
+    decode_cmd.add_argument("--no-bertscore", action="store_true", help="禁用预计算词向量计算 BERTScore")
+    decode_cmd.add_argument("--no-plot", action="store_true", help="禁用可视化图表生成")
+    decode_cmd.add_argument("--no-progress", action="store_true", help="禁用 tqdm 实时进度条")
+    decode_cmd.add_argument("--device", default=None, help="计算设备（cuda / cpu）")
+
     show = commands.add_parser("show", help="显示当前协议或显式指定的历史配置")
     show.add_argument("experiment")
     show.add_argument("--resolved", action="store_true", help="显示协议索引元数据或历史完整配置")
@@ -830,6 +890,8 @@ def main(argv=None) -> int:
             return _workflow_train(args, mode="train")
         if args.command == "eval-run":
             return _workflow_eval(args)
+        if args.command == "decode-sentences":
+            return _workflow_decode_sentences(args)
         if args.command == "show":
             return _show(args.experiment, args.resolved)
         if args.command == "preflight":

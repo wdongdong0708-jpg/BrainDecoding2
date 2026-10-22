@@ -276,5 +276,5 @@ def test_installed_console_script_lists_experiments_from_non_project_cwd(tmp_pat
     assert result.returncode == 0, result.stderr
     assert "unified_protocol_v2" in result.stdout
     assert "synthetic_timing_v1" in result.stdout
-    assert "fixed_k0_rolling_search_test_v2" in result.stdout
+    assert "sequence_decoding_protocol" in result.stdout
     assert "smn4lang" not in result.stdout

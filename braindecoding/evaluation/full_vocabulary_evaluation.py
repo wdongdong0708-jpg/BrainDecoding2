@@ -1,7 +1,10 @@
 """CPU-only full-training-lexicon retrieval for saved local-r2/full-context tests."""
 from __future__ import annotations
 
-from collections import defaultdict
+import csv
+import hashlib
+import json
+import os
 from pathlib import Path
 import time
 
@@ -10,8 +13,7 @@ import numpy as np
 from braindecoding.config import PROJECT_ROOT as ROOT
 from braindecoding.data.text import load_text_embedding_cache
 from braindecoding.evaluation.retrieval import mean_by_target, retrieval_ranks, summarize_retrieval
-from braindecoding.unified_sentence_v2 import digest, read, save, sha256
-from braindecoding.unified_sentence_v2_artifacts import csv_write
+from braindecoding.experiment import file_sha256 as sha256
 from braindecoding.word_paired_statistics_test_v2 import metadata, weighted_scores, bootstrap_weights
 
 
@@ -28,6 +30,34 @@ METRICS = ("macro_recall_at_10", "macro_recall_at_1", "micro_recall_at_10", "mic
 CONDITIONS = ("full_context", "local_r2")
 POPULATIONS = ("all_words", "common_words", "strict50_queries", "strict50_common_queries")
 NAMES = {"pallier2025": "Pallier2025", "chineseeeg2_littleprince": "ChineseEEG-2"}
+
+
+def read(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def save(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    os.replace(temp, path)
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def csv_write(path, rows):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        path.write_text("", encoding="utf-8-sig")
+        return
+    with path.open("w", encoding="utf-8-sig", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def require(condition, message):
@@ -65,7 +95,7 @@ def freeze():
     sources, jobs = {}, []
     for path in (PROTOCOL, Path(__file__), PARENT, CONTEXT,
                  ROOT / "braindecoding/evaluation/retrieval.py", ROOT / "braindecoding/evaluation/word_paired_statistics_test_v2.py",
-                 ROOT / "braindecoding/data/text.py", ROOT / "braindecoding/decoding/unified_sentence_v2.py",
+                 ROOT / "braindecoding/data/text.py",
                  EXPORT / "unified_context_heldout_test_v2_context_by_seed.csv"):
         sources[key(path)] = sha256(path)
     for dataset, info in parent["datasets"].items():
@@ -146,7 +176,6 @@ def load_verified(job, info, meta, bank, vocabulary):
             and np.array_equal(common, [meta[e]["common"] for e in ids]), "Saved target or common-event alignment differs")
     require(queries.shape == (len(ids), 1024)
             and np.allclose(np.linalg.norm(queries, axis=1), 1., atol=.005), "Saved predictions are not normalized 1024-dimensional vectors")
-    # Independently reproduce all four original 50-word metrics for both query masks.
     vindex = {w: i for i, w in enumerate(vocabulary)}
     bank50 = bank[[vindex[w] for w in info["vocabulary50"]]]
     side = read(ROOT / job["metrics"])
@@ -178,7 +207,6 @@ def paired_intervals(info, ids, words, ranks, meta, m, index):
     observed, _ = weighted_scores(np.ones((1, len(blocks))), counts, hits)
     weights = bootstrap_weights(info, m, index)
     differences, represented = [], []
-    # Keep temporary arrays bounded even when the test contains hundreds of rare types.
     for start in range(0, len(weights), 128):
         values, covered_types = weighted_scores(weights[start:start+128], counts, hits)
         differences.append(values[1] - values[0])
@@ -319,7 +347,6 @@ def write_markdown(report, parent):
 
 
 def main():
-    # Limit CPU linear algebra while the priority B decoder keeps the GPU.
     from threadpoolctl import threadpool_limits
     with threadpool_limits(limits=4):
         run(freeze())

@@ -7,7 +7,6 @@ import torch
 
 from braindecoding.unified_protocol_audit import build_training_vocabulary, load_source
 from braindecoding.unified_rolling_training import equal_event_horizon_loss, full_vocabulary_metrics
-from braindecoding.unified_sentence import first_complete_word, replay_abc, search_words
 
 
 def test_epoch_weighting_preserves_event_and_horizon_means_and_gradients():
@@ -65,50 +64,3 @@ def test_common_horizon_selection_excludes_only_unavailable_positions():
     assert metrics["reference_count"] == 2
     assert metrics["selection_score"] == 1
 
-
-class ZeroLM:
-    def score_extensions(self, prefixes, words):
-        return np.zeros(len(words))
-
-    def next_words(self, prefix):
-        return ("outside",)
-
-
-def test_abc_separates_neural_updates_and_respects_unavailable_horizons():
-    predictions = {0: np.array([[1., 0.]]*4), 1: np.array([[0., 1.]]*4), 2: np.array([[0., 1.]]*4)}
-    result = replay_abc(predictions, ["a", "b"], np.eye(2), ZeroLM(), None,
-        candidate_count=2, language_weight=0, open_vocabulary=False)
-    assert result["final"]["A"] == result["final"]["B"] == ["a"]*4
-    assert result["final"]["C"] == ["b", "b", "b", "a"]
-    assert result["trace"][0]["C"] == ["a"]
-    assert result["trace"][1]["C"] == ["b", "a"]
-    predictions[2][3] = [99., -99.]
-    repeated = replay_abc(predictions, ["a", "b"], np.eye(2), ZeroLM(), None,
-        candidate_count=2, language_weight=0, open_vocabulary=False)
-    assert repeated == result
-
-
-def test_open_candidates_are_available_to_all_three_conditions_without_reference():
-    predictions = {d: np.array([[0., 1.]]*3) for d in range(3)}
-    result = replay_abc(predictions, ["inside"], np.array([[1., 0.]]), ZeroLM(),
-        lambda words: np.array([[0., 1.]]*len(words)), candidate_count=1,
-        language_weight=0, open_vocabulary=True)
-    assert all(words == ["outside"]*3 for words in result["final"].values())
-
-
-def test_language_only_baseline_does_not_use_neural_candidates():
-    class LM(ZeroLM):
-        def score_extensions(self, prefixes, words):
-            return np.array([1. if w == "outside" else 0. for w in words])
-    first = search_words(np.array([[999., -999.]]), ["inside"], np.array([[1., 0.]]),
-        LM(), None, pure_lm=True)
-    second = search_words(np.array([[-999., 999.]]), ["inside"], np.array([[0., 1.]]),
-        LM(), None, pure_lm=True)
-    assert first == second == ("outside",)
-
-
-def test_complete_word_proposals_require_boundaries_and_keep_multiple_characters():
-    assert first_complete_word("constitutionnellement ensuite", "fr") == "constitutionnellement"
-    assert first_complete_word("constitutionnellement", "fr") is None
-    assert first_complete_word("porte-", "fr") is None
-    assert first_complete_word("玫瑰花正在盛开", "zh") == "玫瑰花"

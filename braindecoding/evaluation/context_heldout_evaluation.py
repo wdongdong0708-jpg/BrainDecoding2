@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import gc
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,15 +15,16 @@ import numpy as np
 import torch
 
 from braindecoding import unified_context_baselines_v2 as development
-from braindecoding import unified_heldout_test_v2 as heldout
-from braindecoding.unified_sentence_v2 import read, save, digest, sha256
-from braindecoding.unified_sentence_v2_artifacts import csv_write
+from braindecoding import unified_rolling_v2_training as neural
+from braindecoding.config import PROJECT_ROOT as ROOT
+from braindecoding.experiment import file_sha256 as sha256
 from braindecoding.training.runtime import load_checkpoint, set_seed
 from braindecoding.training.word import make_loader, encode_loader
 
-ROOT = heldout.PROJECT_ROOT
 PROTOCOL = ROOT / 'data/manifests/rolling_sentence/unified_protocol_v2.md'
 MANIFEST = PROTOCOL.with_suffix('.json')
+PARENT_MANIFEST = ROOT / 'data/manifests/rolling_sentence/heldout_test_v2.json'
+HELDOUT_REPORT = ROOT / 'data/results/studies/unified_heldout_test_v2'
 OUT = ROOT / 'outputs/heldout_test/unified_context_heldout_test_v2'
 REPORT = ROOT / 'data/results/studies/unified_context_heldout_test_v2'
 RUNTIME = ROOT / '.cache/runs/unified_context_heldout_test_v2'
@@ -30,21 +33,64 @@ METRICS = ('macro_recall_at_1', 'macro_recall_at_10', 'micro_recall_at_1', 'micr
 CONDITIONS = ('local_r0', 'local_r1', 'local_r2', 'local_r4', 'local_r8', 'full_context', 'independent_k0', 'independent_k1')
 
 
+def read(path):
+    return json.loads(Path(path).read_text(encoding='utf-8'))
+
+
+def save(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + '.tmp')
+    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + '\n', encoding='utf-8')
+    os.replace(temp, path)
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+
+
+def csv_write(path, rows):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        path.write_text('', encoding='utf-8-sig')
+        return
+    with path.open('w', encoding='utf-8-sig', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _target_cache(cfg):
+    return ROOT / 'data/cache/derived' / cfg['experiment']['dataset'] / 'text' / 'bge_m3_eval_test' / 'embeddings.npz'
+
+
+def _dataset_for(cfg):
+    task = neural.pallier if cfg['experiment']['dataset'] == 'pallier2025' else neural.chinese
+    loader = task.dataset_module.load_event_table
+    builder = task.build_dataset
+    copied = json.loads(json.dumps(cfg))
+    copied['cache']['text_embeddings'] = str(_target_cache(copied))
+    table = loader(copied['cache']['event_table'], split='test',
+                   subjects=copied['dataset']['subjects'], trainable_only=True)
+    return builder(copied, table)
+
+
 def freeze():
     if MANIFEST.exists():
         m = read(MANIFEST)
         if digest({k: v for k, v in m.items() if k != 'manifest_sha256'}) != m['manifest_sha256']:
             raise ValueError('Context test manifest identity changed')
         return m
-    parent = heldout.manifest()
+    parent = read(PARENT_MANIFEST)
     plan_path = development.RUNTIME / 'plan.json'
     plan = read(plan_path)
     training_report = read(development.REPORT / 'report.json')
     if training_report['completed_jobs'] != 48 or sha256(plan_path) != training_report['plan_sha256']:
         raise ValueError('Need all 48 completed development jobs')
     jobs = []
-    hashes = {str(p.resolve()): sha256(p) for p in [PROTOCOL, Path(__file__), plan_path, heldout.MANIFEST,
-              development.CONFIG, Path(development.__file__), Path(heldout.__file__),
+    hashes = {str(p.resolve()): sha256(p) for p in [PROTOCOL, Path(__file__), plan_path, PARENT_MANIFEST,
+              development.CONFIG, Path(development.__file__),
               ROOT / 'braindecoding/training/word.py', ROOT / 'braindecoding/models.py',
               ROOT / 'braindecoding/training/pallier_alignment_trial.py',
               ROOT / 'data/results/studies/unified_heldout_test_v2/word_results.json',
@@ -166,13 +212,12 @@ def export(m):
                     result[metric + '_mean'] = float(np.mean(values))
                     result[metric + '_sd'] = float(np.std(values, ddof=1))
                 summary.append(result)
-    roll = read(heldout.REPORT / 'word_results.json')
+    roll = read(HELDOUT_REPORT / 'word_results.json')
     if roll['manifest_sha256'] != m['test_material_manifest_sha256'] or roll['split'] != 'test':
         raise ValueError('Wrong rolling test source')
     for source in roll['sources']:
         if sha256(ROOT / source['path']) != source['sha256']:
             raise ValueError('Rolling test source changed')
-    import csv
     with (EXPORT / 'unified_heldout_test_v2_word_by_seed.csv').open(encoding='utf-8-sig', newline='') as stream:
         rolling = list(csv.DictReader(stream))
     comparisons = []
@@ -215,8 +260,8 @@ def run(m):
         msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
         progress(m, state='running', stage='verifying_sources', started_unix=time.time(), completed_jobs=0)
         try:
-            heldout.neural.check_hashes(m['source_sha256'])
-            parent = read(heldout.MANIFEST)
+            neural.check_hashes(m['source_sha256'])
+            parent = read(PARENT_MANIFEST)
             torch.set_num_threads(4)
             set_seed(0)
             ds = loader = dataset_name = None
@@ -232,8 +277,8 @@ def run(m):
                 if sha256(Path(job['checkpoint'])) != job['checkpoint_sha256']:
                     raise ValueError('Validation-selected context checkpoint changed')
                 if dataset_name != job['dataset']:
-                    ds = heldout.dataset_for(cfg)
-                    loader, _ = make_loader(ds, cfg['training'], shuffle=False, group_column=heldout.neural.group_column(cfg))
+                    ds = _dataset_for(cfg)
+                    loader, _ = make_loader(ds, cfg['training'], shuffle=False, group_column=neural.group_column(cfg))
                     dataset_name = job['dataset']
                 cp = load_checkpoint(job['checkpoint'])
                 if (cp['dataset'] != job['dataset'] or cp['seed'] != job['seed'] or cp['condition'] != job['condition']
@@ -242,7 +287,7 @@ def run(m):
                         or cp['channel_names'] != ds.channel_names or cp['subject_ids'] != subject_order(ds)
                         or cp['epoch'] != job['best_epoch']):
                     raise ValueError('Model identity, inputs or development selection changed')
-                model = heldout.neural.build_brain_embedding_model(ds.channel_count, ds.channel_positions, ds.subject_count, cp['model_config']).cuda().eval()
+                model = neural.build_brain_embedding_model(ds.channel_count, ds.channel_positions, ds.subject_count, cp['model_config']).cuda().eval()
                 model.load_state_dict(cp['model_state'], strict=True)
                 with torch.inference_mode():
                     encoded = encode_loader(model, ProgressLoader(loader, m, identity), torch.device('cuda'), amp=True)
@@ -252,11 +297,11 @@ def run(m):
                     raise ValueError('Test event population changed')
                 if not torch.isfinite(encoded['predictions']).all():
                     raise FloatingPointError('Non-finite test predictions')
-                common = development.common_mask(ds.table, encoded['event_ids'], heldout.neural.group_column(cfg))
+                common = development.common_mask(ds.table, encoded['event_ids'], neural.group_column(cfg))
                 if int(common.sum()) != info['counts']['common_events']:
                     raise ValueError('Common test event population changed')
                 evaluation = {**encoded, 'revision_predictions': {0: encoded['predictions']}, 'revision_availability_masks': {0: common}}
-                metrics = heldout.neural.strict_bank_metrics(evaluation, ds, info['vocabulary50'])['0']
+                metrics = neural.strict_bank_metrics(evaluation, ds, info['vocabulary50'])['0']
                 for name, expected_count in [('all_targets', info['counts']['strict50_all']), ('common_targets', info['counts']['strict50_common'])]:
                     if metrics[name]['query_count'] != expected_count or metrics[name]['candidate_count'] != 50:
                         raise ValueError('Strict-50 test population changed')
@@ -276,7 +321,7 @@ def run(m):
                 torch.cuda.empty_cache()
                 progress(m, stage='job_complete', completed_jobs=index + 1, **identity)
                 print(f"Completed {index + 1}/48: {identity}", flush=True)
-            heldout.neural.check_hashes(m['source_sha256'])
+            neural.check_hashes(m['source_sha256'])
             export(m)
         except BaseException as error:
             progress(m, state='failed', stage='failed', error=repr(error))

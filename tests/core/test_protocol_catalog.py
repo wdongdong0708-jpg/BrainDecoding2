@@ -43,14 +43,10 @@ def test_current_scope_is_one_primary_and_two_named_supplements():
     records = discover_protocols()
     assert {record["id"]: record["role"] for record in records} == {
         "unified_protocol_v2": "primary",
+        "sequence_decoding_protocol": "supplement",
         "synthetic_timing_v1": "supplement",
         "synthetic_timing_v2": "supplement",
-        "fixed_k0_rolling_search_test_v2": "supplement",
         "single_word_long_window_test_v2": "supplement",
-        "pure_language_baseline_test_v2": "supplement",
-        "f_local_sentence_test_v2": "supplement",
-        "pure_language_prompt_sensitivity_test_v2": "supplement",
-        "neural_prompt_sensitivity_test_v2": "supplement",
     }
     primary = resolve_protocol("unified_protocol_v2")
     assert primary["protocol"] == "data/manifests/rolling_sentence/unified_protocol_v2.md"
@@ -132,7 +128,7 @@ def test_corrupt_runtime_is_reported_without_falling_back_to_success(index_fixtu
 
 
 @pytest.mark.parametrize("identifier", (
-    "unified_protocol_v2", "synthetic_timing_v1", "fixed_k0_rolling_search_test_v2",
+    "unified_protocol_v2", "synthetic_timing_v1", "sequence_decoding_protocol",
 ))
 def test_current_queries_do_not_load_tasks_or_create_outputs(identifier, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_load_task_config", lambda record: pytest.fail("加载了训练任务"))
