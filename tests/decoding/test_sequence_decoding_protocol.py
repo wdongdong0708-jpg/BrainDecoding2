@@ -535,3 +535,35 @@ def test_decode_sentences_cli_pipeline_steps(tmp_path, monkeypatch) -> None:
             assert "S3_clean_c_gated" in summary["conditions"]
             assert "S3_shifted_neg75s" in summary["conditions"]
 
+
+def test_build_segment_inventory_supports_chinese_canonical_columns():
+    """验证 build_segment_inventory 对磁盘落盘纯中文核心事件表列名的兼容与自动合成 runtime_context_uid。"""
+    import pandas as pd
+    from braindecoding.decoding.neural_score_exporter import build_segment_inventory
+
+    table = pd.DataFrame(
+        {
+            "事件编号": ["ev-1", "ev-2", "ev-3", "ev-4"],
+            "受试者": ["sub-01", "sub-01", "sub-01", "sub-01"],
+            "记录编号": ["sub-01_run-06", "sub-01_run-06", "sub-01_run-06", "sub-01_run-06"],
+            "运行编号": ["run-06", "run-06", "run-06", "run-06"],
+            "BIDS事件行号": [10, 11, 20, 21],
+            "标准词": ["le", "petit", "prince", "parle"],
+            "上下文编号": ["sent-0", "sent-0", "sent-1", "sent-1"],
+        }
+    )
+    segments = build_segment_inventory(
+        "pallier2025",
+        table,
+        vocabulary=["le", "petit", "prince"],
+        adjacent_components_per_block=1,
+    )
+    assert len(segments) == 2
+    assert segments[0]["event_ids"] == ["ev-1", "ev-2"]
+    assert segments[0]["reference_words"] == ["le", "petit"]
+    assert segments[0]["in_vocabulary_mask"] == [True, True]
+    assert segments[1]["event_ids"] == ["ev-3", "ev-4"]
+    assert segments[1]["reference_words"] == ["prince", "parle"]
+    assert segments[1]["in_vocabulary_mask"] == [True, False]
+
+

@@ -111,10 +111,28 @@ def build_segment_inventory(
     vocab_set = set(str(w) for w in vocabulary)
     settings = load_yaml_with_extends(CONFIG_PATH)
     grp_col = settings["adapters"][dataset]["group_column"]
-    if grp_col not in table.columns:
-        grp_col = "protocol_group" if "protocol_group" in table.columns else "context_uid"
+    working = table.reset_index(drop=True).copy()
+    event_col = "event_id" if "event_id" in working.columns else "事件编号"
+    subj_col = "subject_id" if "subject_id" in working.columns else "受试者"
+    rec_col = "recording_id" if "recording_id" in working.columns else "记录编号"
+    word_col = (
+        "normalized_word" if "normalized_word" in working.columns else "标准词"
+    )
+    sent_col = (
+        "sentence_uid" if "sentence_uid" in working.columns else "上下文编号"
+    )
+    if grp_col not in working.columns:
+        if grp_col == "runtime_context_uid" and rec_col in working.columns and sent_col in working.columns:
+            working["runtime_context_uid"] = (
+                working[rec_col].astype(str) + "::" + working[sent_col].astype(str)
+            )
+        elif "protocol_group" in working.columns:
+            grp_col = "protocol_group"
+        elif "context_uid" in working.columns:
+            grp_col = "context_uid"
+        else:
+            grp_col = sent_col
 
-    working = table.reset_index(drop=True)
     segments: list[dict] = []
     parent: list[int] = []
     atom_owner: dict[str, int] = {}
@@ -130,7 +148,7 @@ def build_segment_inventory(
         parent.append(seg_idx)
         row_indices = [int(i) for i in rows.index.tolist()]
         if dataset == "pallier2025":
-            run_col = "运行编号" if "运行编号" in rows.columns else "recording_id"
+            run_col = "运行编号" if "运行编号" in rows.columns else rec_col
             bids_col = "BIDS事件行号" if "BIDS事件行号" in rows.columns else "event_index"
             scope = str(rows[run_col].iloc[0])
             if bids_col in rows.columns:
@@ -142,11 +160,18 @@ def build_segment_inventory(
         else:
             if "chapter" in rows.columns:
                 scope = f"chapter-{int(rows['chapter'].iloc[0]):02d}"
+            elif "章节" in rows.columns:
+                scope = f"chapter-{int(rows['章节'].iloc[0]):02d}"
             else:
-                scope = str(rows["recording_id"].iloc[0])
-            if "source_sentence_uid" in rows.columns:
+                scope = str(rows[rec_col].iloc[0])
+            src_sent_col = (
+                "source_sentence_uid"
+                if "source_sentence_uid" in rows.columns
+                else ("源句编号" if "源句编号" in rows.columns else None)
+            )
+            if src_sent_col is not None:
                 lines = []
-                for val in rows["source_sentence_uid"].astype(str).tolist():
+                for val in rows[src_sent_col].astype(str).tolist():
                     match = re.search(r"actual-line-(\d+)", val)
                     lines.append(match.group(1) if match else val)
                 atoms = [f"{scope}|source-line-{ln}" for ln in lines]
@@ -163,19 +188,18 @@ def build_segment_inventory(
             else:
                 atom_owner[atom] = seg_idx
 
-        word_col = "normalized_word" if "normalized_word" in rows.columns else "标准词"
         ref_words = rows[word_col].astype(str).tolist()
         in_vocab = [bool(w in vocab_set) for w in ref_words]
         segments.append(
             {
                 "segment_index": seg_idx,
                 "group_id": str(group_name),
-                "subject_id": str(rows["subject_id"].iloc[0]),
-                "recording_id": str(rows["recording_id"].iloc[0]),
+                "subject_id": str(rows[subj_col].iloc[0]),
+                "recording_id": str(rows[rec_col].iloc[0]),
                 "scope": scope,
                 "order": order,
                 "event_indices": row_indices,
-                "event_ids": rows["event_id"].astype(str).tolist(),
+                "event_ids": rows[event_col].astype(str).tolist(),
                 "reference_words": ref_words,
                 "in_vocabulary_mask": in_vocab,
                 "_atoms": sorted(set(atoms)),
@@ -340,8 +364,10 @@ def _encode_stage_with_shifts(
 
     amp_enabled = bool(tc.get("amp", True)) and device.type == "cuda"
     amp_dtype = resolve_amp_dtype(tc)
+    ds_table = getattr(clean_ds, "table", eval_table)
+    event_col = "event_id" if "event_id" in ds_table.columns else "事件编号"
     canonical_event_ids = [
-        str(e) for e in eval_table["event_id"].astype(str).tolist()
+        str(e) for e in ds_table[event_col].astype(str).tolist()
     ]
 
     def _align_encoded_to_canonical_events(encoded: dict) -> dict:
@@ -736,11 +762,20 @@ def export_neural_vocabulary_scores(
         clean_scores[state] = (clean_embeddings[state].float() @ vocab_tensor.T).cpu()
         shifted_scores[state] = (shifted_embeddings[state].float() @ vocab_tensor.T).cpu()
 
-    segments = build_segment_inventory(dataset, eval_table, vocabulary)
+    canonical_table = getattr(eval_ds, "table", eval_table)
+    segments = build_segment_inventory(dataset, canonical_table, vocabulary)
     eval_word_col = (
-        "normalized_word" if "normalized_word" in eval_table.columns else "标准词"
+        "normalized_word"
+        if "normalized_word" in canonical_table.columns
+        else "标准词"
     )
-    ref_words = eval_table[eval_word_col].astype(str).tolist()
+    subj_col = (
+        "subject_id" if "subject_id" in canonical_table.columns else "受试者"
+    )
+    rec_col = (
+        "recording_id" if "recording_id" in canonical_table.columns else "记录编号"
+    )
+    ref_words = canonical_table[eval_word_col].astype(str).tolist()
     vocab_set = set(vocabulary)
     in_vocab_mask = torch.tensor([w in vocab_set for w in ref_words], dtype=torch.bool)
     language = "fr" if dataset == "pallier2025" else "zh"
@@ -773,8 +808,8 @@ def export_neural_vocabulary_scores(
         "vocabulary_embeddings": vocab_tensor.cpu(),
         "event_ids": event_ids,
         "reference_words": ref_words,
-        "subject_ids": eval_table["subject_id"].astype(str).tolist(),
-        "recording_ids": eval_table["recording_id"].astype(str).tolist(),
+        "subject_ids": canonical_table[subj_col].astype(str).tolist(),
+        "recording_ids": canonical_table[rec_col].astype(str).tolist(),
         "in_vocabulary_mask": in_vocab_mask,
         "in_vocabulary_rate": float(in_vocab_mask.float().mean().item()),
         "availability_masks": availability_masks,
