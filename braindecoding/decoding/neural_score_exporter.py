@@ -340,6 +340,51 @@ def _encode_stage_with_shifts(
 
     amp_enabled = bool(tc.get("amp", True)) and device.type == "cuda"
     amp_dtype = resolve_amp_dtype(tc)
+    canonical_event_ids = [
+        str(e) for e in eval_table["event_id"].astype(str).tolist()
+    ]
+
+    def _align_encoded_to_canonical_events(encoded: dict) -> dict:
+        actual_ids = [str(e) for e in encoded["event_ids"]]
+        if actual_ids == canonical_event_ids:
+            return encoded
+        if len(actual_ids) != len(canonical_event_ids) or set(actual_ids) != set(
+            canonical_event_ids
+        ):
+            raise ValueError(
+                f"Stage {stage} 编码输出的事件集合与 eval_table 不一致："
+                f"count={len(actual_ids)} vs {len(canonical_event_ids)}。"
+            )
+        id_to_pos = {eid: pos for pos, eid in enumerate(actual_ids)}
+        perm = torch.tensor(
+            [id_to_pos[eid] for eid in canonical_event_ids], dtype=torch.long
+        )
+        aligned = dict(encoded)
+        aligned["event_ids"] = list(canonical_event_ids)
+        if "predictions" in aligned and isinstance(
+            aligned["predictions"], torch.Tensor
+        ):
+            aligned["predictions"] = aligned["predictions"][perm]
+        if "targets" in aligned and isinstance(aligned["targets"], torch.Tensor):
+            aligned["targets"] = aligned["targets"][perm]
+        if " words" in aligned or "words" in aligned:
+            if "words" in aligned and isinstance(aligned["words"], list):
+                aligned["words"] = [aligned["words"][int(i)] for i in perm]
+        if "revision_predictions" in aligned and isinstance(
+            aligned["revision_predictions"], dict
+        ):
+            aligned["revision_predictions"] = {
+                delay: mat[perm]
+                for delay, mat in aligned["revision_predictions"].items()
+            }
+        if "revision_availability_masks" in aligned and isinstance(
+            aligned["revision_availability_masks"], dict
+        ):
+            aligned["revision_availability_masks"] = {
+                delay: mask[perm]
+                for delay, mask in aligned["revision_availability_masks"].items()
+            }
+        return aligned
 
     def _run_encode(shift_sec: float | None, label: str) -> dict:
         if shift_sec is None or abs(float(shift_sec)) <= 1e-9:
@@ -351,7 +396,7 @@ def _encode_stage_with_shifts(
             loader_obj, _ = make_loader(
                 ds_obj, tc, shuffle=False, group_column=grp_col, batch_size=eval_bs
             )
-        return encode_loader(
+        raw_encoded = encode_loader(
             model,
             loader_obj,
             device,
@@ -360,6 +405,7 @@ def _encode_stage_with_shifts(
             show_progress=show_progress,
             progress_desc=f"S3 Export [{stage} | {split} | {label}]",
         )
+        return _align_encoded_to_canonical_events(raw_encoded)
 
     clean_encoded = _run_encode(0.0, "Clean 0s")
     control_encoded = _run_encode(
