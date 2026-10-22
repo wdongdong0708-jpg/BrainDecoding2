@@ -457,12 +457,14 @@ def _build_static_revision_train_table(
     mask_np = np.zeros((n_rows, num_horizons, max_win_len), dtype=np.bool_)
     target_col_np = np.zeros((n_rows, num_horizons), dtype=np.int64)
     valid_delay_np = np.zeros((n_rows, num_horizons), dtype=np.bool_)
+    unique_win_np = np.zeros((n_rows, num_horizons), dtype=np.bool_)
     group_pos_np = np.zeros(n_rows, dtype=np.int64)
 
     for indices in groups:
         g_len = len(indices)
         for cutoff, global_row in enumerate(indices):
             group_pos_np[global_row] = cutoff
+            prev_bounds: tuple[int, int] | None = None
             for h_idx, delay in enumerate(horizons):
                 target_pos = cutoff - delay
                 if target_pos < 0:
@@ -476,6 +478,9 @@ def _build_static_revision_train_table(
                 mask_np[global_row, h_idx, :w_len] = True
                 target_col_np[global_row, h_idx] = int(target_offset)
                 valid_delay_np[global_row, h_idx] = True
+                if (start, stop) != prev_bounds:
+                    unique_win_np[global_row, h_idx] = True
+                    prev_bounds = (start, stop)
 
     return {
         "row_win_global_idx": torch.from_numpy(win_idx_np).to(
@@ -488,6 +493,9 @@ def _build_static_revision_train_table(
             device=device, dtype=torch.long
         ),
         "row_valid_delay": torch.from_numpy(valid_delay_np).to(
+            device=device, dtype=torch.bool
+        ),
+        "row_is_unique_win": torch.from_numpy(unique_win_np).to(
             device=device, dtype=torch.bool
         ),
         "row_group_pos": torch.from_numpy(group_pos_np).to(
@@ -876,6 +884,25 @@ def _run_ff_with_shared_dropout(
     return h
 
 
+def _repeat_target_group_idx(
+    target_group_idx: torch.Tensor | None,
+    num_branches: int,
+    g_len: int,
+) -> torch.Tensor | None:
+    """将单分支目标窗口索引 [Q] 扩展为多分支拼接后的目标窗口索引 [num_branches * Q]。"""
+    if target_group_idx is None or num_branches <= 1:
+        return target_group_idx
+    offsets = (
+        torch.arange(
+            num_branches,
+            device=target_group_idx.device,
+            dtype=torch.long,
+        ).unsqueeze(1)
+        * int(g_len)
+    )
+    return (offsets + target_group_idx.unsqueeze(0)).reshape(-1)
+
+
 def _run_fast_padded_transformer(
     ctx,
     padded: torch.Tensor,
@@ -883,13 +910,18 @@ def _run_fast_padded_transformer(
     *,
     causal_override: bool | None = None,
     target_col_idx: torch.Tensor | None = None,
+    target_group_idx: torch.Tensor | None = None,
     num_branches: int = 1,
     synchronize_dropout_rng: bool = True,
 ) -> torch.Tensor:
     """在已构建好的 [G, L_max, D] 填充张量与 [G, L_max] 掩码上直接执行 Transformer（零 Python 循环）。
 
-    当传入 `target_col_idx`（形状 [G]）且满足直接层循环条件时，第 16 层（末层）仅对
-    每个窗口的目标词位计算 Query、输出投影与 FeedForward，省去末层 80% 冗余计算并直接返回 [G, D]。
+    核心极速优化：
+    1. 有效 Token 紧凑打包（Valid-Token Packing）：将非填充位打包为 [N_valid, D] 贯穿全部 16 层，
+       使得所有 LayerNorm、融合 QKV 投影、to_out 投影与 4x FeedForward 100% 跳过填充零位；
+    2. 融合 QKV / KV 单次大矩阵乘（Fused QKV GEMM）：将每层独立的 to_q/to_k/to_v 合并为单次 GEMM；
+    3. 唯一窗口去重与末层单目标剪枝：前 15 层仅在去重后的唯一窗口 [G] 上计算，第 16 层（末层）
+       仅对目标词位 [Q] 计算 Query、输出投影与 FeedForward，省去末层 80% 冗余计算并直接返回 [Q, D]。
     """
     use_causal_attention = (
         ctx.causal_attention
@@ -900,12 +932,25 @@ def _run_fast_padded_transformer(
         enc = ctx.encoder
         bsz, max_len, dim = padded.shape
         work_dtype = (
-            torch.get_autocast_gpu_dtype()
+            torch.get_autocast_dtype("cuda")
             if (padded.is_cuda and torch.is_autocast_enabled())
             else padded.dtype
         )
-        x = padded.to(dtype=work_dtype)
-        pos = torch.arange(max_len, device=x.device)
+        x_init = padded.to(dtype=work_dtype)
+        valid_flat_idx = mask.reshape(-1).nonzero(as_tuple=False).squeeze(-1)
+        n_valid = int(valid_flat_idx.numel())
+        if n_valid == 0:
+            out_empty = enc.final_norm(x_init)
+            if target_col_idx is not None:
+                win_idx = (
+                    target_group_idx
+                    if target_group_idx is not None
+                    else torch.arange(bsz, device=x_init.device, dtype=torch.long)
+                )
+                return out_empty[win_idx, target_col_idx]
+            return out_empty
+
+        pos = torch.arange(max_len, device=x_init.device)
         if enc.rotary_pos_emb is not None:
             freqs, _ = enc.rotary_pos_emb(pos)
             if freqs.ndim == 3:
@@ -931,13 +976,28 @@ def _run_fast_padded_transformer(
             cos_full = sin_full = cos_t = sin_t = None
 
         key_mask = mask[:, None, None, :]
-        mask_3d = mask.unsqueeze(-1)
         num_layers = len(enc.layers)
-        row_arange = (
-            torch.arange(bsz, device=x.device, dtype=torch.long)
-            if target_col_idx is not None
-            else None
-        )
+        if target_col_idx is not None:
+            num_q = int(target_col_idx.shape[0])
+            win_idx = (
+                target_group_idx
+                if target_group_idx is not None
+                else torch.arange(bsz, device=x_init.device, dtype=torch.long)
+            )
+            target_flat_idx = win_idx * max_len + target_col_idx
+            flat_to_valid = torch.zeros(
+                bsz * max_len, device=x_init.device, dtype=torch.long
+            )
+            flat_to_valid[valid_flat_idx] = torch.arange(
+                n_valid, device=x_init.device, dtype=torch.long
+            )
+            target_valid_idx = flat_to_valid[target_flat_idx]
+        else:
+            num_q = 0
+            target_valid_idx = None
+
+        xv = x_init.reshape(bsz * max_len, dim).index_select(0, valid_flat_idx)
+        x_last = None
 
         for ind, (layer_type, layer_tuple) in enumerate(
             zip(enc.layer_types, enc.layers)
@@ -948,23 +1008,36 @@ def _run_fast_padded_transformer(
             is_last_ff = target_col_idx is not None and ind == num_layers - 1
 
             if is_last_attn:
-                residual = x[row_arange, target_col_idx].unsqueeze(1)
-                x_norm = (
-                    pre_norm(x).to(dtype=work_dtype)
+                residual = xv.index_select(0, target_valid_idx).unsqueeze(1)
+                xv_norm = (
+                    pre_norm(xv).to(dtype=work_dtype)
                     if pre_norm is not None
-                    else x
+                    else xv
                 )
-                q_in = x_norm[row_arange, target_col_idx].unsqueeze(1)
+                q_in = xv_norm.index_select(0, target_valid_idx).unsqueeze(1)
                 heads = int(block.heads)
-                q = block.to_q(q_in).view(bsz, 1, heads, -1).transpose(1, 2)
-                k = block.to_k(x_norm).view(bsz, max_len, heads, -1).transpose(1, 2)
-                v = block.to_v(x_norm).view(bsz, max_len, heads, -1).transpose(1, 2)
+                q = block.to_q(q_in).view(num_q, 1, heads, -1).transpose(1, 2)
+                kv_w = torch.cat((block.to_k.weight, block.to_v.weight), dim=0)
+                kv_valid = F.linear(xv_norm, kv_w)
+                kv_pad = kv_valid.new_zeros((bsz * max_len, kv_valid.shape[-1]))
+                kv_pad.index_copy_(0, valid_flat_idx, kv_valid)
+                k, v = kv_pad.view(bsz, max_len, 2, heads, -1).unbind(dim=2)
+                k = k.transpose(1, 2)
+                v = v.transpose(1, 2)
                 if cos_full is not None:
                     q = _apply_rotary_pos_emb_fast(q, cos_t, sin_t)
                     k = _apply_rotary_pos_emb_fast(k, cos_full, sin_full)
+                if target_group_idx is not None:
+                    k = k.index_select(0, target_group_idx)
+                    v = v.index_select(0, target_group_idx)
+                    last_key_mask = key_mask.index_select(0, target_group_idx)
+                else:
+                    last_key_mask = key_mask
                 scale = q.shape[-1] ** -0.5
                 sim = torch.matmul(q, k.transpose(-1, -2)) * scale
-                sim = sim.masked_fill(~key_mask, -torch.finfo(sim.dtype).max)
+                sim = sim.masked_fill(
+                    ~last_key_mask, -torch.finfo(sim.dtype).max
+                )
                 attn = F.softmax(sim, dim=-1).to(dtype=work_dtype)
                 attn = _apply_siamese_shared_dropout(
                     attn,
@@ -972,19 +1045,19 @@ def _run_fast_padded_transformer(
                     num_branches=num_branches,
                     synchronize_dropout_rng=synchronize_dropout_rng,
                 )
-                out = torch.matmul(attn, v).transpose(1, 2).reshape(bsz, 1, -1)
+                out = torch.matmul(attn, v).transpose(1, 2).reshape(num_q, 1, -1)
                 out = block.to_out(out)
                 if post_branch_norm is not None:
                     out = post_branch_norm(out)
-                x = residual_fn(out, residual).to(dtype=work_dtype)
+                x_last = residual_fn(out, residual).to(dtype=work_dtype)
                 if post_main_norm is not None:
-                    x = post_main_norm(x).to(dtype=work_dtype)
+                    x_last = post_main_norm(x_last).to(dtype=work_dtype)
             elif is_last_ff:
-                residual = x
+                residual = x_last
                 x_norm = (
-                    pre_norm(x).to(dtype=work_dtype)
+                    pre_norm(x_last).to(dtype=work_dtype)
                     if pre_norm is not None
-                    else x
+                    else x_last
                 )
                 out = _run_ff_with_shared_dropout(
                     block,
@@ -994,20 +1067,29 @@ def _run_fast_padded_transformer(
                 )
                 if post_branch_norm is not None:
                     out = post_branch_norm(out)
-                x = residual_fn(out, residual).to(dtype=work_dtype)
+                x_last = residual_fn(out, residual).to(dtype=work_dtype)
                 if post_main_norm is not None:
-                    x = post_main_norm(x).to(dtype=work_dtype)
+                    x_last = post_main_norm(x_last).to(dtype=work_dtype)
             elif layer_type == "a":
-                residual = x
-                x_norm = (
-                    pre_norm(x).to(dtype=work_dtype)
+                xv_norm = (
+                    pre_norm(xv).to(dtype=work_dtype)
                     if pre_norm is not None
-                    else x
+                    else xv
                 )
                 heads = int(block.heads)
-                q = block.to_q(x_norm).view(bsz, max_len, heads, -1).transpose(1, 2)
-                k = block.to_k(x_norm).view(bsz, max_len, heads, -1).transpose(1, 2)
-                v = block.to_v(x_norm).view(bsz, max_len, heads, -1).transpose(1, 2)
+                qkv_w = torch.cat(
+                    (block.to_q.weight, block.to_k.weight, block.to_v.weight),
+                    dim=0,
+                )
+                qkv_valid = F.linear(xv_norm, qkv_w)
+                qkv_pad = qkv_valid.new_zeros(
+                    (bsz * max_len, qkv_valid.shape[-1])
+                )
+                qkv_pad.index_copy_(0, valid_flat_idx, qkv_valid)
+                q, k, v = qkv_pad.view(bsz, max_len, 3, heads, -1).unbind(dim=2)
+                q = q.transpose(1, 2)
+                k = k.transpose(1, 2)
+                v = v.transpose(1, 2)
                 if cos_full is not None:
                     q = _apply_rotary_pos_emb_fast(q, cos_full, sin_full)
                     k = _apply_rotary_pos_emb_fast(k, cos_full, sin_full)
@@ -1021,34 +1103,41 @@ def _run_fast_padded_transformer(
                     num_branches=num_branches,
                     synchronize_dropout_rng=synchronize_dropout_rng,
                 )
-                out = torch.matmul(attn, v).transpose(1, 2).reshape(bsz, max_len, -1)
-                out = block.to_out(out) * mask_3d
-                if post_branch_norm is not None:
-                    out = post_branch_norm(out)
-                x = residual_fn(out, residual).to(dtype=work_dtype)
-                if post_main_norm is not None:
-                    x = post_main_norm(x).to(dtype=work_dtype)
-            else:
-                residual = x
-                x_norm = (
-                    pre_norm(x).to(dtype=work_dtype)
-                    if pre_norm is not None
-                    else x
+                out_pad = (
+                    torch.matmul(attn, v)
+                    .transpose(1, 2)
+                    .reshape(bsz * max_len, -1)
                 )
-                out = _run_ff_with_shared_dropout(
+                out_v = block.to_out(out_pad.index_select(0, valid_flat_idx))
+                if post_branch_norm is not None:
+                    out_v = post_branch_norm(out_v)
+                xv = residual_fn(out_v, xv).to(dtype=work_dtype)
+                if post_main_norm is not None:
+                    xv = post_main_norm(xv).to(dtype=work_dtype)
+            else:
+                xv_norm = (
+                    pre_norm(xv).to(dtype=work_dtype)
+                    if pre_norm is not None
+                    else xv
+                )
+                out_v = _run_ff_with_shared_dropout(
                     block,
-                    x_norm,
+                    xv_norm,
                     num_branches=num_branches,
                     synchronize_dropout_rng=synchronize_dropout_rng,
                 )
                 if post_branch_norm is not None:
-                    out = post_branch_norm(out)
-                x = residual_fn(out, residual).to(dtype=work_dtype)
+                    out_v = post_branch_norm(out_v)
+                xv = residual_fn(out_v, xv).to(dtype=work_dtype)
                 if post_main_norm is not None:
-                    x = post_main_norm(x).to(dtype=work_dtype)
+                    xv = post_main_norm(xv).to(dtype=work_dtype)
 
-        x = enc.final_norm(x)
-        return x.squeeze(1) if target_col_idx is not None else x
+        if target_col_idx is not None:
+            return enc.final_norm(x_last).squeeze(1)
+        xv_final = enc.final_norm(xv)
+        out_full = xv_final.new_zeros((bsz * max_len, dim))
+        out_full.index_copy_(0, valid_flat_idx, xv_final)
+        return out_full.view(bsz, max_len, dim)
 
     max_length = int(padded.shape[1])
     attention_bias = None
@@ -1100,10 +1189,14 @@ def _run_fast_padded_transformer(
             encoder_kwargs["causal"] = True
         encoded = ctx.encoder(encoded, **encoder_kwargs)
     if target_col_idx is not None:
-        row_arange = torch.arange(
-            encoded.shape[0], device=encoded.device, dtype=torch.long
+        win_idx = (
+            target_group_idx
+            if target_group_idx is not None
+            else torch.arange(
+                encoded.shape[0], device=encoded.device, dtype=torch.long
+            )
         )
-        return encoded[row_arange, target_col_idx]
+        return encoded[win_idx, target_col_idx]
     return encoded
 
 
@@ -1114,7 +1207,7 @@ def build_padded_revision_window_plan(
     cutoff_generator=None,
     cutoff_policy: str = "all",
 ) -> dict[str, torch.Tensor]:
-    """在 CPU NumPy 中一次性构建 2D 局部窗口填充索引矩阵 [G, L_max] 与掩码，彻底消除逐窗口 CUDA 小算子循环。"""
+    """在 CPU NumPy 中一次性构建去重后的 2D 局部窗口填充索引矩阵 [G_unique, L_max] 与掩码。"""
     if not getattr(model, "prefix_revision_enabled", False):
         raise ValueError("模型未启用共享前缀回修。")
     if cutoff_policy not in {"sample_one", "all"}:
@@ -1159,6 +1252,7 @@ def build_padded_revision_window_plan(
                 virtual_group += 1
                 continue
 
+            prev_bounds: tuple[int, int] | None = None
             for delay in model.prefix_revision_horizons:
                 target_position = cutoff - delay
                 if target_position < 0:
@@ -1168,13 +1262,15 @@ def build_padded_revision_window_plan(
                 )
                 if stop != cutoff + 1:
                     raise RuntimeError("局部窗口滚动回修训练边界不一致。")
-                win_indices = indices[start:stop]
-                windows.append(win_indices)
-                target_group_indices.append(virtual_group)
+                if (start, stop) != prev_bounds:
+                    win_indices = indices[start:stop]
+                    windows.append(win_indices)
+                    virtual_group += 1
+                    prev_bounds = (start, stop)
+                target_group_indices.append(virtual_group - 1)
                 target_col_indices.append(target_offset)
                 revision_rows.append(indices[target_position])
                 revision_delays.append(delay)
-                virtual_group += 1
 
     num_windows = len(windows)
     max_win_len = max((len(w) for w in windows), default=1)
@@ -1354,6 +1450,7 @@ def forward_revision_from_preextracted(
     cutoff_policy: str = "all",
     synchronize_dropout_rng: bool = True,
     padded_plan: dict[str, torch.Tensor] | None = None,
+    compute_null_grad: bool = True,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor | None,
@@ -1391,7 +1488,8 @@ def forward_revision_from_preextracted(
             )
 
         g_len = int(clean_padded.shape[0])
-        can_prune_last_layer = int(target_col_idx.shape[0]) == g_len
+        q_len = int(target_col_idx.shape[0])
+        base_target_group = None if q_len == g_len else target_group_idx
 
         if not shifted_padded_list:
             clean_out = _run_fast_padded_transformer(
@@ -1399,26 +1497,164 @@ def forward_revision_from_preextracted(
                 clean_padded,
                 mask_2d,
                 causal_override=False,
-                target_col_idx=target_col_idx if can_prune_last_layer else None,
+                target_col_idx=target_col_idx,
+                target_group_idx=base_target_group,
             )
-            if can_prune_last_layer:
-                y_clean = F.normalize(clean_out, dim=-1)
-            else:
-                y_clean = F.normalize(
-                    clean_out[target_group_idx, target_col_idx], dim=-1
-                )
+            y_clean = F.normalize(clean_out, dim=-1)
             return y_clean, None, revision_rows, revision_delays
 
         if _can_use_direct_layer_loop(
             model.context_transformer, use_causal_attention=False
         ):
-            num_branches = 1 + len(shifted_padded_list)
+            num_shifts = len(shifted_padded_list)
+            # 当启用梯度且 M > 1 时，机制 1 (y_tilde) 对 y_shift_mean 施加了 .detach()，
+            # 只有机制 2 (L_null) 对 y_shift_mean 求导。因此仅需将 1 个随机错位分支与 Clean
+            # 合并做带梯度前反向传播（num_branches=2），其余 M-1 个错位分支在 torch.no_grad()
+            # 下共享相同 Dropout RNG 前向计算，通过直通均值估计器 (Straight-Through Mean)
+            # 保证前向 100% 精确等于 M 分支均值、反向提供 L_null 的无偏梯度估计，消去 5/6 错位反向耗时。
+            if torch.is_grad_enabled() and (
+                not compute_null_grad or num_shifts > 1
+            ):
+                cpu_rng_state = (
+                    torch.get_rng_state() if synchronize_dropout_rng else None
+                )
+                cuda_device = (
+                    clean_padded.device.index
+                    if (synchronize_dropout_rng and clean_padded.is_cuda)
+                    else None
+                )
+                cuda_rng_state = (
+                    torch.cuda.get_rng_state(cuda_device)
+                    if cuda_device is not None
+                    else None
+                )
+                fork_devices = [] if cuda_device is None else [cuda_device]
+
+                if not compute_null_grad:
+                    clean_out = _run_fast_padded_transformer(
+                        model.context_transformer,
+                        clean_padded,
+                        mask_2d,
+                        causal_override=False,
+                        target_col_idx=target_col_idx,
+                        target_group_idx=base_target_group,
+                        num_branches=1,
+                        synchronize_dropout_rng=synchronize_dropout_rng,
+                    )
+                    y_clean = F.normalize(clean_out, dim=-1)
+                    with torch.no_grad():
+                        if synchronize_dropout_rng and cpu_rng_state is not None:
+                            with torch.random.fork_rng(devices=fork_devices):
+                                torch.set_rng_state(cpu_rng_state)
+                                if cuda_rng_state is not None:
+                                    torch.cuda.set_rng_state(
+                                        cuda_rng_state, cuda_device
+                                    )
+                                shift_out = _run_fast_padded_transformer(
+                                    model.context_transformer,
+                                    torch.cat(shifted_padded_list, dim=0),
+                                    mask_2d.repeat(num_shifts, 1),
+                                    causal_override=False,
+                                    target_col_idx=target_col_idx.repeat(
+                                        num_shifts
+                                    ),
+                                    target_group_idx=_repeat_target_group_idx(
+                                        base_target_group, num_shifts, g_len
+                                    ),
+                                    num_branches=num_shifts,
+                                    synchronize_dropout_rng=synchronize_dropout_rng,
+                                )
+                        else:
+                            shift_out = _run_fast_padded_transformer(
+                                model.context_transformer,
+                                torch.cat(shifted_padded_list, dim=0),
+                                mask_2d.repeat(num_shifts, 1),
+                                causal_override=False,
+                                target_col_idx=target_col_idx.repeat(num_shifts),
+                                target_group_idx=_repeat_target_group_idx(
+                                    base_target_group, num_shifts, g_len
+                                ),
+                                num_branches=num_shifts,
+                                synchronize_dropout_rng=False,
+                            )
+                        y_shift_mean = (
+                            F.normalize(shift_out, dim=-1)
+                            .view(num_shifts, q_len, -1)
+                            .mean(dim=0)
+                        )
+                    return y_clean, y_shift_mean, revision_rows, revision_delays
+
+                grad_padded = torch.cat(
+                    [clean_padded, shifted_padded_list[0]], dim=0
+                )
+                grad_out = _run_fast_padded_transformer(
+                    model.context_transformer,
+                    grad_padded,
+                    mask_2d.repeat(2, 1),
+                    causal_override=False,
+                    target_col_idx=target_col_idx.repeat(2),
+                    target_group_idx=_repeat_target_group_idx(
+                        base_target_group, 2, g_len
+                    ),
+                    num_branches=2,
+                    synchronize_dropout_rng=synchronize_dropout_rng,
+                )
+                grad_norm = F.normalize(grad_out, dim=-1).view(2, q_len, -1)
+                y_clean = grad_norm[0]
+                y_shift_0 = grad_norm[1]
+
+                num_rest = num_shifts - 1
+                with torch.no_grad():
+                    if synchronize_dropout_rng and cpu_rng_state is not None:
+                        with torch.random.fork_rng(devices=fork_devices):
+                            torch.set_rng_state(cpu_rng_state)
+                            if cuda_rng_state is not None:
+                                torch.cuda.set_rng_state(
+                                    cuda_rng_state, cuda_device
+                                )
+                            rest_out = _run_fast_padded_transformer(
+                                model.context_transformer,
+                                torch.cat(shifted_padded_list[1:], dim=0),
+                                mask_2d.repeat(num_rest, 1),
+                                causal_override=False,
+                                target_col_idx=target_col_idx.repeat(num_rest),
+                                target_group_idx=_repeat_target_group_idx(
+                                    base_target_group, num_rest, g_len
+                                ),
+                                num_branches=num_rest,
+                                synchronize_dropout_rng=synchronize_dropout_rng,
+                            )
+                    else:
+                        rest_out = _run_fast_padded_transformer(
+                            model.context_transformer,
+                            torch.cat(shifted_padded_list[1:], dim=0),
+                            mask_2d.repeat(num_rest, 1),
+                            causal_override=False,
+                            target_col_idx=target_col_idx.repeat(num_rest),
+                            target_group_idx=_repeat_target_group_idx(
+                                base_target_group, num_rest, g_len
+                            ),
+                            num_branches=num_rest,
+                            synchronize_dropout_rng=False,
+                        )
+                    rest_norm = F.normalize(rest_out, dim=-1).view(
+                        num_rest, q_len, -1
+                    )
+                    y_shift_mean_detached = (
+                        y_shift_0.detach() + rest_norm.sum(dim=0)
+                    ) / float(num_shifts)
+
+                y_shift_mean = y_shift_mean_detached + (
+                    y_shift_0 - y_shift_0.detach()
+                )
+                return y_clean, y_shift_mean, revision_rows, revision_delays
+
+            num_branches = 1 + num_shifts
             all_padded = torch.cat([clean_padded, *shifted_padded_list], dim=0)
             all_mask = mask_2d.repeat(num_branches, 1)
-            all_target_col = (
-                target_col_idx.repeat(num_branches)
-                if can_prune_last_layer
-                else None
+            all_target_col = target_col_idx.repeat(num_branches)
+            all_target_group = _repeat_target_group_idx(
+                base_target_group, num_branches, g_len
             )
             all_out = _run_fast_padded_transformer(
                 model.context_transformer,
@@ -1426,20 +1662,13 @@ def forward_revision_from_preextracted(
                 all_mask,
                 causal_override=False,
                 target_col_idx=all_target_col,
+                target_group_idx=all_target_group,
                 num_branches=num_branches,
                 synchronize_dropout_rng=synchronize_dropout_rng,
             )
-            if can_prune_last_layer:
-                all_norm = F.normalize(all_out, dim=-1).view(
-                    num_branches, g_len, -1
-                )
-            else:
-                all_reshaped = all_out.view(
-                    num_branches, g_len, all_out.shape[1], all_out.shape[2]
-                )
-                all_norm = F.normalize(
-                    all_reshaped[:, target_group_idx, target_col_idx], dim=-1
-                )
+            all_norm = F.normalize(all_out, dim=-1).view(
+                num_branches, q_len, -1
+            )
             y_clean = all_norm[0]
             y_shift_mean = all_norm[1:].mean(dim=0)
             return y_clean, y_shift_mean, revision_rows, revision_delays
@@ -1578,6 +1807,7 @@ def forward_context_from_preextracted(
     shifted_z_batches: list[torch.Tensor] | None = None,
     synchronize_dropout_rng: bool = True,
     padded_plan: dict[str, torch.Tensor] | None = None,
+    compute_null_grad: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """针对 Stage 2.1 (context) 在预提取 CNN 特征上运行共享 Transformer，返回 (y_clean, y_shift_mean)。"""
     if _can_use_fast_padded_transformer(model):
@@ -1611,8 +1841,117 @@ def forward_context_from_preextracted(
                 F.pad(shift_z, (0, 0, 0, 1))[win_idx_2d]
                 for shift_z in shifted_z_batches
             ]
-            num_branches = 1 + len(shifted_padded_list)
+            num_shifts = len(shifted_padded_list)
             g_len = int(clean_padded.shape[0])
+            max_len = int(clean_padded.shape[1])
+
+            if torch.is_grad_enabled() and (
+                not compute_null_grad or num_shifts > 1
+            ):
+                cpu_rng_state = (
+                    torch.get_rng_state() if synchronize_dropout_rng else None
+                )
+                cuda_device = (
+                    clean_padded.device.index
+                    if (synchronize_dropout_rng and clean_padded.is_cuda)
+                    else None
+                )
+                cuda_rng_state = (
+                    torch.cuda.get_rng_state(cuda_device)
+                    if cuda_device is not None
+                    else None
+                )
+                fork_devices = [] if cuda_device is None else [cuda_device]
+
+                if not compute_null_grad:
+                    clean_encoded = _run_fast_padded_transformer(
+                        model.context_transformer,
+                        clean_padded,
+                        mask_2d,
+                        num_branches=1,
+                        synchronize_dropout_rng=synchronize_dropout_rng,
+                    )
+                    y_clean = F.normalize(
+                        clean_encoded[row_to_group, row_to_col], dim=-1
+                    )
+                    with torch.no_grad():
+                        if synchronize_dropout_rng and cpu_rng_state is not None:
+                            with torch.random.fork_rng(devices=fork_devices):
+                                torch.set_rng_state(cpu_rng_state)
+                                if cuda_rng_state is not None:
+                                    torch.cuda.set_rng_state(
+                                        cuda_rng_state, cuda_device
+                                    )
+                                shift_encoded = _run_fast_padded_transformer(
+                                    model.context_transformer,
+                                    torch.cat(shifted_padded_list, dim=0),
+                                    mask_2d.repeat(num_shifts, 1),
+                                    num_branches=num_shifts,
+                                    synchronize_dropout_rng=synchronize_dropout_rng,
+                                ).view(num_shifts, g_len, max_len, -1)
+                        else:
+                            shift_encoded = _run_fast_padded_transformer(
+                                model.context_transformer,
+                                torch.cat(shifted_padded_list, dim=0),
+                                mask_2d.repeat(num_shifts, 1),
+                                num_branches=num_shifts,
+                                synchronize_dropout_rng=False,
+                            ).view(num_shifts, g_len, max_len, -1)
+                        y_shift_mean = F.normalize(
+                            shift_encoded[:, row_to_group, row_to_col], dim=-1
+                        ).mean(dim=0)
+                    return y_clean, y_shift_mean
+
+                grad_encoded = _run_fast_padded_transformer(
+                    model.context_transformer,
+                    torch.cat([clean_padded, shifted_padded_list[0]], dim=0),
+                    mask_2d.repeat(2, 1),
+                    num_branches=2,
+                    synchronize_dropout_rng=synchronize_dropout_rng,
+                ).view(2, g_len, max_len, -1)
+                grad_norm = F.normalize(
+                    grad_encoded[:, row_to_group, row_to_col], dim=-1
+                )
+                y_clean = grad_norm[0]
+                y_shift_0 = grad_norm[1]
+
+                num_rest = num_shifts - 1
+                with torch.no_grad():
+                    if synchronize_dropout_rng and cpu_rng_state is not None:
+                        with torch.random.fork_rng(devices=fork_devices):
+                            torch.set_rng_state(cpu_rng_state)
+                            if cuda_rng_state is not None:
+                                torch.cuda.set_rng_state(
+                                    cuda_rng_state, cuda_device
+                                )
+                            rest_encoded = _run_fast_padded_transformer(
+                                model.context_transformer,
+                                torch.cat(shifted_padded_list[1:], dim=0),
+                                mask_2d.repeat(num_rest, 1),
+                                num_branches=num_rest,
+                                synchronize_dropout_rng=synchronize_dropout_rng,
+                            ).view(num_rest, g_len, max_len, -1)
+                    else:
+                        rest_encoded = _run_fast_padded_transformer(
+                            model.context_transformer,
+                            torch.cat(shifted_padded_list[1:], dim=0),
+                            mask_2d.repeat(num_rest, 1),
+                            num_branches=num_rest,
+                            synchronize_dropout_rng=False,
+                        ).view(num_rest, g_len, max_len, -1)
+                    rest_norm = F.normalize(
+                        rest_encoded[:, row_to_group, row_to_col], dim=-1
+                    )
+                    y_shift_mean_detached = (
+                        y_shift_0.detach() + rest_norm.sum(dim=0)
+                    ) / float(num_shifts)
+
+                y_shift_mean = y_shift_mean_detached + (
+                    y_shift_0 - y_shift_0.detach()
+                )
+                return y_clean, y_shift_mean
+
+            num_branches = 1 + num_shifts
             all_padded = torch.cat([clean_padded, *shifted_padded_list], dim=0)
             all_mask = mask_2d.repeat(num_branches, 1)
             all_encoded = _run_fast_padded_transformer(
@@ -1621,7 +1960,7 @@ def forward_context_from_preextracted(
                 all_mask,
                 num_branches=num_branches,
                 synchronize_dropout_rng=synchronize_dropout_rng,
-            ).view(num_branches, g_len, clean_padded.shape[1], -1)
+            ).view(num_branches, g_len, max_len, -1)
             all_norm = F.normalize(
                 all_encoded[:, row_to_group, row_to_col], dim=-1
             )
@@ -1809,28 +2148,41 @@ def train_one_epoch_siamese_debiased(
         p for p in model.parameters() if p.requires_grad
     ]
 
-    total_loss_sum = 0.0
-    siglip_loss_sum = 0.0
-    null_loss_sum = 0.0
+    total_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
+    siglip_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
+    null_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
     sample_count = 0
     optimizer_updates = 0
     batches_seen = 0
     revision_supervision_count = 0
-    revision_delay_counts = {d: 0 for d in horizons}
-    revision_delay_siglip_sums = {d: 0.0 for d in horizons}
-    revision_delay_null_sums = {d: 0.0 for d in horizons}
-    revision_delay_batches = {d: 0 for d in horizons}
+    delay_counts_gpu = {
+        d: torch.zeros((), device=device, dtype=torch.long) for d in horizons
+    }
+    delay_siglip_sums_gpu = {
+        d: torch.zeros((), device=device, dtype=torch.float64) for d in horizons
+    }
+    delay_null_sums_gpu = {
+        d: torch.zeros((), device=device, dtype=torch.float64) for d in horizons
+    }
+    delay_batches_gpu = {
+        d: torch.zeros((), device=device, dtype=torch.long) for d in horizons
+    }
+    max_horizon = max(horizons, default=0)
+    compute_null_grad = bool(
+        siamese_enabled and lambda_null > 0.0 and centered_vocab_bank is not None
+    )
 
     current_lr = (
         float(optimizer.param_groups[0].get("lr", 0.0))
         if getattr(optimizer, "param_groups", None)
         else 0.0
     )
+    total_batches = len(batch_sampler)
     iterable, pbar = _wrap_progress(
         batch_sampler,
         enabled=show_progress,
         desc=progress_desc or f"Epoch {int(epoch_index) + 1:02d} [siamese]",
-        total=len(batch_sampler),
+        total=total_batches,
     )
 
     try:
@@ -1838,36 +2190,48 @@ def train_one_epoch_siamese_debiased(
             idx_tensor = torch.as_tensor(
                 batch_indices, device=device, dtype=torch.long
             )
+            bs_len = int(len(idx_tensor))
             batch_targets = targets_all[idx_tensor]
             batch_sentence_indices = sentence_indices_all[idx_tensor]
 
             chosen_keys: list[float] = []
             if siamese_enabled:
-                if shifts_per_step >= len(shift_keys):
-                    chosen_keys = shift_keys
-                else:
-                    perm = torch.randperm(
-                        len(shift_keys), generator=shift_sample_generator
-                    )[:shifts_per_step].tolist()
-                    chosen_keys = [shift_keys[i] for i in perm]
+                perm = torch.randperm(
+                    len(shift_keys), generator=shift_sample_generator
+                )[: min(shifts_per_step, len(shift_keys))].tolist()
+                chosen_keys = [shift_keys[i] for i in perm]
 
             if use_static_rev_table:
                 valid_2d = static_rev_table["row_valid_delay"][idx_tensor]
+                unique_col = static_rev_table.get("row_is_unique_win")
+                if unique_col is not None:
+                    win_sel_2d = unique_col[idx_tensor]
+                    target_group_idx = (
+                        torch.cumsum(win_sel_2d.view(-1), dim=0).view_as(
+                            valid_2d
+                        )
+                        - 1
+                    )[valid_2d]
+                else:
+                    win_sel_2d = valid_2d
+                    target_group_idx = torch.arange(
+                        int(valid_2d.sum()), device=device, dtype=torch.long
+                    )
                 win_global_2d = static_rev_table["row_win_global_idx"][
                     idx_tensor
-                ][valid_2d]
+                ][win_sel_2d]
                 mask_2d = static_rev_table["row_win_mask"][idx_tensor][
-                    valid_2d
+                    win_sel_2d
                 ]
                 target_col_idx = static_rev_table["row_target_col"][
                     idx_tensor
                 ][valid_2d]
                 horizons_t = static_rev_table["horizons_tensor"]
                 b_arange = torch.arange(
-                    len(idx_tensor), device=device, dtype=torch.long
+                    bs_len, device=device, dtype=torch.long
                 ).unsqueeze(1)
                 revision_delays_plan = horizons_t.unsqueeze(0).expand(
-                    len(idx_tensor), -1
+                    bs_len, -1
                 )[valid_2d]
                 revision_rows_plan = (b_arange - horizons_t.unsqueeze(0))[
                     valid_2d
@@ -1885,9 +2249,7 @@ def train_one_epoch_siamese_debiased(
                     "clean_padded": clean_padded,
                     "shifted_padded_list": shifted_padded_list,
                     "mask_2d": mask_2d,
-                    "target_group_idx": torch.arange(
-                        len(target_col_idx), device=device, dtype=torch.long
-                    ),
+                    "target_group_idx": target_group_idx,
                     "target_col_idx": target_col_idx,
                     "revision_rows": revision_rows_plan,
                     "revision_delays": revision_delays_plan,
@@ -1924,6 +2286,7 @@ def train_one_epoch_siamese_debiased(
                         cutoff_policy=cutoff_policy,
                         synchronize_dropout_rng=sync_rng,
                         padded_plan=padded_plan,
+                        compute_null_grad=compute_null_grad,
                     )
                     if siamese_enabled and y_shift_mean is not None:
                         # 雅可比模长阻尼重缩放（Norm-Damped Detach）：
@@ -1938,22 +2301,20 @@ def train_one_epoch_siamese_debiased(
                     horizon_total_losses = []
                     horizon_siglip_losses = []
                     horizon_null_losses = []
+                    skip_empty_check = (
+                        use_static_rev_table and bs_len > max_horizon * 2
+                    )
                     for delay in horizons:
                         delay_mask = revision_delays == delay
-                        d_count = int(delay_mask.sum())
-                        if d_count == 0:
+                        d_count_t = delay_mask.sum()
+                        if not skip_empty_check and int(d_count_t) == 0:
                             continue
                         d_siglip = loss_module.forward_rectangular(
                             y_tilde[delay_mask],
                             batch_targets,
                             revision_rows[delay_mask],
                         )
-                        if (
-                            siamese_enabled
-                            and y_shift_mean is not None
-                            and lambda_null > 0.0
-                            and centered_vocab_bank is not None
-                        ):
+                        if compute_null_grad and y_shift_mean is not None:
                             d_null = compute_shift_null_loss(
                                 y_shift_mean[delay_mask], centered_vocab_bank
                             )
@@ -1961,28 +2322,24 @@ def train_one_epoch_siamese_debiased(
                             d_null = d_siglip * 0.0
                         d_total = d_siglip + lambda_null * d_null
                         horizon_total_losses.append(d_total)
-                        horizon_siglip_losses.append(d_siglip)
-                        horizon_null_losses.append(d_null)
+                        horizon_siglip_losses.append(d_siglip.detach())
+                        horizon_null_losses.append(d_null.detach())
 
-                        revision_delay_counts[delay] += d_count
-                        revision_delay_siglip_sums[delay] += float(
-                            d_siglip.detach()
+                        delay_counts_gpu[delay] += d_count_t
+                        delay_siglip_sums_gpu[delay] += d_siglip.detach().to(
+                            dtype=torch.float64
                         )
-                        revision_delay_null_sums[delay] += float(
-                            d_null.detach()
+                        delay_null_sums_gpu[delay] += d_null.detach().to(
+                            dtype=torch.float64
                         )
-                        revision_delay_batches[delay] += 1
+                        delay_batches_gpu[delay] += 1
 
                     if not horizon_total_losses:
                         raise RuntimeError("当前 batch 没有可用的滚动回修监督。")
                     loss = torch.stack(horizon_total_losses).mean()
-                    batch_siglip = float(
-                        torch.stack(horizon_siglip_losses).mean().detach()
-                    )
-                    batch_null = float(
-                        torch.stack(horizon_null_losses).mean().detach()
-                    )
-                    revision_supervision_count += int(len(y_tilde))
+                    batch_siglip_t = torch.stack(horizon_siglip_losses).mean()
+                    batch_null_t = torch.stack(horizon_null_losses).mean()
+                    revision_supervision_count += int(y_tilde.shape[0])
                 else:
                     y_clean, y_shift_mean = forward_context_from_preextracted(
                         model,
@@ -1990,6 +2347,7 @@ def train_one_epoch_siamese_debiased(
                         batch_sentence_indices,
                         shifted_z_batches=shifted_z_batches,
                         synchronize_dropout_rng=sync_rng,
+                        compute_null_grad=compute_null_grad,
                     )
                     if siamese_enabled and y_shift_mean is not None:
                         # 雅可比模长阻尼重缩放（Norm-Damped Detach）
@@ -1999,20 +2357,15 @@ def train_one_epoch_siamese_debiased(
                     else:
                         y_tilde = y_clean
                     d_siglip = loss_module(y_tilde, batch_targets)
-                    if (
-                        siamese_enabled
-                        and y_shift_mean is not None
-                        and lambda_null > 0.0
-                        and centered_vocab_bank is not None
-                    ):
+                    if compute_null_grad and y_shift_mean is not None:
                         d_null = compute_shift_null_loss(
                             y_shift_mean, centered_vocab_bank
                         )
                     else:
                         d_null = d_siglip * 0.0
                     loss = d_siglip + lambda_null * d_null
-                    batch_siglip = float(d_siglip.detach())
-                    batch_null = float(d_null.detach())
+                    batch_siglip_t = d_siglip.detach()
+                    batch_null_t = d_null.detach()
 
             scaler.scale(loss).backward()
             max_grad_norm = float(training_config.get("max_grad_norm", 0.0))
@@ -2023,24 +2376,31 @@ def train_one_epoch_siamese_debiased(
                     max_grad_norm,
                     foreach=True if device.type == "cuda" else None,
                 )
-            previous_scale = float(scaler.get_scale())
-            scaler.step(optimizer)
-            scaler.update()
-            batches_seen += 1
-            if not scaler.is_enabled() or float(scaler.get_scale()) >= previous_scale:
+            if scaler.is_enabled():
+                previous_scale = float(scaler.get_scale())
+                scaler.step(optimizer)
+                scaler.update()
+                if float(scaler.get_scale()) >= previous_scale:
+                    optimizer_updates += 1
+            else:
+                optimizer.step()
                 optimizer_updates += 1
+            batches_seen += 1
 
-            bs_len = len(idx_tensor)
-            loss_val = float(loss.detach())
-            total_loss_sum += loss_val * bs_len
-            siglip_loss_sum += batch_siglip * bs_len
-            null_loss_sum += batch_null * bs_len
+            total_loss_gpu += loss.detach().to(dtype=torch.float64) * bs_len
+            siglip_loss_gpu += batch_siglip_t.to(dtype=torch.float64) * bs_len
+            null_loss_gpu += batch_null_t.to(dtype=torch.float64) * bs_len
             sample_count += bs_len
 
-            if pbar is not None:
-                running_tot = total_loss_sum / max(1, sample_count)
-                running_sig = siglip_loss_sum / max(1, sample_count)
-                running_nul = null_loss_sum / max(1, sample_count)
+            if pbar is not None and (
+                batches_seen == 1
+                or batches_seen % 10 == 0
+                or batches_seen == total_batches
+            ):
+                denom_cur = max(1, sample_count)
+                running_tot = float(total_loss_gpu.item()) / denom_cur
+                running_sig = float(siglip_loss_gpu.item()) / denom_cur
+                running_nul = float(null_loss_gpu.item()) / denom_cur
                 pbar.set_postfix(
                     loss=f"{running_tot:.4f}",
                     siglip=f"{running_sig:.4f}",
@@ -2053,6 +2413,21 @@ def train_one_epoch_siamese_debiased(
             pbar.close()
 
     denom = max(1, sample_count)
+    total_loss_sum = float(total_loss_gpu.item())
+    siglip_loss_sum = float(siglip_loss_gpu.item())
+    null_loss_sum = float(null_loss_gpu.item())
+    revision_delay_counts = {
+        d: int(delay_counts_gpu[d].item()) for d in horizons
+    }
+    revision_delay_siglip_sums = {
+        d: float(delay_siglip_sums_gpu[d].item()) for d in horizons
+    }
+    revision_delay_null_sums = {
+        d: float(delay_null_sums_gpu[d].item()) for d in horizons
+    }
+    revision_delay_batches = {
+        d: int(delay_batches_gpu[d].item()) for d in horizons
+    }
     diagnostics = {
         "mode": "siamese_debiased" if siamese_enabled else "preextracted_frozen_cnn",
         "siamese_debiased_enabled": siamese_enabled,
