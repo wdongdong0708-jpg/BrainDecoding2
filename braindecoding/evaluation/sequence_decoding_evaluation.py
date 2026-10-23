@@ -813,6 +813,111 @@ def plot_baseline_and_shifted_comparison(
     }
 
 
+def _backfill_intermediate_and_shifted_bundles(
+    decoded_bundles: Mapping[str, dict],
+) -> dict[str, dict]:
+    """若历史解码产物未单独显式保存 K1（C1）或 K0_shifted_neg75s，则从流式轨迹中零开销回填。"""
+    bundles: dict[str, dict] = dict(decoded_bundles)
+
+    s3_clean = bundles.get("S3_clean") or bundles.get("S3")
+    if "K1" not in bundles and s3_clean is not None:
+        histories = s3_clean.get("screen_histories") or []
+        sentences = s3_clean.get("final_sentences") or []
+        if histories:
+            k1_records: list[dict] = []
+            for idx, hist in enumerate(histories):
+                trajs = hist.get("position_trajectories") or []
+                k1_words = [
+                    str(
+                        t.get("k1_word")
+                        if t.get("k1_word") is not None
+                        else t.get("k0_word", "")
+                    )
+                    for t in trajs
+                ]
+                base_rec = sentences[idx] if idx < len(sentences) else hist
+                k1_records.append(
+                    {
+                        "segment_index": hist.get(
+                            "segment_index", base_rec.get("segment_index", idx)
+                        ),
+                        "group_id": hist.get(
+                            "group_id", base_rec.get("group_id", "")
+                        ),
+                        "subject_id": hist.get(
+                            "subject_id", base_rec.get("subject_id", "")
+                        ),
+                        "reference_words": list(
+                            hist.get(
+                                "reference_words",
+                                base_rec.get("reference_words", []),
+                            )
+                        ),
+                        "predicted_words": k1_words,
+                        "in_vocabulary_mask": list(
+                            hist.get(
+                                "in_vocabulary_mask",
+                                base_rec.get(
+                                    "in_vocabulary_mask",
+                                    [True] * len(k1_words),
+                                ),
+                            )
+                        ),
+                    }
+                )
+            bundles["K1"] = {
+                "condition": "K1",
+                "alignment": "clean",
+                "segment_count": len(k1_records),
+                "mean_seconds_per_segment": float(
+                    s3_clean.get("mean_seconds_per_segment", 0.0)
+                ),
+                "final_sentences": k1_records,
+                "screen_histories": [],
+            }
+
+    s3_shifted = bundles.get("S3_shifted_neg75s")
+    if "K0_shifted_neg75s" not in bundles and s3_shifted is not None:
+        shifted_sents = s3_shifted.get("final_sentences") or []
+        shifted_hists = s3_shifted.get("screen_histories") or []
+        k0_shifted_records: list[dict] = []
+        for idx, rec in enumerate(shifted_sents):
+            init_k0 = rec.get("initial_k0_words")
+            if not init_k0 and idx < len(shifted_hists):
+                trajs = shifted_hists[idx].get("position_trajectories") or []
+                init_k0 = [str(t.get("k0_word", "")) for t in trajs]
+            if init_k0 is None:
+                continue
+            k0_shifted_records.append(
+                {
+                    "segment_index": rec.get("segment_index", idx),
+                    "group_id": rec.get("group_id", ""),
+                    "subject_id": rec.get("subject_id", ""),
+                    "reference_words": list(rec.get("reference_words", [])),
+                    "predicted_words": list(init_k0),
+                    "in_vocabulary_mask": list(
+                        rec.get(
+                            "in_vocabulary_mask",
+                            [True] * len(rec.get("reference_words", [])),
+                        )
+                    ),
+                }
+            )
+        if k0_shifted_records:
+            bundles["K0_shifted_neg75s"] = {
+                "condition": "K0",
+                "alignment": "shifted",
+                "segment_count": len(k0_shifted_records),
+                "mean_seconds_per_segment": float(
+                    s3_shifted.get("mean_seconds_per_segment", 0.0)
+                ),
+                "final_sentences": k0_shifted_records,
+                "screen_histories": [],
+            }
+
+    return bundles
+
+
 def evaluate_and_export_sequence_decoding(
     decoded_bundles: Mapping[str, dict],
     *,
@@ -824,15 +929,18 @@ def evaluate_and_export_sequence_decoding(
     tau_grid: Sequence[float] = DEFAULT_TAU_GATE_GRID,
     plot: bool = True,
 ) -> dict:
-    """汇总各解码条件（LM-Only, S0, K0, S3, F 及 Shifted -75s），输出 6 维指标表与 C-gated 帕累托分析。"""
+    """汇总各解码条件（LM-Only, S0, K0, K1, S3, F 及 Shifted -75s），输出 6 维指标表与 C-gated 帕累托分析。"""
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    expanded_bundles = _backfill_intermediate_and_shifted_bundles(
+        decoded_bundles
+    )
     condition_summaries: dict[str, dict] = {}
     pareto_results: dict[str, dict] = {}
     figure_paths: dict[str, str] = {}
 
-    for key, bundle in decoded_bundles.items():
+    for key, bundle in expanded_bundles.items():
         records = bundle["final_sentences"]
         metrics_6d = evaluate_six_dimensional_metrics(
             records,
@@ -878,6 +986,28 @@ def evaluate_and_export_sequence_decoding(
                         pareto, out_dir, dataset=dataset, split=split
                     )
                 )
+
+    canonical_order = (
+        "LM-Only",
+        "S0",
+        "K0",
+        "K1",
+        "S3_clean",
+        "S3_clean_c_gated",
+        "F",
+        "F_local",
+        "K0_shifted_neg75s",
+        "S3_shifted_neg75s",
+        "S3_shifted_neg75s_c_gated",
+    )
+    ordered_summaries: dict[str, dict] = {}
+    for k in canonical_order:
+        if k in condition_summaries:
+            ordered_summaries[k] = condition_summaries[k]
+    for k, v in condition_summaries.items():
+        if k not in ordered_summaries:
+            ordered_summaries[k] = v
+    condition_summaries = ordered_summaries
 
     if plot and condition_summaries:
         figure_paths.update(

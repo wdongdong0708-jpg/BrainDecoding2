@@ -464,7 +464,15 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
         decoded_bundles: dict[str, Any] = {}
         available_clean = split_payload.get("clean_scores", {})
-        for baseline_mode in ("LM-Only", "S0", "K0"):
+        available_shifted = split_payload.get("shifted_scores", {})
+        ckpt_prov = dict(split_payload.get("checkpoint_provenance") or {})
+        f_mode = (
+            "F_local_fallback"
+            if ckpt_prov.get("context")
+            in (None, "", "fallback_from_revision_mature")
+            else "F_full_context"
+        )
+        for baseline_mode in ("LM-Only", "S0", "K0", "K1"):
             if baseline_mode != "LM-Only" and baseline_mode not in available_clean:
                 continue
             decoded_bundles[baseline_mode] = decode_dataset_segments(
@@ -506,7 +514,21 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 segment_batch_size=segment_batch_size,
                 max_segments=args.max_segments,
                 show_progress=show_progress,
-                progress_desc=f"S3 Decode [F | {args.split}]",
+                progress_desc=f"S3 Decode [F ({f_mode}) | {args.split}]",
+            )
+        if "K0" in available_shifted:
+            decoded_bundles["K0_shifted_neg75s"] = decode_dataset_segments(
+                split_payload,
+                scorer,
+                hyperparameters,
+                condition="K0",
+                alignment="shifted",
+                beam_width=beam_width,
+                candidate_top_k=top_k,
+                segment_batch_size=segment_batch_size,
+                max_segments=args.max_segments,
+                show_progress=show_progress,
+                progress_desc=f"S3 Decode [K0_shifted_-75s | {args.split}]",
             )
         decoded_bundles["S3_shifted_neg75s"] = decode_dataset_segments(
             split_payload,
@@ -528,6 +550,8 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             "split": args.split,
             "seed": int(args.seed),
             "language": "fr" if args.dataset == "pallier2025" else "zh",
+            "checkpoint_provenance": ckpt_prov,
+            "f_condition_mode": f_mode,
             "state_hyperparameters": hyperparameters.get("states", hyperparameters),
             "decoded_bundles": decoded_bundles,
         }
@@ -537,6 +561,8 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             encoding="utf-8",
         )
         results_summary["decoding_path"] = str(decoding_path)
+        results_summary["checkpoint_provenance"] = ckpt_prov
+        results_summary["f_condition_mode"] = f_mode
 
     if args.step in ("evaluate", "all"):
         bundle = json.loads(decoding_path.read_text(encoding="utf-8"))

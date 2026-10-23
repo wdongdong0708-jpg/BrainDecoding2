@@ -248,7 +248,7 @@ def test_confidence_gate_pareto_sweep_and_export(tmp_path: Path) -> None:
             ],
             "screen_histories": [],
         },
-        "S3_shifted": {
+        "S3_shifted_neg75s": {
             "condition": "S3",
             "alignment": "shifted",
             "mean_seconds_per_segment": 0.02,
@@ -262,6 +262,7 @@ def test_confidence_gate_pareto_sweep_and_export(tmp_path: Path) -> None:
                     "block_id": "chapter-02|block-000",
                     "reference_words": ["王子", "说", "你好"],
                     "predicted_words": ["星球", "看", "狐狸"],
+                    "initial_k0_words": ["狐狸", "看", "狐狸"],
                     "in_vocabulary_mask": [True, True, True],
                     "elapsed_seconds": 0.02,
                 }
@@ -279,6 +280,8 @@ def test_confidence_gate_pareto_sweep_and_export(tmp_path: Path) -> None:
         tau_grid=DEFAULT_TAU_GATE_GRID,
         plot=True,
     )
+    assert "K1" in report["conditions"]
+    assert "K0_shifted_neg75s" in report["conditions"]
     assert "S3_clean" in report["conditions"]
     assert "S3_clean_c_gated" in report["conditions"]
     assert (tmp_path / "eval_out" / "s3_evaluation_summary_val.json").exists()
