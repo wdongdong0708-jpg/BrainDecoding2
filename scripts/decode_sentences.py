@@ -200,6 +200,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="禁用 tqdm 实时进度条",
     )
     parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="输出原始 JSON 而非格式化对比表格",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="强制重跑全部步骤，忽略已保存的匹配缓存与中间解码产物",
@@ -866,10 +872,26 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         results_summary["f_condition_mode"] = f_mode
 
     if args.step in ("evaluate", "all"):
+        from braindecoding.evaluation.sequence_decoding_evaluation import (
+            format_sequence_decoding_report,
+        )
+
         bundle = json.loads(decoding_path.read_text(encoding="utf-8"))
         language = str(
             bundle.get("language", "fr" if args.dataset == "pallier2025" else "zh")
         )
+        if "state_hyperparameters" not in results_summary and bundle.get(
+            "state_hyperparameters"
+        ):
+            results_summary["state_hyperparameters"] = bundle[
+                "state_hyperparameters"
+            ]
+        if "f_condition_mode" not in results_summary and bundle.get(
+            "f_condition_mode"
+        ):
+            results_summary["f_condition_mode"] = bundle["f_condition_mode"]
+        if "decoding_path" not in results_summary:
+            results_summary["decoding_path"] = str(decoding_path)
         decoded_bundles_map = dict(bundle.get("decoded_bundles") or {})
         multi_subject_bundles_map = dict(bundle.get("multi_subject_bundles") or {})
         vocabulary_scaling_bundles_map = dict(
@@ -931,15 +953,32 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             "vocabulary_scaling", {}
         )
         results_summary["figures"] = eval_report["figures"]
+        report_txt_path = (
+            paths["evaluation_dir"] / f"s3_evaluation_report_{args.split}.txt"
+        )
+        report_txt_path.write_text(
+            format_sequence_decoding_report(results_summary) + "\n",
+            encoding="utf-8",
+        )
+        results_summary["report_txt_path"] = str(report_txt_path)
 
     return results_summary
 
 
 def main(argv: list[str] | None = None) -> int:
+    from braindecoding.evaluation.sequence_decoding_evaluation import (
+        print_sequence_decoding_report,
+    )
+
     parser = build_parser()
     args = parser.parse_args(argv)
     summary = run_sequence_decoding_pipeline(args)
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if bool(getattr(args, "json_output", False)) or (
+        "conditions" not in summary and "vocabulary_scaling" not in summary
+    ):
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+    else:
+        print_sequence_decoding_report(summary)
     return 0
 
 

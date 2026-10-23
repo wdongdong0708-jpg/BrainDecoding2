@@ -730,10 +730,18 @@ def _workflow_eval(args) -> int:
 
 
 def _workflow_decode_sentences(args) -> int:
+    from braindecoding.evaluation.sequence_decoding_evaluation import (
+        print_sequence_decoding_report,
+    )
     from scripts.decode_sentences import run_sequence_decoding_pipeline
 
     summary = run_sequence_decoding_pipeline(args)
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if bool(getattr(args, "json_output", False)) or (
+        "conditions" not in summary and "vocabulary_scaling" not in summary
+    ):
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+    else:
+        print_sequence_decoding_report(summary)
     return 0
 
 
@@ -855,6 +863,7 @@ def build_parser() -> argparse.ArgumentParser:
     decode_cmd.add_argument("--no-bertscore", action="store_true", help="禁用预计算词向量计算 BERTScore")
     decode_cmd.add_argument("--no-plot", action="store_true", help="禁用可视化图表生成")
     decode_cmd.add_argument("--no-progress", action="store_true", help="禁用 tqdm 实时进度条")
+    decode_cmd.add_argument("--json", dest="json_output", action="store_true", help="输出原始 JSON 而非格式化对比表格")
     decode_cmd.add_argument("--force", action="store_true", help="强制重跑全部步骤，忽略已保存的匹配缓存与中间解码产物")
     decode_cmd.add_argument("--device", default=None, help="计算设备（cuda / cpu）")
 

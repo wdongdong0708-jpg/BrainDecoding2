@@ -423,4 +423,12 @@ def test_core_vocabulary_subsets_and_scaling_curve_export(tmp_path: Path) -> Non
     assert (
         tmp_path / "scaling_eval_out" / "s3_vocabulary_scaling_test.png"
     ).exists()
+    txt_report_path = (
+        tmp_path / "scaling_eval_out" / "s3_evaluation_report_test.txt"
+    )
+    assert txt_report_path.exists()
+    txt_content = txt_report_path.read_text(encoding="utf-8")
+    assert "[表 1]" in txt_content
+    assert "[表 2]" in txt_content
+    assert "[表 4A]" in txt_content
 

@@ -1831,4 +1831,359 @@ def evaluate_and_export_sequence_decoding(
         "figures": figure_paths,
     }
     save_json(out_dir / f"s3_evaluation_summary_{split}.json", report)
+    report_txt = format_sequence_decoding_report(report)
+    (out_dir / f"s3_evaluation_report_{split}.txt").write_text(
+        report_txt + "\n", encoding="utf-8"
+    )
     return report
+
+
+def _fmt_pct(val: object, width: int = 7) -> str:
+    if val is None or val == "":
+        return "-".rjust(width)
+    try:
+        return f"{float(val):{width}.2f}"
+    except (TypeError, ValueError):
+        return "-".rjust(width)
+
+
+def _fmt_signed_pct(val: object, width: int = 7) -> str:
+    if val is None or val == "":
+        return "-".rjust(width)
+    try:
+        return f"{float(val):+{width}.2f}"
+    except (TypeError, ValueError):
+        return "-".rjust(width)
+
+
+def _format_conditions_table(
+    conds_map: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    lines: list[str] = []
+    header = (
+        f"{'Condition':<25} | {'BLEU-1':>7} | {'CorpBLEU':>8} | {'OraclBLEU':>9} | "
+        f"{'WordAcc':>7} | {'InVocAcc':>8} | {'Acc@5':>7} | {'ContAcc':>7} | "
+        f"{'FuncAcc':>7} | {'WER(%)':>7} | {'CER(%)':>7} | {'BERT-F1':>7}"
+    )
+    sep = "-" * len(header)
+    lines.append(sep)
+    lines.append(header)
+    lines.append(sep)
+    for cond_name, m in conds_map.items():
+        if not isinstance(m, Mapping):
+            continue
+        lines.append(
+            f"{str(cond_name):<25} | "
+            f"{_fmt_pct(m.get('bleu1_pct'), 7)} | "
+            f"{_fmt_pct(m.get('corpus_bleu1_pct'), 8)} | "
+            f"{_fmt_pct(m.get('beam_oracle_bleu1_pct'), 9)} | "
+            f"{_fmt_pct(m.get('word_acc_pct'), 7)} | "
+            f"{_fmt_pct(m.get('in_vocabulary_word_acc_pct'), 8)} | "
+            f"{_fmt_pct(m.get('word_acc_top5_pct'), 7)} | "
+            f"{_fmt_pct(m.get('content_word_acc_pct'), 7)} | "
+            f"{_fmt_pct(m.get('function_word_acc_pct'), 7)} | "
+            f"{_fmt_pct(m.get('wer_pct'), 7)} | "
+            f"{_fmt_pct(m.get('cer_pct'), 7)} | "
+            f"{_fmt_pct(m.get('bertscore_f1_pct'), 7)}"
+        )
+    lines.append(sep)
+    return lines
+
+
+def _format_revision_gains_block(
+    gains: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    if not gains:
+        return []
+    label_map = {
+        "clean_C_minus_A_pp": "Clean 滚动修正净增益 (C - A = S3_clean - K0)",
+        "shifted_C_minus_A_pp": "Shifted 错位滚动增益 (C_shift - A_shift)",
+        "clean_minus_shifted_S3_pp": "真实 vs 错位地面实况净优势 (S3_clean - S3_shift)",
+    }
+    out: list[str] = []
+    for g_key in (
+        "clean_C_minus_A_pp",
+        "shifted_C_minus_A_pp",
+        "clean_minus_shifted_S3_pp",
+    ):
+        g_val = gains.get(g_key)
+        if not isinstance(g_val, Mapping) or not g_val:
+            continue
+        out.append(
+            f"  * {label_map.get(g_key, g_key):<46}: "
+            f"ΔBLEU-1={_fmt_signed_pct(g_val.get('bleu1_pct'), 6)} pp | "
+            f"ΔWordAcc={_fmt_signed_pct(g_val.get('word_acc_pct'), 6)} pp | "
+            f"ΔInVocAcc={_fmt_signed_pct(g_val.get('in_vocabulary_word_acc_pct'), 6)} pp | "
+            f"ΔCER={_fmt_signed_pct(g_val.get('cer_pct'), 6)} pp | "
+            f"ΔBERT-F1={_fmt_signed_pct(g_val.get('bertscore_f1_pct'), 6)} pp"
+        )
+    return out
+
+
+def format_sequence_decoding_report(
+    report: Mapping[str, Any],
+) -> str:
+    """将 S3 序列解码评估汇总字典格式化为结构化、易读的终端/Colab 表格报告。"""
+    dataset = str(report.get("dataset", "pallier2025"))
+    split = str(report.get("split", "test"))
+    seed = report.get("seed", 0)
+    exp_tag = report.get("exp_tag") or "(default)"
+    cms_eta = report.get("cms_eta", 0.0)
+    f_mode = report.get("f_condition_mode") or ""
+
+    banner = "=" * 132
+    lines: list[str] = [
+        banner,
+        f"S3 序列解码协议评估汇总报告 | Dataset: {dataset} | Split: {split.upper()} | Seed: {seed} | ExpTag: {exp_tag} | CMS η: {cms_eta}"
+        + (f" | F-Mode: {f_mode}" if f_mode else ""),
+        banner,
+    ]
+
+    state_hp = report.get("state_hyperparameters")
+    if isinstance(state_hp, Mapping) and state_hp:
+        hp_parts: list[str] = []
+        for st_name in ("S0", "K0", "K1", "K2", "F"):
+            st_cfg = state_hp.get(st_name)
+            if isinstance(st_cfg, Mapping):
+                t_val = st_cfg.get("temperature", "-")
+                l_val = st_cfg.get("language_weight", "-")
+                hp_parts.append(f"{st_name}: (T={t_val}, λ={l_val})")
+        if hp_parts:
+            lines.append("[状态自适应校准超参] " + " | ".join(hp_parts))
+            lines.append("-" * 132)
+
+    # 1. 全词库主实验结果表
+    conds = report.get("conditions")
+    if isinstance(conds, Mapping) and conds:
+        first_cond = next(iter(conds.values()), {})
+        tot_segs = first_cond.get("segment_count", "-")
+        tot_words = first_cond.get("total_words", "-")
+        invoc_rate = first_cond.get("in_vocabulary_rate_pct", None)
+        cov_str = (
+            f"{float(invoc_rate):.2f}%"
+            if invoc_rate is not None
+            else "-"
+        )
+        lines.append(
+            f"\n[表 1] 全词库主实验结果 (Full Vocabulary | Segments={tot_segs}, TotalWords={tot_words}, TokenCoverage={cov_str})"
+        )
+        lines.extend(_format_conditions_table(conds))
+        main_gains = _compute_revision_gain_deltas(conds)
+        lines.extend(_format_revision_gains_block(main_gains))
+
+    # 2. 高覆盖核心词表基准 (|V| = 250)
+    core_bench = report.get("core_vocabulary_benchmark")
+    if isinstance(core_bench, Mapping) and core_bench.get("subsets"):
+        v_core = core_bench.get("vocabulary_size", 250)
+        tok_cov_core = core_bench.get("test_token_coverage_pct")
+        cov_core_str = (
+            f"{float(tok_cov_core):.2f}%"
+            if tok_cov_core is not None
+            else "-"
+        )
+        lines.append(
+            f"\n[表 2] 高覆盖核心词表平行基准 (Core Vocabulary |V| = {v_core}, 全集词位覆盖率 = {cov_core_str}，对标 SimpleB2T & Jayalath 2025)"
+        )
+        subsets_map = core_bench.get("subsets") or {}
+        subset_titles = (
+            ("all_segments", "口径 1 [all_segments]: 全部测试句段 (含 In-Vocab Word Acc)"),
+            ("core_subset_100pct", "口径 2a [core_subset_100pct]: 100% 词表内核心句 (0% OOV Core Set，直接对标 SimpleB2T)"),
+            ("core_subset_80pct", "口径 2b [core_subset_80pct]: >=80% 词表内高覆盖核心句"),
+            ("expanded_subset_70pct", "口径 2c [expanded_subset_70pct]: >=70% 词表内扩展高覆盖句"),
+        )
+        for sub_key, sub_title in subset_titles:
+            sub_block = subsets_map.get(sub_key)
+            if not isinstance(sub_block, Mapping):
+                continue
+            sub_conds = sub_block.get("conditions") or {}
+            if not sub_conds:
+                continue
+            seg_cnt = sub_block.get("segment_count", 0)
+            lines.append(f"\n  >>> {sub_title} (Segments = {seg_cnt}) <<<")
+            lines.extend(_format_conditions_table(sub_conds))
+            lines.extend(
+                _format_revision_gains_block(
+                    sub_block.get("revision_gains") or {}
+                )
+            )
+
+    # 3. 全词库 (|V| = 2020) 下的高覆盖核心子集表现
+    full_core = report.get("full_vocab_core_subsets")
+    if isinstance(full_core, Mapping) and full_core.get("subsets"):
+        lines.append(
+            "\n[表 3] 全词库 (Full Vocabulary) 下的高覆盖核心子集拆解 (100% 零 OOV / >=80% / >=70%)"
+        )
+        fc_header = (
+            f"{'Subset':<26} | {'Segs':>5} | {'Condition':<18} | {'BLEU-1':>7} | "
+            f"{'CorpBLEU':>8} | {'WordAcc':>7} | {'InVocAcc':>8} | {'Acc@5':>7} | "
+            f"{'WER(%)':>7} | {'CER(%)':>7} | {'BERT-F1':>7}"
+        )
+        fc_sep = "-" * len(fc_header)
+        lines.append(fc_sep)
+        lines.append(fc_header)
+        lines.append(fc_sep)
+        fc_subsets = full_core.get("subsets") or {}
+        for sub_key in (
+            "all_segments",
+            "core_subset_100pct",
+            "core_subset_80pct",
+            "expanded_subset_70pct",
+        ):
+            sb = fc_subsets.get(sub_key)
+            if not isinstance(sb, Mapping):
+                continue
+            seg_cnt = sb.get("segment_count", 0)
+            sb_conds = sb.get("conditions") or {}
+            for c_name in (
+                "S0",
+                "K0",
+                "K1",
+                "S3_clean",
+                "K0_shifted_neg75s",
+                "S3_shifted_neg75s",
+            ):
+                if c_name not in sb_conds:
+                    continue
+                m = sb_conds[c_name]
+                lines.append(
+                    f"{sub_key:<26} | {int(seg_cnt):>5d} | {c_name:<18} | "
+                    f"{_fmt_pct(m.get('bleu1_pct'), 7)} | "
+                    f"{_fmt_pct(m.get('corpus_bleu1_pct'), 8)} | "
+                    f"{_fmt_pct(m.get('word_acc_pct'), 7)} | "
+                    f"{_fmt_pct(m.get('in_vocabulary_word_acc_pct'), 8)} | "
+                    f"{_fmt_pct(m.get('word_acc_top5_pct'), 7)} | "
+                    f"{_fmt_pct(m.get('wer_pct'), 7)} | "
+                    f"{_fmt_pct(m.get('cer_pct'), 7)} | "
+                    f"{_fmt_pct(m.get('bertscore_f1_pct'), 7)}"
+                )
+            lines.append(fc_sep)
+
+    # 4. 多尺度候选词表缩放定律 (|V| in {50, 100, 250, 500, 1000, 2020})
+    vocab_scaling = report.get("vocabulary_scaling")
+    if isinstance(vocab_scaling, Mapping) and vocab_scaling:
+        lines.append(
+            "\n[表 4A] 多尺度候选词表缩放曲线 — 全测试句段 (All Segments，对标 Jayalath et al. 2025 Fig. 4)"
+        )
+        vs_header = (
+            f"{'Scale |V|':<10} | {'TokCov%':>7} | {'S3 BLEU-1':>9} | {'K0 BLEU-1':>9} | "
+            f"{'S0 BLEU-1':>9} | {'ShiftBLEU':>9} | {'Δ(C-A)BLEU':>10} | {'S3 InVocAcc':>11} | "
+            f"{'K0 InVocAcc':>11} | {'S3 WordAcc':>10} | {'S3 CER(%)':>9} | {'S3 BERT-F1':>10}"
+        )
+        vs_sep = "-" * len(vs_header)
+        lines.append(vs_sep)
+        lines.append(vs_header)
+        lines.append(vs_sep)
+
+        ordered_scales = sorted(
+            vocab_scaling.items(),
+            key=lambda kv: int(
+                kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
+            )
+            if isinstance(kv[1], Mapping)
+            else 0,
+        )
+        for s_key, s_entry in ordered_scales:
+            if not isinstance(s_entry, Mapping):
+                continue
+            all_c = s_entry.get("all_segments") or {}
+            s3_m = all_c.get("S3_clean") or {}
+            k0_m = all_c.get("K0") or {}
+            s0_m = all_c.get("S0") or {}
+            sh_m = all_c.get("S3_shifted_neg75s") or {}
+            gains_all = (
+                (s_entry.get("revision_gains_all_segments") or {}).get(
+                    "clean_C_minus_A_pp"
+                )
+                or {}
+            )
+            lines.append(
+                f"{str(s_key):<10} | "
+                f"{_fmt_pct(s_entry.get('test_token_coverage_pct'), 7)} | "
+                f"{_fmt_pct(s3_m.get('bleu1_pct'), 9)} | "
+                f"{_fmt_pct(k0_m.get('bleu1_pct'), 9)} | "
+                f"{_fmt_pct(s0_m.get('bleu1_pct'), 9)} | "
+                f"{_fmt_pct(sh_m.get('bleu1_pct'), 9)} | "
+                f"{_fmt_signed_pct(gains_all.get('bleu1_pct'), 10)} | "
+                f"{_fmt_pct(s3_m.get('in_vocabulary_word_acc_pct'), 11)} | "
+                f"{_fmt_pct(k0_m.get('in_vocabulary_word_acc_pct'), 11)} | "
+                f"{_fmt_pct(s3_m.get('word_acc_pct'), 10)} | "
+                f"{_fmt_pct(s3_m.get('cer_pct'), 9)} | "
+                f"{_fmt_pct(s3_m.get('bertscore_f1_pct'), 10)}"
+            )
+        lines.append(vs_sep)
+
+        lines.append(
+            "\n[表 4B] 多尺度候选词表缩放曲线 — 高覆盖核心子集 (100% Core [0% OOV] 与 >=80% Core Sentences)"
+        )
+        vc_header = (
+            f"{'Scale |V|':<10} | {'100%Segs':>8} | {'100% S3 BLEU':>12} | {'100% S3 Acc':>11} | "
+            f"{'>=80%Segs':>9} | {'>=80% S3 BLEU':>13} | {'>=80% K0 BLEU':>13} | "
+            f"{'>=80% ShiftBLEU':>15} | {'>=80% S3 InVocAcc':>17} | {'>=80% S3 Acc@5':>14}"
+        )
+        vc_sep = "-" * len(vc_header)
+        lines.append(vc_sep)
+        lines.append(vc_header)
+        lines.append(vc_sep)
+        for s_key, s_entry in ordered_scales:
+            if not isinstance(s_entry, Mapping):
+                continue
+            c100 = (s_entry.get("core_subset_100pct") or {}).get("S3_clean") or {}
+            c80_map = s_entry.get("core_subset_80pct") or {}
+            c80_s3 = c80_map.get("S3_clean") or {}
+            c80_k0 = c80_map.get("K0") or {}
+            c80_sh = c80_map.get("S3_shifted_neg75s") or {}
+            lines.append(
+                f"{str(s_key):<10} | "
+                f"{int(s_entry.get('core_100pct_segment_count', 0)):>8d} | "
+                f"{_fmt_pct(c100.get('bleu1_pct'), 12)} | "
+                f"{_fmt_pct(c100.get('word_acc_pct'), 11)} | "
+                f"{int(s_entry.get('core_80pct_segment_count', 0)):>9d} | "
+                f"{_fmt_pct(c80_s3.get('bleu1_pct'), 13)} | "
+                f"{_fmt_pct(c80_k0.get('bleu1_pct'), 13)} | "
+                f"{_fmt_pct(c80_sh.get('bleu1_pct'), 15)} | "
+                f"{_fmt_pct(c80_s3.get('in_vocabulary_word_acc_pct'), 17)} | "
+                f"{_fmt_pct(c80_s3.get('word_acc_top5_pct'), 14)}"
+            )
+        lines.append(vc_sep)
+
+    # 5. 跨被试多观测神经聚合曲线 (k in {1, 2, 5, 10})
+    ms_scaling = report.get("multi_subject_scaling")
+    if isinstance(ms_scaling, Mapping) and ms_scaling:
+        lines.append(
+            "\n[表 5] 跨被试多观测神经聚合曲线 (Multi-Subject Observation Scaling k ∈ {1, 2, 5, 10})"
+        )
+        ordered_ms = dict(
+            sorted(
+                ms_scaling.items(),
+                key=lambda kv: int(
+                    kv[1].get("k_observations", str(kv[0]).lstrip("kK=_") or 1)
+                )
+                if isinstance(kv[1], Mapping)
+                else 1,
+            )
+        )
+        lines.extend(_format_conditions_table(ordered_ms))
+
+    # 6. 产物与图表保存路径
+    lines.append("\n[导出产物与可视化图表路径]")
+    for path_key in (
+        "export_path",
+        "calibration_path",
+        "decoding_path",
+        "evaluation_dir",
+    ):
+        if report.get(path_key):
+            lines.append(f"  - {path_key:<18}: {report[path_key]}")
+    figs = report.get("figures")
+    if isinstance(figs, Mapping) and figs:
+        for fig_k, fig_p in figs.items():
+            lines.append(f"  - {fig_k:<28}: {fig_p}")
+    lines.append(banner)
+    return "\n".join(lines)
+
+
+def print_sequence_decoding_report(
+    report: Mapping[str, Any],
+) -> None:
+    """向终端打印结构化可读的 S3 序列解码评估汇总表格。"""
+    print(format_sequence_decoding_report(report))
