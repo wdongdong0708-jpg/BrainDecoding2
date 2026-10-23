@@ -126,16 +126,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="可选覆写定稿主干束宽 B（默认：5）",
     )
     parser.add_argument(
+        "--temperature",
+        default=None,
+        help="可选覆写校准温度网格（默认：0.05,0.07）",
+    )
+    parser.add_argument(
         "--cms-eta",
         type=float,
         default=None,
-        help="可选覆写历史因果共模扣除系数 eta（默认：0.8）",
+        help="可选覆写历史因果共模扣除系数 eta（默认：0.0）",
     )
     parser.add_argument(
         "--control-shift-seconds",
         type=float,
         default=None,
         help="可选覆写负对照历史错位秒数（默认：-75.0）",
+    )
+    parser.add_argument(
+        "--k-observations",
+        default=None,
+        help="可选覆写跨被试聚合观测数列表（默认：1,2,5,10）",
     )
     parser.add_argument(
         "--max-segments",
@@ -289,7 +299,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     cms_eta = float(
         args.cms_eta
         if args.cms_eta is not None
-        else cms_cfg.get("subtraction_eta", ctrl_cfg.get("common_mode_subtraction_eta", 0.8))
+        else cms_cfg.get("subtraction_eta", ctrl_cfg.get("common_mode_subtraction_eta", 0.0))
     )
     cms_shifts = tuple(
         float(s)
@@ -309,6 +319,21 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             ctrl_cfg.get("primary_negative_control_shift_seconds", -75.0),
         )
     )
+    raw_k_obs = getattr(args, "k_observations", None)
+    if raw_k_obs is not None:
+        if isinstance(raw_k_obs, (list, tuple)):
+            k_observations = tuple(int(x) for x in raw_k_obs)
+        else:
+            k_observations = tuple(
+                int(x.strip())
+                for x in str(raw_k_obs).split(",")
+                if x.strip()
+            )
+    else:
+        k_observations = tuple(
+            int(x)
+            for x in eval_cfg.get("multi_subject_observations", [1, 2, 5, 10])
+        )
     window_seconds = getattr(args, "window_seconds", None)
     window_start_offset_seconds = getattr(args, "window_start_offset_seconds", None)
     show_progress = not bool(getattr(args, "no_progress", False))
@@ -344,13 +369,17 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         "split": args.split,
         "seed": int(args.seed),
         "exp_tag": exp_tag,
+        "cms_eta": cms_eta,
     }
 
     from braindecoding.decoding.neural_score_exporter import (
         export_neural_vocabulary_scores,
         load_neural_vocabulary_scores,
     )
-    from braindecoding.decoding.rolling_beam_search import decode_dataset_segments
+    from braindecoding.decoding.rolling_beam_search import (
+        decode_dataset_segments,
+        run_multi_subject_observation_sweep,
+    )
     from braindecoding.decoding.state_hyperparameter_calibrator import (
         calibrate_state_hyperparameters,
     )
@@ -379,8 +408,24 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             show_progress=show_progress,
         )
 
+    def _export_matches_cms_eta(pt_path: Path, expected_eta: float) -> bool:
+        if not pt_path.is_file():
+            return False
+        try:
+            payload = load_neural_vocabulary_scores(pt_path)
+            cms_meta = dict(payload.get("cms_metadata") or {})
+            if "subtraction_eta" not in cms_meta:
+                return True
+            return abs(float(cms_meta["subtraction_eta"]) - float(expected_eta)) <= 1e-6
+        except Exception:
+            return False
+
     if args.step in ("export", "all"):
-        if args.step == "all" and args.split != "val" and not val_export_path.is_file():
+        if (
+            args.step == "all"
+            and args.split != "val"
+            and not _export_matches_cms_eta(val_export_path, cms_eta)
+        ):
             _run_export_for_split("val", val_export_path)
         out_pt = _run_export_for_split(args.split, export_path)
         exported_payload = load_neural_vocabulary_scores(out_pt)
@@ -395,7 +440,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             if (args.split != "val" or val_export_path.is_file())
             else export_path
         )
-        if not cal_source_path.is_file():
+        if not _export_matches_cms_eta(cal_source_path, cms_eta):
             _run_export_for_split("val", cal_source_path)
         val_payload = load_neural_vocabulary_scores(cal_source_path)
         scorer = _load_or_init_language_scorer(
@@ -405,10 +450,21 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             language_model_override=args.language_model,
             device=args.device,
         )
-        temp_grid = tuple(
-            float(x)
-            for x in cal_cfg.get("temperature_grid", [0.05, 0.07, 0.10, 0.15, 0.20])
-        )
+        raw_temp_override = getattr(args, "temperature", None)
+        if raw_temp_override is not None:
+            if isinstance(raw_temp_override, (list, tuple)):
+                temp_grid = tuple(float(x) for x in raw_temp_override)
+            else:
+                temp_grid = tuple(
+                    float(x.strip())
+                    for x in str(raw_temp_override).split(",")
+                    if x.strip()
+                )
+        else:
+            temp_grid = tuple(
+                float(x)
+                for x in cal_cfg.get("temperature_grid", [0.05, 0.07])
+            )
         lambda_grid = tuple(
             float(x)
             for x in cal_cfg.get(
@@ -440,7 +496,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         results_summary["state_hyperparameters"] = calibration_res["states"]
 
     if args.step in ("decode", "all"):
-        if not export_path.is_file():
+        if not _export_matches_cms_eta(export_path, cms_eta):
             _run_export_for_split(args.split, export_path)
         split_payload = load_neural_vocabulary_scores(export_path)
         if scorer is None:
@@ -457,7 +513,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         else:
             hyperparameters = {
                 "states": {
-                    s: {"temperature": 0.10, "language_weight": 0.15}
+                    s: {"temperature": 0.07, "language_weight": 0.15}
                     for s in ("S0", "K0", "K1", "K2", "F")
                 }
             }
@@ -544,6 +600,27 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             progress_desc=f"S3 Decode [S3_shifted_-75s | {args.split}]",
         )
 
+        multi_subject_bundles: dict[str, Any] = {}
+        unique_subjects = {
+            str(seg.get("subject_id", "default"))
+            for seg in split_payload.get("segments") or []
+        }
+        if len(k_observations) >= 2 and len(unique_subjects) > 1:
+            multi_subject_bundles = run_multi_subject_observation_sweep(
+                split_payload,
+                scorer,
+                hyperparameters,
+                k_observations=k_observations,
+                condition="S3",
+                alignment="clean",
+                single_subject_s3_bundle=decoded_bundles.get("S3_clean"),
+                beam_width=beam_width,
+                candidate_top_k=top_k,
+                segment_batch_size=segment_batch_size,
+                max_segments=args.max_segments,
+                show_progress=show_progress,
+            )
+
         decoding_bundle = {
             "schema_version": "s3-decoding-bundle/v1",
             "dataset": args.dataset,
@@ -554,6 +631,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             "f_condition_mode": f_mode,
             "state_hyperparameters": hyperparameters.get("states", hyperparameters),
             "decoded_bundles": decoded_bundles,
+            "multi_subject_bundles": multi_subject_bundles,
         }
         decoding_path.parent.mkdir(parents=True, exist_ok=True)
         decoding_path.write_text(
@@ -570,6 +648,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             bundle.get("language", "fr" if args.dataset == "pallier2025" else "zh")
         )
         decoded_bundles_map = dict(bundle.get("decoded_bundles") or {})
+        multi_subject_bundles_map = dict(bundle.get("multi_subject_bundles") or {})
 
         word_embedding_map = None
         if not bool(args.no_bertscore) and export_path.is_file():
@@ -606,10 +685,14 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             output_dir=paths["evaluation_dir"],
             word_embedding_map=word_embedding_map,
             tau_grid=tau_grid,
+            multi_subject_bundles=multi_subject_bundles_map,
             plot=plot_enabled,
         )
         results_summary["evaluation_dir"] = str(paths["evaluation_dir"])
         results_summary["conditions"] = eval_report["conditions"]
+        results_summary["multi_subject_scaling"] = eval_report.get(
+            "multi_subject_scaling", {}
+        )
         results_summary["figures"] = eval_report["figures"]
 
     return results_summary

@@ -43,9 +43,15 @@ class BeamHypothesis:
 
 def compute_neural_log_probabilities(
     cosine_scores: torch.Tensor | np.ndarray,
-    temperature: float = 0.1,
+    temperature: float = 0.07,
+    *,
+    top_k: int | None = 20,
 ) -> np.ndarray:
-    """将全词表余弦相似度矩阵 [L, |V|] 按温度 T_r 缩放并计算 log_softmax 对数概率。"""
+    """将余弦相似度矩阵 [L, |V|] 按温度 T_r 缩放，并在每个词位的 Top-K 神经候选集内部做局部 Softmax 归一化。
+
+    通过仅在 Top-K (默认 K=20) 候选词内部计算配分函数 log Z_t = logsumexp_{w in Top-K}(s(w)/T_r)，
+    滤除其余 ~2,000 个无关背景词的分母稀释，确保神经对数概率与语言模型对数概率在同一量纲上耦合。
+    """
     temp = float(temperature)
     if temp <= 0.0:
         raise ValueError(f"温度参数 T_r 必须为正数，收到：{temperature!r}")
@@ -53,7 +59,15 @@ def compute_neural_log_probabilities(
         tensor = torch.from_numpy(cosine_scores).float()
     else:
         tensor = cosine_scores.detach().cpu().float()
-    log_probs = F_nn.log_softmax(tensor / temp, dim=-1)
+    scaled = tensor / temp
+    vocab_size = int(scaled.shape[-1]) if scaled.ndim >= 1 else 0
+    if top_k is not None and vocab_size > 0 and 1 <= int(top_k) < vocab_size:
+        k_norm = int(top_k)
+        top_vals, _ = torch.topk(scaled, k=k_norm, dim=-1)
+        log_z = torch.logsumexp(top_vals, dim=-1, keepdim=True)
+        log_probs = scaled - log_z
+    else:
+        log_probs = F_nn.log_softmax(scaled, dim=-1)
     return log_probs.numpy().astype(np.float64)
 
 
@@ -421,7 +435,7 @@ def decode_segment_streaming(
         # ------------------------------------------------------------------
         k0_pos = arrival_t
         cands_k0 = k0_cand_ids[k0_pos].tolist()
-        best_k0_id, best_k0_score, _, _ = _score_single_step_candidates(
+        best_k0_id, best_k0_score, k0_scores_map, _ = _score_single_step_candidates(
             scorer,
             tail_cache_state,
             k0_log_probs[k0_pos],
@@ -435,6 +449,9 @@ def decode_segment_streaming(
         traj_k0["k0_word"] = draft_k0_word
         traj_k0["k0_word_id"] = draft_k0_id
         traj_k0["k0_score"] = float(best_k0_score)
+        traj_k0["k0_candidate_scores"] = {
+            vocab_tuple[k_id]: float(val) for k_id, val in k0_scores_map.items()
+        }
 
         # 组装当前时刻 t 的完整屏幕词序列：committed(0..t-2) + [w_{t-1}^{(K1)}, w_t^{(K0)}]
         current_screen_words = list(committed_prefix_words)
@@ -464,11 +481,33 @@ def decode_segment_streaming(
     final_words = list(screen_history[-1]["screen_words"])
     initial_k0_words = [str(t["k0_word"]) for t in position_trajectories]
     committed_k2_words = list(backbone_beams[0].words)
+    tail_suffix = final_words[len(committed_k2_words) :]
+    beam_candidates = [list(b.words) + tail_suffix for b in backbone_beams]
+    top5_words_per_pos: list[list[str]] = []
+    for pos, traj in enumerate(position_trajectories):
+        cand_map = (
+            traj.get("k2_candidate_scores")
+            or traj.get("k1_candidate_scores")
+            or traj.get("k0_candidate_scores")
+            or {}
+        )
+        if cand_map:
+            ranked_w = [
+                w
+                for w, _ in sorted(
+                    cand_map.items(), key=lambda kv: (-float(kv[1]), kv[0])
+                )[:5]
+            ]
+        else:
+            ranked_w = [final_words[pos]] if pos < len(final_words) else []
+        top5_words_per_pos.append(ranked_w)
 
     return {
         "final_words": final_words,
         "committed_k2_words": committed_k2_words,
         "initial_k0_words": initial_k0_words,
+        "beam_candidates": beam_candidates,
+        "top5_words_per_pos": top5_words_per_pos,
         "screen_history": screen_history,
         "position_trajectories": position_trajectories,
         "elapsed_seconds": round(time.perf_counter() - started, 4),
@@ -539,6 +578,7 @@ def decode_segment_static(
         )
     ]
 
+    top5_words_per_pos: list[list[str]] = []
     for pos in range(seg_len):
         beam_states = [b.cache_state for b in beams]
         if is_lm_only:
@@ -555,6 +595,19 @@ def decode_segment_static(
         lm_scores_per_beam = scorer.score_candidates_with_cache(
             beam_states, cand_lists
         )
+
+        if cand_lists and lm_scores_per_beam:
+            top1_step_pairs = [
+                (
+                    float(scores_matrix[pos, w_id]) + lam * float(lm_val),
+                    vocab_tuple[w_id],
+                )
+                for w_id, lm_val in zip(cand_lists[0], lm_scores_per_beam[0])
+            ]
+            top1_step_pairs.sort(key=lambda kv: (-kv[0], kv[1]))
+            top5_words_per_pos.append([w for _, w in top1_step_pairs[:5]])
+        else:
+            top5_words_per_pos.append([])
 
         expanded: list[
             tuple[float, float, float, int, int, tuple[str, ...], tuple[int, ...]]
@@ -615,6 +668,8 @@ def decode_segment_static(
     winner = beams[0]
     return {
         "final_words": list(winner.words),
+        "beam_candidates": [list(b.words) for b in beams],
+        "top5_words_per_pos": top5_words_per_pos,
         "score": float(winner.score),
         "neural_score_sum": float(winner.neural_score_sum),
         "lm_score_sum": float(winner.lm_score_sum),
@@ -651,17 +706,29 @@ def decode_segments_static_batched(
         for mat in scores_matrices:
             if mat.shape[0] == 0:
                 results.append(
-                    {"final_words": [], "score": 0.0, "elapsed_seconds": 0.0}
+                    {
+                        "final_words": [],
+                        "beam_candidates": [],
+                        "top5_words_per_pos": [],
+                        "score": 0.0,
+                        "elapsed_seconds": 0.0,
+                    }
                 )
                 continue
             top1 = np.argmax(mat, axis=-1)
+            top5_idx = select_top_k_neural_candidates(mat, top_k=min(5, vocab_size))[0]
             words = [vocab_tuple[int(i)] for i in top1]
+            top5_per_pos = [
+                [vocab_tuple[int(i)] for i in row] for row in top5_idx
+            ]
             score_sum = float(
                 sum(mat[r, int(top1[r])] for r in range(mat.shape[0]))
             )
             results.append(
                 {
                     "final_words": words,
+                    "beam_candidates": [words],
+                    "top5_words_per_pos": top5_per_pos,
                     "score": score_sum,
                     "neural_score_sum": score_sum,
                     "lm_score_sum": 0.0,
@@ -691,6 +758,7 @@ def decode_segments_static_batched(
         ]
         for _ in range(num_segs)
     ]
+    top5_by_seg: list[list[list[str]]] = [[] for _ in range(num_segs)]
 
     max_len = max(seg_lengths) if seg_lengths else 0
     for pos in range(max_len):
@@ -738,6 +806,19 @@ def decode_segments_static_batched(
             s_beams = beams_by_seg[s_idx]
             s_lm_rows = flat_lm_scores[start_off:end_off]
             s_mat = scores_matrices[s_idx]
+            if row_cands and s_lm_rows:
+                step_pairs = [
+                    (
+                        float(s_mat[pos, w_id]) + lam * float(lm_val),
+                        vocab_tuple[w_id],
+                    )
+                    for w_id, lm_val in zip(row_cands, s_lm_rows[0])
+                ]
+                step_pairs.sort(key=lambda kv: (-kv[0], kv[1]))
+                top5_by_seg[s_idx].append([w for _, w in step_pairs[:5]])
+            else:
+                top5_by_seg[s_idx].append([])
+
             expanded: list[
                 tuple[
                     float,
@@ -815,13 +896,21 @@ def decode_segments_static_batched(
     for s_idx in range(num_segs):
         if seg_lengths[s_idx] == 0:
             outputs.append(
-                {"final_words": [], "score": 0.0, "elapsed_seconds": 0.0}
+                {
+                    "final_words": [],
+                    "beam_candidates": [],
+                    "top5_words_per_pos": [],
+                    "score": 0.0,
+                    "elapsed_seconds": 0.0,
+                }
             )
             continue
         winner = beams_by_seg[s_idx][0]
         outputs.append(
             {
                 "final_words": list(winner.words),
+                "beam_candidates": [list(b.words) for b in beams_by_seg[s_idx]],
+                "top5_words_per_pos": top5_by_seg[s_idx],
                 "score": float(winner.score),
                 "neural_score_sum": float(winner.neural_score_sum),
                 "lm_score_sum": float(winner.lm_score_sum),
@@ -1267,6 +1356,10 @@ def decode_segments_streaming_batched(
             traj_k0["k0_word"] = draft_k0_word
             traj_k0["k0_word_id"] = draft_k0_id
             traj_k0["k0_score"] = float(best_k0_score)
+            traj_k0["k0_candidate_scores"] = {
+                vocab_tuple[k_id]: float(val)
+                for k_id, val in k0_scores_map.items()
+            }
 
             top1_backbone = backbone_beams_by_seg[s_idx][0]
             committed_prefix_words = list(top1_backbone.words)
@@ -1305,6 +1398,8 @@ def decode_segments_streaming_batched(
                     "final_words": [],
                     "committed_k2_words": [],
                     "initial_k0_words": [],
+                    "beam_candidates": [],
+                    "top5_words_per_pos": [],
                     "screen_history": [],
                     "position_trajectories": [],
                     "elapsed_seconds": 0.0,
@@ -1313,11 +1408,38 @@ def decode_segments_streaming_batched(
             continue
         hist = screen_history_by_seg[s_idx]
         trajs = trajectories_by_seg[s_idx]
+        final_w = list(hist[-1]["screen_words"])
+        committed_w = list(backbone_beams_by_seg[s_idx][0].words)
+        tail_suffix = final_w[len(committed_w) :]
+        beam_cands = [
+            list(b.words) + tail_suffix for b in backbone_beams_by_seg[s_idx]
+        ]
+        top5_per_pos: list[list[str]] = []
+        for pos, traj in enumerate(trajs):
+            cand_map = (
+                traj.get("k2_candidate_scores")
+                or traj.get("k1_candidate_scores")
+                or traj.get("k0_candidate_scores")
+                or {}
+            )
+            if cand_map:
+                ranked_w = [
+                    w
+                    for w, _ in sorted(
+                        cand_map.items(), key=lambda kv: (-float(kv[1]), kv[0])
+                    )[:5]
+                ]
+            else:
+                ranked_w = [final_w[pos]] if pos < len(final_w) else []
+            top5_per_pos.append(ranked_w)
+
         outputs.append(
             {
-                "final_words": list(hist[-1]["screen_words"]),
-                "committed_k2_words": list(backbone_beams_by_seg[s_idx][0].words),
+                "final_words": final_w,
+                "committed_k2_words": committed_w,
                 "initial_k0_words": [str(t["k0_word"]) for t in trajs],
+                "beam_candidates": beam_cands,
+                "top5_words_per_pos": top5_per_pos,
                 "screen_history": hist,
                 "position_trajectories": trajs,
                 "elapsed_seconds": per_seg_elapsed,
@@ -1363,7 +1485,7 @@ def decode_dataset_segments(
 
     def _get_state_params(state_name: str) -> tuple[float, float]:
         entry = states_cfg.get(state_name, {})
-        temp = float(entry.get("temperature", 0.1))
+        temp = float(entry.get("temperature", 0.07))
         lam = float(entry.get("language_weight", 0.15))
         return temp, lam
 
@@ -1412,6 +1534,10 @@ def decode_dataset_segments(
                         "block_id": seg.get("block_id", seg["scope"]),
                         "reference_words": list(seg["reference_words"]),
                         "predicted_words": list(dec["final_words"]),
+                        "beam_candidates": list(dec.get("beam_candidates", [])),
+                        "top5_words_per_pos": list(
+                            dec.get("top5_words_per_pos", [])
+                        ),
                         "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
                         "elapsed_seconds": dec["elapsed_seconds"],
                     }
@@ -1427,9 +1553,15 @@ def decode_dataset_segments(
             t_k1, lam_k1 = _get_state_params("K1")
             t_k2, lam_k2 = _get_state_params("K2")
 
-            full_lp_k0 = compute_neural_log_probabilities(score_bank["K0"], t_k0)
-            full_lp_k1 = compute_neural_log_probabilities(score_bank["K1"], t_k1)
-            full_lp_k2 = compute_neural_log_probabilities(score_bank["K2"], t_k2)
+            full_lp_k0 = compute_neural_log_probabilities(
+                score_bank["K0"], t_k0, top_k=candidate_top_k
+            )
+            full_lp_k1 = compute_neural_log_probabilities(
+                score_bank["K1"], t_k1, top_k=candidate_top_k
+            )
+            full_lp_k2 = compute_neural_log_probabilities(
+                score_bank["K2"], t_k2, top_k=candidate_top_k
+            )
             lam_map = {"K0": lam_k0, "K1": lam_k1, "K2": lam_k2}
 
             for start_i in range(0, len(segments), batch_sz):
@@ -1465,6 +1597,12 @@ def decode_dataset_segments(
                             "predicted_words": list(dec["final_words"]),
                             "initial_k0_words": list(dec["initial_k0_words"]),
                             "committed_k2_words": list(dec["committed_k2_words"]),
+                            "beam_candidates": list(
+                                dec.get("beam_candidates", [])
+                            ),
+                            "top5_words_per_pos": list(
+                                dec.get("top5_words_per_pos", [])
+                            ),
                             "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
                             "elapsed_seconds": dec["elapsed_seconds"],
                         }
@@ -1490,7 +1628,9 @@ def decode_dataset_segments(
                     )
         elif cond_upper in {"S0", "K0", "K1", "K2", "F"}:
             t_r, lam_r = _get_state_params(cond_upper)
-            full_lp = compute_neural_log_probabilities(score_bank[cond_upper], t_r)
+            full_lp = compute_neural_log_probabilities(
+                score_bank[cond_upper], t_r, top_k=candidate_top_k
+            )
             for start_i in range(0, len(segments), batch_sz):
                 batch_segs = segments[start_i : start_i + batch_sz]
                 batch_mats = [
@@ -1515,6 +1655,12 @@ def decode_dataset_segments(
                             "block_id": seg.get("block_id", seg["scope"]),
                             "reference_words": list(seg["reference_words"]),
                             "predicted_words": list(dec["final_words"]),
+                            "beam_candidates": list(
+                                dec.get("beam_candidates", [])
+                            ),
+                            "top5_words_per_pos": list(
+                                dec.get("top5_words_per_pos", [])
+                            ),
                             "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
                             "elapsed_seconds": dec["elapsed_seconds"],
                         }
@@ -1546,3 +1692,218 @@ def decode_dataset_segments(
         "final_sentences": final_sentences,
         "screen_histories": screen_histories,
     }
+
+
+def _average_subject_score_rows_rms_preserved(
+    subject_score_matrices: Sequence[torch.Tensor | np.ndarray],
+) -> torch.Tensor:
+    """跨 k 名受试者的同一测试句段平均神经余弦得分，并执行 RMS 范数保持缩放。
+
+    原因：k 名受试者的单位向量求均值后，非锁相背景噪声抵消导致合成向量模长按 ~1/sqrt(k) 收缩；
+    通过按单受试者平均 RMS 重新对齐行模长，既 100% 保持每词位的跨受试者平均候选排序不变，
+    又避免将温度 T_r 变相放大 sqrt(k) 倍。
+    """
+    tensors = [
+        m.detach().cpu().float()
+        if isinstance(m, torch.Tensor)
+        else torch.from_numpy(np.asarray(m, dtype=np.float32))
+        for m in subject_score_matrices
+    ]
+    if len(tensors) == 1:
+        return tensors[0]
+    stacked = torch.stack(tensors, dim=0)  # [k, L, |V|]
+    mean_mat = stacked.mean(dim=0)  # [L, |V|]
+    single_rms = torch.sqrt(
+        (stacked * stacked).mean(dim=-1, keepdim=True) + 1e-12
+    ).mean(dim=0)  # [L, 1]
+    avg_rms = torch.sqrt(
+        (mean_mat * mean_mat).mean(dim=-1, keepdim=True) + 1e-12
+    )  # [L, 1]
+    scale = (single_rms / avg_rms).clamp(min=1.0, max=5.0)
+    return mean_mat * scale
+
+
+def aggregate_multi_subject_payload(
+    exported_payload: dict,
+    k_observations: int,
+) -> dict:
+    """构造跨 k 名受试者神经观测聚合的合成 .pt 载荷（对标 d'Ascoli 2024 / SimpleB2T 2026）。"""
+    k_req = max(1, int(k_observations))
+    all_segments = list(exported_payload.get("segments") or [])
+    grouped: dict[tuple, list[dict]] = {}
+    for seg in all_segments:
+        ref_tuple = tuple(str(w) for w in seg.get("reference_words", []))
+        key = (
+            str(seg.get("scope", "")),
+            str(seg.get("material_id", "")),
+            ref_tuple,
+        )
+        grouped.setdefault(key, []).append(seg)
+
+    clean_bank = exported_payload["clean_scores"]
+    shifted_bank = exported_payload.get("shifted_scores") or clean_bank
+    state_keys = list(clean_bank.keys())
+
+    agg_clean_lists: dict[str, list[torch.Tensor]] = {s: [] for s in state_keys}
+    agg_shifted_lists: dict[str, list[torch.Tensor]] = {
+        s: [] for s in state_keys
+    }
+    agg_segments: list[dict] = []
+    cursor = 0
+
+    for group_idx, (_, seg_group) in enumerate(grouped.items()):
+        seg_group_sorted = sorted(
+            seg_group, key=lambda item: str(item.get("subject_id", ""))
+        )
+        m_avail = len(seg_group_sorted)
+        if m_avail == 0:
+            continue
+        k_eff = min(k_req, m_avail)
+        # 采用确定性轮转窗口选取 k_eff 名受试者，确保全体受试者在语料上均匀代表
+        chosen = [
+            seg_group_sorted[(group_idx + offset) % m_avail]
+            for offset in range(k_eff)
+        ]
+        template = chosen[0]
+        seg_len = len(template["event_indices"])
+        if seg_len == 0:
+            continue
+
+        for s in state_keys:
+            c_rows = [
+                clean_bank[s][member["event_indices"]] for member in chosen
+            ]
+            agg_clean_lists[s].append(
+                _average_subject_score_rows_rms_preserved(c_rows)
+            )
+            if s in shifted_bank:
+                sh_rows = [
+                    shifted_bank[s][member["event_indices"]]
+                    for member in chosen
+                ]
+                agg_shifted_lists[s].append(
+                    _average_subject_score_rows_rms_preserved(sh_rows)
+                )
+
+        new_indices = list(range(cursor, cursor + seg_len))
+        cursor += seg_len
+        subj_label = f"avg_k{k_eff}(" + "+".join(
+            str(c.get("subject_id", "")) for c in chosen
+        ) + ")"
+        agg_segments.append(
+            {
+                "segment_index": len(agg_segments),
+                "group_id": f"k{k_eff}::{template.get('group_id', len(agg_segments))}",
+                "subject_id": f"multi_subject_k{k_eff}",
+                "subject_group_members": [
+                    str(c.get("subject_id", "")) for c in chosen
+                ],
+                "k_observations": int(k_eff),
+                "recording_id": str(template.get("recording_id", "")),
+                "scope": str(template.get("scope", "")),
+                "block_id": str(
+                    template.get("block_id", template.get("scope", ""))
+                ),
+                "material_id": str(template.get("material_id", "")),
+                "partition": str(template.get("partition", "evaluation")),
+                "event_indices": new_indices,
+                "reference_words": list(template["reference_words"]),
+                "in_vocabulary_mask": list(template["in_vocabulary_mask"]),
+                "subject_combination_label": subj_label,
+            }
+        )
+
+    vocab_size = len(exported_payload["vocabulary"])
+    agg_clean = {
+        s: (
+            torch.cat(agg_clean_lists[s], dim=0)
+            if agg_clean_lists[s]
+            else torch.zeros((0, vocab_size), dtype=torch.float32)
+        )
+        for s in state_keys
+    }
+    agg_shifted = {
+        s: (
+            torch.cat(agg_shifted_lists[s], dim=0)
+            if agg_shifted_lists[s]
+            else agg_clean[s]
+        )
+        for s in state_keys
+    }
+
+    return {
+        **exported_payload,
+        "k_observations": k_req,
+        "segments": agg_segments,
+        "clean_scores": agg_clean,
+        "shifted_scores": agg_shifted,
+    }
+
+
+def run_multi_subject_observation_sweep(
+    exported_payload: dict,
+    scorer: CachedVocabularyLanguageScorer,
+    hyperparameters: dict,
+    *,
+    k_values: Sequence[int] = (1, 2, 5, 10),
+    k_observations: Sequence[int] | None = None,
+    condition: str = "S3",
+    alignment: str = "clean",
+    single_subject_s3_bundle: dict | None = None,
+    beam_width: int = 5,
+    candidate_top_k: int = 20,
+    segment_batch_size: int = 32,
+    max_segments: int | None = None,
+    show_progress: bool = False,
+) -> dict[str, dict]:
+    """扫描 k in {1, 2, 5, 10} 跨受试者多观测神经聚合下的 S3 序列解码结果。"""
+    active_k_values = k_observations if k_observations is not None else k_values
+    all_subjects = sorted(
+        {
+            str(seg.get("subject_id", ""))
+            for seg in exported_payload.get("segments", [])
+            if seg.get("subject_id")
+        }
+    )
+    max_avail_k = max(1, len(all_subjects))
+    bundles_by_k: dict[str, dict] = {}
+    seen_eff_k: dict[int, dict] = {}
+
+    for k_raw in active_k_values:
+        k_int = max(1, int(k_raw))
+        if k_int == 1 and single_subject_s3_bundle is not None:
+            bundle = dict(single_subject_s3_bundle)
+            bundle["k_observations"] = 1
+            bundle["effective_k_observations"] = 1
+            bundles_by_k[f"k={k_int}"] = bundle
+            seen_eff_k[1] = bundle
+            continue
+
+        k_eff = min(k_int, max_avail_k)
+        if k_eff in seen_eff_k:
+            cached = dict(seen_eff_k[k_eff])
+            cached["k_observations"] = k_int
+            cached["effective_k_observations"] = k_eff
+            bundles_by_k[f"k={k_int}"] = cached
+            continue
+
+        agg_payload = aggregate_multi_subject_payload(exported_payload, k_eff)
+        bundle = decode_dataset_segments(
+            agg_payload,
+            scorer,
+            hyperparameters,
+            condition=condition,
+            alignment=alignment,
+            beam_width=beam_width,
+            candidate_top_k=candidate_top_k,
+            segment_batch_size=segment_batch_size,
+            max_segments=max_segments,
+            show_progress=show_progress,
+            progress_desc=f"S3 Multi-Subject [k={k_int} (eff={k_eff})]",
+        )
+        bundle["k_observations"] = k_int
+        bundle["effective_k_observations"] = k_eff
+        bundles_by_k[f"k={k_int}"] = bundle
+        seen_eff_k[k_eff] = bundle
+
+    return bundles_by_k

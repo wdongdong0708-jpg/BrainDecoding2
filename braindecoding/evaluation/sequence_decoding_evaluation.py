@@ -231,13 +231,18 @@ def evaluate_six_dimensional_metrics(
 
     total_words = 0
     total_correct = 0
+    total_top5_correct = 0
     content_total = 0
     content_correct = 0
     function_total = 0
     function_correct = 0
     in_vocab_total = 0
     in_vocab_correct = 0
+    in_vocab_top5_correct = 0
+    oracle_correct = 0
+    oracle_in_vocab_correct = 0
 
+    oracle_predictions: list[list[str]] = []
     per_subject_rows: dict[str, list[dict]] = defaultdict(list)
 
     for rec, ref_seq, pred_seq in zip(segment_records, references, predictions):
@@ -247,15 +252,69 @@ def evaluate_six_dimensional_metrics(
             )
         seg_m = sentence_metrics([ref_seq], [pred_seq], chinese=chinese)
         in_vocab_mask = rec.get("in_vocabulary_mask") or [True] * len(ref_seq)
+        top5_per_pos = rec.get("top5_words_per_pos") or []
+        beam_cands_raw = rec.get("beam_candidates") or []
+
+        # 确定 Top-B (Beam=5) Oracle 句段预测
+        valid_beam_cands = [
+            [str(w) for w in cand]
+            for cand in beam_cands_raw
+            if isinstance(cand, (list, tuple)) and len(cand) == len(ref_seq)
+        ]
+        if not valid_beam_cands:
+            valid_beam_cands = [pred_seq]
+        elif pred_seq not in valid_beam_cands:
+            valid_beam_cands = [pred_seq] + valid_beam_cands
+
+        best_oracle_seq = pred_seq
+        best_oracle_key = (-1.0, -1)
+        for cand_seq in valid_beam_cands:
+            c_hits = sum(int(a == b) for a, b in zip(ref_seq, cand_seq))
+            c_bleu = (
+                float(
+                    sentence_metrics([ref_seq], [cand_seq], chinese=chinese)[
+                        "sentence_bleu1_mean"
+                    ]
+                )
+                if len(valid_beam_cands) > 1
+                else float(seg_m["sentence_bleu1_mean"])
+            )
+            cand_key = (round(0.5 * c_bleu + 0.5 * (c_hits / max(1, len(ref_seq))), 8), c_hits)
+            if cand_key > best_oracle_key:
+                best_oracle_key = cand_key
+                best_oracle_seq = cand_seq
+        oracle_predictions.append(best_oracle_seq)
+        oracle_seg_m = (
+            sentence_metrics([ref_seq], [best_oracle_seq], chinese=chinese)
+            if best_oracle_seq != pred_seq
+            else seg_m
+        )
 
         seg_c_tot = seg_c_hit = seg_f_tot = seg_f_hit = 0
         for pos, (r_w, p_w) in enumerate(zip(ref_seq, pred_seq)):
             hit = int(r_w == p_w)
+            ora_w = best_oracle_seq[pos] if pos < len(best_oracle_seq) else p_w
+            ora_hit = int(r_w == ora_w)
+            pos_cands: set[str] = {p_w, ora_w}
+            if pos < len(top5_per_pos) and isinstance(
+                top5_per_pos[pos], (list, tuple)
+            ):
+                for cw in top5_per_pos[pos][:5]:
+                    pos_cands.add(str(cw))
+            for b_seq in valid_beam_cands[:5]:
+                if pos < len(b_seq):
+                    pos_cands.add(str(b_seq[pos]))
+            top5_hit = int(r_w in pos_cands)
+
             total_words += 1
             total_correct += hit
+            total_top5_correct += top5_hit
+            oracle_correct += ora_hit
             if pos < len(in_vocab_mask) and bool(in_vocab_mask[pos]):
                 in_vocab_total += 1
                 in_vocab_correct += hit
+                in_vocab_top5_correct += top5_hit
+                oracle_in_vocab_correct += ora_hit
             if is_content_word(r_w, language):
                 content_total += 1
                 content_correct += hit
@@ -272,6 +331,9 @@ def evaluate_six_dimensional_metrics(
             {
                 "words": len(ref_seq),
                 "sentence_bleu1": float(seg_m["sentence_bleu1_mean"]),
+                "oracle_sentence_bleu1": float(
+                    oracle_seg_m["sentence_bleu1_mean"]
+                ),
                 "wer": float(seg_m["wer"]),
                 "cer": float(seg_m["cer"]),
                 "word_acc": float(seg_m["exact_word_accuracy"]),
@@ -282,6 +344,9 @@ def evaluate_six_dimensional_metrics(
             }
         )
 
+    oracle_base = sentence_metrics(
+        references, oracle_predictions, chinese=chinese
+    )
     bert_scores = compute_bertscore_percentage(
         references, predictions, word_embedding_map=word_embedding_map
     )
@@ -289,6 +354,10 @@ def evaluate_six_dimensional_metrics(
     # 计算受试者等权宏平均 BLEU-1 (%) 与 Word Acc (%)
     subj_bleu1_list = [
         float(np.mean([r["sentence_bleu1"] for r in rows])) * 100.0
+        for rows in per_subject_rows.values()
+    ]
+    subj_oracle_bleu1_list = [
+        float(np.mean([r["oracle_sentence_bleu1"] for r in rows])) * 100.0
         for rows in per_subject_rows.values()
     ]
     subj_word_acc_list = [
@@ -305,6 +374,11 @@ def evaluate_six_dimensional_metrics(
     word_acc_pct = (
         float(total_correct / total_words * 100.0) if total_words > 0 else 0.0
     )
+    word_acc_top5_pct = (
+        float(total_top5_correct / total_words * 100.0)
+        if total_words > 0
+        else 0.0
+    )
     content_acc_pct = (
         float(content_correct / content_total * 100.0)
         if content_total > 0
@@ -320,6 +394,19 @@ def evaluate_six_dimensional_metrics(
         if in_vocab_total > 0
         else 0.0
     )
+    in_vocab_top5_acc_pct = (
+        float(in_vocab_top5_correct / in_vocab_total * 100.0)
+        if in_vocab_total > 0
+        else 0.0
+    )
+    oracle_word_acc_pct = (
+        float(oracle_correct / total_words * 100.0) if total_words > 0 else 0.0
+    )
+    oracle_in_vocab_acc_pct = (
+        float(oracle_in_vocab_correct / in_vocab_total * 100.0)
+        if in_vocab_total > 0
+        else 0.0
+    )
 
     return {
         "segment_count": len(segment_records),
@@ -332,15 +419,23 @@ def evaluate_six_dimensional_metrics(
         else float(base["sentence_bleu1_mean"] * 100.0),
         "sentence_bleu1_pct": float(base["sentence_bleu1_mean"] * 100.0),
         "corpus_bleu1_pct": float(base["bleu1"] * 100.0),
+        "beam_oracle_bleu1_pct": float(np.mean(subj_oracle_bleu1_list))
+        if subj_oracle_bleu1_list
+        else float(oracle_base["sentence_bleu1_mean"] * 100.0),
+        "beam_oracle_corpus_bleu1_pct": float(oracle_base["bleu1"] * 100.0),
         "wer_pct": float(base["wer"] * 100.0),
         "cer_pct": float(base["cer"] * 100.0),
         "word_acc_pct": word_acc_pct,
+        "in_vocabulary_word_acc_pct": in_vocab_acc_pct,
+        "word_acc_top5_pct": word_acc_top5_pct,
+        "in_vocabulary_word_acc_top5_pct": in_vocab_top5_acc_pct,
+        "beam_oracle_word_acc_pct": oracle_word_acc_pct,
+        "beam_oracle_in_vocabulary_word_acc_pct": oracle_in_vocab_acc_pct,
         "subject_equal_word_acc_pct": float(np.mean(subj_word_acc_list))
         if subj_word_acc_list
         else word_acc_pct,
         "content_word_acc_pct": content_acc_pct,
         "function_word_acc_pct": function_acc_pct,
-        "in_vocabulary_word_acc_pct": in_vocab_acc_pct,
         "bertscore_f1_pct": float(bert_scores["bertscore_f1_pct"]),
         "bertscore_precision_pct": float(bert_scores["bertscore_precision_pct"]),
         "bertscore_recall_pct": float(bert_scores["bertscore_recall_pct"]),
@@ -363,6 +458,7 @@ def apply_confidence_gate_to_segment(
 
     final_gated_words: list[str] = []
     initial_k0_words: list[str] = []
+    top5_words_per_pos: list[list[str]] = []
 
     rewrite_opportunities = 0
     triggered_rewrites = 0
@@ -424,6 +520,23 @@ def apply_confidence_gate_to_segment(
             net_position_changes += 1
         final_gated_words.append(current_word)
 
+        cand_map = (
+            traj.get("k2_candidate_scores")
+            or traj.get("k1_candidate_scores")
+            or traj.get("k0_candidate_scores")
+            or {}
+        )
+        if cand_map:
+            ranked_w = [
+                str(w)
+                for w, _ in sorted(
+                    cand_map.items(), key=lambda kv: (-float(kv[1]), str(kv[0]))
+                )[:5]
+            ]
+        else:
+            ranked_w = [current_word]
+        top5_words_per_pos.append(ranked_w)
+
     eligible_positions = max(0, seg_len - 1)
     return {
         "segment_index": segment_history_record["segment_index"],
@@ -435,6 +548,7 @@ def apply_confidence_gate_to_segment(
         ),
         "initial_k0_words": initial_k0_words,
         "predicted_words": final_gated_words,
+        "top5_words_per_pos": top5_words_per_pos,
         "eligible_positions": eligible_positions,
         "rewrite_opportunities": rewrite_opportunities,
         "triggered_rewrites": triggered_rewrites,
@@ -813,11 +927,46 @@ def plot_baseline_and_shifted_comparison(
     }
 
 
+def _top5_from_trajectory(traj: Mapping[str, object], fallback_word: str = "") -> list[str]:
+    cand_map = (
+        traj.get("k2_candidate_scores")
+        or traj.get("k1_candidate_scores")
+        or traj.get("k0_candidate_scores")
+        or {}
+    )
+    if isinstance(cand_map, Mapping) and cand_map:
+        return [
+            str(w)
+            for w, _ in sorted(
+                cand_map.items(), key=lambda kv: (-float(kv[1]), str(kv[0]))
+            )[:5]
+        ]
+    return [str(fallback_word)] if fallback_word else []
+
+
 def _backfill_intermediate_and_shifted_bundles(
     decoded_bundles: Mapping[str, dict],
 ) -> dict[str, dict]:
     """若历史解码产物未单独显式保存 K1（C1）或 K0_shifted_neg75s，则从流式轨迹中零开销回填。"""
     bundles: dict[str, dict] = dict(decoded_bundles)
+
+    for key in ("S3_clean", "S3", "S3_shifted_neg75s"):
+        b = bundles.get(key)
+        if not b:
+            continue
+        sents = b.get("final_sentences") or []
+        hists = b.get("screen_histories") or []
+        if sents and hists and len(sents) == len(hists):
+            for rec, hist in zip(sents, hists):
+                if not rec.get("top5_words_per_pos"):
+                    trajs = hist.get("position_trajectories") or []
+                    preds = rec.get("predicted_words") or []
+                    rec["top5_words_per_pos"] = [
+                        _top5_from_trajectory(
+                            t, str(preds[p]) if p < len(preds) else ""
+                        )
+                        for p, t in enumerate(trajs)
+                    ]
 
     s3_clean = bundles.get("S3_clean") or bundles.get("S3")
     if "K1" not in bundles and s3_clean is not None:
@@ -835,6 +984,26 @@ def _backfill_intermediate_and_shifted_bundles(
                     )
                     for t in trajs
                 ]
+                k1_top5: list[list[str]] = []
+                for p, t in enumerate(trajs):
+                    cmap = (
+                        t.get("k1_candidate_scores")
+                        or t.get("k0_candidate_scores")
+                        or t.get("k2_candidate_scores")
+                        or {}
+                    )
+                    if isinstance(cmap, Mapping) and cmap:
+                        k1_top5.append(
+                            [
+                                str(w)
+                                for w, _ in sorted(
+                                    cmap.items(),
+                                    key=lambda kv: (-float(kv[1]), str(kv[0])),
+                                )[:5]
+                            ]
+                        )
+                    else:
+                        k1_top5.append([k1_words[p]])
                 base_rec = sentences[idx] if idx < len(sentences) else hist
                 k1_records.append(
                     {
@@ -854,6 +1023,7 @@ def _backfill_intermediate_and_shifted_bundles(
                             )
                         ),
                         "predicted_words": k1_words,
+                        "top5_words_per_pos": k1_top5,
                         "in_vocabulary_mask": list(
                             hist.get(
                                 "in_vocabulary_mask",
@@ -883,11 +1053,34 @@ def _backfill_intermediate_and_shifted_bundles(
         k0_shifted_records: list[dict] = []
         for idx, rec in enumerate(shifted_sents):
             init_k0 = rec.get("initial_k0_words")
-            if not init_k0 and idx < len(shifted_hists):
-                trajs = shifted_hists[idx].get("position_trajectories") or []
+            trajs = (
+                shifted_hists[idx].get("position_trajectories") or []
+                if idx < len(shifted_hists)
+                else []
+            )
+            if not init_k0 and trajs:
                 init_k0 = [str(t.get("k0_word", "")) for t in trajs]
             if init_k0 is None:
                 continue
+            k0_top5: list[list[str]] = []
+            for p, w0 in enumerate(init_k0):
+                cmap = (
+                    trajs[p].get("k0_candidate_scores") or {}
+                    if p < len(trajs)
+                    else {}
+                )
+                if isinstance(cmap, Mapping) and cmap:
+                    k0_top5.append(
+                        [
+                            str(w)
+                            for w, _ in sorted(
+                                cmap.items(),
+                                key=lambda kv: (-float(kv[1]), str(kv[0])),
+                            )[:5]
+                        ]
+                    )
+                else:
+                    k0_top5.append([str(w0)])
             k0_shifted_records.append(
                 {
                     "segment_index": rec.get("segment_index", idx),
@@ -895,6 +1088,7 @@ def _backfill_intermediate_and_shifted_bundles(
                     "subject_id": rec.get("subject_id", ""),
                     "reference_words": list(rec.get("reference_words", [])),
                     "predicted_words": list(init_k0),
+                    "top5_words_per_pos": k0_top5,
                     "in_vocabulary_mask": list(
                         rec.get(
                             "in_vocabulary_mask",
@@ -918,6 +1112,144 @@ def _backfill_intermediate_and_shifted_bundles(
     return bundles
 
 
+def plot_multi_subject_observation_curve(
+    multi_subject_scaling: Mapping[str, Mapping[str, float | int]],
+    output_dir: str | Path,
+    *,
+    dataset: str = "pallier2025",
+    split: str = "test",
+) -> dict[str, str]:
+    """绘制跨被试观测数 k ∈ {1, 2, 5, 10} 聚合下的序列解码性能跃升曲线（对标 d'Ascoli 2024 & SimpleB2T 2026）。"""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not multi_subject_scaling:
+        return {}
+
+    ordered_items = sorted(
+        multi_subject_scaling.items(),
+        key=lambda kv: int(kv[1].get("k_observations", 1)),
+    )
+    k_vals = [int(item[1].get("k_observations", 1)) for item in ordered_items]
+    bleu1 = [float(item[1].get("bleu1_pct", 0.0)) for item in ordered_items]
+    corpus_bleu1 = [
+        float(item[1].get("corpus_bleu1_pct", 0.0)) for item in ordered_items
+    ]
+    oracle_bleu1 = [
+        float(item[1].get("beam_oracle_bleu1_pct", 0.0))
+        for item in ordered_items
+    ]
+    word_acc = [
+        float(item[1].get("word_acc_pct", 0.0)) for item in ordered_items
+    ]
+    invocab_acc = [
+        float(item[1].get("in_vocabulary_word_acc_pct", 0.0))
+        for item in ordered_items
+    ]
+    top5_acc = [
+        float(item[1].get("word_acc_top5_pct", 0.0)) for item in ordered_items
+    ]
+
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(13.5, 5.0), dpi=160)
+    fig.suptitle(
+        f"Multi-Subject Observation Scaling (k = {', '.join(map(str, k_vals))}) | {dataset} ({split.upper()})",
+        fontsize=12.5,
+        fontweight="bold",
+    )
+
+    ax_left.plot(
+        k_vals,
+        bleu1,
+        "-o",
+        color="#1f77b4",
+        linewidth=2.2,
+        markersize=6,
+        label="Sentence BLEU-1 (%)",
+    )
+    ax_left.plot(
+        k_vals,
+        corpus_bleu1,
+        "-s",
+        color="#2ca02c",
+        linewidth=2.2,
+        markersize=6,
+        label="Corpus BLEU-1 (%)",
+    )
+    ax_left.plot(
+        k_vals,
+        oracle_bleu1,
+        "--^",
+        color="#9467bd",
+        linewidth=2.0,
+        markersize=6,
+        label="Beam-5 Oracle BLEU-1 (%)",
+    )
+    ax_left.set_title(
+        "(A) Sequence BLEU-1 vs. Aggregated Subject Observations k",
+        fontsize=10.5,
+        fontweight="bold",
+    )
+    ax_left.set_xlabel("Number of Averaged Subject Observations (k)", fontsize=10)
+    ax_left.set_ylabel("BLEU-1 (%)", fontsize=10)
+    ax_left.set_xticks(k_vals)
+    ax_left.grid(True, linestyle=":", alpha=0.5)
+    ax_left.legend(loc="best", fontsize=8.5)
+
+    ax_right.plot(
+        k_vals,
+        word_acc,
+        "-o",
+        color="#ff7f0e",
+        linewidth=2.2,
+        markersize=6,
+        label="All-Word Acc@1 (%)",
+    )
+    ax_right.plot(
+        k_vals,
+        invocab_acc,
+        "-s",
+        color="#d62728",
+        linewidth=2.2,
+        markersize=6,
+        label="In-Vocabulary Word Acc@1 (%)",
+    )
+    ax_right.plot(
+        k_vals,
+        top5_acc,
+        "--d",
+        color="#17becf",
+        linewidth=2.0,
+        markersize=6,
+        label="Position Candidate Acc@5 (%)",
+    )
+    ax_right.set_title(
+        "(B) Word Accuracy (Top-1 / In-Vocab / Top-5) vs. Observations k",
+        fontsize=10.5,
+        fontweight="bold",
+    )
+    ax_right.set_xlabel("Number of Averaged Subject Observations (k)", fontsize=10)
+    ax_right.set_ylabel("Word Accuracy (%)", fontsize=10)
+    ax_right.set_xticks(k_vals)
+    ax_right.grid(True, linestyle=":", alpha=0.5)
+    ax_right.legend(loc="best", fontsize=8.5)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    png_path = out_dir / f"multi_subject_observation_scaling_{split}.png"
+    pdf_path = out_dir / f"multi_subject_observation_scaling_{split}.pdf"
+    fig.savefig(png_path, dpi=160)
+    fig.savefig(pdf_path)
+    plt.close(fig)
+
+    return {
+        "multi_subject_scaling_png": str(png_path),
+        "multi_subject_scaling_pdf": str(pdf_path),
+    }
+
+
 def evaluate_and_export_sequence_decoding(
     decoded_bundles: Mapping[str, dict],
     *,
@@ -927,6 +1259,7 @@ def evaluate_and_export_sequence_decoding(
     output_dir: str | Path,
     word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
     tau_grid: Sequence[float] = DEFAULT_TAU_GATE_GRID,
+    multi_subject_bundles: Mapping[str | int, dict] | None = None,
     plot: bool = True,
 ) -> dict:
     """汇总各解码条件（LM-Only, S0, K0, K1, S3, F 及 Shifted -75s），输出 6 维指标表与 C-gated 帕累托分析。"""
@@ -939,6 +1272,7 @@ def evaluate_and_export_sequence_decoding(
     condition_summaries: dict[str, dict] = {}
     pareto_results: dict[str, dict] = {}
     figure_paths: dict[str, str] = {}
+    multi_subject_summaries: dict[str, dict] = {}
 
     for key, bundle in expanded_bundles.items():
         records = bundle["final_sentences"]
@@ -1009,6 +1343,37 @@ def evaluate_and_export_sequence_decoding(
             ordered_summaries[k] = v
     condition_summaries = ordered_summaries
 
+    if multi_subject_bundles:
+        for raw_key, ms_bundle in multi_subject_bundles.items():
+            ms_records = ms_bundle.get("final_sentences") or []
+            if not ms_records:
+                continue
+            k_obs = int(
+                ms_bundle.get(
+                    "k_observations",
+                    str(raw_key).lstrip("kK=_"),
+                )
+            )
+            ms_metrics = evaluate_six_dimensional_metrics(
+                ms_records,
+                language=language,
+                word_embedding_map=word_embedding_map,
+            )
+            ms_metrics["k_observations"] = k_obs
+            ms_metrics["mean_seconds_per_segment"] = float(
+                ms_bundle.get("mean_seconds_per_segment", 0.0)
+            )
+            multi_subject_summaries[f"k={k_obs}"] = ms_metrics
+        if plot and len(multi_subject_summaries) >= 2:
+            figure_paths.update(
+                plot_multi_subject_observation_curve(
+                    multi_subject_summaries,
+                    out_dir,
+                    dataset=dataset,
+                    split=split,
+                )
+            )
+
     if plot and condition_summaries:
         figure_paths.update(
             plot_baseline_and_shifted_comparison(
@@ -1023,6 +1388,7 @@ def evaluate_and_export_sequence_decoding(
         "language": language,
         "split": split,
         "conditions": condition_summaries,
+        "multi_subject_scaling": multi_subject_summaries,
         "confidence_gate_pareto": pareto_results,
         "figures": figure_paths,
     }

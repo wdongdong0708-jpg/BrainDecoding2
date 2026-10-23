@@ -67,7 +67,17 @@ def test_six_dimensional_metrics_computation() -> None:
             "reference_words": ["le", "petit", "prince", "parle"],
             # 命中 "le", "prince", "parle"；错 1 个实义词 ("petit" -> "grand")
             "predicted_words": ["le", "grand", "prince", "parle"],
-            "in_vocabulary_mask": [True, True, True, True],
+            "in_vocabulary_mask": [True, False, True, True],
+            "top5_words_per_pos": [
+                ["le"],
+                ["grand", "petit"],
+                ["prince"],
+                ["parle"],
+            ],
+            "beam_candidates": [
+                ["le", "grand", "prince", "parle"],
+                ["le", "petit", "prince", "parle"],
+            ],
         }
     ]
 
@@ -79,6 +89,11 @@ def test_six_dimensional_metrics_computation() -> None:
     assert metrics["function_word_count"] == 1
     assert metrics["content_word_count"] == 3
     assert metrics["word_acc_pct"] == pytest.approx(75.0)
+    assert metrics["in_vocabulary_word_acc_pct"] == pytest.approx(100.0)
+    assert metrics["word_acc_top5_pct"] == pytest.approx(100.0)
+    assert metrics["beam_oracle_bleu1_pct"] == pytest.approx(100.0)
+    assert metrics["beam_oracle_word_acc_pct"] == pytest.approx(100.0)
+    assert metrics["corpus_bleu1_pct"] == pytest.approx(75.0)
     assert metrics["function_word_acc_pct"] == pytest.approx(100.0)
     assert metrics["content_word_acc_pct"] == pytest.approx(200.0 / 3.0)
     assert metrics["wer_pct"] == pytest.approx(25.0)
@@ -271,6 +286,19 @@ def test_confidence_gate_pareto_sweep_and_export(tmp_path: Path) -> None:
         },
     }
 
+    multi_subject_bundles = {
+        "k1": {
+            "k_observations": 1,
+            "mean_seconds_per_segment": 0.02,
+            "final_sentences": decoded_bundles["S0_clean"]["final_sentences"],
+        },
+        "k5": {
+            "k_observations": 5,
+            "mean_seconds_per_segment": 0.02,
+            "final_sentences": decoded_bundles["S3_clean"]["final_sentences"],
+        },
+    }
+
     report = evaluate_and_export_sequence_decoding(
         decoded_bundles,
         dataset="chineseeeg2_littleprince",
@@ -278,12 +306,20 @@ def test_confidence_gate_pareto_sweep_and_export(tmp_path: Path) -> None:
         split="val",
         output_dir=tmp_path / "eval_out",
         tau_grid=DEFAULT_TAU_GATE_GRID,
+        multi_subject_bundles=multi_subject_bundles,
         plot=True,
     )
     assert "K1" in report["conditions"]
     assert "K0_shifted_neg75s" in report["conditions"]
     assert "S3_clean" in report["conditions"]
     assert "S3_clean_c_gated" in report["conditions"]
+    assert "k=1" in report["multi_subject_scaling"]
+    assert "k=5" in report["multi_subject_scaling"]
+    assert (
+        report["multi_subject_scaling"]["k=5"]["word_acc_pct"]
+        >= report["multi_subject_scaling"]["k=1"]["word_acc_pct"]
+    )
     assert (tmp_path / "eval_out" / "s3_evaluation_summary_val.json").exists()
     assert (tmp_path / "eval_out" / "pareto_confidence_gate_val.pdf").exists()
     assert (tmp_path / "eval_out" / "baseline_and_shifted_comparison_val.pdf").exists()
+    assert (tmp_path / "eval_out" / "multi_subject_observation_scaling_val.pdf").exists()

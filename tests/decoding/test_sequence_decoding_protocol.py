@@ -650,4 +650,95 @@ def test_batched_segment_decoding_and_transition_cache_equivalence() -> None:
         assert np.isclose(s_res["score"], b_res["score"], atol=1e-6)
 
 
+def test_top_k_local_softmax_and_multi_subject_observation_sweep() -> None:
+    """验证 Top-K 局部 Softmax 归一化消除无关词稀释，以及 k ∈ {1, 2, 5, 10} 跨被试多观测聚合。"""
+    from braindecoding.decoding.rolling_beam_search import (
+        aggregate_multi_subject_payload,
+        run_multi_subject_observation_sweep,
+    )
+
+    # 1. 验证局部 Top-K Softmax 概率和在 Top-K 候选上严格等于 1.0
+    scores = np.array([[0.8, 0.7, 0.6, -0.5, -0.8, -0.9]], dtype=np.float32)
+    lp_local = compute_neural_log_probabilities(scores, temperature=0.07, top_k=3)
+    top3_prob_sum = float(np.exp(lp_local[0, :3]).sum())
+    assert np.isclose(top3_prob_sum, 1.0, atol=1e-5)
+
+    # 2. 验证跨被试多观测聚合 (k=1, 2) 提升信噪比并输出聚合解码结果
+    vocabulary, scorer, _ = _build_toy_french_scorer()
+    vocab_size = len(vocabulary)
+    n_subjects = 4
+    seg_len = 3
+    total_events = n_subjects * seg_len
+
+    rng = np.random.default_rng(2026)
+    true_mat = np.full((seg_len, vocab_size), -1.0, dtype=np.float32)
+    for pos in range(seg_len):
+        true_mat[pos, pos] = 1.0
+
+    clean_scores = {}
+    for s in CANONICAL_STATES:
+        rows = []
+        for _ in range(n_subjects):
+            noisy = true_mat + 0.35 * rng.standard_normal((seg_len, vocab_size)).astype(
+                np.float32
+            )
+            rows.append(noisy)
+        clean_scores[s] = torch.from_numpy(np.concatenate(rows, axis=0))
+
+    segments = []
+    for subj_idx in range(n_subjects):
+        ev_start = subj_idx * seg_len
+        segments.append(
+            {
+                "segment_index": subj_idx,
+                "group_id": f"sub-{subj_idx+1:02d}|sent-0",
+                "subject_id": f"sub-{subj_idx+1:02d}",
+                "recording_id": f"sub-{subj_idx+1:02d}_run-06",
+                "scope": "run-06",
+                "block_id": "run-06|block-000",
+                "partition": "evaluation",
+                "event_indices": list(range(ev_start, ev_start + seg_len)),
+                "reference_words": [vocabulary[0], vocabulary[1], vocabulary[2]],
+                "in_vocabulary_mask": [True, True, True],
+            }
+        )
+
+    payload = {
+        "dataset": "pallier2025",
+        "language": "fr",
+        "split": "test",
+        "seed": 0,
+        "vocabulary": vocabulary,
+        "segments": segments,
+        "clean_scores": clean_scores,
+        "shifted_scores": clean_scores,
+    }
+    agg_k2 = aggregate_multi_subject_payload(payload, k_observations=2)
+    assert len(agg_k2["segments"]) == 1
+    assert agg_k2["segments"][0]["k_observations"] == 2
+
+    hyperparams = {
+        "states": {
+            s: {"temperature": 0.07, "language_weight": 0.05}
+            for s in CANONICAL_STATES
+        }
+    }
+    sweep = run_multi_subject_observation_sweep(
+        payload,
+        scorer,
+        hyperparams,
+        k_observations=(1, 2, 4),
+        beam_width=3,
+        candidate_top_k=5,
+        show_progress=False,
+    )
+    assert set(sweep.keys()) == {"k=1", "k=2", "k=4"}
+    assert sweep["k=4"]["final_sentences"][0]["predicted_words"] == [
+        vocabulary[0],
+        vocabulary[1],
+        vocabulary[2],
+    ]
+
+
+
 

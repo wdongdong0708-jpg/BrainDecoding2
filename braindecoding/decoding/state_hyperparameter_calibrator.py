@@ -28,7 +28,7 @@ from braindecoding.evaluation.statistical_significance import sentence_metrics
 from braindecoding.training.training_runtime import save_json
 
 
-DEFAULT_TEMPERATURE_GRID: tuple[float, ...] = (0.05, 0.07, 0.10, 0.15, 0.20)
+DEFAULT_TEMPERATURE_GRID: tuple[float, ...] = (0.05, 0.07)
 DEFAULT_LANGUAGE_WEIGHT_GRID: tuple[float, ...] = (
     0.0,
     0.05,
@@ -176,6 +176,7 @@ def calibrate_state_hyperparameters(
     state_grids: dict[str, list[dict]] = {}
     unconstrained_best: dict[str, dict] = {}
     best_by_state_and_lambda: dict[str, dict[float, dict]] = {}
+    by_state_temp_lam: dict[str, dict[tuple[float, float], dict]] = {}
     batch_sz = max(1, int(segment_batch_size))
 
     total_grid_evals = len(states) * len(temp_list) * len(lam_list)
@@ -197,13 +198,14 @@ def calibrate_state_hyperparameters(
             raw_matrix = clean_scores[state]
             grid_rows: list[dict] = []
             best_for_lam: dict[float, dict] = {}
+            temp_lam_map: dict[tuple[float, float], dict] = {}
             alpha_eval_cache: dict[float, dict[str, float]] = {}
 
             # 当 λ_r == 0.0 时，Top-1 神经预测与温度 T_r 无关，只需计算一次
             zero_lam_metrics: dict[str, float] | None = None
             if 0.0 in lam_list:
                 lp_any = compute_neural_log_probabilities(
-                    raw_matrix, temp_list[0]
+                    raw_matrix, temp_list[0], top_k=candidate_top_k
                 )
                 top1_idx = np.argmax(lp_any, axis=-1)
                 zero_preds = [
@@ -219,7 +221,9 @@ def calibrate_state_hyperparameters(
                 alpha_eval_cache[0.0] = zero_lam_metrics
 
             for temp in temp_list:
-                lp_matrix = compute_neural_log_probabilities(raw_matrix, temp)
+                lp_matrix = compute_neural_log_probabilities(
+                    raw_matrix, temp, top_k=candidate_top_k
+                )
                 for lam in lam_list:
                     alpha_key = round(float(temp) * float(lam), 9)
                     if alpha_key in alpha_eval_cache:
@@ -259,6 +263,7 @@ def calibrate_state_hyperparameters(
                         **eval_res,
                     }
                     grid_rows.append(row)
+                    temp_lam_map[(float(temp), float(lam))] = row
 
                     prev_best_lam = best_for_lam.get(float(lam))
                     if prev_best_lam is None or (
@@ -279,18 +284,19 @@ def calibrate_state_hyperparameters(
                         )
                         pbar.update(1)
 
-            # 无约束最优：按 selection_score 降序，平局优先选择较小 language_weight 与适中温度
+            # 无约束最优：按 selection_score 降序，平局优先选择较小 language_weight 与较小锐利温度
             winner = sorted(
                 grid_rows,
                 key=lambda item: (
                     -round(item["selection_score"], 9),
-                    item["language_weight"],
                     item["temperature"],
+                    item["language_weight"],
                 ),
             )[0]
             state_grids[state] = grid_rows
             unconstrained_best[state] = dict(winner)
             best_by_state_and_lambda[state] = best_for_lam
+            by_state_temp_lam[state] = temp_lam_map
     finally:
         if pbar is not None:
             pbar.close()
@@ -306,43 +312,60 @@ def calibrate_state_hyperparameters(
             unconstrained_best["K0"]["language_weight"]
             >= unconstrained_best["K1"]["language_weight"]
             >= unconstrained_best["K2"]["language_weight"]
+            and unconstrained_best["K0"]["temperature"]
+            == unconstrained_best["K1"]["temperature"]
+            == unconstrained_best["K2"]["temperature"]
         )
 
     if has_k012 and enforce_monotonic_lambda:
-        # 在满足 λ_{K0} >= λ_{K1} >= λ_{K2} 的所有网格三元组中寻找总校准分最高的组合
-        # 平局时优先鼓励严格单调递减 (λ_{K0} > λ_{K1} > λ_{K2}) 以体现神经证据递增规律
+        # 锁定同一锐利温度 T_0 = T_1 = T_2 = T，并在满足 λ_{K0} >= λ_{K1} >= λ_{K2} 的所有网格三元组中寻找总校准分最高的组合
+        # 彻底杜绝 K2 通过跳变到高温度 T_2 (如 0.20) 变相放大语言模型权重并压扁神经概率
         best_triple: tuple[dict, dict, dict] | None = None
-        best_key: tuple[float, int, float] | None = None
+        best_key: tuple[float, int, float, float] | None = None
 
-        for l0 in lam_list:
-            r0 = best_by_state_and_lambda["K0"][l0]
-            for l1 in lam_list:
-                if l1 > l0 + 1e-12:
-                    continue
-                r1 = best_by_state_and_lambda["K1"][l1]
-                for l2 in lam_list:
-                    if l2 > l1 + 1e-12:
+        for shared_temp in temp_list:
+            for l0 in lam_list:
+                r0 = by_state_temp_lam["K0"][(shared_temp, l0)]
+                for l1 in lam_list:
+                    if l1 > l0 + 1e-12:
                         continue
-                    r2 = best_by_state_and_lambda["K2"][l2]
-                    total_score = (
-                        r0["selection_score"]
-                        + r1["selection_score"]
-                        + r2["selection_score"]
-                    )
-                    strict_steps = int(l0 > l1) + int(l1 > l2)
-                    cand_key = (
-                        round(total_score, 8),
-                        strict_steps,
-                        -(l0 + l1 + l2),
-                    )
-                    if best_key is None or cand_key > best_key:
-                        best_key = cand_key
-                        best_triple = (dict(r0), dict(r1), dict(r2))
+                    r1 = by_state_temp_lam["K1"][(shared_temp, l1)]
+                    for l2 in lam_list:
+                        if l2 > l1 + 1e-12:
+                            continue
+                        r2 = by_state_temp_lam["K2"][(shared_temp, l2)]
+                        total_score = (
+                            r0["selection_score"]
+                            + r1["selection_score"]
+                            + r2["selection_score"]
+                        )
+                        strict_steps = int(l0 > l1) + int(l1 > l2)
+                        cand_key = (
+                            round(total_score, 8),
+                            strict_steps,
+                            -shared_temp,
+                            -(l0 + l1 + l2),
+                        )
+                        if best_key is None or cand_key > best_key:
+                            best_key = cand_key
+                            best_triple = (dict(r0), dict(r1), dict(r2))
 
         if best_triple is not None:
             selected_states["K0"] = best_triple[0]
             selected_states["K1"] = best_triple[1]
             selected_states["K2"] = best_triple[2]
+            ckpt_prov = dict(
+                exported_val_payload.get("checkpoint_provenance") or {}
+            )
+            if (
+                "F" in selected_states
+                and ckpt_prov.get("context")
+                in (None, "", "fallback_from_revision_mature")
+            ):
+                selected_states["F"] = {
+                    **best_triple[2],
+                    "state": "F",
+                }
 
     monotonicity_satisfied = True
     if has_k012:
