@@ -2085,17 +2085,21 @@ def format_sequence_decoding_report(
         for s_key, s_entry in ordered_scales:
             if not isinstance(s_entry, Mapping):
                 continue
-            all_c = s_entry.get("all_segments") or {}
+            all_c = (
+                s_entry.get("conditions")
+                or s_entry.get("all_segments")
+                or {}
+            )
             s3_m = all_c.get("S3_clean") or {}
             k0_m = all_c.get("K0") or {}
             s0_m = all_c.get("S0") or {}
             sh_m = all_c.get("S3_shifted_neg75s") or {}
-            gains_all = (
-                (s_entry.get("revision_gains_all_segments") or {}).get(
-                    "clean_C_minus_A_pp"
-                )
+            raw_gains = (
+                s_entry.get("revision_gains")
+                or s_entry.get("revision_gains_all_segments")
                 or {}
             )
+            gains_all = raw_gains.get("clean_C_minus_A_pp") or {}
             lines.append(
                 f"{str(s_key):<10} | "
                 f"{_fmt_pct(s_entry.get('test_token_coverage_pct'), 7)} | "
@@ -2127,8 +2131,19 @@ def format_sequence_decoding_report(
         for s_key, s_entry in ordered_scales:
             if not isinstance(s_entry, Mapping):
                 continue
-            c100 = (s_entry.get("core_subset_100pct") or {}).get("S3_clean") or {}
-            c80_map = s_entry.get("core_subset_80pct") or {}
+            c100_block = s_entry.get("core_subset_100pct") or {}
+            c100_conds = (
+                c100_block.get("conditions")
+                if isinstance(c100_block.get("conditions"), Mapping)
+                else c100_block
+            ) or {}
+            c100 = c100_conds.get("S3_clean") or {}
+            c80_block = s_entry.get("core_subset_80pct") or {}
+            c80_map = (
+                c80_block.get("conditions")
+                if isinstance(c80_block.get("conditions"), Mapping)
+                else c80_block
+            ) or {}
             c80_s3 = c80_map.get("S3_clean") or {}
             c80_k0 = c80_map.get("K0") or {}
             c80_sh = c80_map.get("S3_shifted_neg75s") or {}
