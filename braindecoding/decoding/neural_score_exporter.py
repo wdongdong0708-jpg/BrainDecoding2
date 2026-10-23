@@ -603,6 +603,26 @@ def export_neural_vocabulary_scores(
 
     word_col = "normalized_word" if "normalized_word" in train_table.columns else "标准词"
     vocabulary = sorted(set(train_table[word_col].astype(str).tolist()))
+    if dataset == "pallier2025":
+        run_c = "运行编号" if "运行编号" in train_table.columns else "recording_id"
+        bids_c = "BIDS事件行号" if "BIDS事件行号" in train_table.columns else "event_index"
+        dedup_train = (
+            train_table.drop_duplicates([run_c, bids_c])
+            if (run_c in train_table.columns and bids_c in train_table.columns)
+            else train_table
+        )
+    else:
+        voice_c = "音频版本" if "音频版本" in train_table.columns else "voice_version"
+        src_w_c = "源词编号" if "源词编号" in train_table.columns else "source_word_id"
+        dedup_train = (
+            train_table.drop_duplicates([voice_c, src_w_c])
+            if (voice_c in train_table.columns and src_w_c in train_table.columns)
+            else train_table
+        )
+    train_word_series = dedup_train[word_col].astype(str).value_counts().to_dict()
+    vocabulary_train_counts = {
+        str(w): int(train_word_series.get(str(w), 1)) for w in vocabulary
+    }
     eval_ds = task.build_dataset(rev_cfg, eval_table)
 
     vocab_vectors = np.stack(
@@ -805,6 +825,7 @@ def export_neural_vocabulary_scores(
         "states": list(CANONICAL_STATES),
         "vocabulary": vocabulary,
         "vocabulary_size": len(vocabulary),
+        "vocabulary_train_counts": vocabulary_train_counts,
         "vocabulary_embeddings": vocab_tensor.cpu(),
         "event_ids": event_ids,
         "reference_words": ref_words,
@@ -823,6 +844,7 @@ def export_neural_vocabulary_scores(
             "subtraction_eta": eta_val,
         },
         "checkpoints": checkpoint_provenance,
+        "checkpoint_provenance": checkpoint_provenance,
         "elapsed_seconds": round(time.perf_counter() - started, 3),
     }
     tmp_file = out_file.with_suffix(out_file.suffix + ".tmp")
@@ -846,11 +868,133 @@ def export_neural_vocabulary_scores(
             "states": list(CANONICAL_STATES),
             "cms_metadata": payload["cms_metadata"],
             "checkpoints": checkpoint_provenance,
+            "checkpoint_provenance": checkpoint_provenance,
             "pt_file": str(out_file),
             "elapsed_seconds": payload["elapsed_seconds"],
         },
     )
     return out_file
+
+
+def resolve_vocabulary_frequency_order(
+    exported_payload: dict,
+) -> tuple[list[int], list[str], dict[str, int]]:
+    """返回按训练集词频降序、字典序升序排列的词表列索引、词列表与训练词频字典。"""
+    vocabulary = [str(w) for w in exported_payload.get("vocabulary") or []]
+    if not vocabulary:
+        return [], [], {}
+
+    dataset = str(exported_payload.get("dataset") or "pallier2025")
+    saved_counts = exported_payload.get("vocabulary_train_counts")
+    counts: dict[str, int] = {}
+
+    if isinstance(saved_counts, dict) and saved_counts:
+        counts = {str(k): int(v) for k, v in saved_counts.items()}
+    elif isinstance(saved_counts, (list, tuple)) and len(saved_counts) == len(vocabulary):
+        counts = {
+            str(vocabulary[i]): int(saved_counts[i])
+            for i in range(len(vocabulary))
+        }
+
+    if not counts and dataset == "pallier2025":
+        manifest_path = project_path(
+            "data/manifests/rolling_sentence/pallier2025_train_vocabulary.json"
+        )
+        if manifest_path.is_file():
+            try:
+                manifest_obj = json.loads(
+                    manifest_path.read_text(encoding="utf-8")
+                )
+                mat_freqs = manifest_obj.get("material_frequencies") or {}
+                if isinstance(mat_freqs, dict) and mat_freqs:
+                    counts = {str(k): int(v) for k, v in mat_freqs.items()}
+            except Exception:
+                counts = {}
+
+    if not counts:
+        try:
+            task = pallier_task if dataset == "pallier2025" else chinese_task
+            from braindecoding.data.derived_cache import canonical_cache_paths
+
+            evt_path = Path(canonical_cache_paths(dataset)["event_table"])
+            if evt_path.is_file():
+                train_df = task.dataset_module.load_event_table(
+                    evt_path, split="train", trainable_only=True
+                )
+                w_col = (
+                    "normalized_word"
+                    if "normalized_word" in train_df.columns
+                    else "标准词"
+                )
+                if dataset == "pallier2025":
+                    r_col = (
+                        "运行编号"
+                        if "运行编号" in train_df.columns
+                        else "recording_id"
+                    )
+                    b_col = (
+                        "BIDS事件行号"
+                        if "BIDS事件行号" in train_df.columns
+                        else "event_index"
+                    )
+                    if r_col in train_df.columns and b_col in train_df.columns:
+                        train_df = train_df.drop_duplicates([r_col, b_col])
+                else:
+                    v_col = (
+                        "音频版本"
+                        if "音频版本" in train_df.columns
+                        else "voice_version"
+                    )
+                    s_col = (
+                        "源词编号"
+                        if "源词编号" in train_df.columns
+                        else "source_word_id"
+                    )
+                    if v_col in train_df.columns and s_col in train_df.columns:
+                        train_df = train_df.drop_duplicates([v_col, s_col])
+                counts = {
+                    str(k): int(v)
+                    for k, v in train_df[w_col]
+                    .astype(str)
+                    .value_counts()
+                    .to_dict()
+                    .items()
+                }
+        except Exception:
+            counts = {}
+
+    if not counts:
+        manifest_dir = (
+            "pallier2025" if dataset == "pallier2025" else "chineseeeg2"
+        )
+        n150_path = project_path(
+            f"data/manifests/{manifest_dir}/vocabulary_N150.json"
+        )
+        if n150_path.is_file():
+            try:
+                n150_obj = json.loads(n150_path.read_text(encoding="utf-8"))
+                wc = n150_obj.get("word_counts") or {}
+                if isinstance(wc, dict) and wc:
+                    counts.update({str(k): int(v) * 1000 for k, v in wc.items()})
+                elif isinstance(n150_obj.get("vocabulary"), list):
+                    for rank_i, w_str in enumerate(n150_obj["vocabulary"]):
+                        counts[str(w_str)] = (200 - rank_i) * 1000
+            except Exception:
+                pass
+        for seg in exported_payload.get("segments") or []:
+            for w_str in seg.get("reference_words") or []:
+                w_s = str(w_str)
+                if w_s not in counts:
+                    counts[w_s] = 0
+                counts[w_s] += 1
+
+    ranked_indices = sorted(
+        range(len(vocabulary)),
+        key=lambda idx: (-int(counts.get(vocabulary[idx], 0)), vocabulary[idx]),
+    )
+    ranked_words = [vocabulary[idx] for idx in ranked_indices]
+    full_counts = {w: int(counts.get(w, 0)) for w in vocabulary}
+    return ranked_indices, ranked_words, full_counts
 
 
 def load_neural_vocabulary_scores(path: str | Path) -> dict:

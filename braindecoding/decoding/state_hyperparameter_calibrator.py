@@ -196,6 +196,37 @@ def calibrate_state_hyperparameters(
             if state not in clean_scores:
                 raise ValueError(f"导出的验证集得分缺少状态 {state!r}。")
             raw_matrix = clean_scores[state]
+            if (
+                state == "F"
+                and "K2" in state_grids
+                and np.allclose(
+                    np.asarray(raw_matrix, dtype=np.float32),
+                    np.asarray(clean_scores["K2"], dtype=np.float32),
+                    atol=1e-6,
+                )
+            ):
+                grid_rows = [
+                    {**row, "state": "F"} for row in state_grids["K2"]
+                ]
+                best_for_lam = {
+                    lam_k: {**row, "state": "F"}
+                    for lam_k, row in best_by_state_and_lambda["K2"].items()
+                }
+                temp_lam_map = {
+                    tl_k: {**row, "state": "F"}
+                    for tl_k, row in by_state_temp_lam["K2"].items()
+                }
+                state_grids["F"] = grid_rows
+                unconstrained_best["F"] = {
+                    **unconstrained_best["K2"],
+                    "state": "F",
+                }
+                best_by_state_and_lambda["F"] = best_for_lam
+                by_state_temp_lam["F"] = temp_lam_map
+                if pbar is not None:
+                    pbar.update(len(temp_list) * len(lam_list))
+                continue
+
             grid_rows: list[dict] = []
             best_for_lam: dict[float, dict] = {}
             temp_lam_map: dict[tuple[float, float], dict] = {}
@@ -375,6 +406,7 @@ def calibrate_state_hyperparameters(
             >= selected_states["K2"]["language_weight"]
         )
 
+    cms_meta = dict(exported_val_payload.get("cms_metadata") or {})
     result = {
         "schema_version": 1,
         "protocol": "sequence_decoding_s3_calibration",
@@ -382,6 +414,7 @@ def calibrate_state_hyperparameters(
         "language": language,
         "split": "val",
         "seed": exported_val_payload.get("seed", 0),
+        "cms_eta": cms_meta.get("subtraction_eta"),
         "calibration_segments": len(cal_segments),
         "metric": metric_name,
         "temperature_grid": temp_list,

@@ -13,7 +13,8 @@ language_model:
     - Qwen/Qwen3-8B-Base
     - Qwen/Qwen3-4B-Base
   precision: bf16-mixed
-  score_batch_size: 128
+  score_batch_size: 256
+  max_prefix_cache_states: 512
   context_tokens: 8192
 
 decoding:
@@ -90,6 +91,14 @@ evaluation:
     - 2
     - 5
     - 10
+  core_vocabulary_size: 250
+  vocabulary_scaling_sizes:
+    - 50
+    - 100
+    - 250
+    - 500
+    - 1000
+    - 2020
   confidence_gate:
     enabled: true
     tau_min: 0.0

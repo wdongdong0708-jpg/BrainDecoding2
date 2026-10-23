@@ -969,6 +969,68 @@ def _backfill_intermediate_and_shifted_bundles(
                     ]
 
     s3_clean = bundles.get("S3_clean") or bundles.get("S3")
+    if "K0" not in bundles and s3_clean is not None:
+        clean_sents = s3_clean.get("final_sentences") or []
+        clean_hists = s3_clean.get("screen_histories") or []
+        k0_clean_records: list[dict] = []
+        for idx, rec in enumerate(clean_sents):
+            init_k0 = rec.get("initial_k0_words")
+            trajs = (
+                clean_hists[idx].get("position_trajectories") or []
+                if idx < len(clean_hists)
+                else []
+            )
+            if not init_k0 and trajs:
+                init_k0 = [str(t.get("k0_word", "")) for t in trajs]
+            if init_k0 is None:
+                continue
+            k0_top5: list[list[str]] = []
+            for p, w0 in enumerate(init_k0):
+                cmap = (
+                    trajs[p].get("k0_candidate_scores") or {}
+                    if p < len(trajs)
+                    else {}
+                )
+                if isinstance(cmap, Mapping) and cmap:
+                    k0_top5.append(
+                        [
+                            str(w)
+                            for w, _ in sorted(
+                                cmap.items(),
+                                key=lambda kv: (-float(kv[1]), str(kv[0])),
+                            )[:5]
+                        ]
+                    )
+                else:
+                    k0_top5.append([str(w0)])
+            k0_clean_records.append(
+                {
+                    "segment_index": rec.get("segment_index", idx),
+                    "group_id": rec.get("group_id", ""),
+                    "subject_id": rec.get("subject_id", ""),
+                    "reference_words": list(rec.get("reference_words", [])),
+                    "predicted_words": list(init_k0),
+                    "top5_words_per_pos": k0_top5,
+                    "in_vocabulary_mask": list(
+                        rec.get(
+                            "in_vocabulary_mask",
+                            [True] * len(rec.get("reference_words", [])),
+                        )
+                    ),
+                }
+            )
+        if k0_clean_records:
+            bundles["K0"] = {
+                "condition": "K0",
+                "alignment": "clean",
+                "segment_count": len(k0_clean_records),
+                "mean_seconds_per_segment": float(
+                    s3_clean.get("mean_seconds_per_segment", 0.0)
+                ),
+                "final_sentences": k0_clean_records,
+                "screen_histories": [],
+            }
+
     if "K1" not in bundles and s3_clean is not None:
         histories = s3_clean.get("screen_histories") or []
         sentences = s3_clean.get("final_sentences") or []
@@ -1250,6 +1312,338 @@ def plot_multi_subject_observation_curve(
     }
 
 
+def _filter_records_by_vocabulary_coverage(
+    records: Sequence[Mapping],
+    min_coverage_fraction: float,
+) -> list[dict]:
+    """筛选词表覆盖率 >= min_coverage_fraction 的高覆盖核心句段（对标 SimpleB2T Core / Expanded 子集）。"""
+    threshold = float(min_coverage_fraction) - 1e-9
+    filtered: list[dict] = []
+    for rec in records:
+        ref = rec.get("reference_words") or []
+        if not ref:
+            continue
+        iv_mask = rec.get("in_vocabulary_mask")
+        if iv_mask is None or len(iv_mask) != len(ref):
+            cov = 1.0
+        else:
+            cov = float(sum(1 for flag in iv_mask if bool(flag)) / len(ref))
+        if cov >= threshold:
+            filtered.append(dict(rec))
+    return filtered
+
+
+def _compute_revision_gain_deltas(
+    cond_metrics: Mapping[str, Mapping[str, float | int]],
+) -> dict[str, dict[str, float]]:
+    """计算指定条件集合下的 Clean (S3_clean - K0) 与 Shifted (S3_shifted - K0_shifted) 滚动修正净增益（百分点 pp）。"""
+    gains: dict[str, dict[str, float]] = {}
+    metric_keys = (
+        "bleu1_pct",
+        "corpus_bleu1_pct",
+        "beam_oracle_bleu1_pct",
+        "word_acc_pct",
+        "in_vocabulary_word_acc_pct",
+        "word_acc_top5_pct",
+        "content_word_acc_pct",
+        "function_word_acc_pct",
+        "cer_pct",
+        "wer_pct",
+        "bertscore_f1_pct",
+    )
+    if "S3_clean" in cond_metrics and "K0" in cond_metrics:
+        c_m = cond_metrics["S3_clean"]
+        a_m = cond_metrics["K0"]
+        gains["clean_C_minus_A_pp"] = {
+            mk: round(float(c_m.get(mk, 0.0)) - float(a_m.get(mk, 0.0)), 4)
+            for mk in metric_keys
+            if mk in c_m and mk in a_m
+        }
+    if (
+        "S3_shifted_neg75s" in cond_metrics
+        and "K0_shifted_neg75s" in cond_metrics
+    ):
+        cs_m = cond_metrics["S3_shifted_neg75s"]
+        as_m = cond_metrics["K0_shifted_neg75s"]
+        gains["shifted_C_minus_A_pp"] = {
+            mk: round(float(cs_m.get(mk, 0.0)) - float(as_m.get(mk, 0.0)), 4)
+            for mk in metric_keys
+            if mk in cs_m and mk in as_m
+        }
+    if "S3_clean" in cond_metrics and "S3_shifted_neg75s" in cond_metrics:
+        c_m = cond_metrics["S3_clean"]
+        cs_m = cond_metrics["S3_shifted_neg75s"]
+        gains["clean_minus_shifted_S3_pp"] = {
+            mk: round(float(c_m.get(mk, 0.0)) - float(cs_m.get(mk, 0.0)), 4)
+            for mk in metric_keys
+            if mk in c_m and mk in cs_m
+        }
+    return gains
+
+
+def evaluate_high_coverage_core_subsets(
+    bundles_map: Mapping[str, dict],
+    *,
+    language: str,
+    word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
+    vocabulary_size: int | None = None,
+) -> dict[str, Any]:
+    """评估特定词表规模（如 Core Vocab |V|=250 或 Full Vocab |V|=2020）下的口径 1（In-Vocab 全句段）与口径 2（高覆盖核心句 Core Sentences: 100%, >=80%, >=70%）。"""
+    expanded = _backfill_intermediate_and_shifted_bundles(bundles_map)
+    subset_specs = (
+        ("all_segments", 0.0, "All Test Segments (In-Vocab Token Evaluation)"),
+        (
+            "core_subset_100pct",
+            1.0,
+            "Core Sentences (100% Words in V_N, 0% OOV, SimpleB2T Core Set)",
+        ),
+        (
+            "core_subset_80pct",
+            0.80,
+            "High-Coverage Core Sentences (>=80% Words in V_N)",
+        ),
+        (
+            "expanded_subset_70pct",
+            0.70,
+            "Expanded High-Coverage Sentences (>=70% Words in V_N)",
+        ),
+    )
+    canonical_conds = (
+        "LM-Only",
+        "S0",
+        "K0",
+        "K1",
+        "S3_clean",
+        "F",
+        "K0_shifted_neg75s",
+        "S3_shifted_neg75s",
+    )
+
+    subsets_report: dict[str, Any] = {}
+    for subset_key, min_cov, desc in subset_specs:
+        cond_results: dict[str, dict] = {}
+        seg_count_observed = 0
+        for cond_name in canonical_conds:
+            if cond_name not in expanded:
+                continue
+            raw_recs = expanded[cond_name].get("final_sentences") or []
+            sub_recs = (
+                list(raw_recs)
+                if min_cov <= 0.0
+                else _filter_records_by_vocabulary_coverage(raw_recs, min_cov)
+            )
+            if not sub_recs:
+                continue
+            seg_count_observed = max(seg_count_observed, len(sub_recs))
+            cond_results[cond_name] = evaluate_six_dimensional_metrics(
+                sub_recs,
+                language=language,
+                word_embedding_map=word_embedding_map,
+            )
+        if cond_results:
+            subsets_report[subset_key] = {
+                "description": desc,
+                "min_vocabulary_coverage_fraction": float(min_cov),
+                "segment_count": int(seg_count_observed),
+                "conditions": cond_results,
+                "revision_gains": _compute_revision_gain_deltas(cond_results),
+            }
+
+    return {
+        "vocabulary_size": vocabulary_size,
+        "subsets": subsets_report,
+    }
+
+
+def evaluate_vocabulary_scaling_summary(
+    vocabulary_scaling_bundles: Mapping[str, dict],
+    *,
+    language: str,
+    word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
+) -> dict[str, dict]:
+    """汇总多尺度候选词表 |V| in {50, 100, 250, 500, 1000, 2020} 下的 6 维指标、高覆盖核心句表现与滚动修正净增益（对标 Jayalath 2025 Fig 4）。"""
+    summary_by_scale: dict[str, dict] = {}
+    ordered_entries = sorted(
+        vocabulary_scaling_bundles.items(),
+        key=lambda kv: int(
+            kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
+        ),
+    )
+
+    for scale_key, entry in ordered_entries:
+        if not isinstance(entry, Mapping):
+            continue
+        v_size = int(
+            entry.get("vocabulary_size", str(scale_key).lstrip("vV=_") or 0)
+        )
+        raw_conds = entry.get("conditions") or {}
+        if not isinstance(raw_conds, Mapping) or not raw_conds:
+            continue
+
+        subset_eval = evaluate_high_coverage_core_subsets(
+            raw_conds,
+            language=language,
+            word_embedding_map=word_embedding_map,
+            vocabulary_size=v_size,
+        )
+        subsets_map = subset_eval.get("subsets", {})
+        all_seg_block = subsets_map.get("all_segments", {})
+        core80_block = subsets_map.get("core_subset_80pct", {})
+        core100_block = subsets_map.get("core_subset_100pct", {})
+
+        all_conds = all_seg_block.get("conditions", {})
+        s3_m = all_conds.get("S3_clean", {})
+        tok_cov = float(
+            entry.get(
+                "test_token_coverage_pct",
+                s3_m.get("in_vocabulary_rate_pct", 0.0),
+            )
+        )
+
+        summary_by_scale[f"V={v_size}"] = {
+            "vocabulary_size": v_size,
+            "is_full_vocabulary": bool(entry.get("is_full_vocabulary", False)),
+            "test_token_coverage_pct": round(tok_cov, 4),
+            "total_segment_count": int(
+                entry.get(
+                    "total_segment_count",
+                    all_seg_block.get("segment_count", 0),
+                )
+            ),
+            "core_100pct_segment_count": int(
+                entry.get(
+                    "core_100pct_segment_count",
+                    core100_block.get("segment_count", 0),
+                )
+            ),
+            "core_80pct_segment_count": int(
+                entry.get(
+                    "core_80pct_segment_count",
+                    core80_block.get("segment_count", 0),
+                )
+            ),
+            "conditions": all_conds,
+            "revision_gains": all_seg_block.get("revision_gains", {}),
+            "core_subset_80pct": core80_block,
+            "core_subset_100pct": core100_block,
+        }
+
+    return summary_by_scale
+
+
+def plot_vocabulary_scaling_curve(
+    vocabulary_scaling_summary: Mapping[str, Mapping[str, Any]],
+    output_dir: str | Path,
+    *,
+    dataset: str = "pallier2025",
+    split: str = "test",
+) -> dict[str, str]:
+    """绘制 1x4 多尺度词表敏感性曲线（横轴 log |V|，纵轴 BLEU-1 / In-Vocab Word Acc / CER / BERTScore，对标 Jayalath 2025 Fig 4）。"""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not vocabulary_scaling_summary:
+        return {}
+
+    ordered = sorted(
+        vocabulary_scaling_summary.items(),
+        key=lambda kv: int(kv[1].get("vocabulary_size", 0)),
+    )
+    v_sizes = [int(item[1].get("vocabulary_size", 0)) for item in ordered]
+    if len(v_sizes) < 2:
+        return {}
+
+    curve_specs = (
+        ("S3_clean", "S3 (K2 Rolling Revision, Clean)", "#1f77b4", "-o", 2.3),
+        ("K0", "K0 (Initial Draft, Clean)", "#2ca02c", "--s", 1.9),
+        ("S0", "S0 (Single-Word CNN, Clean)", "#ff7f0e", ":^", 1.8),
+        (
+            "S3_shifted_neg75s",
+            "S3 Shifted (-75s Control)",
+            "#d62728",
+            "-.x",
+            1.7,
+        ),
+    )
+    panel_specs = (
+        ("bleu1_pct", "(A) Sentence BLEU-1 (%)", "BLEU-1 (%)"),
+        (
+            "in_vocabulary_word_acc_pct",
+            "(B) In-Vocabulary Word Acc (%)",
+            "In-Vocab Word Acc (%)",
+        ),
+        ("cer_pct", "(C) Character Error Rate CER (%) ↓", "CER (%)"),
+        (
+            "bertscore_f1_pct",
+            "(D) Continuous Semantic BERTScore (%)",
+            "BERTScore F1 (%)",
+        ),
+    )
+
+    fig, axes = plt.subplots(1, 4, figsize=(18.5, 4.6), dpi=160)
+    fig.suptitle(
+        f"Multi-Scale Vocabulary Scaling Law (|V| = {', '.join(map(str, v_sizes))}) | {dataset} ({split.upper()})",
+        fontsize=12.5,
+        fontweight="bold",
+    )
+
+    for ax, (metric_key, panel_title, y_label) in zip(axes, panel_specs):
+        for cond_key, label, color, style, lw in curve_specs:
+            xs: list[int] = []
+            ys: list[float] = []
+            for _, scale_obj in ordered:
+                c_map = scale_obj.get("conditions") or {}
+                if cond_key in c_map and metric_key in c_map[cond_key]:
+                    xs.append(int(scale_obj["vocabulary_size"]))
+                    ys.append(float(c_map[cond_key][metric_key]))
+            if xs:
+                ax.plot(
+                    xs,
+                    ys,
+                    style,
+                    color=color,
+                    linewidth=lw,
+                    markersize=5.5,
+                    label=label,
+                )
+        ax.set_xscale("log")
+        ax.set_xticks(v_sizes)
+        ax.set_xticklabels([str(v) for v in v_sizes], fontsize=8.5)
+        ax.get_xaxis().set_minor_formatter(matplotlib.ticker.NullFormatter())
+        ax.set_title(panel_title, fontsize=10.0, fontweight="bold")
+        ax.set_xlabel("Candidate Vocabulary Size |V| (log scale)", fontsize=9.5)
+        ax.set_ylabel(y_label, fontsize=9.5)
+        ax.grid(True, linestyle=":", alpha=0.5)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(
+            handles,
+            labels,
+            loc="lower center",
+            ncol=4,
+            fontsize=9.0,
+            frameon=True,
+            bbox_to_anchor=(0.5, 0.01),
+        )
+
+    fig.tight_layout(rect=[0, 0.08, 1, 0.92])
+    png_path = out_dir / f"s3_vocabulary_scaling_{split}.png"
+    pdf_path = out_dir / f"s3_vocabulary_scaling_{split}.pdf"
+    fig.savefig(png_path, dpi=160)
+    fig.savefig(pdf_path)
+    plt.close(fig)
+
+    return {
+        "vocabulary_scaling_png": str(png_path),
+        "vocabulary_scaling_pdf": str(pdf_path),
+    }
+
+
 def evaluate_and_export_sequence_decoding(
     decoded_bundles: Mapping[str, dict],
     *,
@@ -1260,9 +1654,11 @@ def evaluate_and_export_sequence_decoding(
     word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
     tau_grid: Sequence[float] = DEFAULT_TAU_GATE_GRID,
     multi_subject_bundles: Mapping[str | int, dict] | None = None,
+    vocabulary_scaling_bundles: Mapping[str, dict] | None = None,
+    core_vocab_size: int = 250,
     plot: bool = True,
 ) -> dict:
-    """汇总各解码条件（LM-Only, S0, K0, K1, S3, F 及 Shifted -75s），输出 6 维指标表与 C-gated 帕累托分析。"""
+    """汇总各解码条件（LM-Only, S0, K0, K1, S3, F 及 Shifted -75s）、跨被试聚合与多尺度候选词表实验，输出 6 维指标表与可视化图表。"""
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1273,6 +1669,8 @@ def evaluate_and_export_sequence_decoding(
     pareto_results: dict[str, dict] = {}
     figure_paths: dict[str, str] = {}
     multi_subject_summaries: dict[str, dict] = {}
+    vocabulary_scaling_summaries: dict[str, dict] = {}
+    core_vocabulary_benchmark: dict[str, Any] = {}
 
     for key, bundle in expanded_bundles.items():
         records = bundle["final_sentences"]
@@ -1343,6 +1741,15 @@ def evaluate_and_export_sequence_decoding(
             ordered_summaries[k] = v
     condition_summaries = ordered_summaries
 
+    full_vocab_core_subsets = evaluate_high_coverage_core_subsets(
+        expanded_bundles,
+        language=language,
+        word_embedding_map=word_embedding_map,
+        vocabulary_size=expanded_bundles.get("S3_clean", {}).get(
+            "vocabulary_size"
+        ),
+    )
+
     if multi_subject_bundles:
         for raw_key, ms_bundle in multi_subject_bundles.items():
             ms_records = ms_bundle.get("final_sentences") or []
@@ -1374,6 +1781,34 @@ def evaluate_and_export_sequence_decoding(
                 )
             )
 
+    if vocabulary_scaling_bundles:
+        vocabulary_scaling_summaries = evaluate_vocabulary_scaling_summary(
+            vocabulary_scaling_bundles,
+            language=language,
+            word_embedding_map=word_embedding_map,
+        )
+        core_key = f"V={int(core_vocab_size)}"
+        if core_key in vocabulary_scaling_bundles:
+            core_entry = vocabulary_scaling_bundles[core_key]
+            core_vocabulary_benchmark = evaluate_high_coverage_core_subsets(
+                core_entry.get("conditions") or {},
+                language=language,
+                word_embedding_map=word_embedding_map,
+                vocabulary_size=int(core_vocab_size),
+            )
+            core_vocabulary_benchmark["test_token_coverage_pct"] = (
+                core_entry.get("test_token_coverage_pct")
+            )
+        if plot and len(vocabulary_scaling_summaries) >= 2:
+            figure_paths.update(
+                plot_vocabulary_scaling_curve(
+                    vocabulary_scaling_summaries,
+                    out_dir,
+                    dataset=dataset,
+                    split=split,
+                )
+            )
+
     if plot and condition_summaries:
         figure_paths.update(
             plot_baseline_and_shifted_comparison(
@@ -1388,6 +1823,9 @@ def evaluate_and_export_sequence_decoding(
         "language": language,
         "split": split,
         "conditions": condition_summaries,
+        "core_vocabulary_benchmark": core_vocabulary_benchmark,
+        "full_vocab_core_subsets": full_vocab_core_subsets,
+        "vocabulary_scaling": vocabulary_scaling_summaries,
         "multi_subject_scaling": multi_subject_summaries,
         "confidence_gate_pareto": pareto_results,
         "figures": figure_paths,

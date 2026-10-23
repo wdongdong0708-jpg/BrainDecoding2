@@ -845,6 +845,8 @@ def build_parser() -> argparse.ArgumentParser:
     decode_cmd.add_argument("--cms-eta", type=float, default=None, help="可选覆写共模扣除系数 eta（默认：0.0）")
     decode_cmd.add_argument("--control-shift-seconds", type=float, default=None, help="可选覆写负对照错位秒数")
     decode_cmd.add_argument("--k-observations", default=None, help="可选覆写跨被试聚合观测数列表（默认：1,2,5,10）")
+    decode_cmd.add_argument("--vocab-sizes", default=None, help="可选覆写多尺度候选词表规模列表（默认：50,100,250,500,1000,2020）")
+    decode_cmd.add_argument("--core-vocab-size", type=int, default=None, help="可选覆写高覆盖核心基准词表规模（默认：250）")
     decode_cmd.add_argument("--max-segments", type=int, default=None, help="可选限制最大解码段落数")
     decode_cmd.add_argument("--output-dir", default=None, help="可选显式指定输出根目录")
     decode_cmd.add_argument("--export-path", default=None, help="可选显式指定神经词表得分 .pt 路径")
@@ -853,6 +855,7 @@ def build_parser() -> argparse.ArgumentParser:
     decode_cmd.add_argument("--no-bertscore", action="store_true", help="禁用预计算词向量计算 BERTScore")
     decode_cmd.add_argument("--no-plot", action="store_true", help="禁用可视化图表生成")
     decode_cmd.add_argument("--no-progress", action="store_true", help="禁用 tqdm 实时进度条")
+    decode_cmd.add_argument("--force", action="store_true", help="强制重跑全部步骤，忽略已保存的匹配缓存与中间解码产物")
     decode_cmd.add_argument("--device", default=None, help="计算设备（cuda / cpu）")
 
     show = commands.add_parser("show", help="显示当前协议或显式指定的历史配置")

@@ -346,9 +346,9 @@ class CachedVocabularyLanguageScorer:
             ctx: tensor.to(self.device)
             for ctx, tensor in self.vocab_table.first_token_by_context.items()
         }
-        self.max_batch_size = int(self.settings.get("score_batch_size", 128))
+        self.max_batch_size = int(self.settings.get("score_batch_size", 256))
         self.max_prefix_cache_states = int(
-            self.settings.get("max_prefix_cache_states", 64)
+            self.settings.get("max_prefix_cache_states", 512)
         )
         self.max_transition_cache_prefixes = int(
             self.settings.get("max_transition_cache_prefixes", 200000)
@@ -450,6 +450,15 @@ class CachedVocabularyLanguageScorer:
         if not pending_by_words:
             return
 
+        unmaterialized_parents = [
+            (st_group[0].parent_state or self.init_prompt_state())
+            for st_group in pending_by_words.values()
+            if (st_group[0].parent_state or self.init_prompt_state()).past_key_values
+            is None
+        ]
+        if unmaterialized_parents:
+            self._ensure_states_materialized(unmaterialized_parents)
+
         unique_specs: list[
             tuple[
                 tuple[str, ...],
@@ -462,8 +471,6 @@ class CachedVocabularyLanguageScorer:
             rep = st_group[0]
             parent = rep.parent_state or self.init_prompt_state()
             step_toks = rep.step_token_ids
-            if parent.past_key_values is None:
-                self._ensure_states_materialized([parent])
             if not step_toks:
                 for target_st in st_group:
                     target_st.past_key_values = parent.past_key_values
@@ -471,6 +478,13 @@ class CachedVocabularyLanguageScorer:
                     target_st.parent_state = None
                 continue
             unique_specs.append((words_key, parent, step_toks, st_group))
+
+        unique_specs.sort(
+            key=lambda item: (
+                int(item[1].past_key_values[0][0].shape[2]),
+                len(item[2]),
+            )
+        )
 
         for start in range(0, len(unique_specs), self.max_batch_size):
             batch = unique_specs[start : start + self.max_batch_size]
@@ -484,21 +498,13 @@ class CachedVocabularyLanguageScorer:
             min_step_len = min(step_lengths)
             min_past_len = min(past_lengths)
 
-            input_ids = torch.zeros(
-                (bsz, max_step_len), dtype=torch.long, device=self.device
-            )
-            position_ids = torch.zeros(
-                (bsz, max_step_len), dtype=torch.long, device=self.device
-            )
+            input_ids_np = np.zeros((bsz, max_step_len), dtype=np.int64)
+            position_ids_np = np.zeros((bsz, max_step_len), dtype=np.int64)
             need_mask = (min_past_len != max_past_len) or (
                 min_step_len != max_step_len
             )
-            attention_mask = (
-                torch.zeros(
-                    (bsz, max_past_len + max_step_len),
-                    dtype=torch.long,
-                    device=self.device,
-                )
+            attention_mask_np = (
+                np.zeros((bsz, max_past_len + max_step_len), dtype=np.int64)
                 if need_mask
                 else None
             )
@@ -506,27 +512,26 @@ class CachedVocabularyLanguageScorer:
             for row_i, (_, _, step_toks, _) in enumerate(batch):
                 p_len = past_lengths[row_i]
                 s_len = len(step_toks)
-                input_ids[row_i, :s_len] = torch.tensor(
-                    step_toks, dtype=torch.long, device=self.device
+                input_ids_np[row_i, :s_len] = step_toks
+                position_ids_np[row_i, :s_len] = np.arange(
+                    p_len, p_len + s_len, dtype=np.int64
                 )
-                pos_seq = torch.arange(
-                    p_len, p_len + s_len, dtype=torch.long, device=self.device
-                )
-                position_ids[row_i, :s_len] = pos_seq
                 if s_len < max_step_len:
-                    position_ids[row_i, s_len:] = p_len + s_len - 1
-                if attention_mask is not None:
+                    position_ids_np[row_i, s_len:] = p_len + s_len - 1
+                if attention_mask_np is not None:
                     pad_left = max_past_len - p_len
-                    attention_mask[row_i, pad_left : max_past_len + s_len] = 1
+                    attention_mask_np[row_i, pad_left : max_past_len + s_len] = 1
 
             model_kwargs: dict = {
-                "input_ids": input_ids,
+                "input_ids": torch.from_numpy(input_ids_np).to(self.device),
                 "past_key_values": batched_kv,
-                "position_ids": position_ids,
+                "position_ids": torch.from_numpy(position_ids_np).to(self.device),
                 "use_cache": True,
             }
-            if attention_mask is not None:
-                model_kwargs["attention_mask"] = attention_mask
+            if attention_mask_np is not None:
+                model_kwargs["attention_mask"] = torch.from_numpy(
+                    attention_mask_np
+                ).to(self.device)
 
             outputs = self.model(**model_kwargs)
             self.stats["prefix_advance_batches"] += 1
@@ -566,7 +571,7 @@ class CachedVocabularyLanguageScorer:
         - 已缓存转移 `(u, w)`：直接从 `_transition_score_cache` O(1) 命中返回，0 次 GPU 调用；
         - 单 Token 候选词：直接从 `prefix_state.last_log_probs[t_0]` O(1) 索引取值，0 次 Forward；
         - 多 Token 候选词：首 Token 从 `last_log_probs[t_0]` 取值，剩余 1~3 个后缀 Token
-          按唯一 `(u, tok_ids)` 去重后通过左填充 KV-Cache 组装为单次 Batch 增量 Forward。
+          按唯一 `(u, tok_ids[:-1])` 前缀去重合并后通过左填充 KV-Cache 组装为单次 Batch 增量 Forward。
         """
         if len(prefix_states) != len(candidate_word_indices):
             raise ValueError(
@@ -612,15 +617,15 @@ class CachedVocabularyLanguageScorer:
 
         self._ensure_states_materialized(states_to_materialize)
 
-        # 去重收集所有多 Token 候选词请求：
-        # key = (state.words, int(word_idx)) -> (state, tok_ids, first_lp, [(beam_idx, pos), ...])
-        unique_multi_requests: dict[
-            tuple[tuple[str, ...], int],
+        # 按 (state.words, step_tokens=tok_ids[:-1]) 合并多 Token 候选请求：
+        # 共享相同首/中间子词（如法语省音 ' 或相同词干）的多个候选词只需跑 1 次 Forward！
+        # key = (state.words, tok_ids[:-1]) -> (state, step_tokens, {word_idx: (tok_ids, first_lp, [(beam_idx, pos), ...])})
+        unique_step_groups: dict[
+            tuple[tuple[str, ...], tuple[int, ...]],
             tuple[
                 PrefixCacheState,
                 tuple[int, ...],
-                float,
-                list[tuple[int, int]],
+                dict[int, tuple[tuple[int, ...], float, list[tuple[int, int]]]],
             ],
         ] = {}
 
@@ -644,22 +649,38 @@ class CachedVocabularyLanguageScorer:
                     bucket[word_idx] = first_lp
                     self.stats["single_token_lookups"] += 1
                 else:
-                    req_key = (state.words, word_idx)
-                    if req_key not in unique_multi_requests:
+                    step_tokens = token_ids[:-1]
+                    group_key = (state.words, step_tokens)
+                    if group_key not in unique_step_groups:
                         self.stats["multi_token_evaluations"] += 1
-                        unique_multi_requests[req_key] = (
+                        unique_step_groups[group_key] = (
                             state,
-                            token_ids,
-                            first_lp,
-                            [(beam_idx, pos)],
+                            step_tokens,
+                            {word_idx: (token_ids, first_lp, [(beam_idx, pos)])},
                         )
                     else:
-                        unique_multi_requests[req_key][3].append((beam_idx, pos))
+                        word_map = unique_step_groups[group_key][2]
+                        if word_idx not in word_map:
+                            self.stats["multi_token_evaluations"] += 1
+                            word_map[word_idx] = (
+                                token_ids,
+                                first_lp,
+                                [(beam_idx, pos)],
+                            )
+                        else:
+                            word_map[word_idx][2].append((beam_idx, pos))
 
-        if not unique_multi_requests:
+        if not unique_step_groups:
             return results
 
-        multi_items = list(unique_multi_requests.items())
+        multi_items = list(unique_step_groups.items())
+        multi_items.sort(
+            key=lambda item: (
+                int(item[1][0].past_key_values[0][0].shape[2]),
+                len(item[1][1]),
+            )
+        )
+
         for start in range(0, len(multi_items), self.max_batch_size):
             batch_items = multi_items[start : start + self.max_batch_size]
             bsz = len(batch_items)
@@ -667,78 +688,70 @@ class CachedVocabularyLanguageScorer:
             batched_kv, past_lengths, max_past_len = _stack_padded_kv_caches(
                 batch_kvs, self._reference_cache_type
             )
-            step_lengths = [len(item[1][1]) - 1 for item in batch_items]
+            step_lengths = [len(item[1][1]) for item in batch_items]
             max_step_len = max(step_lengths)
             min_step_len = min(step_lengths)
             min_past_len = min(past_lengths)
 
-            input_ids = torch.zeros(
-                (bsz, max_step_len), dtype=torch.long, device=self.device
-            )
-            position_ids = torch.zeros(
-                (bsz, max_step_len), dtype=torch.long, device=self.device
-            )
+            input_ids_np = np.zeros((bsz, max_step_len), dtype=np.int64)
+            position_ids_np = np.zeros((bsz, max_step_len), dtype=np.int64)
             need_mask = (min_past_len != max_past_len) or (
                 min_step_len != max_step_len
             )
-            attention_mask = (
-                torch.zeros(
-                    (bsz, max_past_len + max_step_len),
-                    dtype=torch.long,
-                    device=self.device,
-                )
+            attention_mask_np = (
+                np.zeros((bsz, max_past_len + max_step_len), dtype=np.int64)
                 if need_mask
                 else None
             )
 
-            for row_i, (_, (_, tok_ids, _, _)) in enumerate(batch_items):
+            for row_i, (_, (_, step_tokens, _)) in enumerate(batch_items):
                 p_len = past_lengths[row_i]
-                step_tokens = tok_ids[:-1]
                 s_len = len(step_tokens)
-                input_ids[row_i, :s_len] = torch.tensor(
-                    step_tokens, dtype=torch.long, device=self.device
+                input_ids_np[row_i, :s_len] = step_tokens
+                position_ids_np[row_i, :s_len] = np.arange(
+                    p_len, p_len + s_len, dtype=np.int64
                 )
-                pos_seq = torch.arange(
-                    p_len, p_len + s_len, dtype=torch.long, device=self.device
-                )
-                position_ids[row_i, :s_len] = pos_seq
                 if s_len < max_step_len:
-                    position_ids[row_i, s_len:] = p_len + s_len - 1
-                if attention_mask is not None:
+                    position_ids_np[row_i, s_len:] = p_len + s_len - 1
+                if attention_mask_np is not None:
                     pad_left = max_past_len - p_len
-                    attention_mask[row_i, pad_left : max_past_len + s_len] = 1
+                    attention_mask_np[row_i, pad_left : max_past_len + s_len] = 1
 
             model_kwargs: dict = {
-                "input_ids": input_ids,
+                "input_ids": torch.from_numpy(input_ids_np).to(self.device),
                 "past_key_values": batched_kv,
-                "position_ids": position_ids,
+                "position_ids": torch.from_numpy(position_ids_np).to(self.device),
                 "use_cache": False,
             }
-            if attention_mask is not None:
-                model_kwargs["attention_mask"] = attention_mask
+            if attention_mask_np is not None:
+                model_kwargs["attention_mask"] = torch.from_numpy(
+                    attention_mask_np
+                ).to(self.device)
 
             outputs = self.model(**model_kwargs)
             self.stats["incremental_forward_batches"] += 1
-            step_log_probs = F_nn.log_softmax(outputs.logits.float(), dim=-1)
+            step_log_probs_cpu = (
+                F_nn.log_softmax(outputs.logits.float(), dim=-1)
+                .detach()
+                .cpu()
+                .numpy()
+            )
 
-            for row_i, ((words_key, word_idx), (_, tok_ids, first_lp, targets_list)) in enumerate(
+            for row_i, ((words_key, _), (_, _, word_map)) in enumerate(
                 batch_items
             ):
-                suffix_targets = tok_ids[1:]
-                n_suf = len(suffix_targets)
-                target_tensor = torch.tensor(
-                    suffix_targets, dtype=torch.long, device=self.device
-                ).unsqueeze(-1)
-                gathered = (
-                    step_log_probs[row_i, :n_suf, :]
-                    .gather(-1, target_tensor)
-                    .squeeze(-1)
-                )
-                total_lp = first_lp + float(gathered.double().sum().item())
                 bucket = self._get_transition_bucket(words_key)
-                bucket[word_idx] = total_lp
-                for beam_idx, pos in targets_list:
-                    results[beam_idx][pos] = total_lp
+                row_lps = step_log_probs_cpu[row_i]
+                for word_idx, (tok_ids, first_lp, targets_list) in word_map.items():
+                    suffix_targets = tok_ids[1:]
+                    suf_lp_sum = sum(
+                        float(row_lps[pos_idx, tok_id])
+                        for pos_idx, tok_id in enumerate(suffix_targets)
+                    )
+                    total_lp = first_lp + suf_lp_sum
+                    bucket[word_idx] = total_lp
+                    for beam_idx, pos in targets_list:
+                        results[beam_idx][pos] = total_lp
 
         return results
 

@@ -740,5 +740,106 @@ def test_top_k_local_softmax_and_multi_subject_observation_sweep() -> None:
     ]
 
 
+def test_vocabulary_frequency_order_and_scaling_sweep() -> None:
+    """验证按训练集词频降序排列词表与零训练成本多尺度候选词表扫描（|V| 截断掩码 + 全词库零开销复用）。"""
+    from braindecoding.decoding.neural_score_exporter import (
+        resolve_vocabulary_frequency_order,
+    )
+    from braindecoding.decoding.rolling_beam_search import (
+        run_vocabulary_scaling_sweep,
+    )
+
+    vocabulary, scorer, _ = _build_toy_french_scorer()
+    vocab_size = len(vocabulary)
+    # 故意设置非词典序的训练词频：使索引 4 ("ami") 和索引 2 ("prince") 成为 Top-2 高频词
+    train_counts = [5, 10, 50, 2, 100, 1]
+
+    seg_len = 3
+    clean_scores = {}
+    for s in CANONICAL_STATES:
+        mat = torch.full((seg_len, vocab_size), -1.0, dtype=torch.float32)
+        # 在词位 0 给低频词索引 0 ("le", count=5) 最高分，给高频词索引 4 ("ami", count=100) 次高分
+        mat[0, 0] = 5.0
+        mat[0, 4] = 3.0
+        mat[1, 2] = 4.0
+        mat[2, 1] = 4.0
+        clean_scores[s] = mat
+
+    payload = {
+        "dataset": "custom_toy",
+        "language": "fr",
+        "split": "test",
+        "seed": 0,
+        "vocabulary": vocabulary,
+        "vocabulary_train_counts": train_counts,
+        "segments": [
+            {
+                "segment_index": 0,
+                "group_id": "sub-01|sent-0",
+                "subject_id": "sub-01",
+                "recording_id": "sub-01_run-06",
+                "scope": "run-06",
+                "block_id": "run-06|block-000",
+                "partition": "evaluation",
+                "event_indices": [0, 1, 2],
+                # "ami" (count=100), "prince" (count=50), "le" (count=5)
+                "reference_words": ["ami", "prince", "le"],
+                "in_vocabulary_mask": [True, True, True],
+            }
+        ],
+        "clean_scores": clean_scores,
+        "shifted_scores": clean_scores,
+    }
+
+    ranked_indices, ranked_words, counts = resolve_vocabulary_frequency_order(payload)
+    # Top-3 词频顺序应为: "ami" (100, idx=4), "prince" (50, idx=2), "petit" (10, idx=1)
+    assert ranked_indices[:3] == [4, 2, 1]
+    assert ranked_words[:3] == ["ami", "prince", "petit"]
+    assert counts["ami"] == 100 and counts["prince"] == 50
+
+    # 验证 allowed_vocab_indices 掩码：当仅允许 Top-2 高频词 [4, 2] 时，索引 0 被屏蔽为 -1e30
+    lp_restricted = compute_neural_log_probabilities(
+        clean_scores["K2"],
+        temperature=0.07,
+        top_k=2,
+        allowed_vocab_indices=[4, 2],
+    )
+    assert lp_restricted[0, 0] <= -1e20
+    assert np.isclose(
+        float(np.exp(lp_restricted[0, [4, 2]]).sum()), 1.0, atol=1e-5
+    )
+
+    hyperparams = {
+        "states": {
+            s: {"temperature": 0.07, "language_weight": 0.0}
+            for s in CANONICAL_STATES
+        }
+    }
+    completed_order: list[str] = []
+    scaling_bundles = run_vocabulary_scaling_sweep(
+        payload,
+        scorer,
+        hyperparams,
+        vocab_sizes=(2, 3, 6),
+        core_vocab_size=3,
+        beam_width=2,
+        candidate_top_k=4,
+        show_progress=False,
+        on_scale_completed=lambda k, _b: completed_order.append(k),
+    )
+
+    # core_vocab_size=3 优先在第一位执行，随后按升序返回 V=2, V=3, V=6
+    assert completed_order[0] == "V=3"
+    assert list(scaling_bundles.keys()) == ["V=2", "V=3", "V=6"]
+
+    # 在 V=2 下，候选池仅包含 {"ami", "prince"}：
+    # 词位 0 原最高分 "le" 被截断排除，预测自动落入池内最高分 "ami"；且参考词 ["ami", "prince", "le"] 的掩码变为 [True, True, False]
+    v2_s3 = scaling_bundles["V=2"]["conditions"]["S3_clean"]["final_sentences"][0]
+    assert set(v2_s3["predicted_words"]).issubset({"ami", "prince"})
+    assert v2_s3["in_vocabulary_mask"] == [True, True, False]
+    assert scaling_bundles["V=2"]["test_token_coverage_pct"] == round(200.0 / 3.0, 4)
+
+
+
 
 

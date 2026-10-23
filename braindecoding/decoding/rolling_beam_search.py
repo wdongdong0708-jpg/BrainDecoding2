@@ -46,28 +46,53 @@ def compute_neural_log_probabilities(
     temperature: float = 0.07,
     *,
     top_k: int | None = 20,
+    allowed_vocab_indices: Sequence[int] | None = None,
 ) -> np.ndarray:
     """将余弦相似度矩阵 [L, |V|] 按温度 T_r 缩放，并在每个词位的 Top-K 神经候选集内部做局部 Softmax 归一化。
 
     通过仅在 Top-K (默认 K=20) 候选词内部计算配分函数 log Z_t = logsumexp_{w in Top-K}(s(w)/T_r)，
     滤除其余 ~2,000 个无关背景词的分母稀释，确保神经对数概率与语言模型对数概率在同一量纲上耦合。
+    若传入 `allowed_vocab_indices`（多尺度高频子词表 V_N），则仅在该子词表列内筛选 Top-K 并做局部归一化。
     """
     temp = float(temperature)
     if temp <= 0.0:
         raise ValueError(f"温度参数 T_r 必须为正数，收到：{temperature!r}")
     if isinstance(cosine_scores, np.ndarray):
-        tensor = torch.from_numpy(cosine_scores).float()
+        tensor = torch.from_numpy(cosine_scores).float().clone()
     else:
-        tensor = cosine_scores.detach().cpu().float()
+        tensor = cosine_scores.detach().cpu().float().clone()
     scaled = tensor / temp
     vocab_size = int(scaled.shape[-1]) if scaled.ndim >= 1 else 0
-    if top_k is not None and vocab_size > 0 and 1 <= int(top_k) < vocab_size:
-        k_norm = int(top_k)
+
+    active_vocab_count = vocab_size
+    disallowed_mask: torch.Tensor | None = None
+    if allowed_vocab_indices is not None and vocab_size > 0:
+        valid_idx = [
+            int(i)
+            for i in allowed_vocab_indices
+            if 0 <= int(i) < vocab_size
+        ]
+        if 0 < len(valid_idx) < vocab_size:
+            active_vocab_count = len(valid_idx)
+            allowed_mask = torch.zeros(vocab_size, dtype=torch.bool)
+            allowed_mask[valid_idx] = True
+            disallowed_mask = ~allowed_mask
+            scaled[..., disallowed_mask] = -1e30
+
+    if (
+        top_k is not None
+        and active_vocab_count > 0
+        and 1 <= int(top_k) <= active_vocab_count
+    ):
+        k_norm = min(int(top_k), active_vocab_count)
         top_vals, _ = torch.topk(scaled, k=k_norm, dim=-1)
         log_z = torch.logsumexp(top_vals, dim=-1, keepdim=True)
         log_probs = scaled - log_z
     else:
         log_probs = F_nn.log_softmax(scaled, dim=-1)
+
+    if disallowed_mask is not None:
+        log_probs[..., disallowed_mask] = -1e30
     return log_probs.numpy().astype(np.float64)
 
 
@@ -1458,6 +1483,8 @@ def decode_dataset_segments(
     beam_width: int = 5,
     candidate_top_k: int = 20,
     segment_batch_size: int = 32,
+    vocab_size_limit: int | None = None,
+    allowed_vocab_indices: Sequence[int] | None = None,
     partition_filter: str | None = None,
     max_segments: int | None = None,
     show_progress: bool = False,
@@ -1466,8 +1493,55 @@ def decode_dataset_segments(
 ) -> dict:
     """对导出的 .pt 神经得分载荷批量执行指定条件（S3, S0, K0, K1, K2, F, LM-Only）的句段解码。"""
     from tqdm.auto import tqdm
+    from braindecoding.decoding.neural_score_exporter import (
+        resolve_vocabulary_frequency_order,
+    )
 
     vocabulary = list(exported_payload["vocabulary"])
+    active_vocab_indices: list[int] | None = None
+    active_vocab_set: set[str] | None = None
+    if allowed_vocab_indices is not None:
+        active_vocab_indices = [
+            int(i)
+            for i in allowed_vocab_indices
+            if 0 <= int(i) < len(vocabulary)
+        ]
+        if len(active_vocab_indices) >= len(vocabulary):
+            active_vocab_indices = None
+        else:
+            active_vocab_set = {
+                str(vocabulary[i]) for i in active_vocab_indices
+            }
+    elif (
+        vocab_size_limit is not None
+        and 0 < int(vocab_size_limit) < len(vocabulary)
+    ):
+        freq_indices, freq_words, _ = resolve_vocabulary_frequency_order(
+            exported_payload
+        )
+        n_lim = int(vocab_size_limit)
+        active_vocab_indices = freq_indices[:n_lim]
+        active_vocab_set = set(freq_words[:n_lim])
+
+    eff_top_k = (
+        min(int(candidate_top_k), len(active_vocab_indices))
+        if active_vocab_indices is not None
+        else int(candidate_top_k)
+    )
+    eff_vocab_size = (
+        len(active_vocab_indices)
+        if active_vocab_indices is not None
+        else len(vocabulary)
+    )
+
+    def _seg_in_vocab_mask(seg: dict) -> list[bool]:
+        if active_vocab_set is not None:
+            return [
+                str(w) in active_vocab_set
+                for w in seg.get("reference_words", [])
+            ]
+        return list(seg["in_vocabulary_mask"])
+
     segments = [
         seg
         for seg in exported_payload["segments"]
@@ -1519,7 +1593,7 @@ def decode_dataset_segments(
                         scorer,
                         language_weight=1.0 if lm_weight <= 0 else lm_weight,
                         beam_width=beam_width,
-                        candidate_top_k=candidate_top_k,
+                        candidate_top_k=eff_top_k,
                         segment_length=seg_len,
                         pure_language_model=True,
                     )
@@ -1538,7 +1612,7 @@ def decode_dataset_segments(
                         "top5_words_per_pos": list(
                             dec.get("top5_words_per_pos", [])
                         ),
-                        "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
+                        "in_vocabulary_mask": _seg_in_vocab_mask(seg),
                         "elapsed_seconds": dec["elapsed_seconds"],
                     }
                 )
@@ -1554,13 +1628,22 @@ def decode_dataset_segments(
             t_k2, lam_k2 = _get_state_params("K2")
 
             full_lp_k0 = compute_neural_log_probabilities(
-                score_bank["K0"], t_k0, top_k=candidate_top_k
+                score_bank["K0"],
+                t_k0,
+                top_k=eff_top_k,
+                allowed_vocab_indices=active_vocab_indices,
             )
             full_lp_k1 = compute_neural_log_probabilities(
-                score_bank["K1"], t_k1, top_k=candidate_top_k
+                score_bank["K1"],
+                t_k1,
+                top_k=eff_top_k,
+                allowed_vocab_indices=active_vocab_indices,
             )
             full_lp_k2 = compute_neural_log_probabilities(
-                score_bank["K2"], t_k2, top_k=candidate_top_k
+                score_bank["K2"],
+                t_k2,
+                top_k=eff_top_k,
+                allowed_vocab_indices=active_vocab_indices,
             )
             lam_map = {"K0": lam_k0, "K1": lam_k1, "K2": lam_k2}
 
@@ -1581,10 +1664,11 @@ def decode_dataset_segments(
                     scorer,
                     language_weights=lam_map,
                     beam_width=beam_width,
-                    candidate_top_k=candidate_top_k,
+                    candidate_top_k=eff_top_k,
                     reference_words_list=batch_refs,
                 )
                 for seg, dec in zip(batch_segs, batch_decs):
+                    seg_iv_mask = _seg_in_vocab_mask(seg)
                     final_sentences.append(
                         {
                             "segment_index": seg["segment_index"],
@@ -1603,7 +1687,7 @@ def decode_dataset_segments(
                             "top5_words_per_pos": list(
                                 dec.get("top5_words_per_pos", [])
                             ),
-                            "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
+                            "in_vocabulary_mask": seg_iv_mask,
                             "elapsed_seconds": dec["elapsed_seconds"],
                         }
                     )
@@ -1613,7 +1697,7 @@ def decode_dataset_segments(
                             "group_id": seg["group_id"],
                             "subject_id": seg["subject_id"],
                             "reference_words": list(seg["reference_words"]),
-                            "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
+                            "in_vocabulary_mask": seg_iv_mask,
                             "screen_history": dec["screen_history"],
                             "position_trajectories": dec["position_trajectories"],
                         }
@@ -1629,7 +1713,10 @@ def decode_dataset_segments(
         elif cond_upper in {"S0", "K0", "K1", "K2", "F"}:
             t_r, lam_r = _get_state_params(cond_upper)
             full_lp = compute_neural_log_probabilities(
-                score_bank[cond_upper], t_r, top_k=candidate_top_k
+                score_bank[cond_upper],
+                t_r,
+                top_k=eff_top_k,
+                allowed_vocab_indices=active_vocab_indices,
             )
             for start_i in range(0, len(segments), batch_sz):
                 batch_segs = segments[start_i : start_i + batch_sz]
@@ -1642,7 +1729,7 @@ def decode_dataset_segments(
                     scorer,
                     language_weight=lam_r,
                     beam_width=beam_width,
-                    candidate_top_k=candidate_top_k,
+                    candidate_top_k=eff_top_k,
                 )
                 for seg, dec in zip(batch_segs, batch_decs):
                     final_sentences.append(
@@ -1661,7 +1748,7 @@ def decode_dataset_segments(
                             "top5_words_per_pos": list(
                                 dec.get("top5_words_per_pos", [])
                             ),
-                            "in_vocabulary_mask": list(seg["in_vocabulary_mask"]),
+                            "in_vocabulary_mask": _seg_in_vocab_mask(seg),
                             "elapsed_seconds": dec["elapsed_seconds"],
                         }
                     )
@@ -1686,6 +1773,7 @@ def decode_dataset_segments(
     return {
         "condition": condition,
         "alignment": alignment,
+        "vocabulary_size": eff_vocab_size,
         "segment_count": len(segments),
         "total_elapsed_seconds": round(total_elapsed, 4),
         "mean_seconds_per_segment": round(mean_sec, 4),
@@ -1907,3 +1995,231 @@ def run_multi_subject_observation_sweep(
         seen_eff_k[k_eff] = bundle
 
     return bundles_by_k
+
+
+DEFAULT_VOCABULARY_SCALING_SIZES: tuple[int, ...] = (
+    50,
+    100,
+    250,
+    500,
+    1000,
+    2020,
+)
+
+
+def run_vocabulary_scaling_sweep(
+    exported_payload: dict,
+    scorer: CachedVocabularyLanguageScorer,
+    hyperparameters: dict,
+    *,
+    vocab_sizes: Sequence[int] = DEFAULT_VOCABULARY_SCALING_SIZES,
+    core_vocab_size: int = 250,
+    full_vocab_bundles: dict[str, dict] | None = None,
+    existing_scaling_bundles: dict[str, dict] | None = None,
+    beam_width: int = 5,
+    candidate_top_k: int = 20,
+    segment_batch_size: int = 32,
+    max_segments: int | None = None,
+    show_progress: bool = False,
+    on_scale_completed: Callable[[str, dict], None] | None = None,
+) -> dict[str, dict]:
+    """按训练集词频降序截取前 N 个候选词（N in {50, 100, 250, 500, 1000, |V|}），零训练成本扫描多尺度词表序列解码表现（对标 Jayalath 2025 & SimpleB2T 2026）。"""
+    from braindecoding.decoding.neural_score_exporter import (
+        resolve_vocabulary_frequency_order,
+    )
+    from braindecoding.evaluation.sequence_decoding_evaluation import (
+        _backfill_intermediate_and_shifted_bundles,
+    )
+
+    vocabulary = [str(w) for w in exported_payload.get("vocabulary") or []]
+    full_v_size = len(vocabulary)
+    if full_v_size == 0:
+        return {}
+
+    freq_indices, freq_words, _ = resolve_vocabulary_frequency_order(
+        exported_payload
+    )
+    all_segments = list(exported_payload.get("segments") or [])
+    if max_segments is not None:
+        all_segments = all_segments[: int(max_segments)]
+    expected_seg_count = len(all_segments)
+    total_ref_tokens = max(
+        1, sum(len(seg.get("reference_words") or []) for seg in all_segments)
+    )
+
+    normalized_sizes: list[int] = []
+    for raw_n in vocab_sizes:
+        n_int = int(raw_n)
+        if n_int <= 0:
+            continue
+        eff_n = full_v_size if n_int >= full_v_size else n_int
+        if eff_n not in normalized_sizes:
+            normalized_sizes.append(eff_n)
+    if (
+        core_vocab_size is not None
+        and 0 < int(core_vocab_size) <= full_v_size
+        and int(core_vocab_size) not in normalized_sizes
+    ):
+        normalized_sizes.append(int(core_vocab_size))
+    if full_v_size not in normalized_sizes:
+        normalized_sizes.append(full_v_size)
+    normalized_sizes.sort()
+
+    # 优先执行 core_vocab_size (默认 250)，确保高覆盖核心子集主表最快落盘并预热转移缓存
+    execution_order = list(normalized_sizes)
+    if (
+        core_vocab_size is not None
+        and int(core_vocab_size) in execution_order
+    ):
+        c_val = int(core_vocab_size)
+        execution_order = [c_val] + [x for x in execution_order if x != c_val]
+
+    scaling_bundles: dict[str, dict] = {}
+    if isinstance(existing_scaling_bundles, dict):
+        for k_str, entry in existing_scaling_bundles.items():
+            if isinstance(entry, dict) and isinstance(
+                entry.get("conditions"), dict
+            ):
+                s3_b = entry["conditions"].get("S3_clean")
+                if (
+                    isinstance(s3_b, dict)
+                    and int(s3_b.get("segment_count", -1)) == expected_seg_count
+                ):
+                    scaling_bundles[str(k_str)] = entry
+
+    available_clean = exported_payload.get("clean_scores") or {}
+    available_shifted = exported_payload.get("shifted_scores") or {}
+
+    for eff_n in execution_order:
+        scale_key = f"V={eff_n}"
+        active_indices = freq_indices[:eff_n]
+        active_words = freq_words[:eff_n]
+        active_set = set(active_words)
+
+        in_vocab_tokens = sum(
+            1
+            for seg in all_segments
+            for w in (seg.get("reference_words") or [])
+            if str(w) in active_set
+        )
+        token_coverage_pct = float(in_vocab_tokens / total_ref_tokens * 100.0)
+        segs_100pct = sum(
+            1
+            for seg in all_segments
+            if (seg.get("reference_words") or [])
+            and all(str(w) in active_set for w in seg["reference_words"])
+        )
+        segs_80pct = sum(
+            1
+            for seg in all_segments
+            if (seg.get("reference_words") or [])
+            and (
+                sum(1 for w in seg["reference_words"] if str(w) in active_set)
+                / len(seg["reference_words"])
+                >= 0.80 - 1e-9
+            )
+        )
+
+        if scale_key in scaling_bundles:
+            continue
+
+        if (
+            eff_n == full_v_size
+            and isinstance(full_vocab_bundles, dict)
+            and "S3_clean" in full_vocab_bundles
+        ):
+            reused_conds = _backfill_intermediate_and_shifted_bundles(
+                {
+                    k: full_vocab_bundles[k]
+                    for k in (
+                        "S0",
+                        "K0",
+                        "K1",
+                        "S3_clean",
+                        "K0_shifted_neg75s",
+                        "S3_shifted_neg75s",
+                    )
+                    if k in full_vocab_bundles
+                }
+            )
+            scale_entry = {
+                "vocabulary_size": int(eff_n),
+                "is_full_vocabulary": True,
+                "test_token_coverage_pct": round(token_coverage_pct, 4),
+                "core_100pct_segment_count": int(segs_100pct),
+                "core_80pct_segment_count": int(segs_80pct),
+                "total_segment_count": int(expected_seg_count),
+                "conditions": reused_conds,
+            }
+            scaling_bundles[scale_key] = scale_entry
+            if on_scale_completed is not None:
+                on_scale_completed(scale_key, scale_entry)
+            continue
+
+        cond_map: dict[str, dict] = {}
+        cond_map["S3_clean"] = decode_dataset_segments(
+            exported_payload,
+            scorer,
+            hyperparameters,
+            condition="S3",
+            alignment="clean",
+            beam_width=beam_width,
+            candidate_top_k=candidate_top_k,
+            segment_batch_size=segment_batch_size,
+            allowed_vocab_indices=active_indices,
+            max_segments=max_segments,
+            show_progress=show_progress,
+            progress_desc=f"S3 VocabScale [V={eff_n} | S3_clean]",
+        )
+        if "S0" in available_clean:
+            cond_map["S0"] = decode_dataset_segments(
+                exported_payload,
+                scorer,
+                hyperparameters,
+                condition="S0",
+                alignment="clean",
+                beam_width=beam_width,
+                candidate_top_k=candidate_top_k,
+                segment_batch_size=segment_batch_size,
+                allowed_vocab_indices=active_indices,
+                max_segments=max_segments,
+                show_progress=show_progress,
+                progress_desc=f"S3 VocabScale [V={eff_n} | S0]",
+            )
+        if "K2" in available_shifted:
+            cond_map["S3_shifted_neg75s"] = decode_dataset_segments(
+                exported_payload,
+                scorer,
+                hyperparameters,
+                condition="S3",
+                alignment="shifted",
+                beam_width=beam_width,
+                candidate_top_k=candidate_top_k,
+                segment_batch_size=segment_batch_size,
+                allowed_vocab_indices=active_indices,
+                max_segments=max_segments,
+                show_progress=show_progress,
+                progress_desc=f"S3 VocabScale [V={eff_n} | S3_shifted_-75s]",
+            )
+
+        cond_map = _backfill_intermediate_and_shifted_bundles(cond_map)
+        scale_entry = {
+            "vocabulary_size": int(eff_n),
+            "is_full_vocabulary": bool(eff_n == full_v_size),
+            "test_token_coverage_pct": round(token_coverage_pct, 4),
+            "core_100pct_segment_count": int(segs_100pct),
+            "core_80pct_segment_count": int(segs_80pct),
+            "total_segment_count": int(expected_seg_count),
+            "conditions": cond_map,
+        }
+        scaling_bundles[scale_key] = scale_entry
+        if on_scale_completed is not None:
+            on_scale_completed(scale_key, scale_entry)
+
+    # 按词表规模从小到大排序返回
+    ordered_result: dict[str, dict] = {}
+    for n_val in normalized_sizes:
+        k_str = f"V={n_val}"
+        if k_str in scaling_bundles:
+            ordered_result[k_str] = scaling_bundles[k_str]
+    return ordered_result

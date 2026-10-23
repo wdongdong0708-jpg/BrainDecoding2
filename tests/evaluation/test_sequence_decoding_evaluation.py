@@ -323,3 +323,104 @@ def test_confidence_gate_pareto_sweep_and_export(tmp_path: Path) -> None:
     assert (tmp_path / "eval_out" / "pareto_confidence_gate_val.pdf").exists()
     assert (tmp_path / "eval_out" / "baseline_and_shifted_comparison_val.pdf").exists()
     assert (tmp_path / "eval_out" / "multi_subject_observation_scaling_val.pdf").exists()
+
+
+def test_core_vocabulary_subsets_and_scaling_curve_export(tmp_path: Path) -> None:
+    """验证高覆盖核心词表（口径1全集 + 口径2 100%/80%/70% 子集）与多尺度词表敏感性曲线导出。"""
+    from braindecoding.evaluation.sequence_decoding_evaluation import (
+        evaluate_high_coverage_core_subsets,
+    )
+
+    # 构造 3 个句段：
+    # - seg 0: 4/4 (100%) 词在词表内
+    # - seg 1: 4/5 (80%) 词在词表内
+    # - seg 2: 2/4 (50%) 词在词表内
+    seg_records = [
+        {
+            "segment_index": 0,
+            "group_id": "g0",
+            "subject_id": "sub-01",
+            "reference_words": ["le", "petit", "prince", "parle"],
+            "predicted_words": ["le", "petit", "prince", "parle"],
+            "in_vocabulary_mask": [True, True, True, True],
+        },
+        {
+            "segment_index": 1,
+            "group_id": "g1",
+            "subject_id": "sub-01",
+            "reference_words": ["le", "petit", "prince", "dessine", "mouton"],
+            "predicted_words": ["le", "petit", "prince", "dessine", "prince"],
+            "in_vocabulary_mask": [True, True, True, True, False],
+        },
+        {
+            "segment_index": 2,
+            "group_id": "g2",
+            "subject_id": "sub-01",
+            "reference_words": ["le", "renard", "apprivoise", "rose"],
+            "predicted_words": ["le", "prince", "parle", "petit"],
+            "in_vocabulary_mask": [True, False, False, True],
+        },
+    ]
+
+    subsets = evaluate_high_coverage_core_subsets(
+        {"S3_clean": {"final_sentences": seg_records}},
+        language="fr",
+        vocabulary_size=250,
+    )
+    assert subsets["vocabulary_size"] == 250
+    sub_map = subsets["subsets"]
+    assert sub_map["all_segments"]["segment_count"] == 3
+    assert sub_map["core_subset_100pct"]["segment_count"] == 1
+    assert sub_map["core_subset_100pct"]["conditions"]["S3_clean"]["word_acc_pct"] == pytest.approx(100.0)
+    assert sub_map["core_subset_80pct"]["segment_count"] == 2
+    assert sub_map["expanded_subset_70pct"]["segment_count"] == 2
+    assert (
+        sub_map["core_subset_100pct"]["conditions"]["S3_clean"]["bleu1_pct"]
+        > sub_map["all_segments"]["conditions"]["S3_clean"]["bleu1_pct"]
+    )
+
+    vocabulary_scaling_bundles = {
+        "V=50": {
+            "vocabulary_size": 50,
+            "test_token_coverage_pct": 50.0,
+            "conditions": {
+                "S3_clean": {"final_sentences": seg_records[:2]},
+                "S3_shifted_neg75s": {"final_sentences": [seg_records[2]]},
+            },
+        },
+        "V=250": {
+            "vocabulary_size": 250,
+            "test_token_coverage_pct": 76.92,
+            "conditions": {
+                "S3_clean": {"final_sentences": seg_records},
+                "S3_shifted_neg75s": {"final_sentences": [seg_records[2]]},
+            },
+        },
+    }
+
+    report = evaluate_and_export_sequence_decoding(
+        {"S3_clean": {"final_sentences": seg_records, "screen_histories": []}},
+        dataset="pallier2025",
+        language="fr",
+        split="test",
+        output_dir=tmp_path / "scaling_eval_out",
+        vocabulary_scaling_bundles=vocabulary_scaling_bundles,
+        core_vocab_size=250,
+        plot=True,
+    )
+    assert report["core_vocabulary_benchmark"]["vocabulary_size"] == 250
+    assert (
+        report["core_vocabulary_benchmark"]["subsets"]["core_subset_100pct"][
+            "segment_count"
+        ]
+        == 1
+    )
+    assert "V=50" in report["vocabulary_scaling"]
+    assert "V=250" in report["vocabulary_scaling"]
+    assert (
+        tmp_path / "scaling_eval_out" / "s3_vocabulary_scaling_test.pdf"
+    ).exists()
+    assert (
+        tmp_path / "scaling_eval_out" / "s3_vocabulary_scaling_test.png"
+    ).exists()
+
