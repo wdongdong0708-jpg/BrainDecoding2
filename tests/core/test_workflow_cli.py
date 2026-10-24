@@ -1507,4 +1507,183 @@ def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
     assert "+-30s" not in eval_nb_text
 
 
+def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
+    import json
+    import numpy as np
+    import torch
+    import torch.nn.functional as F
+
+    from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+        analyze_shift_subspace_and_coherence,
+        run_subspace_coherence_debiasing_sweep,
+        subspace_coherence_loo_debiasing,
+    )
+
+    torch.manual_seed(42)
+    N, M, D = 40, 6, 32
+    true_rank_k = 4
+
+    # Construct an orthonormal basis: first true_rank_k columns = temporal grid bias subspace,
+    # remaining (D - true_rank_k) columns = pure semantic subspace
+    q_basis, _ = torch.linalg.qr(torch.randn(D, D))
+    u_bias_true = q_basis[:, :true_rank_k]       # [D, 4]
+    u_sem_true = q_basis[:, true_rank_k:]        # [D, 28]
+
+    # Sample-specific deterministic grid bias inside u_bias_true + independent shift noise in u_sem_true
+    bias_coeffs = torch.randn(N, true_rank_k)
+    b_grid = F.normalize(bias_coeffs @ u_bias_true.T, p=2, dim=-1)  # [N, D]
+
+    sem_coeffs = torch.randn(N, D - true_rank_k)
+    s_clean = F.normalize(sem_coeffs @ u_sem_true.T, p=2, dim=-1)   # [N, D]
+
+    y_clean = F.normalize(0.70 * s_clean + 0.70 * b_grid, p=2, dim=-1)
+    shift_list = []
+    for _ in range(M):
+        sem_noise = F.normalize(
+            torch.randn(N, D - true_rank_k) @ u_sem_true.T, p=2, dim=-1
+        )
+        # Shifted windows share the exact same b_grid in u_bias_true, plus random orthogonal noise
+        y_m = F.normalize(0.75 * b_grid + 0.65 * sem_noise, p=2, dim=-1)
+        shift_list.append(y_m)
+    y_shifts = torch.stack(shift_list, dim=1)  # [N, M, D]
+
+    # 1. Verify SVD subspace & coherence analysis
+    diag, vh = analyze_shift_subspace_and_coherence(
+        y_shifts, coherence_low=0.35, coherence_high=0.65
+    )
+    assert diag["num_samples"] == N
+    assert diag["num_shifts_M"] == M
+    assert diag["feature_dim_D"] == D
+    # Since b_grid lives in a 4D subspace, top-4 singular values capture the majority of variance
+    assert diag["cumulative_energy_explained"]["top_4"] > 0.60
+    assert diag["coherence_norm"]["mean"] > diag["theoretical_random_orthogonal_norm"]
+
+    # 2. Verify 100% preservation of the (D - rank_k) orthogonal complement before final L2 normalization
+    u_k = vh[:true_rank_k, :].T
+    # Orthogonal complement projector (I - U_k U_k^T)
+    p_orth = torch.eye(D) - u_k @ u_k.T
+
+    y_clean_deb, y_shifts_deb = subspace_coherence_loo_debiasing(
+        y_clean,
+        y_shifts,
+        eta=1.0,
+        rank_k=true_rank_k,
+        use_coherence_gate=True,
+        precomputed_vh=vh,
+    )
+    assert y_clean_deb.shape == (N, D)
+    assert y_shifts_deb.shape == (N, M, D)
+    assert torch.allclose(
+        y_clean_deb.norm(p=2, dim=-1), torch.ones(N), atol=1e-5
+    )
+    assert torch.allclose(
+        y_shifts_deb.norm(p=2, dim=-1), torch.ones(N, M), atol=1e-5
+    )
+
+    # Check that projecting y_clean_deb onto p_orth has the exact same direction as projecting y_clean onto p_orth
+    clean_orth_before = F.normalize(y_clean @ p_orth, p=2, dim=-1)
+    clean_orth_after = F.normalize(y_clean_deb @ p_orth, p=2, dim=-1)
+    cos_orth = (clean_orth_before * clean_orth_after).sum(dim=-1)
+    assert torch.allclose(cos_orth, torch.ones(N), atol=1e-5)
+
+    # And alignment with true semantic vector s_clean improves after subspace debiasing
+    cos_sem_raw = (y_clean * s_clean).sum(dim=-1).mean().item()
+    cos_sem_deb = (y_clean_deb * s_clean).sum(dim=-1).mean().item()
+    assert cos_sem_deb > cos_sem_raw + 0.08
+
+    # 3. Verify synthetic sweep across K0/K1/K2 horizons and output files
+    vocab50 = [f"word_{i:02d}" for i in range(10)]
+    full_vocabulary = [f"word_{i:02d}" for i in range(20)]
+    word_bank = F.normalize(
+        torch.randn(20, D - true_rank_k) @ u_sem_true.T, p=2, dim=-1
+    )
+    event_words = [vocab50[i % 10] for i in range(N)]
+    targets = torch.stack([word_bank[i % 10] for i in range(N)], dim=0)
+
+    bias_lure = F.normalize(
+        (torch.randn(N, true_rank_k) @ u_bias_true.T), p=2, dim=-1
+    )
+    clean_preds = F.normalize(0.75 * targets + 0.65 * bias_lure, p=2, dim=-1)
+    event_ids = [f"ev-{i:03d}" for i in range(N)]
+
+    def _make_encoded(preds_tensor):
+        return {
+            "predictions": preds_tensor,
+            "targets": targets,
+            "words": event_words,
+            "event_ids": event_ids,
+            "revision_predictions": {
+                0: preds_tensor,
+                1: preds_tensor,
+                2: preds_tensor,
+            },
+            "revision_availability_masks": {
+                0: torch.ones(N, dtype=torch.bool),
+                1: torch.ones(N, dtype=torch.bool),
+                2: torch.ones(N, dtype=torch.bool),
+            },
+        }
+
+    clean_encoded = _make_encoded(clean_preds)
+    shifted_by_shift = []
+    for delta_s in (-15.0, -30.0, -45.0, -60.0, -90.0, -120.0):
+        noise_orth = F.normalize(
+            torch.randn(N, D - true_rank_k) @ u_sem_true.T, p=2, dim=-1
+        )
+        sh_preds = F.normalize(0.75 * bias_lure + 0.65 * noise_orth, p=2, dim=-1)
+        key = f"shift_neg{int(abs(delta_s))}s"
+        label = f"Shifted ({int(delta_s)}s)"
+        shifted_by_shift.append((delta_s, key, label, _make_encoded(sh_preds)))
+
+    import pandas as pd
+
+    class _DummySubspaceDataset:
+        def __init__(self):
+            self.embedding_map = {
+                w: word_bank[idx].numpy() for idx, w in enumerate(full_vocabulary)
+            }
+            self.table = pd.DataFrame(
+                {
+                    "event_id": event_ids,
+                    "subject_id": [f"sub-{(i % 2) + 1:02d}" for i in range(N)],
+                }
+            )
+
+        def __len__(self):
+            return len(self.table)
+
+    report = run_subspace_coherence_debiasing_sweep(
+        dataset="pallier2025",
+        stage="revision",
+        split="test",
+        seed=0,
+        exp_tag="win1000ms_siamese_e080_l10_causal",
+        word_exp_tag="win1000ms",
+        clean_encoded=clean_encoded,
+        shifted_encoded_by_shift=shifted_by_shift,
+        eval_ds=_DummySubspaceDataset(),
+        vocabulary=full_vocabulary,
+        vocab50=vocab50,
+        rank_k_values=[4, 8],
+        eta_values=[0.8, 1.0],
+        coherence_gate_modes=[True, False],
+        full_loo_etas=[0.8, 1.0],
+        output_dir=tmp_path,
+        plot=True,
+        print_report=False,
+    )
+    assert report["experiment_type"] == "exploratory_subspace_coherence_loo_debiasing"
+    assert len(report["subspace_sweep"]) == 2 * 2 * 2
+    assert (tmp_path / "exploratory" / "subspace_coherence_debiasing_test.json").exists()
+    assert (tmp_path / "figures" / "subspace_coherence_debiasing_test.png").exists()
+
+    nb_path = PROJECT_ROOT / "scripts/colab/colab_subspace_coherence_debiasing.ipynb"
+    assert nb_path.exists()
+    nb_obj = json.loads(nb_path.read_text(encoding="utf-8"))
+    assert nb_obj["nbformat"] == 4
+    nb_raw = nb_path.read_text(encoding="utf-8")
+    assert "braindecoding.evaluation.subspace_coherence_debiasing_evaluation" in nb_raw
+
+
+
 
