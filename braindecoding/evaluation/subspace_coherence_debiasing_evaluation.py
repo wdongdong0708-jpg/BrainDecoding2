@@ -346,11 +346,15 @@ def subspace_loo_with_column_calibration(
             precomputed_vh_loo=precomputed_vh_loo,
         )
 
-        # --- Step 2: 计算词库原始余弦相似度得分 ---
-        scores_clean = torch.matmul(y_clean_deb, vocab_f.t())    # [N, V]
-        scores_shifts = torch.matmul(y_shifts_deb, vocab_f.t())  # [N, M, V]
+        # --- Step 2: 计算 2,020 词余弦得分，并【剥离行均值常值 c_i = <y_i, mu_V>】---
+        # (等价于与中心化词库 vocab_embeds_centered = E_V - mean(E_V) 做内积，消除行常值方差掩蔽与 c_i < 0 负号反转助推，且在 beta=0, tau=0 时行内排序 100% 不变！)
+        raw_scores_clean = torch.matmul(y_clean_deb, vocab_f.t())    # [N, V]
+        raw_scores_shifts = torch.matmul(y_shifts_deb, vocab_f.t())  # [N, M, V]
 
-        # 预计算 Clean 所需的全 M=6 错位列向均值/标准差与 Shifted LOO 所需的 M-1 错位列向均值/标准差
+        scores_clean = raw_scores_clean - raw_scores_clean.mean(dim=-1, keepdim=True)     # [N, V], 消除 c_i
+        scores_shifts = raw_scores_shifts - raw_scores_shifts.mean(dim=-1, keepdim=True)  # [N, M, V], 消除 c_i
+
+        # 预计算剥离 c_i 后真实差模得分 Delta_S 的全 M=6 错位列向均值/标准差与 Shifted LOO 的 M-1 错位列向均值/标准差
         mu_v_all = scores_shifts.mean(dim=(0, 1), keepdim=True).squeeze(0)  # [1, V]
         std_v_all = (
             scores_shifts.std(dim=(0, 1), keepdim=True)
@@ -861,6 +865,8 @@ def analyze_lexical_hubness_diagnostics(
     std_tail = float(std_v[~is_top50_col].mean().item()) if has_tail else 0.0
     mu_top50 = float(mu_v[is_top50_col].mean().item()) if has_top50 else 0.0
     mu_tail = float(mu_v[~is_top50_col].mean().item()) if has_tail else 0.0
+    abs_mu_top50 = float(mu_v[is_top50_col].abs().mean().item()) if has_top50 else 0.0
+    abs_mu_tail = float(mu_v[~is_top50_col].abs().mean().item()) if has_tail else 0.0
 
     top_k_slots = min(10, len(vocab_list))
     tau_slot_occupancy: dict[str, dict] = {}
@@ -895,6 +901,11 @@ def analyze_lexical_hubness_diagnostics(
     raw_top10_in_50 = float(is_top50_col[raw_top10_idx].float().mean().item())
     n_queries = len(words_str)
     n_top50_queries = int(sum(w in vocab_set50 for w in words_str))
+    from collections import Counter
+
+    word_counts = Counter(words_str)
+    n_top100_queries = int(sum(cnt for _, cnt in word_counts.most_common(100)))
+    test_top100_share = float(n_top100_queries / max(1, n_queries))
 
     return {
         "anchor_rank_k": int(rank_k) if rank_k is not None else None,
@@ -903,6 +914,8 @@ def analyze_lexical_hubness_diagnostics(
         "vocab_size": len(vocab_list),
         "top50_query_count": n_top50_queries,
         "top50_query_share": round(test_top50_share, 4),
+        "top100_query_count": n_top100_queries,
+        "top100_query_share": round(test_top100_share, 4),
         "test_query_top50_share": round(test_top50_share, 4),
         "uniform_vocab_top50_share": round(uniform_top50_col_share, 4),
         "theoretical_uniform_top50_slot_share": round(uniform_top50_col_share, 4),
@@ -914,8 +927,8 @@ def analyze_lexical_hubness_diagnostics(
         "std_ratio_top50_vs_tail": round(std_top50 / max(std_tail, 1e-8), 3),
         "uncalibrated_mu_top50_mean": round(mu_top50, 5),
         "uncalibrated_mu_tail_mean": round(mu_tail, 5),
-        "top50_abs_mean_bias": round(abs(mu_top50), 5),
-        "tail_abs_mean_bias": round(abs(mu_tail), 5),
+        "top50_abs_mean_bias": round(abs_mu_top50, 5),
+        "tail_abs_mean_bias": round(abs_mu_tail, 5),
         "expected_random_within_top50_hub_pool": round(test_top50_share * (10.0 / 60.0), 4),
         "uncalibrated_shifted_top10_slot_share_by_top50": round(raw_top10_in_50, 4),
         "by_tau": tau_slot_occupancy,

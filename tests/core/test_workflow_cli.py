@@ -1739,7 +1739,19 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
     assert (tmp_path / "exploratory" / "subspace_coherence_debiasing_test.json").exists()
     assert (tmp_path / "figures" / "subspace_coherence_debiasing_test.png").exists()
 
-    # 4. Verify subspace_loo_with_column_calibration suppresses Zipf column-variance hubness
+    # 4. Verify subspace_loo_with_column_calibration strips row-constant c_i and suppresses Zipf column-variance hubness
+    raw_c_centered, raw_s_centered = subspace_loo_with_column_calibration(
+        y_clean,
+        y_shifts,
+        word_bank,
+        rank_k=true_rank_k,
+        eta=0.80,
+        beta=0.0,
+        tau=0.0,
+    )
+    assert torch.allclose(raw_c_centered.mean(dim=-1), torch.zeros(N), atol=1e-6)
+    assert torch.allclose(raw_s_centered.mean(dim=-1), torch.zeros(N, M), atol=1e-6)
+
     cal_c0, cal_s0 = subspace_loo_with_column_calibration(
         y_clean,
         y_shifts,
