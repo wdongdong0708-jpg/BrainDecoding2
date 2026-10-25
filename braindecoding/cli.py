@@ -305,6 +305,41 @@ def _report(selector: str, write: bool) -> int:
     return 0
 
 
+def _parse_seed_argument(raw: str | int | list[int] | tuple[int, ...]) -> int | list[int]:
+    """解析单种子（返回 int）或逗号/空格分隔的多种子（返回 list[int]）。"""
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        if raw < 0:
+            raise argparse.ArgumentTypeError(f"随机种子必须是非负整数：{raw}")
+        return int(raw)
+    if isinstance(raw, (list, tuple)):
+        parts = [str(item).strip() for item in raw if str(item).strip()]
+    else:
+        text = str(raw).strip().strip("[]()")
+        parts = [p.strip() for p in re.split(r"[,\s]+", text) if p.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError(f"无效的随机种子参数：{raw!r}")
+    seeds: list[int] = []
+    for part in parts:
+        try:
+            val = int(part)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                f"无效的随机种子 {part!r}（来自 {raw!r}）"
+            ) from exc
+        if val < 0:
+            raise argparse.ArgumentTypeError(f"随机种子必须是非负整数：{val}")
+        if val not in seeds:
+            seeds.append(val)
+    return seeds[0] if len(seeds) == 1 else seeds
+
+
+def _resolve_seed_list(args) -> list[int]:
+    """将 CLI 解析后的 seed 参数统一展开为非空 int 列表。"""
+    raw = getattr(args, "seed", 0)
+    parsed = _parse_seed_argument(raw if raw is not None else 0)
+    return [parsed] if isinstance(parsed, int) else list(parsed)
+
+
 def _add_subject_subset_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--subject",
@@ -349,7 +384,14 @@ def _add_training_workflow_args(
         default=None,
         help="训练阶段：word/1（阶段1：单窗脑编码器）、context/2.1（阶段2.1：脑编码器+16层Transformer）或 revision/2.2（阶段2.2：16层局部窗口滚动修订）",
     )
-    parser.add_argument("--seed", type=int, default=0, help="随机种子（默认：0）")
+    parser.add_argument(
+        "--seed",
+        "--seeds",
+        dest="seed",
+        type=_parse_seed_argument,
+        default=0,
+        help="随机种子：支持单种子（如 0）或逗号分隔的多种子列表（如 0,1,2；默认：0）",
+    )
     _add_subject_subset_args(parser)
     parser.add_argument(
         "--epochs",
@@ -519,7 +561,14 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
         default="val",
         help="评估划分：val（验证集）或 test（留出测试集）",
     )
-    parser.add_argument("--seed", type=int, default=0, help="随机种子（默认：0）")
+    parser.add_argument(
+        "--seed",
+        "--seeds",
+        dest="seed",
+        type=_parse_seed_argument,
+        default=0,
+        help="随机种子：支持单种子（如 0）或逗号分隔的多种子列表（如 0,1,2；默认：0）",
+    )
     _add_subject_subset_args(parser)
     parser.add_argument(
         "--checkpoint",
@@ -639,41 +688,50 @@ def _workflow_train(args, *, mode: str) -> int:
     dataset = args.dataset
     if dataset is None and args.config is None:
         dataset = "chineseeeg2_littleprince"
-    run_training_workflow(
-        dataset,
-        stage=args.stage,
-        seed=args.seed,
-        subject=args.subject,
-        num_subjects=args.num_subjects,
-        subjects=args.subjects,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        eval_batch_size=args.eval_batch_size,
-        learning_rate=args.learning_rate,
-        num_workers=args.num_workers,
-        precision=args.precision,
-        window_seconds=getattr(args, "window_seconds", None),
-        window_start_offset_seconds=getattr(
-            args, "window_start_offset_seconds", None
-        ),
-        require_cache=args.require_cache,
-        resume=args.resume,
-        mode=mode,
-        output_dir=args.output_dir,
-        exp_tag=getattr(args, "exp_tag", None),
-        word_exp_tag=getattr(args, "word_exp_tag", None),
-        word_checkpoint=args.word_checkpoint,
-        max_train_rows=args.max_train_rows,
-        max_val_rows=args.max_val_rows,
-        overwrite=args.overwrite,
-        show_progress=not bool(getattr(args, "no_progress", False)),
-        config_path=args.config,
-        siamese_debiased=getattr(args, "siamese_debiased", None),
-        eta_train=getattr(args, "eta_train", None),
-        lambda_null=getattr(args, "lambda_null", None),
-        shifts_per_step=getattr(args, "shifts_per_step", None),
-        preextract_frozen_cnn=getattr(args, "preextract_frozen_cnn", None),
-    )
+    seed_list = _resolve_seed_list(args)
+    for idx, seed_val in enumerate(seed_list):
+        if len(seed_list) > 1:
+            print(
+                f"\n{'#' * 96}\n"
+                f" [Multi-Seed Training {idx + 1}/{len(seed_list)}] Running seed={seed_val} (all seeds: {seed_list})\n"
+                f"{'#' * 96}",
+                flush=True,
+            )
+        run_training_workflow(
+            dataset,
+            stage=args.stage,
+            seed=seed_val,
+            subject=args.subject,
+            num_subjects=args.num_subjects,
+            subjects=args.subjects,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            eval_batch_size=args.eval_batch_size,
+            learning_rate=args.learning_rate,
+            num_workers=args.num_workers,
+            precision=args.precision,
+            window_seconds=getattr(args, "window_seconds", None),
+            window_start_offset_seconds=getattr(
+                args, "window_start_offset_seconds", None
+            ),
+            require_cache=args.require_cache,
+            resume=args.resume,
+            mode=mode,
+            output_dir=args.output_dir if len(seed_list) == 1 else None,
+            exp_tag=getattr(args, "exp_tag", None),
+            word_exp_tag=getattr(args, "word_exp_tag", None),
+            word_checkpoint=args.word_checkpoint,
+            max_train_rows=args.max_train_rows,
+            max_val_rows=args.max_val_rows,
+            overwrite=args.overwrite,
+            show_progress=not bool(getattr(args, "no_progress", False)),
+            config_path=args.config,
+            siamese_debiased=getattr(args, "siamese_debiased", None),
+            eta_train=getattr(args, "eta_train", None),
+            lambda_null=getattr(args, "lambda_null", None),
+            shifts_per_step=getattr(args, "shifts_per_step", None),
+            preextract_frozen_cnn=getattr(args, "preextract_frozen_cnn", None),
+        )
     return 0
 
 
@@ -696,36 +754,45 @@ def _workflow_eval(args) -> int:
                     dataset = (raw_ctrl.get("workflow") or {}).get("dataset")
         if dataset is None:
             dataset = "chineseeeg2_littleprince"
-    run_evaluation_workflow(
-        dataset,
-        stage=args.stage,
-        seed=args.seed,
-        split=args.split,
-        subject=args.subject,
-        num_subjects=args.num_subjects,
-        subjects=args.subjects,
-        eval_batch_size=args.eval_batch_size,
-        num_workers=args.num_workers,
-        precision=args.precision,
-        window_seconds=getattr(args, "window_seconds", None),
-        window_start_offset_seconds=getattr(
-            args, "window_start_offset_seconds", None
-        ),
-        require_cache=args.require_cache,
-        checkpoint_path=args.checkpoint,
-        output_dir=args.output_dir,
-        exp_tag=getattr(args, "exp_tag", None),
-        word_exp_tag=getattr(args, "word_exp_tag", None),
-        config_path=args.config,
-        control_config_path=control_cfg,
-        shift_seconds=getattr(args, "shift_seconds", None),
-        zero_signal_control=bool(getattr(args, "zero_signal_control", False)),
-        subtraction_etas=getattr(args, "subtraction_etas", None),
-        all_stages=args.all_stages,
-        plot=not bool(getattr(args, "no_plot", False)),
-        show_progress=not bool(getattr(args, "no_progress", False)),
-        max_eval_rows=args.max_eval_rows,
-    )
+    seed_list = _resolve_seed_list(args)
+    for idx, seed_val in enumerate(seed_list):
+        if len(seed_list) > 1:
+            print(
+                f"\n{'#' * 96}\n"
+                f" [Multi-Seed Evaluation {idx + 1}/{len(seed_list)}] Evaluating seed={seed_val} (all seeds: {seed_list})\n"
+                f"{'#' * 96}",
+                flush=True,
+            )
+        run_evaluation_workflow(
+            dataset,
+            stage=args.stage,
+            seed=seed_val,
+            split=args.split,
+            subject=args.subject,
+            num_subjects=args.num_subjects,
+            subjects=args.subjects,
+            eval_batch_size=args.eval_batch_size,
+            num_workers=args.num_workers,
+            precision=args.precision,
+            window_seconds=getattr(args, "window_seconds", None),
+            window_start_offset_seconds=getattr(
+                args, "window_start_offset_seconds", None
+            ),
+            require_cache=args.require_cache,
+            checkpoint_path=args.checkpoint if len(seed_list) == 1 else None,
+            output_dir=args.output_dir if len(seed_list) == 1 else None,
+            exp_tag=getattr(args, "exp_tag", None),
+            word_exp_tag=getattr(args, "word_exp_tag", None),
+            config_path=args.config,
+            control_config_path=control_cfg,
+            shift_seconds=getattr(args, "shift_seconds", None),
+            zero_signal_control=bool(getattr(args, "zero_signal_control", False)),
+            subtraction_etas=getattr(args, "subtraction_etas", None),
+            all_stages=args.all_stages,
+            plot=not bool(getattr(args, "no_plot", False)),
+            show_progress=not bool(getattr(args, "no_progress", False)),
+            max_eval_rows=args.max_eval_rows,
+        )
     return 0
 
 

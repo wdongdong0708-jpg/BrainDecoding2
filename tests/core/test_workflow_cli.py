@@ -1113,12 +1113,48 @@ def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
     assert cfg_override["workflow"]["siamese_debiased"]["lambda_null"] == pytest.approx(12.0)
     assert cfg_override["workflow"]["siamese_debiased"]["shifts_per_step"] == 6
 
-    # Reject stage=word with siamese_debiased
+    # Reject stage=word with explicit siamese_debiased=True
     with pytest.raises(ValueError, match="仅适用于 context"):
         build_workflow_config(
             config_path="configs/training/pallier2025_word_encoder.yaml",
             siamese_debiased=True,
         )
+
+    # Implicit leftover eta_train / lambda_null / shifts_per_step on stage=word must be safely ignored
+    cfg_word_ignore, _ = build_workflow_config(
+        config_path="configs/training/pallier2025_word_encoder.yaml",
+        seed=1,
+        eta_train=0.8,
+        lambda_null=10.0,
+        shifts_per_step=6,
+    )
+    assert cfg_word_ignore["workflow"]["stage"] == "word"
+    assert cfg_word_ignore["workflow"]["siamese_debiased"]["enabled"] is False
+    assert cfg_word_ignore["workflow"]["siamese_debiased"]["preextract_frozen_cnn"] is False
+
+    # Multi-seed CLI parsing (--seed 0,1,2 and --seeds 0,1,2)
+    multiseed_args = parser.parse_args(
+        [
+            "train",
+            "--config",
+            "configs/training/pallier2025_word_encoder.yaml",
+            "--seed",
+            "0,1,2",
+        ]
+    )
+    assert multiseed_args.seed == [0, 1, 2]
+    assert cli._resolve_seed_list(multiseed_args) == [0, 1, 2]
+    singleseed_args = parser.parse_args(
+        [
+            "train",
+            "--config",
+            "configs/training/pallier2025_word_encoder.yaml",
+            "--seed",
+            "1",
+        ]
+    )
+    assert singleseed_args.seed == 1
+    assert cli._resolve_seed_list(singleseed_args) == [1]
 
     # 3. Verify centered vocabulary bank & shift-null loss properties
     dim = 32

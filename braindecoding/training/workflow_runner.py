@@ -892,13 +892,31 @@ def build_workflow_config(
         resolve_siamese_debiased_config,
     )
 
+    raw_siam_cfg = (
+        cfg.get("siamese_debiased")
+        if isinstance(cfg.get("siamese_debiased"), dict)
+        else {}
+    )
+    yaml_siam_enabled = bool(
+        raw_siam_cfg.get("enabled", False)
+        or raw_siam_cfg.get("preextract_frozen_cnn", False)
+        or tc.get("preextract_frozen_cnn", False)
+    )
+    ignore_implicit_siamese_on_word = (
+        stage not in ("context", "revision")
+        and siamese_debiased is not True
+        and preextract_frozen_cnn is not True
+        and not yaml_siam_enabled
+    )
     siamese_spec = resolve_siamese_debiased_config(
         cfg,
-        siamese_debiased=siamese_debiased,
-        eta_train=eta_train,
-        lambda_null=lambda_null,
-        shifts_per_step=shifts_per_step,
-        preextract_frozen_cnn=preextract_frozen_cnn,
+        siamese_debiased=False if ignore_implicit_siamese_on_word else siamese_debiased,
+        eta_train=None if ignore_implicit_siamese_on_word else eta_train,
+        lambda_null=None if ignore_implicit_siamese_on_word else lambda_null,
+        shifts_per_step=None if ignore_implicit_siamese_on_word else shifts_per_step,
+        preextract_frozen_cnn=(
+            False if ignore_implicit_siamese_on_word else preextract_frozen_cnn
+        ),
     )
     if (
         siamese_spec["enabled"] or siamese_spec["preextract_frozen_cnn"]

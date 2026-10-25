@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-10-24T03:49:05Z",
+  "updated_at": "2026-10-25T02:46:47Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "0d1b867e4402f71df56358a482460d1acdbba2afa39644041ef92253a63ee582",
-      "size": 94109,
-      "normalized_sha256": "0d1b867e4402f71df56358a482460d1acdbba2afa39644041ef92253a63ee582"
+      "sha256": "9640ac10df21a234ffad888608c3129d7b34545330a151f9a8d8f61e8c093cf5",
+      "size": 94145,
+      "normalized_sha256": "9640ac10df21a234ffad888608c3129d7b34545330a151f9a8d8f61e8c093cf5"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "braindecoding/cli.py": {
       "role": "index",
-      "sha256": "298363c1537dcb8fc514150f6de03b13f64bc108f3494f6ef6af74c079012b4a",
-      "size": 37542,
-      "normalized_sha256": "298363c1537dcb8fc514150f6de03b13f64bc108f3494f6ef6af74c079012b4a"
+      "sha256": "f03d52c34e11b07d83c092da76cd9a0784aecf5249625ebc20f5534cdfcbec1b",
+      "size": 40478,
+      "normalized_sha256": "f03d52c34e11b07d83c092da76cd9a0784aecf5249625ebc20f5534cdfcbec1b"
     },
     "braindecoding/config.py": {
       "role": "index",
@@ -563,9 +563,9 @@
     },
     "braindecoding/training/workflow_runner.py": {
       "role": "index",
-      "sha256": "db45842bf0516bb33e5ff32bd6779057eb0ed3f790395487bd4902ac62756d55",
-      "size": 184263,
-      "normalized_sha256": "db45842bf0516bb33e5ff32bd6779057eb0ed3f790395487bd4902ac62756d55"
+      "sha256": "e4dc706c7a4263edeb4d858375ae267370ce7c599ed0c5dd090fed28f11d7e49",
+      "size": 185051,
+      "normalized_sha256": "e4dc706c7a4263edeb4d858375ae267370ce7c599ed0c5dd090fed28f11d7e49"
     },
     "configs/controls/common_mode_subtraction/chineseeeg2_common_mode_subtraction_control.yaml": {
       "role": "index",
@@ -1186,9 +1186,9 @@
     },
     "scripts/colab/colab_gpu_train.ipynb": {
       "role": "index",
-      "sha256": "403ce4ba226123cdede9c27380992779904ba245dbe454e50f6b5dc85a94bc1a",
-      "size": 12989,
-      "normalized_sha256": "403ce4ba226123cdede9c27380992779904ba245dbe454e50f6b5dc85a94bc1a"
+      "sha256": "b98da8c3e4c93c003f14c3aab1d27bf76dc291cf145fdccd1f2444f97f4e6434",
+      "size": 13815,
+      "normalized_sha256": "b98da8c3e4c93c003f14c3aab1d27bf76dc291cf145fdccd1f2444f97f4e6434"
     },
     "scripts/colab/colab_subspace_coherence_debiasing.ipynb": {
       "role": "index",
