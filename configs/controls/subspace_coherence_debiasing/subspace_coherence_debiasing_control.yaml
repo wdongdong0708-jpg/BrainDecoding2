@@ -28,6 +28,9 @@ control:
     rank_k_values: [8, 12, 16, 24]
     eta_values: [0.8, 1.0, 1.2]
     full_loo_eta_values: [0.5, 0.8, 1.0]
+    calibration_betas: [1.0]
+    calibration_taus: [0.0, 0.3, 0.5, 0.7, 1.0]
+    center_svd: false
     use_coherence_gate: true
     coherence_low: 0.35
     coherence_high: 0.65
@@ -44,4 +47,7 @@ evaluation:
     mode: subspace_coherence_leave_one_out
     rank_k_values: [8, 12, 16, 24]
     eta_values: [0.8, 1.0, 1.2]
+    calibration_betas: [1.0]
+    calibration_taus: [0.0, 0.3, 0.5, 0.7, 1.0]
+    center_svd: false
     use_coherence_gate: true

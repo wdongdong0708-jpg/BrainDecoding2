@@ -1551,9 +1551,32 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
 
     from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
         analyze_shift_subspace_and_coherence,
+        build_arg_parser,
+        evaluate_cached_pt_column_calibration,
         run_subspace_coherence_debiasing_sweep,
         subspace_coherence_loo_debiasing,
+        subspace_loo_with_column_calibration,
     )
+
+    sub_parser = build_arg_parser()
+    parsed_sub_args = sub_parser.parse_args(
+        [
+            "--dataset",
+            "pallier2025",
+            "--shift-seconds",
+            "-15,-30,-45,-60,-90,-120",
+            "--rank-ks",
+            "8,12,16,24",
+            "--etas",
+            "0.8,1.0,1.2",
+            "--betas",
+            "1.0",
+            "--taus",
+            "0.0,0.3,0.5,0.7,1.0",
+        ]
+    )
+    assert parsed_sub_args.shift_seconds == "-15,-30,-45,-60,-90,-120"
+    assert parsed_sub_args.taus == "0.0,0.3,0.5,0.7,1.0"
 
     torch.manual_seed(42)
     N, M, D = 40, 6, 32
@@ -1710,8 +1733,75 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
     )
     assert report["experiment_type"] == "exploratory_subspace_coherence_loo_debiasing"
     assert len(report["subspace_sweep"]) == 2 * 2 * 2
+    assert len(report["column_calibration_sweep"]) > 0
+    assert "lexical_hubness_diagnostics" in report
+    assert "shifted_top10_hubness_by_tau" in report["lexical_hubness_diagnostics"]
     assert (tmp_path / "exploratory" / "subspace_coherence_debiasing_test.json").exists()
     assert (tmp_path / "figures" / "subspace_coherence_debiasing_test.png").exists()
+
+    # 4. Verify subspace_loo_with_column_calibration suppresses Zipf column-variance hubness
+    cal_c0, cal_s0 = subspace_loo_with_column_calibration(
+        y_clean,
+        y_shifts,
+        word_bank,
+        rank_k=true_rank_k,
+        eta=0.80,
+        beta=1.0,
+        tau=0.0,
+    )
+    cal_c1, cal_s1 = subspace_loo_with_column_calibration(
+        y_clean,
+        y_shifts,
+        word_bank,
+        rank_k=true_rank_k,
+        eta=0.80,
+        beta=1.0,
+        tau=1.0,
+    )
+    assert cal_c0.shape == (N, len(full_vocabulary))
+    assert cal_s0.shape == (N, M, len(full_vocabulary))
+    assert cal_c1.shape == (N, len(full_vocabulary))
+    assert cal_s1.shape == (N, M, len(full_vocabulary))
+    # At tau=1.0, the column-wise mean across (N, M) is near zero and column-wise std is ~1.0 across all V columns
+    assert float(cal_s1.mean(dim=(0, 1)).abs().max()) < 0.05
+    assert torch.allclose(cal_s1.std(dim=(0, 1)), torch.ones(len(full_vocabulary)), atol=0.15)
+
+    # 5. Verify direct .pt cache evaluation via evaluate_cached_pt_column_calibration
+    dummy_ds = _DummySubspaceDataset()
+    cache_pt = tmp_path / "exploratory" / "subspace_encoded_cache_test.pt"
+    torch.save(
+        {
+            "version": "subspace_encoded_cache_v1",
+            "checkpoint_sha256": "dummy_sha",
+            "dataset": "pallier2025",
+            "stage": "revision",
+            "split": "test",
+            "seed": 0,
+            "exp_tag": "win1000ms_siamese_e080_l10_causal",
+            "word_exp_tag": "win1000ms",
+            "window_seconds": 1.0,
+            "window_samples": 50,
+            "shift_seconds": [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0],
+            "vocabulary": full_vocabulary,
+            "vocab50": vocab50,
+            "eval_table": dummy_ds.table,
+            "embedding_map": dummy_ds.embedding_map,
+            "clean_encoded": clean_encoded,
+            "shifted_encoded_by_shift": shifted_by_shift,
+        },
+        cache_pt,
+    )
+    cached_report = evaluate_cached_pt_column_calibration(
+        cache_pt,
+        eta_values=[0.8],
+        rank_k_values=[4],
+        coherence_gate_modes=[True],
+        calibration_betas=[1.0],
+        calibration_taus=[0.0, 0.5, 1.0],
+        plot=False,
+        print_report=False,
+    )
+    assert len(cached_report["column_calibration_sweep"]) == 3
 
     nb_path = PROJECT_ROOT / "scripts/colab/colab_subspace_coherence_debiasing.ipynb"
     assert nb_path.exists()
@@ -1719,6 +1809,7 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
     assert nb_obj["nbformat"] == 4
     nb_raw = nb_path.read_text(encoding="utf-8")
     assert "braindecoding.evaluation.subspace_coherence_debiasing_evaluation" in nb_raw
+    assert "--cache-pt" in nb_raw
 
 
 
