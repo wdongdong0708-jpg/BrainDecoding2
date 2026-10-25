@@ -1543,7 +1543,7 @@ def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
     assert "+-30s" not in eval_nb_text
 
 
-def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
+def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
     import json
     import numpy as np
     import torch
@@ -1552,10 +1552,9 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
     from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
         analyze_shift_subspace_and_coherence,
         build_arg_parser,
-        evaluate_cached_pt_column_calibration,
+        evaluate_cached_pt_subspace_loo,
         run_subspace_coherence_debiasing_sweep,
         subspace_coherence_loo_debiasing,
-        subspace_loo_with_column_calibration,
     )
 
     sub_parser = build_arg_parser()
@@ -1569,14 +1568,10 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
             "8,12,16,24",
             "--etas",
             "0.8,1.0,1.2",
-            "--betas",
-            "1.0",
-            "--taus",
-            "0.0,0.3,0.5,0.7,1.0",
         ]
     )
     assert parsed_sub_args.shift_seconds == "-15,-30,-45,-60,-90,-120"
-    assert parsed_sub_args.taus == "0.0,0.3,0.5,0.7,1.0"
+    assert parsed_sub_args.uncentered_svd is False
 
     torch.manual_seed(42)
     N, M, D = 40, 6, 32
@@ -1606,13 +1601,15 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
         shift_list.append(y_m)
     y_shifts = torch.stack(shift_list, dim=1)  # [N, M, D]
 
-    # 1. Verify SVD subspace & coherence analysis
+    # 1. Verify centered SVD subspace & strict LOO SVD basis U_{K,LOO}
     diag, vh = analyze_shift_subspace_and_coherence(
-        y_shifts, coherence_low=0.35, coherence_high=0.65
+        y_shifts, coherence_low=0.35, coherence_high=0.65, compute_loo_svd=True
     )
     assert diag["num_samples"] == N
     assert diag["num_shifts_M"] == M
     assert diag["feature_dim_D"] == D
+    assert diag["svd_centered"] is True
+    assert "_vh_loo_list" in diag and len(diag["_vh_loo_list"]) == M
     # Since b_grid lives in a 4D subspace, top-4 singular values capture the majority of variance
     assert diag["cumulative_energy_explained"]["top_4"] > 0.60
     assert diag["coherence_norm"]["mean"] > diag["theoretical_random_orthogonal_norm"]
@@ -1627,8 +1624,10 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
         y_shifts,
         eta=1.0,
         rank_k=true_rank_k,
-        use_coherence_gate=True,
+        use_coherence_gate=False,
+        center_svd=True,
         precomputed_vh=vh,
+        precomputed_vh_loo=diag["_vh_loo_list"],
     )
     assert y_clean_deb.shape == (N, D)
     assert y_shifts_deb.shape == (N, M, D)
@@ -1650,7 +1649,7 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
     cos_sem_deb = (y_clean_deb * s_clean).sum(dim=-1).mean().item()
     assert cos_sem_deb > cos_sem_raw + 0.08
 
-    # 3. Verify synthetic sweep across K0/K1/K2 horizons and output files
+    # 3. Verify synthetic sweep across K0/K1/K2 horizons, 50w Top-1 printing, and output files
     vocab50 = [f"word_{i:02d}" for i in range(10)]
     full_vocabulary = [f"word_{i:02d}" for i in range(20)]
     word_bank = F.normalize(
@@ -1725,60 +1724,25 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
         vocab50=vocab50,
         rank_k_values=[4, 8],
         eta_values=[0.8, 1.0],
-        coherence_gate_modes=[True, False],
+        coherence_gate_modes=[False, True],
         full_loo_etas=[0.8, 1.0],
         output_dir=tmp_path,
         plot=True,
-        print_report=False,
+        print_report=True,
     )
+    printed_out = capsys.readouterr().out
+    assert "50w Clean Top1" in printed_out
+    assert "50w Shift Top1" in printed_out
+    assert "3B. Revision Horizons (K0 / K1 / K2) 50-Word Macro Top-1" in printed_out
+    assert "Column-Wise Null Standardization" not in printed_out
     assert report["experiment_type"] == "exploratory_subspace_coherence_loo_debiasing"
+    assert report["formula"]["center_svd"] is True
     assert len(report["subspace_sweep"]) == 2 * 2 * 2
-    assert len(report["column_calibration_sweep"]) > 0
-    assert "lexical_hubness_diagnostics" in report
-    assert "shifted_top10_hubness_by_tau" in report["lexical_hubness_diagnostics"]
+    assert "column_calibration_sweep" not in report
     assert (tmp_path / "exploratory" / "subspace_coherence_debiasing_test.json").exists()
     assert (tmp_path / "figures" / "subspace_coherence_debiasing_test.png").exists()
 
-    # 4. Verify subspace_loo_with_column_calibration strips row-constant c_i and suppresses Zipf column-variance hubness
-    raw_c_centered, raw_s_centered = subspace_loo_with_column_calibration(
-        y_clean,
-        y_shifts,
-        word_bank,
-        rank_k=true_rank_k,
-        eta=0.80,
-        beta=0.0,
-        tau=0.0,
-    )
-    assert torch.allclose(raw_c_centered.mean(dim=-1), torch.zeros(N), atol=1e-6)
-    assert torch.allclose(raw_s_centered.mean(dim=-1), torch.zeros(N, M), atol=1e-6)
-
-    cal_c0, cal_s0 = subspace_loo_with_column_calibration(
-        y_clean,
-        y_shifts,
-        word_bank,
-        rank_k=true_rank_k,
-        eta=0.80,
-        beta=1.0,
-        tau=0.0,
-    )
-    cal_c1, cal_s1 = subspace_loo_with_column_calibration(
-        y_clean,
-        y_shifts,
-        word_bank,
-        rank_k=true_rank_k,
-        eta=0.80,
-        beta=1.0,
-        tau=1.0,
-    )
-    assert cal_c0.shape == (N, len(full_vocabulary))
-    assert cal_s0.shape == (N, M, len(full_vocabulary))
-    assert cal_c1.shape == (N, len(full_vocabulary))
-    assert cal_s1.shape == (N, M, len(full_vocabulary))
-    # At tau=1.0, the column-wise mean across (N, M) is near zero and column-wise std is ~1.0 across all V columns
-    assert float(cal_s1.mean(dim=(0, 1)).abs().max()) < 0.05
-    assert torch.allclose(cal_s1.std(dim=(0, 1)), torch.ones(len(full_vocabulary)), atol=0.15)
-
-    # 5. Verify direct .pt cache evaluation via evaluate_cached_pt_column_calibration
+    # 4. Verify direct .pt cache evaluation via evaluate_cached_pt_subspace_loo
     dummy_ds = _DummySubspaceDataset()
     cache_pt = tmp_path / "exploratory" / "subspace_encoded_cache_test.pt"
     torch.save(
@@ -1803,17 +1767,15 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
         },
         cache_pt,
     )
-    cached_report = evaluate_cached_pt_column_calibration(
+    cached_report = evaluate_cached_pt_subspace_loo(
         cache_pt,
-        eta_values=[0.8],
-        rank_k_values=[4],
-        coherence_gate_modes=[True],
-        calibration_betas=[1.0],
-        calibration_taus=[0.0, 0.5, 1.0],
+        eta_values=[0.8, 1.0],
+        rank_k_values=[4, 8],
+        coherence_gate_modes=[False],
         plot=False,
         print_report=False,
     )
-    assert len(cached_report["column_calibration_sweep"]) == 3
+    assert len(cached_report["subspace_sweep"]) == 4
 
     nb_path = PROJECT_ROOT / "scripts/colab/colab_subspace_coherence_debiasing.ipynb"
     assert nb_path.exists()
@@ -1822,6 +1784,8 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path):
     nb_raw = nb_path.read_text(encoding="utf-8")
     assert "braindecoding.evaluation.subspace_coherence_debiasing_evaluation" in nb_raw
     assert "--cache-pt" in nb_raw
+    assert "--taus" not in nb_raw
+
 
 
 

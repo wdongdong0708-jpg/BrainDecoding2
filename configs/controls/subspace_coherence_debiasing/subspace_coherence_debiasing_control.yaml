@@ -1,9 +1,10 @@
 # 方案一（零重训 · 测试期即插即用）：低秩共模子空间投影 + 相干度门控去偏（Subspace-Projected + Coherence-Gated LOO）配置
 # 核心思想：
-#   1. 基于测试期 6 个纯历史因果时间错位窗口（-15s, -30s, -45s, -60s, -90s, -120s）的共模均值特征做 SVD，
-#      提取跨历史窗口共有的低秩时间偏置子空间 P_bias = U_K U_K^T（秩 K in [8, 12, 16, 24]）；
-#   2. 结合跨历史窗口相干度门控 g_i = clamp((||y_shift_mean_i||_2 - 0.35) / (0.65 - 0.35), 0.2, 1.2)；
-#   3. 仅在低秩偏置子空间 U_K 内执行满额 LOO 共模扣除（eta in [0.8, 1.0, 1.2]），
+#   1. 基于测试期 6 个纯历史因果时间错位窗口（-15s, -30s, -45s, -60s, -90s, -120s）的共模均值特征做中心化 SVD，
+#      提取跨历史窗口共有的低秩时间偏置子空间 P_bias = U_K U_K^T（秩 K in [8, 12, 16, 24]，有效秩 EffRank = 1.7 ~ 2.2）；
+#   2. 每个错位分支 k 严格仅使用其余 M-1=5 个错位条件的均值求中心化 SVD 基 U_{K,LOO}（完全不碰第 k 个错位条件自身）；
+#   3. 结合可选跨历史窗口相干度门控 g_i = clamp((||y_shift_mean_i||_2 - 0.35) / (0.65 - 0.35), 0.2, 1.2)（默认同时对比 Gate=Off 与 Gate=On）；
+#   4. 仅在低秩偏置子空间 U_K 内执行 LOO 共模扣除（eta in [0.8, 1.0, 1.2]），
 #      100% 保护正交的 (D - K) 个纯神经语义维度免受 1 + eta^2 / M 噪声方差膨胀。
 #
 # 启动命令示例：
@@ -14,7 +15,7 @@ extends: ../temporal_shift/temporal_shift_control.yaml
 control:
   name: subspace_coherence_debiasing_negative_control
   control_type: subspace_coherence_debiasing
-  description: Low-rank subspace-projected (U_K U_K^T) and cross-shift coherence-gated leave-one-out common-mode debiasing across purely historical causal windows (-15s, -30s, -45s, -60s, -90s, -120s).
+  description: Centered-SVD low-rank subspace-projected (U_K U_K^T with strict LOO basis U_{K,LOO}) and cross-shift coherence-gated leave-one-out common-mode debiasing across purely historical causal windows (-15s, -30s, -45s, -60s, -90s, -120s).
   shift_seconds: [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
   shift_mode: deterministic_circular
   same_subject: true
@@ -28,10 +29,8 @@ control:
     rank_k_values: [8, 12, 16, 24]
     eta_values: [0.8, 1.0, 1.2]
     full_loo_eta_values: [0.5, 0.8, 1.0]
-    calibration_betas: [1.0]
-    calibration_taus: [0.0, 0.3, 0.5, 0.7, 1.0]
-    center_svd: false
-    use_coherence_gate: true
+    center_svd: true
+    use_coherence_gate: false
     coherence_low: 0.35
     coherence_high: 0.65
     gate_min: 0.2
@@ -47,7 +46,5 @@ evaluation:
     mode: subspace_coherence_leave_one_out
     rank_k_values: [8, 12, 16, 24]
     eta_values: [0.8, 1.0, 1.2]
-    calibration_betas: [1.0]
-    calibration_taus: [0.0, 0.3, 0.5, 0.7, 1.0]
-    center_svd: false
-    use_coherence_gate: true
+    center_svd: true
+    use_coherence_gate: false
