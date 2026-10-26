@@ -16,14 +16,18 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import torch
 from torch.nn import functional as F_nn
 
+from braindecoding.evaluation.evaluation_exports import (
+    export_sequence_decoding_tables_and_markdown,
+)
 from braindecoding.evaluation.statistical_significance import (
     edit_distance,
+    paired_block_statistics,
     sentence_metrics,
 )
 from braindecoding.training.training_runtime import save_json
@@ -1132,6 +1136,273 @@ def evaluate_vocabulary_scaling_summary(
     return summary_by_scale
 
 
+def _s3_significance_stars(p_value: float) -> str:
+    p = float(p_value)
+    if p < 0.001:
+        return "***"
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return "ns"
+
+
+def _compute_s3_per_subject_breakdown(
+    expanded_bundles: Mapping[str, dict],
+    *,
+    language: str,
+    word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """计算 S3_clean（及与 K0 对比）的逐被试 6 维指标明细与跨被试 Mean ± SD 汇总。"""
+    s3_bundle = expanded_bundles.get("S3_clean") or expanded_bundles.get("S3")
+    if not s3_bundle or not s3_bundle.get("final_sentences"):
+        return [], {}
+    s3_sents = s3_bundle.get("final_sentences") or []
+    k0_sents = (expanded_bundles.get("K0") or {}).get("final_sentences") or []
+
+    by_subj_s3: dict[str, list[dict]] = defaultdict(list)
+    by_subj_k0: dict[str, list[dict]] = defaultdict(list)
+    for rec in s3_sents:
+        sid = str(rec.get("subject_id", "default"))
+        by_subj_s3[sid].append(rec)
+    for rec in k0_sents:
+        sid = str(rec.get("subject_id", "default"))
+        by_subj_k0[sid].append(rec)
+
+    per_subject: list[dict[str, Any]] = []
+    for sid in sorted(by_subj_s3.keys()):
+        s3_m = evaluate_six_dimensional_metrics(
+            by_subj_s3[sid],
+            language=language,
+            word_embedding_map=word_embedding_map,
+        )
+        row: dict[str, Any] = {
+            "subject_id": sid,
+            "segment_count": int(s3_m["segment_count"]),
+            "total_words": int(s3_m["total_words"]),
+            "bleu1_pct": round(float(s3_m["bleu1_pct"]), 4),
+            "word_acc_pct": round(float(s3_m["word_acc_pct"]), 4),
+            "in_vocabulary_word_acc_pct": round(
+                float(s3_m["in_vocabulary_word_acc_pct"]), 4
+            ),
+            "content_word_acc_pct": round(
+                float(s3_m["content_word_acc_pct"]), 4
+            ),
+            "function_word_acc_pct": round(
+                float(s3_m["function_word_acc_pct"]), 4
+            ),
+            "wer_pct": round(float(s3_m["wer_pct"]), 4),
+            "cer_pct": round(float(s3_m["cer_pct"]), 4),
+            "bertscore_f1_pct": round(float(s3_m["bertscore_f1_pct"]), 4),
+        }
+        if sid in by_subj_k0 and by_subj_k0[sid]:
+            k0_m = evaluate_six_dimensional_metrics(
+                by_subj_k0[sid],
+                language=language,
+                word_embedding_map=word_embedding_map,
+            )
+            row["k0_bleu1_pct"] = round(float(k0_m["bleu1_pct"]), 4)
+            row["k0_word_acc_pct"] = round(float(k0_m["word_acc_pct"]), 4)
+            row["s3_minus_k0_bleu1_pp"] = round(
+                float(s3_m["bleu1_pct"]) - float(k0_m["bleu1_pct"]), 4
+            )
+            row["s3_minus_k0_word_acc_pp"] = round(
+                float(s3_m["word_acc_pct"]) - float(k0_m["word_acc_pct"]), 4
+            )
+        per_subject.append(row)
+
+    summary: dict[str, Any] = {}
+    if per_subject:
+        b_vals = [float(r["bleu1_pct"]) for r in per_subject]
+        w_vals = [float(r["word_acc_pct"]) for r in per_subject]
+        summary = {
+            "subject_count": len(per_subject),
+            "mean_bleu1_pct": round(float(np.mean(b_vals)), 4),
+            "std_bleu1_pct": round(float(np.std(b_vals, ddof=0)), 4),
+            "min_bleu1_pct": round(float(np.min(b_vals)), 4),
+            "max_bleu1_pct": round(float(np.max(b_vals)), 4),
+            "mean_word_acc_pct": round(float(np.mean(w_vals)), 4),
+            "std_word_acc_pct": round(float(np.std(w_vals, ddof=0)), 4),
+            "min_word_acc_pct": round(float(np.min(w_vals)), 4),
+            "max_word_acc_pct": round(float(np.max(w_vals)), 4),
+        }
+        d_b = [
+            float(r["s3_minus_k0_bleu1_pp"])
+            for r in per_subject
+            if "s3_minus_k0_bleu1_pp" in r
+        ]
+        if d_b:
+            summary["mean_s3_minus_k0_bleu1_pp"] = round(
+                float(np.mean(d_b)), 4
+            )
+            summary["std_s3_minus_k0_bleu1_pp"] = round(
+                float(np.std(d_b, ddof=0)), 4
+            )
+            summary["improved_subjects_count"] = int(
+                sum(1 for v in d_b if v > 0.0)
+            )
+    return per_subject, summary
+
+
+def _compute_s3_paired_significance(
+    expanded_bundles: Mapping[str, dict],
+    *,
+    language: str,
+) -> dict[str, dict[str, Any]]:
+    """计算 S3_clean vs K0 与 S3_clean vs S3_shifted_neg75s 的配对材料块 95% CI 与置换检验 p 值。"""
+    s3_bundle = expanded_bundles.get("S3_clean") or expanded_bundles.get("S3")
+    if not s3_bundle or not s3_bundle.get("final_sentences"):
+        return {}
+    chinese = language == "zh"
+    s3_sents = s3_bundle.get("final_sentences") or []
+
+    def _segment_scores(records: Sequence[Mapping]) -> tuple[list[float], list[float], list[str], list[float]]:
+        bleu_list: list[float] = []
+        acc_list: list[float] = []
+        blocks: list[str] = []
+        weights: list[float] = []
+        for idx, rec in enumerate(records):
+            ref = [str(w) for w in rec.get("reference_words") or ()]
+            pred = [str(w) for w in rec.get("predicted_words") or ()]
+            if not ref or len(ref) != len(pred):
+                continue
+            sm = sentence_metrics([ref], [pred], chinese=chinese)
+            bleu_list.append(float(sm["sentence_bleu1_mean"]) * 100.0)
+            acc_list.append(float(sm["exact_word_accuracy"]) * 100.0)
+            gid = str(rec.get("group_id") or "")
+            sid = str(rec.get("subject_id") or "0")
+            blk = gid.split(":")[0] if ":" in gid and gid.split(":")[0] else (gid or f"seg_{idx // 5}")
+            blocks.append(blk)
+            weights.append(float(max(1, len(ref))))
+        return bleu_list, acc_list, blocks, weights
+
+    s3_bleu, s3_acc, s3_blocks, s3_weights = _segment_scores(s3_sents)
+    if len(s3_bleu) < 2:
+        return {}
+
+    sig_results: dict[str, dict[str, Any]] = {}
+    comparisons = (
+        ("K0", "S3_clean vs K0 (Revision Gain)", "s3_clean_vs_k0", 20261031),
+        (
+            "S3_shifted_neg75s",
+            "S3_clean vs Shifted -75s (Temporal Alignment)",
+            "s3_clean_vs_shifted",
+            20261032,
+        ),
+    )
+    for other_key, label_prefix, key_prefix, base_seed in comparisons:
+        other_bundle = expanded_bundles.get(other_key)
+        if not other_bundle or not other_bundle.get("final_sentences"):
+            continue
+        o_bleu, o_acc, _, _ = _segment_scores(
+            other_bundle.get("final_sentences") or []
+        )
+        if len(o_bleu) != len(s3_bleu):
+            continue
+        effective_blocks = (
+            s3_blocks
+            if len(set(s3_blocks)) >= 2
+            else [f"seg_{i}" for i in range(len(s3_bleu))]
+        )
+        for metric_label, m_suffix, a_vals, b_vals, w_vals in (
+            ("BLEU-1 (%)", "bleu1", s3_bleu, o_bleu, [1.0] * len(s3_bleu)),
+            ("Word Acc (%)", "word_acc", s3_acc, o_acc, s3_weights),
+        ):
+            arr_a = np.asarray(a_vals, dtype=np.float64)
+            arr_b = np.asarray(b_vals, dtype=np.float64)
+            arr_w = np.asarray(w_vals, dtype=np.float64)
+            diffs = arr_a - arr_b
+            b_to_idx: dict[str, list[int]] = {}
+            for idx_item, b_key in enumerate(effective_blocks):
+                b_to_idx.setdefault(str(b_key), []).append(idx_item)
+            block_means = np.asarray(
+                [
+                    float(
+                        np.sum(diffs[idxs] * arr_w[idxs])
+                        / max(float(np.sum(arr_w[idxs])), 1e-12)
+                    )
+                    for idxs in b_to_idx.values()
+                ],
+                dtype=np.float64,
+            )
+            block_weights = np.asarray(
+                [float(np.sum(arr_w[idxs])) for idxs in b_to_idx.values()],
+                dtype=np.float64,
+            )
+            n_blocks = int(len(block_means))
+            total_w = max(float(np.sum(block_weights)), 1e-12)
+            observed = float(np.sum(block_means * block_weights) / total_w)
+            if n_blocks <= 1 or float(np.max(np.abs(diffs))) <= 1e-12:
+                p_one = 1.0 if abs(observed) <= 1e-12 else 0.05
+                p_two = p_one
+                ci_low = observed
+                ci_high = observed
+            else:
+                norm_weights = block_weights / total_w
+                weighted_contribs = block_means * norm_weights
+                rng = np.random.default_rng(
+                    base_seed + (0 if m_suffix == "bleu1" else 10)
+                )
+                if n_blocks <= 12:
+                    ints = np.arange(2**n_blocks, dtype=np.uint32)
+                    signs = (
+                        2.0
+                        * (
+                            (
+                                ints[:, None]
+                                >> np.arange(n_blocks, dtype=np.uint32)
+                            )
+                            & 1
+                        ).astype(np.float64)
+                        - 1.0
+                    )
+                    null_dist = signs @ weighted_contribs
+                    p_one = float(np.mean(null_dist >= observed - 1e-12))
+                    p_two = float(
+                        np.mean(np.abs(null_dist) >= abs(observed) - 1e-12)
+                    )
+                else:
+                    signs = rng.choice((-1.0, 1.0), size=(2000, n_blocks))
+                    null_dist = signs @ weighted_contribs
+                    p_one = float(
+                        (1 + int(np.count_nonzero(null_dist >= observed - 1e-12)))
+                        / 2001.0
+                    )
+                    p_two = float(
+                        (
+                            1
+                            + int(
+                                np.count_nonzero(
+                                    np.abs(null_dist) >= abs(observed) - 1e-12
+                                )
+                            )
+                        )
+                        / 2001.0
+                    )
+                boot_picks = rng.integers(0, n_blocks, size=(2000, n_blocks))
+                picked_means = block_means[boot_picks]
+                picked_weights = block_weights[boot_picks]
+                boot_estimates = np.sum(
+                    picked_means * picked_weights, axis=1
+                ) / np.maximum(np.sum(picked_weights, axis=1), 1e-12)
+                ci_low, ci_high = (
+                    float(x)
+                    for x in np.quantile(boot_estimates, (0.025, 0.975))
+                )
+            sig_results[f"{key_prefix}_{m_suffix}"] = {
+                "label": label_prefix,
+                "metric": metric_label,
+                "effect_pp": round(float(observed), 4),
+                "ci_lower_pp": round(float(ci_low), 4),
+                "ci_upper_pp": round(float(ci_high), 4),
+                "p_one_sided": round(float(p_one), 6),
+                "p_two_sided": round(float(p_two), 6),
+                "significance": _s3_significance_stars(p_two),
+                "blocks": n_blocks,
+            }
+    return sig_results
+
+
 def evaluate_and_export_sequence_decoding(
     decoded_bundles: Mapping[str, dict],
     *,
@@ -1304,6 +1575,17 @@ def evaluate_and_export_sequence_decoding(
             )
         )
 
+    per_subject, per_subject_summary = _compute_s3_per_subject_breakdown(
+        expanded_bundles,
+        language=language,
+        word_embedding_map=word_embedding_map,
+    )
+    statistical_significance = _compute_s3_paired_significance(
+        expanded_bundles,
+        language=language,
+    )
+    revision_gains = _compute_revision_gain_deltas(condition_summaries)
+
     report = {
         "schema_version": 1,
         "protocol": "sequence_decoding_s3_evaluation",
@@ -1311,6 +1593,10 @@ def evaluate_and_export_sequence_decoding(
         "language": language,
         "split": split,
         "conditions": condition_summaries,
+        "revision_gains": revision_gains,
+        "statistical_significance": statistical_significance,
+        "per_subject": per_subject,
+        "per_subject_summary": per_subject_summary,
         "core_vocabulary_benchmark": core_vocabulary_benchmark,
         "full_vocab_core_subsets": full_vocab_core_subsets,
         "vocabulary_scaling": vocabulary_scaling_summaries,
@@ -1318,6 +1604,12 @@ def evaluate_and_export_sequence_decoding(
         "confidence_gate_pareto": pareto_results,
         "figures": figure_paths,
     }
+    s3_exports = export_sequence_decoding_tables_and_markdown(
+        report,
+        out_dir,
+        decoded_bundles=expanded_bundles,
+    )
+    report["exports"] = s3_exports
     save_json(out_dir / f"s3_evaluation_summary_{split}.json", report)
     report_txt = format_sequence_decoding_report(report, verbose=True)
     (out_dir / f"s3_evaluation_report_{split}.txt").write_text(

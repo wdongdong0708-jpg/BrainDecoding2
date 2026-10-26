@@ -12,6 +12,12 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from braindecoding.evaluation.evaluation_exports import (
+    export_multi_seed_tables_and_markdown,
+    export_sequence_decoding_tables_and_markdown,
+    export_stage_comparison_tables_and_markdown,
+    export_word_evaluation_tables_and_markdown,
+)
 from braindecoding.evaluation.evaluation_figures import (
     STAGE_DISPLAY_NAMES,
     STAGE_SHORT_LABELS,
@@ -239,7 +245,11 @@ def format_word_evaluation_report(
     lines.append(hdr)
     lines.append(rule)
 
-    primary_keys = ("N20", "N50", "N100", "N150", "full_vocab") if verbose else ("N50", "full_vocab")
+    primary_keys = (
+        ("N20", "N50", "N50_strict", "N100", "N150", "full_vocab")
+        if verbose
+        else ("N50", "N50_strict", "full_vocab")
+    )
     for k in primary_keys:
         if k not in sweep:
             continue
@@ -254,6 +264,99 @@ def format_word_evaluation_report(
             f"{_fmt_float(r.get('median_rank'), 7, 1)}"
         )
     lines.append(rule)
+
+    n50_blk = sweep.get("N50") or {}
+    fv_blk = sweep.get("full_vocab") or {}
+    subj_sum = (
+        (metrics.get("per_subject_summary") if isinstance(metrics, Mapping) else None)
+        or eval_result.get("per_subject_summary")
+        or {}
+    )
+    if n50_blk or fv_blk:
+        n50_ch = float(n50_blk.get("chance_top10", 0.2))
+        n50_fd = float(
+            n50_blk.get(
+                "fold_over_chance_top10",
+                float(n50_blk.get("macro_top10", 0.0)) / max(n50_ch, 1e-12),
+            )
+        )
+        fv_ch = float(fv_blk.get("chance_top10", 0.005))
+        fv_fd = float(
+            fv_blk.get(
+                "fold_over_chance_top10",
+                float(fv_blk.get("macro_top10", 0.0)) / max(fv_ch, 1e-12),
+            )
+        )
+        subj_str = ""
+        sm_raw = subj_sum.get("mean_n50_macro_top10", subj_sum.get("mean_macro_top10")) if isinstance(subj_sum, Mapping) else None
+        if sm_raw is not None:
+            sm = float(sm_raw) * 100.0
+            ssd = float(subj_sum.get("std_n50_macro_top10", subj_sum.get("std_macro_top10", 0.0))) * 100.0
+            subj_str = f" | Subj: {sm:.1f}±{ssd:.1f}%"
+        lines.append(
+            f" * Chance@10: N50={n50_ch*100:.1f}% ({n50_fd:.2f}x) | "
+            f"Full={fv_ch*100:.2f}% ({fv_fd:.1f}x){subj_str}"[:REPORT_WIDTH]
+        )
+
+    ling = (
+        (metrics.get("linguistic_breakdown") if isinstance(metrics, Mapping) else None)
+        or eval_result.get("linguistic_breakdown")
+        or {}
+    )
+    if isinstance(ling, Mapping) and ling:
+        cw_b = ling.get("content_words") or {}
+        fw_b = ling.get("function_words") or {}
+        c50 = cw_b.get("vocab50_word_macro_top10")
+        f50 = fw_b.get("vocab50_word_macro_top10")
+        cfv = cw_b.get("full_vocab_word_macro_top10")
+        ffv = fw_b.get("full_vocab_word_macro_top10")
+        if c50 is not None and f50 is not None:
+            fv_part = (
+                f" | Full: {float(cfv)*100:.2f}% / {float(ffv)*100:.2f}%"
+                if cfv is not None and ffv is not None
+                else ""
+            )
+            lines.append(
+                f" * Content/Func Top10: N50={float(c50)*100:.2f}% / {float(f50)*100:.2f}%{fv_part}"[
+                    :REPORT_WIDTH
+                ]
+            )
+        if verbose and (cw_b or fw_b):
+            lines.append("\n[1B] Linguistic Word-Class Breakdown (Content vs. Function Words)")
+            l_hdr = (
+                f"{'Word Class':<24} | {'Events':>7} | {'Types':>6} | "
+                f"{'50wTop10':>9} | {'50wTop1':>8} | {'FulTop10':>9} | {'FulMRR':>7}"
+            )
+            lines.append(rule)
+            lines.append(l_hdr)
+            lines.append(rule)
+            for cls_k, cls_lbl in (
+                ("content_words", "Content Words (实词)"),
+                ("function_words", "Function Words (虚词)"),
+            ):
+                cb = ling.get(cls_k)
+                if not isinstance(cb, Mapping):
+                    continue
+                lines.append(
+                    f"{cls_lbl[:24]:<24} | {int(cb.get('query_count', 0)):>7d} | "
+                    f"{int(cb.get('unique_word_count', 0)):>6d} | "
+                    f"{_fmt_ratio_pct(cb.get('vocab50_word_macro_top10'), 9)} | "
+                    f"{_fmt_ratio_pct(cb.get('vocab50_word_macro_top1'), 8)} | "
+                    f"{_fmt_ratio_pct(cb.get('full_vocab_word_macro_top10'), 9)} | "
+                    f"{_fmt_ratio_pct(cb.get('full_vocab_mrr'), 7)}"
+                )
+            lines.append(rule)
+
+    sig_map = (
+        (metrics.get("statistical_significance") if isinstance(metrics, Mapping) else None)
+        or eval_result.get("statistical_significance")
+        or {}
+    )
+    transitions = (
+        (metrics.get("revision_transitions") if isinstance(metrics, Mapping) else None)
+        or eval_result.get("revision_transitions")
+        or {}
+    )
 
     if horizons:
         lines.append("\n[2] Rolling Revision Horizons (Common Targets: K0 -> K1 -> K2)")
@@ -290,6 +393,59 @@ def format_word_evaluation_report(
                 f"{_fmt_signed_ratio_pct(d_fv, 13)}"
             )
         lines.append(rule)
+        sig_k2 = sig_map.get("K2_minus_K0_vocab50_top10") if isinstance(sig_map, Mapping) else None
+        if isinstance(sig_k2, Mapping) and sig_k2.get("ci_lower") is not None:
+            ci_l = float(sig_k2["ci_lower"]) * 100.0
+            ci_u = float(sig_k2["ci_upper"]) * 100.0
+            p_v = float(sig_k2.get("p_two_sided", sig_k2.get("p_one_sided", 1.0)))
+            st_s = str(sig_k2.get("significance", ""))
+            lines.append(
+                f" * K2-K0 50w Top10 95% CI: [{ci_l:+.2f}%, {ci_u:+.2f}%] (p={p_v:.4f} {st_s})"[
+                    :REPORT_WIDTH
+                ]
+            )
+        t_k02 = (
+            (transitions.get("K0_to_K2") or {}).get("vocab50_top10")
+            if isinstance(transitions, Mapping)
+            else None
+        )
+        if isinstance(t_k02, Mapping):
+            rep = int(t_k02.get("beneficial_repairs", 0))
+            hrm = int(t_k02.get("harmful_overwrites", 0))
+            rat = float(t_k02.get("repair_to_harm_ratio", 0.0))
+            lines.append(
+                f" * K0->K2 Transitions: Repairs={rep} (Miss->Hit) | Harms={hrm} (Hit->Miss) | {rat:.2f}x"[
+                    :REPORT_WIDTH
+                ]
+            )
+        if verbose and isinstance(transitions, Mapping) and transitions:
+            lines.append("\n[2B] Event-Level Revision Transition Matrix (Miss->Hit vs. Hit->Miss)")
+            t_hdr = (
+                f"{'Transition / Criterion':<28} | {'Events':>7} | {'Repairs':>9} | "
+                f"{'Harms':>9} | {'NetGain':>9} | {'Rep/Harm':>8}"
+            )
+            lines.append(rule)
+            lines.append(t_hdr)
+            lines.append(rule)
+            for tr_k in ("K0_to_K1", "K0_to_K2", "K1_to_K2"):
+                tr_b = transitions.get(tr_k)
+                if not isinstance(tr_b, Mapping):
+                    continue
+                for crit_k, crit_lbl in (
+                    ("vocab50_top10", f"{tr_k} (50w Top-10)"),
+                    ("full_vocab_top10", f"{tr_k} (Full Top-10)"),
+                ):
+                    cd = tr_b.get(crit_k)
+                    if not isinstance(cd, Mapping):
+                        continue
+                    lines.append(
+                        f"{crit_lbl[:28]:<28} | {int(cd.get('total_events', 0)):>7d} | "
+                        f"{int(cd.get('beneficial_repairs', 0)):>9d} | "
+                        f"{int(cd.get('harmful_overwrites', 0)):>9d} | "
+                        f"{int(cd.get('net_gain_events', 0)):>+9d} | "
+                        f"{float(cd.get('repair_to_harm_ratio', 0.0)):>7.2f}x"
+                    )
+            lines.append(rule)
 
     neg_ctrl = eval_result.get("negative_controls") or eval_result.get("negative_control") or {}
     raw_ctrl_conditions = neg_ctrl.get("conditions") or []
@@ -357,6 +513,23 @@ def format_word_evaluation_report(
                 f"{'-':>7}"
             )
         lines.append(rule)
+        nc_sig = (
+            (neg_ctrl.get("statistical_significance") or {}).get(
+                "clean_vs_shifted_vocab50_top10"
+            )
+            if isinstance(neg_ctrl.get("statistical_significance"), Mapping)
+            else None
+        )
+        if isinstance(nc_sig, Mapping) and nc_sig.get("ci_lower") is not None:
+            ci_l = float(nc_sig["ci_lower"]) * 100.0
+            ci_u = float(nc_sig["ci_upper"]) * 100.0
+            p_v = float(nc_sig.get("p_two_sided", nc_sig.get("p_one_sided", 1.0)))
+            st_s = str(nc_sig.get("significance", ""))
+            lines.append(
+                f" * Clean-Shift 50w Top10 95% CI: [{ci_l:+.2f}%, {ci_u:+.2f}%] (p={p_v:.4f} {st_s})"[
+                    :REPORT_WIDTH
+                ]
+            )
 
     if verbose and len(per_subject) >= 1:
         lines.append(f"\n[4] Per-Subject 50-Word Retrieval Breakdown ({split})")
@@ -369,18 +542,20 @@ def format_word_evaluation_report(
         lines.append(rule)
         for s in per_subject:
             lines.append(
-                f"{str(s.get('subject_id', '-')):<12} | "
-                f"{int(s.get('total_events', 0)):>7d} | "
-                f"{int(s.get('vocab50_queries', 0)):>7d} | "
-                f"{_fmt_ratio_pct(s.get('macro_top10'), 9)} | "
-                f"{_fmt_ratio_pct(s.get('micro_top10'), 9)} | "
-                f"{_fmt_ratio_pct(s.get('macro_top1'), 9)} | "
-                f"{_fmt_float(s.get('median_rank'), 8, 1)}"
+                f"{str(s.get('subject_label', s.get('subject_id', '-'))):<12} | "
+                f"{int(s.get('total_events', s.get('query_count', 0))):>7d} | "
+                f"{int(s.get('vocab50_queries', s.get('n50_query_count', 0))):>7d} | "
+                f"{_fmt_ratio_pct(s.get('macro_top10', s.get('n50_macro_top10')), 9)} | "
+                f"{_fmt_ratio_pct(s.get('micro_top10', s.get('n50_micro_top10')), 9)} | "
+                f"{_fmt_ratio_pct(s.get('macro_top1', s.get('n50_macro_top1')), 9)} | "
+                f"{_fmt_float(s.get('median_rank', s.get('n50_median_rank')), 8, 1)}"
             )
         lines.append(rule)
     elif not verbose:
         lines.append(
-            f"[Tip] Use --verbose or evaluation_report_{split.lower()}.txt for full breakdown."
+            f"[Tip] Full tables: evaluation_report_{split.lower()}.md, .txt & tables/*.csv (--verbose)"[
+                :REPORT_WIDTH
+            ]
         )
 
     lines.append(banner)
@@ -394,15 +569,17 @@ def print_word_evaluation_report(
     output_dir: Path | str | None = None,
     print_to_stdout: bool = True,
 ) -> str:
-    """Save full .txt report to output_dir and print compact/verbose report to terminal."""
+    """Save full .txt/.md/CSV reports to output_dir and print compact/verbose report to terminal."""
     split = str(eval_result.get("split", "val")).lower()
     target_dir = output_dir or eval_result.get("output_dir")
     if target_dir:
-        out_path = Path(str(target_dir)) / f"evaluation_report_{split}.txt"
+        out_dir_path = Path(str(target_dir))
+        out_path = out_dir_path / f"evaluation_report_{split}.txt"
         try:
-            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_dir_path.mkdir(parents=True, exist_ok=True)
             full_txt = format_word_evaluation_report(eval_result, verbose=True)
             out_path.write_text(full_txt + "\n", encoding="utf-8")
+            export_word_evaluation_tables_and_markdown(eval_result, out_dir_path)
         except OSError:
             pass
     rendered = format_word_evaluation_report(eval_result, verbose=verbose)
@@ -606,7 +783,9 @@ def format_stage_comparison_report(
                 lines.append(format_word_evaluation_report(res, verbose=True))
     else:
         lines.append(
-            f"[Tip] Use --verbose or stage_comparison_report_{split.lower()}.txt for full tables."
+            f"[Tip] Full tables: stage_comparison_report_{split.lower()}.md, .txt & tables/*.csv"[
+                :REPORT_WIDTH
+            ]
         )
         lines.append(banner)
 
@@ -620,15 +799,19 @@ def print_stage_comparison_report(
     verbose: bool = False,
     output_dir: Path | str | None = None,
 ) -> str:
-    """Print unified multi-stage comparison report and optionally save .txt file."""
+    """Print unified multi-stage comparison report and optionally save .txt/.md/CSV files."""
     if output_dir:
-        out_path = Path(str(output_dir)) / f"stage_comparison_report_{split.lower()}.txt"
+        out_dir_path = Path(str(output_dir))
+        out_path = out_dir_path / f"stage_comparison_report_{split.lower()}.txt"
         try:
-            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_dir_path.mkdir(parents=True, exist_ok=True)
             full_txt = format_stage_comparison_report(
                 stage_results_or_summary, split=split, verbose=True
             )
             out_path.write_text(full_txt + "\n", encoding="utf-8")
+            export_stage_comparison_tables_and_markdown(
+                stage_results_or_summary, out_dir_path, split=split
+            )
         except OSError:
             pass
     rendered = format_stage_comparison_report(
@@ -1177,6 +1360,37 @@ def format_sequence_decoding_executive_summary(
                     f"ΔInVoc={_fmt_signed_pct(gv.get('in_vocabulary_word_acc_pct'), 6)} | "
                     f"ΔWAcc={_fmt_signed_pct(gv.get('word_acc_pct'), 6)}"
                 )
+        s3_sig = report.get("statistical_significance") or {}
+        if isinstance(s3_sig, Mapping):
+            sig_c = s3_sig.get("s3_clean_vs_k0_bleu1")
+            if isinstance(sig_c, Mapping) and sig_c.get("ci_lower_pp") is not None:
+                lines.append(
+                    f" * S3 vs K0 BLEU-1 95% CI: "
+                    f"[{float(sig_c['ci_lower_pp']):+.2f}, {float(sig_c['ci_upper_pp']):+.2f}] pp "
+                    f"(p={float(sig_c.get('p_two_sided', 1.0)):.4f} {sig_c.get('significance', '')})"[
+                        :REPORT_WIDTH
+                    ]
+                )
+            sig_sh = s3_sig.get("s3_clean_vs_shifted_bleu1")
+            if isinstance(sig_sh, Mapping) and sig_sh.get("ci_lower_pp") is not None:
+                lines.append(
+                    f" * Clean vs Shifted BLEU-1 95% CI: "
+                    f"[{float(sig_sh['ci_lower_pp']):+.2f}, {float(sig_sh['ci_upper_pp']):+.2f}] pp "
+                    f"(p={float(sig_sh.get('p_two_sided', 1.0)):.4f} {sig_sh.get('significance', '')})"[
+                        :REPORT_WIDTH
+                    ]
+                )
+        s3_sub_sum = report.get("per_subject_summary") or {}
+        if isinstance(s3_sub_sum, Mapping) and s3_sub_sum.get("mean_bleu1_pct") is not None:
+            mb = float(s3_sub_sum["mean_bleu1_pct"])
+            sb = float(s3_sub_sum.get("std_bleu1_pct", 0.0))
+            mw = float(s3_sub_sum.get("mean_word_acc_pct", 0.0))
+            sw = float(s3_sub_sum.get("std_word_acc_pct", 0.0))
+            lines.append(
+                f" * Across-Subject S3: BLEU1={mb:.2f}±{sb:.2f}% | WordAcc={mw:.2f}±{sw:.2f}%"[
+                    :REPORT_WIDTH
+                ]
+            )
 
     vs = report.get("vocabulary_scaling")
     if isinstance(vs, Mapping) and vs:
@@ -1255,7 +1469,9 @@ def format_sequence_decoding_executive_summary(
         lines.append(rule)
 
     lines.append(
-        f"[Tip] Use --verbose or s3_evaluation_report_{split}.txt for all 6 detailed tables."
+        f"[Tip] Full reports: s3_evaluation_report_{split}.md, s3_decoded_sentences_{split}.md"[
+            :REPORT_WIDTH
+        ]
     )
     lines.append(banner)
     return "\n".join(lines)
@@ -1679,18 +1895,26 @@ def render_saved_evaluation_report(
         or ("per_seed" in payload and "vocabulary_sweep_aggregate" in payload)
         or "stages_aggregate" in payload
     ):
-        return print_multi_seed_evaluation_report(payload, verbose=verbose)
+        return print_multi_seed_evaluation_report(
+            payload, verbose=verbose, output_dir=src.parent
+        )
 
     if protocol == "sequence_decoding_s3_evaluation" or (
         "conditions" in payload and "vocabulary_scaling" in payload
     ):
+        try:
+            export_sequence_decoding_tables_and_markdown(payload, src.parent)
+        except OSError:
+            pass
         rendered = format_sequence_decoding_report(payload, verbose=verbose)
         print(rendered, flush=True)
         return rendered
 
     if "stages" in payload and isinstance(payload.get("stages"), Mapping):
         split = str(payload.get("split", "val"))
-        return print_stage_comparison_report(payload, split=split, verbose=verbose)
+        return print_stage_comparison_report(
+            payload, split=split, verbose=verbose, output_dir=src.parent
+        )
 
     if exp_type == "exploratory_subspace_coherence_loo_debiasing" or (
         "subspace_and_coherence_diagnostics" in payload and "subspace_sweep" in payload
@@ -1707,7 +1931,9 @@ def render_saved_evaluation_report(
         or "vocabularies" in payload
         or "full_vocabulary_evaluation" in payload
     ):
-        return print_word_evaluation_report(payload, verbose=verbose)
+        return print_word_evaluation_report(
+            payload, verbose=verbose, output_dir=src.parent
+        )
 
     raise ValueError(f"Unrecognized evaluation JSON schema in {src}")
 
@@ -1994,11 +2220,13 @@ def print_multi_seed_evaluation_report(
         else f"multi_seed_evaluation_report_{split}.txt"
     )
     if target_dir:
-        out_path = Path(str(target_dir)) / report_filename
+        out_dir_path = Path(str(target_dir))
+        out_path = out_dir_path / report_filename
         try:
-            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_dir_path.mkdir(parents=True, exist_ok=True)
             full_txt = format_multi_seed_evaluation_report(summary, verbose=True)
             out_path.write_text(full_txt + "\n", encoding="utf-8")
+            export_multi_seed_tables_and_markdown(summary, out_dir_path)
         except OSError:
             pass
     rendered = format_multi_seed_evaluation_report(summary, verbose=verbose)

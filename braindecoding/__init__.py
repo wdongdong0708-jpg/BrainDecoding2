@@ -26,6 +26,7 @@ _SUBPACKAGE_MAP: dict[str, str] = {
     "dataset_builder": "data",
     "derived_cache": "data",
     "environment_preflight": "training",
+    "evaluation_exports": "evaluation",
     "evaluation_figures": "evaluation",
     "evaluation_reporting": "evaluation",
     "event_table": "data",

@@ -2197,6 +2197,311 @@ def test_stage1_standalone_and_multi_seed_training_and_evaluation(
     assert "EVAL_ALL_STAGES" in eval_nb_raw
 
 
+def test_scientific_diagnostic_metrics_and_readable_csv_markdown_exports(
+    tmp_path: Path,
+) -> None:
+    """Verify unified vocabulary sweep, 5 diagnostic metrics, and CSV/Markdown exports."""
+    import csv
+    import pandas as pd
+    import torch
+    import torch.nn.functional as F
+
+    from braindecoding.evaluation.evaluation_exports import (
+        export_word_evaluation_tables_and_markdown,
+    )
+    from braindecoding.evaluation.evaluation_reporting import (
+        REPORT_WIDTH,
+        format_sequence_decoding_report,
+        format_word_evaluation_report,
+    )
+    from braindecoding.evaluation.sequence_decoding_evaluation import (
+        evaluate_and_export_sequence_decoding,
+    )
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        _compute_encoded_evaluation_metrics,
+    )
+
+    torch.manual_seed(42)
+    D = 16
+    # Include both French function words ("le", "de", "dans", "pour") and content words
+    vocab_words = [
+        "le",
+        "de",
+        "dans",
+        "pour",
+        "petit",
+        "prince",
+        "planète",
+        "fleur",
+        "renard",
+        "étoile",
+        "mouton",
+        "désert",
+    ]
+    emb_bank = F.normalize(torch.randn(len(vocab_words), D), p=2, dim=-1)
+    emb_map = {w: emb_bank[i].numpy() for i, w in enumerate(vocab_words)}
+
+    N = 24
+    words = [vocab_words[i % 10] for i in range(N)]
+    targets = torch.stack(
+        [torch.from_numpy(emb_map[w]) for w in words], dim=0
+    )
+    noise0 = F.normalize(torch.randn(N, D), p=2, dim=-1)
+    noise1 = F.normalize(torch.randn(N, D), p=2, dim=-1)
+    pred_k0 = F.normalize(0.45 * targets + 0.55 * noise0, p=2, dim=-1)
+    pred_k1 = F.normalize(0.65 * targets + 0.35 * noise1, p=2, dim=-1)
+    pred_k2 = F.normalize(0.88 * targets + 0.12 * noise0, p=2, dim=-1)
+
+    event_ids = [f"ev-{i:03d}" for i in range(N)]
+    encoded = {
+        "predictions": pred_k2,
+        "targets": targets,
+        "words": words,
+        "event_ids": event_ids,
+        "revision_predictions": {0: pred_k0, 1: pred_k1, 2: pred_k2},
+        "revision_availability_masks": {
+            0: torch.ones(N, dtype=torch.bool),
+            1: torch.ones(N, dtype=torch.bool),
+            2: torch.ones(N, dtype=torch.bool),
+        },
+    }
+
+    class _DummyEvalDS:
+        def __init__(self):
+            self.embedding_map = emb_map
+            self.table = pd.DataFrame(
+                {
+                    "event_id": event_ids,
+                    "subject_id": [1 if i < 12 else 2 for i in range(N)],
+                    "recording_id": [
+                        f"sub-{(1 if i < 12 else 2):02d}_run-0{(i // 6) + 1}"
+                        for i in range(N)
+                    ],
+                }
+            )
+
+        def __len__(self):
+            return len(self.table)
+
+    # vocab50 has 10 words, plus 1 extra candidate not appearing in queries ("mouton") to test N50_strict vs N50
+    vocab50 = vocab_words[:11]
+    bundle = _compute_encoded_evaluation_metrics(
+        encoded,
+        _DummyEvalDS(),
+        vocab_words,
+        vocab50,
+        {
+            "experiment": {"dataset": "pallier2025"},
+            "dataset": {"subjects": [1, 2]},
+            "training": {"selection_metric": "pallier2025_50_macro"},
+        },
+        stage="revision",
+        split="test",
+    )
+
+    sweep = bundle["vocabulary_sweep"]
+    assert "N50" in sweep and "N50_strict" in sweep and "full_vocab" in sweep
+    assert sweep["N50"]["candidate_count"] == 50
+    assert sweep["N50"]["oov_policy"] == "filter_in_vocabulary"
+    assert sweep["N50_strict"]["oov_policy"] == "retain_all_targets_as_errors"
+    assert sweep["N50"]["fold_over_chance_top10"] > 0.0
+    assert "word_macro_top10" in sweep["full_vocab"]
+    assert "subject_macro_top10" in sweep["full_vocab"]
+    assert sweep["full_vocab"]["in_vocabulary_coverage_pct"] == 100.0
+
+    # Linguistic breakdown (Content vs. Function words)
+    ling = bundle["linguistic_breakdown"]
+    assert "content_words" in ling and "function_words" in ling
+    assert ling["content_words"]["query_count"] > 0
+    assert ling["function_words"]["query_count"] > 0
+    assert (
+        ling["content_words"]["query_count"]
+        + ling["function_words"]["query_count"]
+        == N
+    )
+
+    # Revision transitions (Miss->Hit vs Hit->Miss)
+    trans = bundle["revision_transitions"]
+    assert "K0_to_K1" in trans and "K0_to_K2" in trans and "K1_to_K2" in trans
+    t_k02 = trans["K0_to_K2"]["full_vocab_top1"]
+    assert (
+        t_k02["beneficial_repairs"]
+        + t_k02["harmful_overwrites"]
+        + t_k02["retained_hits"]
+        + t_k02["persistent_misses"]
+        == N
+    )
+    assert (
+        t_k02["net_gain_events"]
+        == t_k02["beneficial_repairs"] - t_k02["harmful_overwrites"]
+    )
+
+    # Paired statistical significance
+    sig = bundle["statistical_significance"]
+    assert "clean_vs_chance_vocab50_top10" in sig
+    assert "K2_minus_K0_vocab50_top10" in sig
+    assert "ci_lower" in sig["K2_minus_K0_vocab50_top10"]
+    assert sig["K2_minus_K0_vocab50_top10"]["significance"] in {
+        "***",
+        "**",
+        "*",
+        "ns",
+    }
+
+    # Per-subject summary
+    subj_sum = bundle["per_subject_summary"]
+    assert subj_sum["subject_count"] == 2
+    assert "mean_macro_top10" in subj_sum
+    assert "improved_subjects_count" in subj_sum
+
+    # Export CSV & Markdown for word evaluation
+    word_out = tmp_path / "word_eval_out"
+    eval_result = {
+        "dataset": "pallier2025",
+        "stage": "revision",
+        "split": "test",
+        "seed": 0,
+        "subset": {"subset_tag": "all-n2", "subject_count": 2},
+        "checkpoint": {"path": "best.ckpt", "epoch": 12},
+        "window_seconds": 1.0,
+        "window_samples": 50,
+        "selection_metric": "pallier2025_50_macro",
+        "selection_score": float(sweep["N50"]["macro_top10"]),
+        "metrics": bundle,
+        "vocabulary_sweep": sweep,
+        "revision_horizons": bundle["revision_horizons"],
+        "revision_transitions": trans,
+        "linguistic_breakdown": ling,
+        "statistical_significance": sig,
+        "per_subject": bundle["per_subject"],
+        "per_subject_summary": subj_sum,
+    }
+    exported = export_word_evaluation_tables_and_markdown(
+        eval_result, word_out
+    )
+    assert Path(exported["evaluation_report_md"]).is_file()
+    assert Path(exported["vocabulary_metrics_csv"]).is_file()
+    assert Path(exported["linguistic_breakdown_csv"]).is_file()
+    assert Path(exported["revision_horizons_csv"]).is_file()
+    assert Path(exported["per_subject_metrics_csv"]).is_file()
+
+    md_text = Path(exported["evaluation_report_md"]).read_text(
+        encoding="utf-8"
+    )
+    assert "Multi-Scale Vocabulary Retrieval Metrics" in md_text
+    assert "Event-Level Revision Transition Matrix" in md_text
+    assert "Content Words vs. Function Words Breakdown" in md_text
+
+    compact_txt = format_word_evaluation_report(eval_result, verbose=False)
+    assert max(len(line) for line in compact_txt.splitlines()) <= REPORT_WIDTH
+    assert "Chance@10:" in compact_txt
+    assert "Content/Func Top10:" in compact_txt
+    assert "K0->K2 Transitions:" in compact_txt
+
+    # S3 Sequence Decoding exports (including side-by-side decoded sentences MD & CSV)
+    s3_out = tmp_path / "s3_eval_out"
+    decoded_bundles = {
+        "K0": {
+            "condition": "K0",
+            "mean_seconds_per_segment": 0.05,
+            "final_sentences": [
+                {
+                    "segment_index": 0,
+                    "subject_id": "sub-01",
+                    "group_id": "run-06:0",
+                    "reference_words": ["le", "petit", "prince"],
+                    "predicted_words": ["le", "grand", "prince"],
+                    "in_vocabulary_mask": [True, True, True],
+                },
+                {
+                    "segment_index": 1,
+                    "subject_id": "sub-02",
+                    "group_id": "run-06:1",
+                    "reference_words": ["dans", "le", "désert"],
+                    "predicted_words": ["pour", "la", "planète"],
+                    "in_vocabulary_mask": [True, True, True],
+                },
+            ],
+        },
+        "S3_clean": {
+            "condition": "S3_clean",
+            "mean_seconds_per_segment": 0.12,
+            "final_sentences": [
+                {
+                    "segment_index": 0,
+                    "subject_id": "sub-01",
+                    "group_id": "run-06:0",
+                    "reference_words": ["le", "petit", "prince"],
+                    "initial_k0_words": ["le", "grand", "prince"],
+                    "predicted_words": ["le", "petit", "prince"],
+                    "in_vocabulary_mask": [True, True, True],
+                },
+                {
+                    "segment_index": 1,
+                    "subject_id": "sub-02",
+                    "group_id": "run-06:1",
+                    "reference_words": ["dans", "le", "désert"],
+                    "initial_k0_words": ["pour", "la", "planète"],
+                    "predicted_words": ["dans", "le", "planète"],
+                    "in_vocabulary_mask": [True, True, True],
+                },
+            ],
+        },
+        "S3_shifted_neg75s": {
+            "condition": "S3_shifted_neg75s",
+            "mean_seconds_per_segment": 0.12,
+            "final_sentences": [
+                {
+                    "segment_index": 0,
+                    "subject_id": "sub-01",
+                    "group_id": "run-06:0",
+                    "reference_words": ["le", "petit", "prince"],
+                    "predicted_words": ["de", "fleur", "mouton"],
+                    "in_vocabulary_mask": [True, True, True],
+                },
+                {
+                    "segment_index": 1,
+                    "subject_id": "sub-02",
+                    "group_id": "run-06:1",
+                    "reference_words": ["dans", "le", "désert"],
+                    "predicted_words": ["pour", "renard", "étoile"],
+                    "in_vocabulary_mask": [True, True, True],
+                },
+            ],
+        },
+    }
+    s3_report = evaluate_and_export_sequence_decoding(
+        decoded_bundles,
+        dataset="pallier2025",
+        language="fr",
+        split="test",
+        output_dir=s3_out,
+        plot=False,
+    )
+    assert "statistical_significance" in s3_report
+    assert "s3_clean_vs_k0_bleu1" in s3_report["statistical_significance"]
+    assert "per_subject" in s3_report and len(s3_report["per_subject"]) == 2
+    assert (s3_out / "s3_evaluation_report_test.md").is_file()
+    assert (s3_out / "s3_decoded_sentences_test.md").is_file()
+    assert (s3_out / "tables" / "s3_decoded_sentences_test.csv").is_file()
+    assert (s3_out / "tables" / "s3_per_subject_test.csv").is_file()
+
+    with (s3_out / "tables" / "s3_decoded_sentences_test.csv").open(
+        "r", encoding="utf-8-sig"
+    ) as f:
+        sent_rows = list(csv.DictReader(f))
+    assert len(sent_rows) == 2
+    assert sent_rows[0]["reference_sentence"] == "le petit prince"
+    assert sent_rows[0]["k0_initial_sentence"] == "le grand prince"
+    assert sent_rows[0]["s3_final_sentence"] == "le petit prince"
+    assert int(sent_rows[0]["beneficial_repairs"]) == 1
+    assert "#2:grand->petit" in sent_rows[0]["repair_highlights"]
+
+    s3_exec = format_sequence_decoding_report(s3_report, verbose=False)
+    assert max(len(line) for line in s3_exec.splitlines()) <= REPORT_WIDTH
+
+
+
 
 
 

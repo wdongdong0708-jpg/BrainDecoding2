@@ -1,0 +1,1769 @@
+"""Human-readable multi-format evaluation exporters (CSV spreadsheets, Markdown reports, and side-by-side decoded sentences).
+
+Automatically exports flat UTF-8-SIG ``.csv`` tables (under ``<output_dir>/tables/``),
+structured GitHub-Flavored Markdown ``.md`` reports, and S3 segment-by-segment
+decoded sentence comparisons (``s3_decoded_sentences_<split>.md`` and ``.csv``)
+so users never have to manually inspect deeply nested JSON files.
+"""
+
+from __future__ import annotations
+
+import csv
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+import numpy as np
+
+
+def _pct(val: Any, scale: float = 100.0, digits: int = 2) -> float:
+    """将比例或百分比安全转换为保留指定小数位的浮点数。"""
+    if val is None or val == "":
+        return 0.0
+    try:
+        return round(float(val) * scale, digits)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _num(val: Any, digits: int = 4) -> float:
+    """将数值安全转换为保留指定小数位的浮点数。"""
+    if val is None or val == "":
+        return 0.0
+    try:
+        return round(float(val), digits)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _fmt_pct(val: Any, scale: float = 100.0, digits: int = 2) -> str:
+    """格式化为带 % 的字符串。"""
+    if val is None or val == "":
+        return "-"
+    try:
+        return f"{float(val) * scale:.{digits}f}%"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _fmt_signed_pct(val: Any, scale: float = 100.0, digits: int = 2) -> str:
+    """格式化为带正负号与 pp 的百分点差值字符串。"""
+    if val is None or val == "":
+        return "-"
+    try:
+        return f"{float(val) * scale:+.{digits}f} pp"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _write_csv_table(
+    path: Path,
+    fieldnames: Sequence[str],
+    rows: Sequence[Mapping[str, Any]],
+) -> Path:
+    """以 UTF-8-SIG 编码写入扁平 CSV 表（兼容 Excel 直接双击打开与 Pandas 读取）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=list(fieldnames),
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(dict(row))
+    return path
+
+
+def _join_tokens_natural(words: Sequence[str], language: str) -> str:
+    """将词序列拼接为自然可读的法语或中文句子字符串。"""
+    tokens = [str(w).strip() for w in words if str(w).strip()]
+    if not tokens:
+        return ""
+    if language == "zh":
+        return "".join(tokens)
+    text = " ".join(tokens)
+    for prefix in ("l'", "d'", "j'", "c'", "n'", "s'", "qu'", "m'", "t'"):
+        text = text.replace(f"{prefix} ", prefix)
+    text = text.replace(" -", "-")
+    return text
+
+
+def export_word_evaluation_tables_and_markdown(
+    eval_result: Mapping[str, Any],
+    output_dir: str | Path | None = None,
+) -> dict[str, str]:
+    """将单阶段词级评估结果导出为 tables/*.csv 与 evaluation_report_{split}.md。"""
+    target_dir_raw = output_dir or eval_result.get("output_dir")
+    if not target_dir_raw:
+        return {}
+    out_dir = Path(str(target_dir_raw))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tables_dir = out_dir / "tables"
+    tables_dir.mkdir(parents=True, exist_ok=True)
+
+    split = str(eval_result.get("split", "val"))
+    dataset = str(eval_result.get("dataset", "-"))
+    stage = str(eval_result.get("stage", "word"))
+    stage_disp = str(eval_result.get("stage_display_name", stage))
+    seed = eval_result.get("seed", 0)
+    win_sec = float(eval_result.get("window_seconds", 1.0))
+    win_off = float(eval_result.get("window_start_offset_seconds", 0.0))
+    ckpt = eval_result.get("checkpoint") or {}
+    ckpt_epoch = ckpt.get("epoch", "-") if isinstance(ckpt, dict) else "-"
+    metrics = eval_result.get("metrics") or {}
+    sweep = metrics.get("vocabulary_sweep") or {}
+    horizons = metrics.get("revision_horizons") or {}
+    transitions = metrics.get("revision_transitions") or {}
+    ling = metrics.get("linguistic_breakdown") or {}
+    sig_map = metrics.get("statistical_significance") or {}
+    per_subj = metrics.get("per_subject") or []
+    subj_sum = metrics.get("per_subject_summary") or {}
+    nc = eval_result.get("negative_controls") or {}
+
+    exported: dict[str, str] = {}
+
+    # 1. 导出词表规模汇总表 vocabulary_metrics_{split}.csv
+    vocab_rows: list[dict[str, Any]] = []
+    scale_order = ("N20", "N50", "N50_strict", "N100", "N150", "full_vocab")
+    ordered_keys = [k for k in scale_order if k in sweep] + [
+        k for k in sweep if k not in scale_order
+    ]
+    for s_key in ordered_keys:
+        entry = sweep.get(s_key)
+        if not isinstance(entry, Mapping):
+            continue
+        c_cnt = int(entry.get("candidate_count", 0))
+        q_cnt = int(entry.get("query_count", 0))
+        w_top10 = float(entry.get("word_macro_top10", entry.get("macro_top10", 0.0)))
+        s_top10 = float(entry.get("subject_macro_top10", entry.get("macro_top10", 0.0)))
+        s_std10 = float(entry.get("subject_std_top10", 0.0))
+        m_top10 = float(entry.get("micro_top10", 0.0))
+        c_top10 = float(
+            entry.get("chance_top10", min(10.0, float(max(1, c_cnt))) / max(1, c_cnt))
+        )
+        primary_top10 = float(entry.get("macro_top10", w_top10))
+        fold_10 = float(
+            entry.get(
+                "fold_over_chance_top10",
+                primary_top10 / max(c_top10, 1e-12),
+            )
+        )
+        delta_10 = float(
+            entry.get("delta_vs_chance_top10", primary_top10 - c_top10)
+        )
+        w_top5 = float(entry.get("word_macro_top5", entry.get("macro_top5", 0.0)))
+        m_top5 = float(entry.get("micro_top5", 0.0))
+        w_top1 = float(entry.get("word_macro_top1", entry.get("macro_top1", 0.0)))
+        m_top1 = float(entry.get("micro_top1", 0.0))
+        c_top1 = float(entry.get("chance_top1", 1.0 / max(1, c_cnt)))
+        cov_pct = float(
+            entry.get(
+                "in_vocabulary_coverage_pct",
+                q_cnt / max(1, int(metrics.get("evaluated_events", max(1, q_cnt)))) * 100.0,
+            )
+        )
+        vocab_rows.append(
+            {
+                "scale_key": s_key,
+                "label": str(entry.get("label", s_key)),
+                "oov_policy": str(entry.get("oov_policy", "filter_in_vocabulary")),
+                "candidate_count": c_cnt,
+                "supported_candidates": int(entry.get("supported_candidates", c_cnt)),
+                "query_count": q_cnt,
+                "in_vocabulary_coverage_pct": _num(cov_pct, 2),
+                "primary_macro_top10_pct": _pct(primary_top10),
+                "word_macro_top10_pct": _pct(w_top10),
+                "subject_macro_top10_pct": _pct(s_top10),
+                "subject_std_top10_pct": _pct(s_std10),
+                "micro_top10_pct": _pct(m_top10),
+                "chance_top10_pct": _pct(c_top10),
+                "fold_over_chance_top10": _num(fold_10, 2),
+                "delta_vs_chance_top10_pp": _pct(delta_10),
+                "word_macro_top5_pct": _pct(w_top5),
+                "micro_top5_pct": _pct(m_top5),
+                "word_macro_top1_pct": _pct(w_top1),
+                "micro_top1_pct": _pct(m_top1),
+                "chance_top1_pct": _pct(c_top1),
+                "mrr": _num(entry.get("mrr", 0.0), 4),
+                "median_rank": _num(entry.get("median_rank", 0.0), 1),
+                "chance_median_rank": _num(
+                    entry.get("chance_median_rank", (c_cnt + 1) / 2.0), 1
+                ),
+            }
+        )
+    if vocab_rows:
+        v_csv = _write_csv_table(
+            tables_dir / f"vocabulary_metrics_{split}.csv",
+            list(vocab_rows[0].keys()),
+            vocab_rows,
+        )
+        exported["vocabulary_metrics_csv"] = str(v_csv)
+
+    # 2. 导出实词 vs. 虚词拆解表 linguistic_breakdown_{split}.csv
+    if isinstance(ling, Mapping) and ling:
+        ling_rows: list[dict[str, Any]] = []
+        for cat_key in ("content_words", "function_words", "content_minus_function"):
+            cat = ling.get(cat_key)
+            if not isinstance(cat, Mapping):
+                continue
+            ling_rows.append(
+                {
+                    "category": cat_key,
+                    "label": str(cat.get("label", cat_key)),
+                    "query_count": int(cat.get("query_count", 0)),
+                    "unique_word_count": int(cat.get("unique_word_count", 0)),
+                    "event_share_pct": _num(cat.get("event_share_pct", 0.0), 2),
+                    "vocab50_word_macro_top10_pct": _pct(
+                        cat.get("vocab50_word_macro_top10", 0.0)
+                    ),
+                    "vocab50_micro_top10_pct": _pct(
+                        cat.get("vocab50_micro_top10", 0.0)
+                    ),
+                    "vocab50_word_macro_top1_pct": _pct(
+                        cat.get("vocab50_word_macro_top1", 0.0)
+                    ),
+                    "vocab50_mrr": _num(cat.get("vocab50_mrr", 0.0), 4),
+                    "full_vocab_word_macro_top10_pct": _pct(
+                        cat.get("full_vocab_word_macro_top10", 0.0)
+                    ),
+                    "full_vocab_subject_macro_top10_pct": _pct(
+                        cat.get("full_vocab_subject_macro_top10", 0.0)
+                    ),
+                    "full_vocab_micro_top10_pct": _pct(
+                        cat.get("full_vocab_micro_top10", 0.0)
+                    ),
+                    "full_vocab_word_macro_top1_pct": _pct(
+                        cat.get("full_vocab_word_macro_top1", 0.0)
+                    ),
+                    "full_vocab_mrr": _num(cat.get("full_vocab_mrr", 0.0), 4),
+                    "full_vocab_median_rank": _num(
+                        cat.get("full_vocab_median_rank", 0.0), 1
+                    ),
+                }
+            )
+        if ling_rows:
+            l_csv = _write_csv_table(
+                tables_dir / f"linguistic_breakdown_{split}.csv",
+                list(ling_rows[0].keys()),
+                ling_rows,
+            )
+            exported["linguistic_breakdown_csv"] = str(l_csv)
+
+    # 3. 导出滚动回修视野与状态转移表 revision_horizons_{split}.csv
+    if isinstance(horizons, Mapping) and horizons:
+        h_rows: list[dict[str, Any]] = []
+        for h_key in ("K0", "K1", "K2"):
+            if h_key not in horizons:
+                continue
+            h = horizons[h_key]
+            h_rows.append(
+                {
+                    "horizon": h_key,
+                    "label": str(h.get("label", h_key)),
+                    "delay_words": int(h.get("delay", 0)),
+                    "common_vocab50_macro_top10_pct": _pct(
+                        h.get("common_vocab50_macro_top10", 0.0)
+                    ),
+                    "common_vocab50_micro_top10_pct": _pct(
+                        h.get("common_vocab50_micro_top10", 0.0)
+                    ),
+                    "common_vocab50_macro_top1_pct": _pct(
+                        h.get("common_vocab50_macro_top1", 0.0)
+                    ),
+                    "common_full_vocab_subject_macro_top10_pct": _pct(
+                        h.get("common_full_vocab_macro_top10", 0.0)
+                    ),
+                    "common_full_vocab_word_macro_top10_pct": _pct(
+                        h.get("common_full_vocab_word_macro_top10", 0.0)
+                    ),
+                    "common_full_vocab_micro_top10_pct": _pct(
+                        h.get("common_full_vocab_micro_top10", 0.0)
+                    ),
+                    "common_full_vocab_macro_top1_pct": _pct(
+                        h.get("common_full_vocab_macro_top1", 0.0)
+                    ),
+                    "common_full_vocab_mrr": _num(
+                        h.get("common_full_vocab_mrr", 0.0), 4
+                    ),
+                    "common_full_vocab_median_rank": _num(
+                        h.get("common_full_vocab_median_rank", 0.0), 1
+                    ),
+                    "beneficial_repairs_vocab50_top10": "",
+                    "harmful_overwrites_vocab50_top10": "",
+                    "net_gain_events_vocab50_top10": "",
+                    "ci95_low_pp": "",
+                    "ci95_high_pp": "",
+                    "p_value": "",
+                    "significance": "",
+                }
+            )
+        for pair_key, from_k, to_k in (
+            ("K0_to_K1", "K0", "K1"),
+            ("K0_to_K2", "K0", "K2"),
+        ):
+            if from_k in horizons and to_k in horizons:
+                h_from = horizons[from_k]
+                h_to = horizons[to_k]
+                t_pair = (
+                    (transitions.get(pair_key) or {}).get("vocab50_top10") or {}
+                    if isinstance(transitions, Mapping)
+                    else {}
+                )
+                sig_entry = (
+                    sig_map.get(f"{to_k}_minus_{from_k}_vocab50_top10") or {}
+                    if isinstance(sig_map, Mapping)
+                    else {}
+                )
+                h_rows.append(
+                    {
+                        "horizon": f"Delta_{to_k}_vs_{from_k}",
+                        "label": f"{to_k} - {from_k} Net Gain",
+                        "delay_words": int(h_to.get("delay", 0))
+                        - int(h_from.get("delay", 0)),
+                        "common_vocab50_macro_top10_pct": _pct(
+                            float(h_to.get("common_vocab50_macro_top10", 0.0))
+                            - float(h_from.get("common_vocab50_macro_top10", 0.0))
+                        ),
+                        "common_vocab50_micro_top10_pct": _pct(
+                            float(h_to.get("common_vocab50_micro_top10", 0.0))
+                            - float(h_from.get("common_vocab50_micro_top10", 0.0))
+                        ),
+                        "common_vocab50_macro_top1_pct": _pct(
+                            float(h_to.get("common_vocab50_macro_top1", 0.0))
+                            - float(h_from.get("common_vocab50_macro_top1", 0.0))
+                        ),
+                        "common_full_vocab_subject_macro_top10_pct": _pct(
+                            float(h_to.get("common_full_vocab_macro_top10", 0.0))
+                            - float(h_from.get("common_full_vocab_macro_top10", 0.0))
+                        ),
+                        "common_full_vocab_word_macro_top10_pct": _pct(
+                            float(
+                                h_to.get("common_full_vocab_word_macro_top10", 0.0)
+                            )
+                            - float(
+                                h_from.get(
+                                    "common_full_vocab_word_macro_top10", 0.0
+                                )
+                            )
+                        ),
+                        "common_full_vocab_micro_top10_pct": _pct(
+                            float(h_to.get("common_full_vocab_micro_top10", 0.0))
+                            - float(
+                                h_from.get("common_full_vocab_micro_top10", 0.0)
+                            )
+                        ),
+                        "common_full_vocab_macro_top1_pct": _pct(
+                            float(h_to.get("common_full_vocab_macro_top1", 0.0))
+                            - float(h_from.get("common_full_vocab_macro_top1", 0.0))
+                        ),
+                        "common_full_vocab_mrr": _num(
+                            float(h_to.get("common_full_vocab_mrr", 0.0))
+                            - float(h_from.get("common_full_vocab_mrr", 0.0)),
+                            4,
+                        ),
+                        "common_full_vocab_median_rank": _num(
+                            float(h_to.get("common_full_vocab_median_rank", 0.0))
+                            - float(
+                                h_from.get("common_full_vocab_median_rank", 0.0)
+                            ),
+                            1,
+                        ),
+                        "beneficial_repairs_vocab50_top10": t_pair.get(
+                            "beneficial_repairs", ""
+                        ),
+                        "harmful_overwrites_vocab50_top10": t_pair.get(
+                            "harmful_overwrites", ""
+                        ),
+                        "net_gain_events_vocab50_top10": t_pair.get(
+                            "net_gain_events", ""
+                        ),
+                        "ci95_low_pp": _pct(sig_entry.get("ci_lower"))
+                        if "ci_lower" in sig_entry
+                        else "",
+                        "ci95_high_pp": _pct(sig_entry.get("ci_upper"))
+                        if "ci_upper" in sig_entry
+                        else "",
+                        "p_value": _num(sig_entry.get("p_two_sided", sig_entry.get("p_one_sided")), 5)
+                        if sig_entry
+                        else "",
+                        "significance": str(sig_entry.get("significance", "")),
+                    }
+                )
+        if h_rows:
+            h_csv = _write_csv_table(
+                tables_dir / f"revision_horizons_{split}.csv",
+                list(h_rows[0].keys()),
+                h_rows,
+            )
+            exported["revision_horizons_csv"] = str(h_csv)
+
+    # 4. 导出负对照汇总表 negative_controls_{split}.csv
+    if isinstance(nc, Mapping) and (nc.get("conditions") or nc.get("shifted_aggregate")):
+        nc_rows: list[dict[str, Any]] = []
+        clean_ref = nc.get("clean_reference") or {}
+        if clean_ref:
+            nc_rows.append(
+                {
+                    "condition_key": "clean_0s",
+                    "label": str(clean_ref.get("label", "Clean (0s)")),
+                    "control_type": "clean_reference",
+                    "shift_seconds": 0.0,
+                    "vocab50_macro_top10_pct": _pct(
+                        clean_ref.get("vocab50_macro_top10", 0.0)
+                    ),
+                    "vocab50_micro_top10_pct": _pct(
+                        clean_ref.get("vocab50_micro_top10", 0.0)
+                    ),
+                    "vocab50_macro_top1_pct": _pct(
+                        clean_ref.get("vocab50_macro_top1", 0.0)
+                    ),
+                    "vocab50_mrr": _num(clean_ref.get("vocab50_mrr", 0.0), 4),
+                    "vocab50_median_rank": _num(
+                        clean_ref.get("vocab50_median_rank", 0.0), 1
+                    ),
+                    "full_vocab_macro_top10_pct": _pct(
+                        clean_ref.get("full_vocab_macro_top10", 0.0)
+                    ),
+                    "full_vocab_micro_top10_pct": _pct(
+                        clean_ref.get("full_vocab_micro_top10", 0.0)
+                    ),
+                    "full_vocab_macro_top1_pct": _pct(
+                        clean_ref.get("full_vocab_macro_top1", 0.0)
+                    ),
+                    "full_vocab_mrr": _num(clean_ref.get("full_vocab_mrr", 0.0), 4),
+                    "delta_vocab50_top10_vs_clean_pp": 0.0,
+                    "delta_full_vocab_top10_vs_clean_pp": 0.0,
+                    "ci95_low_pp": "",
+                    "ci95_high_pp": "",
+                    "p_value": "",
+                    "significance": "",
+                }
+            )
+        for cond in nc.get("conditions") or ():
+            s_row = cond.get("summary") or {}
+            d_clean = s_row.get("delta_vs_clean") or {}
+            nc_rows.append(
+                {
+                    "condition_key": str(cond.get("key", "")),
+                    "label": str(cond.get("label", "")),
+                    "control_type": str(cond.get("control_type", "temporal_shift")),
+                    "shift_seconds": cond.get("shift_seconds", ""),
+                    "vocab50_macro_top10_pct": _pct(
+                        s_row.get("vocab50_macro_top10", 0.0)
+                    ),
+                    "vocab50_micro_top10_pct": _pct(
+                        s_row.get("vocab50_micro_top10", 0.0)
+                    ),
+                    "vocab50_macro_top1_pct": _pct(
+                        s_row.get("vocab50_macro_top1", 0.0)
+                    ),
+                    "vocab50_mrr": _num(s_row.get("vocab50_mrr", 0.0), 4),
+                    "vocab50_median_rank": _num(
+                        s_row.get("vocab50_median_rank", 0.0), 1
+                    ),
+                    "full_vocab_macro_top10_pct": _pct(
+                        s_row.get("full_vocab_macro_top10", 0.0)
+                    ),
+                    "full_vocab_micro_top10_pct": _pct(
+                        s_row.get("full_vocab_micro_top10", 0.0)
+                    ),
+                    "full_vocab_macro_top1_pct": _pct(
+                        s_row.get("full_vocab_macro_top1", 0.0)
+                    ),
+                    "full_vocab_mrr": _num(s_row.get("full_vocab_mrr", 0.0), 4),
+                    "delta_vocab50_top10_vs_clean_pp": _pct(
+                        d_clean.get("vocab50_macro_top10", 0.0)
+                    ),
+                    "delta_full_vocab_top10_vs_clean_pp": _pct(
+                        d_clean.get("full_vocab_macro_top10", 0.0)
+                    ),
+                    "ci95_low_pp": "",
+                    "ci95_high_pp": "",
+                    "p_value": "",
+                    "significance": "",
+                }
+            )
+        sh_agg = nc.get("shifted_aggregate") or {}
+        if sh_agg:
+            nc_sig = sh_agg.get("statistical_significance") or {}
+            v50_sig = nc_sig.get("clean_minus_shifted_vocab50_top10") or {}
+            nc_rows.append(
+                {
+                    "condition_key": "shifted_mean",
+                    "label": f"Shifted Mean (M={sh_agg.get('shift_count', 0)})",
+                    "control_type": "shifted_aggregate",
+                    "shift_seconds": "",
+                    "vocab50_macro_top10_pct": _pct(
+                        sh_agg.get("mean_vocab50_macro_top10", 0.0)
+                    ),
+                    "vocab50_micro_top10_pct": _pct(
+                        sh_agg.get("mean_vocab50_micro_top10", 0.0)
+                    ),
+                    "vocab50_macro_top1_pct": _pct(
+                        sh_agg.get("mean_vocab50_macro_top1", 0.0)
+                    ),
+                    "vocab50_mrr": _num(sh_agg.get("mean_vocab50_mrr", 0.0), 4),
+                    "vocab50_median_rank": _num(
+                        sh_agg.get("mean_vocab50_median_rank", 0.0), 1
+                    ),
+                    "full_vocab_macro_top10_pct": _pct(
+                        sh_agg.get("mean_full_vocab_macro_top10", 0.0)
+                    ),
+                    "full_vocab_micro_top10_pct": _pct(
+                        sh_agg.get("mean_full_vocab_micro_top10", 0.0)
+                    ),
+                    "full_vocab_macro_top1_pct": _pct(
+                        sh_agg.get("mean_full_vocab_macro_top1", 0.0)
+                    ),
+                    "full_vocab_mrr": _num(
+                        sh_agg.get("mean_full_vocab_mrr", 0.0), 4
+                    ),
+                    "delta_vocab50_top10_vs_clean_pp": _pct(
+                        sh_agg.get("delta_vocab50_macro_top10_vs_clean", 0.0)
+                    ),
+                    "delta_full_vocab_top10_vs_clean_pp": _pct(
+                        sh_agg.get("delta_full_vocab_macro_top10_vs_clean", 0.0)
+                    ),
+                    "ci95_low_pp": _pct(v50_sig.get("ci_lower"))
+                    if "ci_lower" in v50_sig
+                    else "",
+                    "ci95_high_pp": _pct(v50_sig.get("ci_upper"))
+                    if "ci_upper" in v50_sig
+                    else "",
+                    "p_value": _num(
+                        v50_sig.get("p_two_sided", v50_sig.get("p_one_sided")), 5
+                    )
+                    if v50_sig
+                    else "",
+                    "significance": str(v50_sig.get("significance", "")),
+                }
+            )
+        if nc_rows:
+            nc_csv = _write_csv_table(
+                tables_dir / f"negative_controls_{split}.csv",
+                list(nc_rows[0].keys()),
+                nc_rows,
+            )
+            exported["negative_controls_csv"] = str(nc_csv)
+
+    # 5. 导出受试者级明细与汇总表 per_subject_metrics_{split}.csv
+    if isinstance(per_subj, Sequence) and per_subj:
+        ps_rows: list[dict[str, Any]] = []
+        for s_item in per_subj:
+            if not isinstance(s_item, Mapping):
+                continue
+            ps_rows.append(
+                {
+                    "subject_id": str(s_item.get("subject_id", "-")),
+                    "total_events": int(s_item.get("total_events", 0)),
+                    "vocab50_queries": int(s_item.get("vocab50_queries", 0)),
+                    "vocab50_macro_top10_pct": _pct(s_item.get("macro_top10", 0.0)),
+                    "vocab50_micro_top10_pct": _pct(s_item.get("micro_top10", 0.0)),
+                    "vocab50_macro_top1_pct": _pct(s_item.get("macro_top1", 0.0)),
+                    "vocab50_micro_top1_pct": _pct(s_item.get("micro_top1", 0.0)),
+                    "vocab50_mrr": _num(s_item.get("mrr", 0.0), 4),
+                    "vocab50_median_rank": _num(
+                        s_item.get("median_rank", 25.0), 1
+                    ),
+                    "full_vocab_top10_pct": _pct(
+                        s_item.get("full_vocab_top10", 0.0)
+                    ),
+                    "full_vocab_top1_pct": _pct(
+                        s_item.get("full_vocab_top1", 0.0)
+                    ),
+                    "full_vocab_mrr": _num(s_item.get("full_vocab_mrr", 0.0), 4),
+                    "full_vocab_median_rank": _num(
+                        s_item.get("full_vocab_median_rank", 0.0), 1
+                    ),
+                    "k0_vocab50_top10_pct": _pct(
+                        s_item.get("k0_vocab50_top10", 0.0)
+                    )
+                    if "k0_vocab50_top10" in s_item
+                    else "",
+                    "k2_vocab50_top10_pct": _pct(
+                        s_item.get("k2_vocab50_top10", 0.0)
+                    )
+                    if "k2_vocab50_top10" in s_item
+                    else "",
+                    "k2_minus_k0_vocab50_top10_pp": _pct(
+                        s_item.get("k2_minus_k0_vocab50_top10", 0.0)
+                    )
+                    if "k2_minus_k0_vocab50_top10" in s_item
+                    else "",
+                }
+            )
+        if ps_rows and len(ps_rows) >= 2:
+            numeric_cols = (
+                "vocab50_macro_top10_pct",
+                "vocab50_micro_top10_pct",
+                "vocab50_macro_top1_pct",
+                "vocab50_micro_top1_pct",
+                "vocab50_mrr",
+                "vocab50_median_rank",
+                "full_vocab_top10_pct",
+                "full_vocab_top1_pct",
+                "full_vocab_mrr",
+                "full_vocab_median_rank",
+            )
+            mean_row: dict[str, Any] = {
+                "subject_id": "MEAN",
+                "total_events": int(
+                    sum(int(r["total_events"]) for r in ps_rows)
+                ),
+                "vocab50_queries": int(
+                    sum(int(r["vocab50_queries"]) for r in ps_rows)
+                ),
+            }
+            sd_row: dict[str, Any] = {
+                "subject_id": "SD",
+                "total_events": "",
+                "vocab50_queries": "",
+            }
+            for col in numeric_cols:
+                arr = np.asarray(
+                    [float(r[col]) for r in ps_rows if r.get(col) != ""],
+                    dtype=np.float64,
+                )
+                digits = 4 if "mrr" in col else (1 if "rank" in col else 2)
+                mean_row[col] = (
+                    round(float(np.mean(arr)), digits) if len(arr) else ""
+                )
+                sd_row[col] = (
+                    round(float(np.std(arr, ddof=0)), digits)
+                    if len(arr)
+                    else ""
+                )
+            for opt_col in (
+                "k0_vocab50_top10_pct",
+                "k2_vocab50_top10_pct",
+                "k2_minus_k0_vocab50_top10_pp",
+            ):
+                vals = [
+                    float(r[opt_col])
+                    for r in ps_rows
+                    if r.get(opt_col) not in ("", None)
+                ]
+                mean_row[opt_col] = (
+                    round(float(np.mean(vals)), 2) if vals else ""
+                )
+                sd_row[opt_col] = (
+                    round(float(np.std(vals, ddof=0)), 2) if vals else ""
+                )
+            ps_rows.append(mean_row)
+            ps_rows.append(sd_row)
+
+        if ps_rows:
+            ps_csv = _write_csv_table(
+                tables_dir / f"per_subject_metrics_{split}.csv",
+                list(ps_rows[0].keys()),
+                ps_rows,
+            )
+            exported["per_subject_metrics_csv"] = str(ps_csv)
+
+    # 6. 生成结构化 Markdown 报告 evaluation_report_{split}.md
+    md_lines: list[str] = [
+        f"# Word-Level Retrieval Evaluation Report (`{dataset}` | `{stage}` | `{split}`)",
+        "",
+        f"- **Dataset**: `{dataset}` | **Stage**: `{stage_disp}` | **Split**: `{split}` | **Seed**: `{seed}` (Best Epoch: `{ckpt_epoch}`)",
+        f"- **Signal Window**: `{win_sec:.2f}s` (Offset: `{win_off:+.2f}s`) | **Evaluated Events**: `{metrics.get('evaluated_events', '-')}` / `{metrics.get('total_events', '-')}`",
+        "",
+    ]
+
+    n50_d = sweep.get("N50") or {}
+    fv_d = sweep.get("full_vocab") or {}
+    if n50_d:
+        n50_top10 = float(n50_d.get("macro_top10", 0.0))
+        n50_chance = float(n50_d.get("chance_top10", 0.20))
+        n50_fold = n50_top10 / max(n50_chance, 1e-12)
+        fv_top10 = float(fv_d.get("macro_top10", 0.0))
+        fv_chance = float(fv_d.get("chance_top10", 0.005))
+        fv_fold = fv_top10 / max(fv_chance, 1e-12)
+        md_lines.extend(
+            [
+                "> [!IMPORTANT]",
+                f"> **Executive Headline**: Top-50 Vocab Macro Top-10 = **{_fmt_pct(n50_top10)}** (`{n50_fold:.2f}x` chance `{_fmt_pct(n50_chance)}`), "
+                f"Micro Top-10 = **{_fmt_pct(n50_d.get('micro_top10'))}**, Top-1 = **{_fmt_pct(n50_d.get('macro_top1'))}** | "
+                f"Full-Vocab (`|V|={fv_d.get('candidate_count', '-')}`) Subject-Macro Top-10 = **{_fmt_pct(fv_top10)}** (`{fv_fold:.2f}x` chance `{_fmt_pct(fv_chance)}`), "
+                f"Word-Macro Top-10 = **{_fmt_pct(fv_d.get('word_macro_top10', fv_top10))}**.",
+                "",
+            ]
+        )
+
+    if vocab_rows:
+        md_lines.extend(
+            [
+                "## 1. Multi-Scale Vocabulary Retrieval Metrics",
+                "",
+                "| Scale | OOV Policy | Candidates | Queries (Cov%) | Word-Macro@10 | Subj-Macro@10 | Micro@10 | Chance@10 (Fold) | Word-Macro@1 | MRR | Median Rank (Chance) |",
+                "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for vr in vocab_rows:
+            md_lines.append(
+                f"| **{vr['label']}** (`{vr['scale_key']}`) | `{vr['oov_policy']}` | {vr['candidate_count']} | "
+                f"{vr['query_count']} ({vr['in_vocabulary_coverage_pct']:.1f}%) | "
+                f"**{vr['word_macro_top10_pct']:.2f}%** | {vr['subject_macro_top10_pct']:.2f}% | "
+                f"{vr['micro_top10_pct']:.2f}% | {vr['chance_top10_pct']:.2f}% (**{vr['fold_over_chance_top10']:.2f}x**) | "
+                f"{vr['word_macro_top1_pct']:.2f}% | {vr['mrr']:.4f} | "
+                f"{vr['median_rank']:.1f} ({vr['chance_median_rank']:.1f}) |"
+            )
+        md_lines.append("")
+
+    if isinstance(horizons, Mapping) and horizons:
+        md_lines.extend(
+            [
+                "## 2. Rolling Revision Horizons (`K0 -> K1 -> K2`) & Transition Diagnostics",
+                "",
+                "| Horizon | Delay | N50 Macro@10 | N50 Micro@10 | N50 Macro@1 | Full-Vocab Subj@10 | Full-Vocab Word@10 | Full-Vocab MRR |",
+                "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for h_k in ("K0", "K1", "K2"):
+            if h_k not in horizons:
+                continue
+            hd = horizons[h_k]
+            md_lines.append(
+                f"| **{hd.get('label', h_k)}** | `+{hd.get('delay', 0)}w` | "
+                f"**{_fmt_pct(hd.get('common_vocab50_macro_top10'))}** | {_fmt_pct(hd.get('common_vocab50_micro_top10'))} | "
+                f"{_fmt_pct(hd.get('common_vocab50_macro_top1'))} | **{_fmt_pct(hd.get('common_full_vocab_macro_top10'))}** | "
+                f"{_fmt_pct(hd.get('common_full_vocab_word_macro_top10', hd.get('common_full_vocab_macro_top10')))} | "
+                f"{_num(hd.get('common_full_vocab_mrr', 0.0), 4):.4f} |"
+            )
+        if "K0" in horizons and "K2" in horizons:
+            k0_d, k2_d = horizons["K0"], horizons["K2"]
+            sig_k2 = sig_map.get("K2_minus_K0_vocab50_top10") or {}
+            ci_str = (
+                f"[{_pct(sig_k2.get('ci_lower')):+.2f}, {_pct(sig_k2.get('ci_upper')):+.2f}] pp "
+                f"(p={_num(sig_k2.get('p_two_sided', sig_k2.get('p_one_sided')), 4):.4f} {sig_k2.get('significance', '')})"
+                if sig_k2
+                else ""
+            )
+            md_lines.append(
+                f"| **Δ (K2 - K0)** | `+2w` | "
+                f"**{_fmt_signed_pct(float(k2_d.get('common_vocab50_macro_top10', 0.0)) - float(k0_d.get('common_vocab50_macro_top10', 0.0)))}** {ci_str} | "
+                f"{_fmt_signed_pct(float(k2_d.get('common_vocab50_micro_top10', 0.0)) - float(k0_d.get('common_vocab50_micro_top10', 0.0)))} | "
+                f"{_fmt_signed_pct(float(k2_d.get('common_vocab50_macro_top1', 0.0)) - float(k0_d.get('common_vocab50_macro_top1', 0.0)))} | "
+                f"**{_fmt_signed_pct(float(k2_d.get('common_full_vocab_macro_top10', 0.0)) - float(k0_d.get('common_full_vocab_macro_top10', 0.0)))}** | "
+                f"{_fmt_signed_pct(float(k2_d.get('common_full_vocab_word_macro_top10', 0.0)) - float(k0_d.get('common_full_vocab_word_macro_top10', 0.0)))} | "
+                f"{float(k2_d.get('common_full_vocab_mrr', 0.0)) - float(k0_d.get('common_full_vocab_mrr', 0.0)):+.4f} |"
+            )
+        md_lines.append("")
+
+        if isinstance(transitions, Mapping) and transitions:
+            md_lines.extend(
+                [
+                    "### Event-Level Revision Transition Matrix (`Miss -> Hit` vs. `Hit -> Miss`)",
+                    "",
+                    "| Transition | Criterion | Common Events | Beneficial Repairs (`Miss->Hit`) | Harmful Overwrites (`Hit->Miss`) | Retained Hits (`Hit->Hit`) | Net Gain Events (Rate) | Repair / Harm Ratio |",
+                    "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
+                ]
+            )
+            for t_key, t_label in (
+                ("K0_to_K1", "K0 -> K1 (+1w)"),
+                ("K0_to_K2", "K0 -> K2 (+2w)"),
+                ("K1_to_K2", "K1 -> K2 (+1w)"),
+            ):
+                t_group = transitions.get(t_key)
+                if not isinstance(t_group, Mapping):
+                    continue
+                for crit_key, crit_label in (
+                    ("vocab50_top10", "N50 Top-10"),
+                    ("full_vocab_top10", "Full-Vocab Top-10"),
+                ):
+                    td = t_group.get(crit_key)
+                    if not isinstance(td, Mapping):
+                        continue
+                    md_lines.append(
+                        f"| **{t_label}** | `{crit_label}` | {td.get('total_common_events', 0)} | "
+                        f"**+{td.get('beneficial_repairs', 0)}** ({_num(td.get('beneficial_repair_rate_pct', 0.0), 2):.2f}%) | "
+                        f"-{td.get('harmful_overwrites', 0)} ({_num(td.get('harmful_overwrite_rate_pct', 0.0), 2):.2f}%) | "
+                        f"{td.get('retained_hits', 0)} | "
+                        f"**{int(td.get('net_gain_events', 0)):+d}** ({_num(td.get('net_gain_pct', 0.0), 2):+.2f}%) | "
+                        f"`{_num(td.get('repair_to_harm_ratio', 0.0), 2):.2f}x` |"
+                    )
+            md_lines.append("")
+
+    if isinstance(ling, Mapping) and ling:
+        md_lines.extend(
+            [
+                "## 3. Content Words vs. Function Words Breakdown",
+                "",
+                "| Word Class | Events (Share) | Unique Words | N50 Word-Macro@10 | N50 Micro@10 | N50 Word-Macro@1 | Full-Vocab Word-Macro@10 | Full-Vocab Micro@10 | Full-Vocab MRR |",
+                "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for cat_k in ("content_words", "function_words"):
+            cd = ling.get(cat_k)
+            if not isinstance(cd, Mapping):
+                continue
+            md_lines.append(
+                f"| **{cd.get('label', cat_k)}** | {cd.get('query_count', 0)} ({_num(cd.get('event_share_pct', 0.0), 1):.1f}%) | "
+                f"{cd.get('unique_word_count', 0)} | **{_fmt_pct(cd.get('vocab50_word_macro_top10'))}** | "
+                f"{_fmt_pct(cd.get('vocab50_micro_top10'))} | {_fmt_pct(cd.get('vocab50_word_macro_top1'))} | "
+                f"**{_fmt_pct(cd.get('full_vocab_word_macro_top10'))}** | {_fmt_pct(cd.get('full_vocab_micro_top10'))} | "
+                f"{_num(cd.get('full_vocab_mrr', 0.0), 4):.4f} |"
+            )
+        md_lines.append("")
+
+    if isinstance(nc, Mapping) and (nc.get("conditions") or nc.get("shifted_aggregate")):
+        md_lines.extend(
+            [
+                "## 4. Negative Controls & Neural Specificity (`Clean vs. Shifted`)",
+                "",
+                "| Condition | Shift (s) | N50 Macro@10 | Δ vs Clean | N50 Micro@10 | N50 Macro@1 | Full-Vocab@10 | Δ Full-Vocab |",
+                "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        clean_ref = nc.get("clean_reference") or {}
+        if clean_ref:
+            md_lines.append(
+                f"| **Clean (0s)** | `0.0s` | **{_fmt_pct(clean_ref.get('vocab50_macro_top10'))}** | `0.00 pp` | "
+                f"{_fmt_pct(clean_ref.get('vocab50_micro_top10'))} | {_fmt_pct(clean_ref.get('vocab50_macro_top1'))} | "
+                f"**{_fmt_pct(clean_ref.get('full_vocab_macro_top10'))}** | `0.00 pp` |"
+            )
+        for cond in nc.get("conditions") or ():
+            sr = cond.get("summary") or {}
+            dc = sr.get("delta_vs_clean") or {}
+            s_val = cond.get("shift_seconds")
+            s_str = f"`{float(s_val):+.0f}s`" if s_val is not None else "`N/A`"
+            md_lines.append(
+                f"| {cond.get('label', cond.get('key', '-'))} | {s_str} | "
+                f"{_fmt_pct(sr.get('vocab50_macro_top10'))} | {_fmt_signed_pct(dc.get('vocab50_macro_top10'))} | "
+                f"{_fmt_pct(sr.get('vocab50_micro_top10'))} | {_fmt_pct(sr.get('vocab50_macro_top1'))} | "
+                f"{_fmt_pct(sr.get('full_vocab_macro_top10'))} | {_fmt_signed_pct(dc.get('full_vocab_macro_top10'))} |"
+            )
+        sh_agg = nc.get("shifted_aggregate") or {}
+        if sh_agg:
+            nc_sig = (sh_agg.get("statistical_significance") or {}).get(
+                "clean_minus_shifted_vocab50_top10"
+            ) or {}
+            sig_note = (
+                f" (95% CI `[{_pct(nc_sig.get('ci_lower')):+.2f}, {_pct(nc_sig.get('ci_upper')):+.2f}] pp`, "
+                f"`p={_num(nc_sig.get('p_two_sided', nc_sig.get('p_one_sided')), 4):.4f}` {nc_sig.get('significance', '')})"
+                if nc_sig
+                else ""
+            )
+            md_lines.append(
+                f"| **Shifted Mean ± SD** | `M={sh_agg.get('shift_count', 0)}` | "
+                f"**{_fmt_pct(sh_agg.get('mean_vocab50_macro_top10'))} ± {_fmt_pct(sh_agg.get('std_vocab50_macro_top10'))}** | "
+                f"**{_fmt_signed_pct(sh_agg.get('delta_vocab50_macro_top10_vs_clean'))}**{sig_note} | "
+                f"{_fmt_pct(sh_agg.get('mean_vocab50_micro_top10'))} | {_fmt_pct(sh_agg.get('mean_vocab50_macro_top1'))} | "
+                f"**{_fmt_pct(sh_agg.get('mean_full_vocab_macro_top10'))}** | "
+                f"{_fmt_signed_pct(sh_agg.get('delta_full_vocab_macro_top10_vs_clean'))} |"
+            )
+        md_lines.append("")
+
+    if isinstance(per_subj, Sequence) and per_subj:
+        has_k2_k0 = any("k2_minus_k0_vocab50_top10" in s for s in per_subj if isinstance(s, Mapping))
+        md_lines.append("## 5. Per-Subject Performance (`Mean ± SD`)")
+        md_lines.append("")
+        if isinstance(subj_sum, Mapping) and subj_sum:
+            imp_cnt = subj_sum.get("improved_subjects_count")
+            tot_cnt = subj_sum.get("subject_count", len(per_subj))
+            imp_str = (
+                f" | **Revision Improved Subjects**: `{imp_cnt}/{tot_cnt}` (`{_num(subj_sum.get('improved_subjects_pct', 0.0), 1):.1f}%`)"
+                if imp_cnt is not None
+                else ""
+            )
+            md_lines.append(
+                f"- **Across-Subject N50 Macro@10**: `{_fmt_pct(subj_sum.get('mean_macro_top10'))} ± {_fmt_pct(subj_sum.get('std_macro_top10'))}` "
+                f"(Range: `{_fmt_pct(subj_sum.get('min_macro_top10'))} ~ {_fmt_pct(subj_sum.get('max_macro_top10'))}`) | "
+                f"**Full-Vocab Top-10**: `{_fmt_pct(subj_sum.get('mean_full_vocab_top10'))} ± {_fmt_pct(subj_sum.get('std_full_vocab_top10'))}`{imp_str}"
+            )
+            md_lines.append("")
+        if has_k2_k0:
+            md_lines.append(
+                "| Subject | Events (N50) | N50 Macro@10 | N50 Micro@10 | N50 Macro@1 | N50 MRR | Full-Vocab@10 | K0 N50@10 | K2 N50@10 | Δ (K2 - K0) |"
+            )
+            md_lines.append(
+                "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+            )
+            for s in per_subj:
+                if not isinstance(s, Mapping):
+                    continue
+                md_lines.append(
+                    f"| `{s.get('subject_id', '-')}` | {s.get('total_events', 0)} ({s.get('vocab50_queries', 0)}) | "
+                    f"**{_fmt_pct(s.get('macro_top10'))}** | {_fmt_pct(s.get('micro_top10'))} | "
+                    f"{_fmt_pct(s.get('macro_top1'))} | {_num(s.get('mrr', 0.0), 4):.4f} | "
+                    f"{_fmt_pct(s.get('full_vocab_top10', 0.0))} | {_fmt_pct(s.get('k0_vocab50_top10'))} | "
+                    f"{_fmt_pct(s.get('k2_vocab50_top10'))} | **{_fmt_signed_pct(s.get('k2_minus_k0_vocab50_top10'))}** |"
+                )
+        else:
+            md_lines.append(
+                "| Subject | Events (N50) | N50 Macro@10 | N50 Micro@10 | N50 Macro@1 | N50 MRR | N50 MedRank | Full-Vocab@10 | Full-Vocab MRR |"
+            )
+            md_lines.append(
+                "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+            )
+            for s in per_subj:
+                if not isinstance(s, Mapping):
+                    continue
+                md_lines.append(
+                    f"| `{s.get('subject_id', '-')}` | {s.get('total_events', 0)} ({s.get('vocab50_queries', 0)}) | "
+                    f"**{_fmt_pct(s.get('macro_top10'))}** | {_fmt_pct(s.get('micro_top10'))} | "
+                    f"{_fmt_pct(s.get('macro_top1'))} | {_num(s.get('mrr', 0.0), 4):.4f} | "
+                    f"{_num(s.get('median_rank', 25.0), 1):.1f} | **{_fmt_pct(s.get('full_vocab_top10', 0.0))}** | "
+                    f"{_num(s.get('full_vocab_mrr', 0.0), 4):.4f} |"
+                )
+        md_lines.append("")
+
+    md_path = out_dir / f"evaluation_report_{split}.md"
+    md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+    exported["evaluation_report_md"] = str(md_path)
+    return exported
+
+
+def export_stage_comparison_tables_and_markdown(
+    multi_summary: Mapping[str, Any],
+    output_dir: str | Path | None = None,
+    *,
+    split: str | None = None,
+) -> dict[str, str]:
+    """将三阶段对比评估结果导出为 tables/stage_comparison_{split}.csv 与 stage_comparison_report_{split}.md。"""
+    target_dir_raw = output_dir or multi_summary.get("output_dir")
+    if not target_dir_raw:
+        return {}
+    out_dir = Path(str(target_dir_raw))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tables_dir = out_dir / "tables"
+    tables_dir.mkdir(parents=True, exist_ok=True)
+
+    stages_map = (
+        multi_summary["stages"]
+        if "stages" in multi_summary and isinstance(multi_summary["stages"], Mapping)
+        else multi_summary
+    )
+    first_st = next(iter(stages_map.values()), {})
+    resolved_split = str(
+        split or multi_summary.get("split") or first_st.get("split", "val")
+    )
+    dataset = str(multi_summary.get("dataset") or first_st.get("dataset", "-"))
+    seed = multi_summary.get("seed", first_st.get("seed", 0))
+    stage_sig = multi_summary.get("stage_significance") or {}
+
+    rows: list[dict[str, Any]] = []
+    word_res = stages_map.get("word")
+    w_n50 = (
+        (word_res.get("metrics") or {}).get("vocabulary_sweep", {}).get("N50", {})
+        if isinstance(word_res, Mapping)
+        else {}
+    )
+    w_fv = (
+        (word_res.get("metrics") or {}).get("vocabulary_sweep", {}).get("full_vocab", {})
+        if isinstance(word_res, Mapping)
+        else {}
+    )
+
+    for st_key in ("word", "context", "revision"):
+        if st_key not in stages_map:
+            continue
+        res = stages_map[st_key]
+        if not isinstance(res, Mapping):
+            continue
+        m = res.get("metrics") or {}
+        sw = m.get("vocabulary_sweep") or {}
+        n50 = sw.get("N50") or {}
+        fv = sw.get("full_vocab") or {}
+        nc = res.get("negative_controls") or {}
+        sh_agg = nc.get("shifted_aggregate") or {}
+        sig_vs_w = stage_sig.get(f"{st_key}_minus_word_vocab50_top10") or {}
+        rows.append(
+            {
+                "stage": st_key,
+                "stage_display_name": str(res.get("stage_display_name", st_key)),
+                "best_epoch": (res.get("checkpoint") or {}).get("epoch", 0)
+                if isinstance(res.get("checkpoint"), Mapping)
+                else 0,
+                "vocab50_macro_top10_pct": _pct(n50.get("macro_top10", 0.0)),
+                "delta_vs_word_vocab50_top10_pp": _pct(
+                    float(n50.get("macro_top10", 0.0))
+                    - float(w_n50.get("macro_top10", 0.0))
+                )
+                if w_n50
+                else 0.0,
+                "vocab50_micro_top10_pct": _pct(n50.get("micro_top10", 0.0)),
+                "vocab50_macro_top1_pct": _pct(n50.get("macro_top1", 0.0)),
+                "vocab50_mrr": _num(n50.get("mrr", 0.0), 4),
+                "vocab50_median_rank": _num(n50.get("median_rank", 25.0), 1),
+                "full_vocab_subject_macro_top10_pct": _pct(
+                    fv.get("macro_top10", 0.0)
+                ),
+                "full_vocab_word_macro_top10_pct": _pct(
+                    fv.get("word_macro_top10", fv.get("macro_top10", 0.0))
+                ),
+                "delta_vs_word_full_vocab_top10_pp": _pct(
+                    float(fv.get("macro_top10", 0.0))
+                    - float(w_fv.get("macro_top10", 0.0))
+                )
+                if w_fv
+                else 0.0,
+                "full_vocab_mrr": _num(fv.get("mrr", 0.0), 4),
+                "shifted_vocab50_macro_top10_pct": _pct(
+                    sh_agg.get("mean_vocab50_macro_top10", 0.0)
+                )
+                if sh_agg
+                else "",
+                "clean_minus_shifted_vocab50_top10_pp": _pct(
+                    sh_agg.get("clean_minus_shifted_vocab50_macro_top10", 0.0)
+                )
+                if sh_agg
+                else "",
+                "ci95_low_vs_word_pp": _pct(sig_vs_w.get("ci_lower"))
+                if "ci_lower" in sig_vs_w
+                else "",
+                "ci95_high_vs_word_pp": _pct(sig_vs_w.get("ci_upper"))
+                if "ci_upper" in sig_vs_w
+                else "",
+                "p_value_vs_word": _num(
+                    sig_vs_w.get("p_two_sided", sig_vs_w.get("p_one_sided")), 5
+                )
+                if sig_vs_w
+                else "",
+                "significance_vs_word": str(sig_vs_w.get("significance", "")),
+            }
+        )
+
+    exported: dict[str, str] = {}
+    if rows:
+        csv_path = _write_csv_table(
+            tables_dir / f"stage_comparison_{resolved_split}.csv",
+            list(rows[0].keys()),
+            rows,
+        )
+        exported["stage_comparison_csv"] = str(csv_path)
+
+        md_lines = [
+            f"# Cross-Stage Comparison Report (`{dataset}` | `{resolved_split}` | `seed={seed}`)",
+            "",
+            "| Stage | Best Epoch | N50 Macro@10 | Δ vs Stage 1 (95% CI / p) | N50 Micro@10 | N50 Macro@1 | Full-Vocab@10 | Δ Full-Vocab | Clean - Shifted |",
+            "| :--- | ---: | ---: | :--- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for r in rows:
+            sig_txt = (
+                f" (`[{r['ci95_low_vs_word_pp']:+.2f}, {r['ci95_high_vs_word_pp']:+.2f}]`, `p={r['p_value_vs_word']}` {r['significance_vs_word']})"
+                if r["p_value_vs_word"] != ""
+                else ""
+            )
+            sh_txt = (
+                f"{r['clean_minus_shifted_vocab50_top10_pp']:+.2f} pp"
+                if r["clean_minus_shifted_vocab50_top10_pp"] != ""
+                else "-"
+            )
+            md_lines.append(
+                f"| **{r['stage_display_name']}** (`{r['stage']}`) | {r['best_epoch']} | "
+                f"**{r['vocab50_macro_top10_pct']:.2f}%** | {r['delta_vs_word_vocab50_top10_pp']:+.2f} pp{sig_txt} | "
+                f"{r['vocab50_micro_top10_pct']:.2f}% | {r['vocab50_macro_top1_pct']:.2f}% | "
+                f"**{r['full_vocab_subject_macro_top10_pct']:.2f}%** | {r['delta_vs_word_full_vocab_top10_pp']:+.2f} pp | {sh_txt} |"
+            )
+        md_path = out_dir / f"stage_comparison_report_{resolved_split}.md"
+        md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+        exported["stage_comparison_md"] = str(md_path)
+    return exported
+
+
+def export_multi_seed_tables_and_markdown(
+    summary: Mapping[str, Any],
+    output_dir: str | Path | None = None,
+) -> dict[str, str]:
+    """将多种子聚合评估结果导出为 tables/multi_seed_summary_{split}.csv 与 multi_seed_evaluation_report_{split}.md。"""
+    target_dir_raw = output_dir or summary.get("output_dir")
+    if not target_dir_raw:
+        return {}
+    out_dir = Path(str(target_dir_raw))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tables_dir = out_dir / "tables"
+    tables_dir.mkdir(parents=True, exist_ok=True)
+
+    split = str(summary.get("split", "val"))
+    dataset = str(summary.get("dataset", "-"))
+    seeds = summary.get("seeds") or []
+    exported: dict[str, str] = {}
+
+    if "stages_aggregate" in summary and isinstance(
+        summary.get("stages_aggregate"), Mapping
+    ):
+        st_rows: list[dict[str, Any]] = []
+        for st_key, st_agg in summary["stages_aggregate"].items():
+            if not isinstance(st_agg, Mapping):
+                continue
+            vs_agg = st_agg.get("vocabulary_sweep_aggregate") or {}
+            n50 = vs_agg.get("N50") or {}
+            fv = vs_agg.get("full_vocab") or {}
+            nc = st_agg.get("negative_controls_aggregate") or {}
+            st_rows.append(
+                {
+                    "stage": st_key,
+                    "seed_count": int(st_agg.get("seed_count", len(seeds))),
+                    "mean_vocab50_macro_top10_pct": _pct(
+                        n50.get("mean_macro_top10", 0.0)
+                    ),
+                    "std_vocab50_macro_top10_pct": _pct(
+                        n50.get("std_macro_top10", 0.0)
+                    ),
+                    "mean_vocab50_micro_top10_pct": _pct(
+                        n50.get("mean_micro_top10", 0.0)
+                    ),
+                    "std_vocab50_micro_top10_pct": _pct(
+                        n50.get("std_micro_top10", 0.0)
+                    ),
+                    "mean_vocab50_macro_top1_pct": _pct(
+                        n50.get("mean_macro_top1", 0.0)
+                    ),
+                    "std_vocab50_macro_top1_pct": _pct(
+                        n50.get("std_macro_top1", 0.0)
+                    ),
+                    "mean_full_vocab_macro_top10_pct": _pct(
+                        fv.get("mean_macro_top10", 0.0)
+                    ),
+                    "std_full_vocab_macro_top10_pct": _pct(
+                        fv.get("std_macro_top10", 0.0)
+                    ),
+                    "mean_clean_minus_shifted_vocab50_top10_pp": _pct(
+                        nc.get("mean_gap_vocab50_macro_top10", 0.0)
+                    )
+                    if nc.get("enabled")
+                    else "",
+                    "std_clean_minus_shifted_vocab50_top10_pp": _pct(
+                        nc.get("std_gap_vocab50_macro_top10", 0.0)
+                    )
+                    if nc.get("enabled")
+                    else "",
+                }
+            )
+        if st_rows:
+            p_csv = _write_csv_table(
+                tables_dir / f"multi_seed_stage_summary_{split}.csv",
+                list(st_rows[0].keys()),
+                st_rows,
+            )
+            exported["multi_seed_summary_csv"] = str(p_csv)
+    else:
+        vs_agg = summary.get("vocabulary_sweep_aggregate") or {}
+        scale_rows: list[dict[str, Any]] = []
+        for s_key in ("N20", "N50", "N50_strict", "N100", "N150", "full_vocab"):
+            sd = vs_agg.get(s_key)
+            if not isinstance(sd, Mapping):
+                continue
+            scale_rows.append(
+                {
+                    "scale_key": s_key,
+                    "label": str(sd.get("label", s_key)),
+                    "candidate_count": int(sd.get("candidate_count", 0)),
+                    "seed_count": int(sd.get("seed_count", len(seeds))),
+                    "mean_macro_top10_pct": _pct(sd.get("mean_macro_top10", 0.0)),
+                    "std_macro_top10_pct": _pct(sd.get("std_macro_top10", 0.0)),
+                    "mean_micro_top10_pct": _pct(sd.get("mean_micro_top10", 0.0)),
+                    "std_micro_top10_pct": _pct(sd.get("std_micro_top10", 0.0)),
+                    "mean_macro_top1_pct": _pct(sd.get("mean_macro_top1", 0.0)),
+                    "std_macro_top1_pct": _pct(sd.get("std_macro_top1", 0.0)),
+                    "mean_mrr": _num(sd.get("mean_mrr", 0.0), 4),
+                    "std_mrr": _num(sd.get("std_mrr", 0.0), 4),
+                }
+            )
+        if scale_rows:
+            p_csv = _write_csv_table(
+                tables_dir / f"multi_seed_summary_{split}.csv",
+                list(scale_rows[0].keys()),
+                scale_rows,
+            )
+            exported["multi_seed_summary_csv"] = str(p_csv)
+
+        per_seed = summary.get("per_seed") or []
+        if isinstance(per_seed, Sequence) and per_seed:
+            seed_rows = [
+                {
+                    "seed": r.get("seed", 0),
+                    "best_epoch": r.get("epoch", 0),
+                    "vocab50_macro_top10_pct": _pct(
+                        r.get("vocab50_macro_top10", 0.0)
+                    ),
+                    "vocab50_micro_top10_pct": _pct(
+                        r.get("vocab50_micro_top10", 0.0)
+                    ),
+                    "vocab50_macro_top1_pct": _pct(
+                        r.get("vocab50_macro_top1", 0.0)
+                    ),
+                    "vocab50_mrr": _num(r.get("vocab50_mrr", 0.0), 4),
+                    "full_vocab_macro_top10_pct": _pct(
+                        r.get("full_vocab_macro_top10", 0.0)
+                    ),
+                    "full_vocab_mrr": _num(r.get("full_vocab_mrr", 0.0), 4),
+                }
+                for r in per_seed
+                if isinstance(r, Mapping)
+            ]
+            if seed_rows:
+                ps_csv = _write_csv_table(
+                    tables_dir / f"multi_seed_per_seed_{split}.csv",
+                    list(seed_rows[0].keys()),
+                    seed_rows,
+                )
+                exported["multi_seed_per_seed_csv"] = str(ps_csv)
+
+    md_path = out_dir / f"multi_seed_evaluation_report_{split}.md"
+    md_lines = [
+        f"# Multi-Seed Evaluation Summary (`{dataset}` | `{split}` | Seeds: `{seeds}`)",
+        "",
+        f"Exported flat CSV tables to `{tables_dir.name}/`.",
+    ]
+    md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+    exported["multi_seed_report_md"] = str(md_path)
+    return exported
+
+
+def export_sequence_decoding_tables_and_markdown(
+    report: Mapping[str, Any],
+    output_dir: str | Path | None = None,
+    *,
+    decoded_bundles: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, str]:
+    """将 S3 序列解码评估结果与逐句预测导出为扁平 CSV 表、Markdown 报告及双语逐句可读对照视图。"""
+    target_dir_raw = output_dir or report.get("evaluation_dir") or report.get("output_dir")
+    if not target_dir_raw:
+        return {}
+    out_dir = Path(str(target_dir_raw))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tables_dir = out_dir / "tables"
+    tables_dir.mkdir(parents=True, exist_ok=True)
+
+    split = str(report.get("split", "test"))
+    dataset = str(report.get("dataset", "-"))
+    language = str(
+        report.get("language", "fr" if dataset == "pallier2025" else "zh")
+    )
+    conditions = report.get("conditions") or {}
+    sig_map = report.get("statistical_significance") or {}
+    per_subj = report.get("per_subject") or []
+    subj_sum = report.get("per_subject_summary") or {}
+    vocab_scaling = report.get("vocabulary_scaling") or {}
+    multi_subj = report.get("multi_subject_scaling") or {}
+    pareto_map = report.get("confidence_gate_pareto") or {}
+
+    exported: dict[str, str] = {}
+
+    # 1. 导出条件对比表 s3_conditions_summary_{split}.csv
+    cond_rows: list[dict[str, Any]] = []
+    for cond_name, cm in conditions.items():
+        if not isinstance(cm, Mapping):
+            continue
+        cond_rows.append(
+            {
+                "condition": cond_name,
+                "segment_count": int(cm.get("segment_count", 0)),
+                "total_words": int(cm.get("total_words", 0)),
+                "bleu1_subject_macro_pct": _num(cm.get("bleu1_pct", 0.0), 2),
+                "corpus_bleu1_pct": _num(cm.get("corpus_bleu1_pct", 0.0), 2),
+                "beam_oracle_bleu1_pct": _num(
+                    cm.get("beam_oracle_bleu1_pct", 0.0), 2
+                ),
+                "word_acc_pct": _num(cm.get("word_acc_pct", 0.0), 2),
+                "in_vocabulary_word_acc_pct": _num(
+                    cm.get("in_vocabulary_word_acc_pct", 0.0), 2
+                ),
+                "word_acc_top5_pct": _num(cm.get("word_acc_top5_pct", 0.0), 2),
+                "content_word_acc_pct": _num(
+                    cm.get("content_word_acc_pct", 0.0), 2
+                ),
+                "function_word_acc_pct": _num(
+                    cm.get("function_word_acc_pct", 0.0), 2
+                ),
+                "wer_pct": _num(cm.get("wer_pct", 0.0), 2),
+                "cer_pct": _num(cm.get("cer_pct", 0.0), 2),
+                "bertscore_f1_pct": _num(cm.get("bertscore_f1_pct", 0.0), 2),
+                "screen_rewrite_rate_pct": _num(
+                    cm.get("screen_rewrite_rate_pct", 0.0), 2
+                )
+                if "screen_rewrite_rate_pct" in cm
+                else "",
+                "recommended_tau_gate": cm.get("recommended_tau_gate", ""),
+            }
+        )
+    if cond_rows:
+        c_csv = _write_csv_table(
+            tables_dir / f"s3_conditions_summary_{split}.csv",
+            list(cond_rows[0].keys()),
+            cond_rows,
+        )
+        exported["s3_conditions_csv"] = str(c_csv)
+
+    # 2. 导出受试者级序列解码表 s3_per_subject_{split}.csv
+    if isinstance(per_subj, Sequence) and per_subj:
+        ps_rows: list[dict[str, Any]] = []
+        for s_item in per_subj:
+            if not isinstance(s_item, Mapping):
+                continue
+            ps_rows.append(
+                {
+                    "subject_id": str(s_item.get("subject_id", "-")),
+                    "segment_count": int(s_item.get("segment_count", 0)),
+                    "total_words": int(s_item.get("total_words", 0)),
+                    "s3_bleu1_pct": _num(s_item.get("bleu1_pct", 0.0), 2),
+                    "k0_bleu1_pct": _num(s_item.get("k0_bleu1_pct", 0.0), 2)
+                    if "k0_bleu1_pct" in s_item
+                    else "",
+                    "s3_minus_k0_bleu1_pp": _num(
+                        s_item.get("s3_minus_k0_bleu1_pp", 0.0), 2
+                    )
+                    if "s3_minus_k0_bleu1_pp" in s_item
+                    else "",
+                    "s3_word_acc_pct": _num(s_item.get("word_acc_pct", 0.0), 2),
+                    "k0_word_acc_pct": _num(s_item.get("k0_word_acc_pct", 0.0), 2)
+                    if "k0_word_acc_pct" in s_item
+                    else "",
+                    "s3_minus_k0_word_acc_pp": _num(
+                        s_item.get("s3_minus_k0_word_acc_pp", 0.0), 2
+                    )
+                    if "s3_minus_k0_word_acc_pp" in s_item
+                    else "",
+                    "content_word_acc_pct": _num(
+                        s_item.get("content_word_acc_pct", 0.0), 2
+                    ),
+                    "function_word_acc_pct": _num(
+                        s_item.get("function_word_acc_pct", 0.0), 2
+                    ),
+                    "wer_pct": _num(s_item.get("wer_pct", 0.0), 2),
+                    "cer_pct": _num(s_item.get("cer_pct", 0.0), 2),
+                    "bertscore_f1_pct": _num(
+                        s_item.get("bertscore_f1_pct", 0.0), 2
+                    ),
+                }
+            )
+        if ps_rows and len(ps_rows) >= 2:
+            num_cols = (
+                "s3_bleu1_pct",
+                "s3_word_acc_pct",
+                "content_word_acc_pct",
+                "function_word_acc_pct",
+                "wer_pct",
+                "cer_pct",
+                "bertscore_f1_pct",
+            )
+            m_row: dict[str, Any] = {
+                "subject_id": "MEAN",
+                "segment_count": sum(int(r["segment_count"]) for r in ps_rows),
+                "total_words": sum(int(r["total_words"]) for r in ps_rows),
+            }
+            sd_row: dict[str, Any] = {
+                "subject_id": "SD",
+                "segment_count": "",
+                "total_words": "",
+            }
+            for col in num_cols:
+                vals = [float(r[col]) for r in ps_rows if r.get(col) != ""]
+                m_row[col] = round(float(np.mean(vals)), 2) if vals else ""
+                sd_row[col] = (
+                    round(float(np.std(vals, ddof=0)), 2) if vals else ""
+                )
+            for opt_c in (
+                "k0_bleu1_pct",
+                "s3_minus_k0_bleu1_pp",
+                "k0_word_acc_pct",
+                "s3_minus_k0_word_acc_pp",
+            ):
+                vals = [
+                    float(r[opt_c])
+                    for r in ps_rows
+                    if r.get(opt_c) not in ("", None)
+                ]
+                m_row[opt_c] = round(float(np.mean(vals)), 2) if vals else ""
+                sd_row[opt_c] = (
+                    round(float(np.std(vals, ddof=0)), 2) if vals else ""
+                )
+            ps_rows.append(m_row)
+            ps_rows.append(sd_row)
+
+        if ps_rows:
+            s_csv = _write_csv_table(
+                tables_dir / f"s3_per_subject_{split}.csv",
+                list(ps_rows[0].keys()),
+                ps_rows,
+            )
+            exported["s3_per_subject_csv"] = str(s_csv)
+
+    # 3. 导出多尺度词表表 s3_vocabulary_scaling_{split}.csv
+    if isinstance(vocab_scaling, Mapping) and vocab_scaling:
+        vs_rows: list[dict[str, Any]] = []
+        for scale_key, sc_block in vocab_scaling.items():
+            if not isinstance(sc_block, Mapping):
+                continue
+            conds = sc_block.get("conditions") or {}
+            s3_m = conds.get("S3_clean") or {}
+            k0_m = conds.get("K0") or {}
+            sh_m = conds.get("S3_shifted_neg75s") or {}
+            vs_rows.append(
+                {
+                    "scale_key": scale_key,
+                    "vocabulary_size": int(sc_block.get("vocabulary_size", 0)),
+                    "test_token_coverage_pct": _num(
+                        sc_block.get("test_token_coverage_pct", 0.0), 2
+                    ),
+                    "s3_bleu1_pct": _num(s3_m.get("bleu1_pct", 0.0), 2),
+                    "k0_bleu1_pct": _num(k0_m.get("bleu1_pct", 0.0), 2),
+                    "delta_s3_minus_k0_bleu1_pp": _num(
+                        float(s3_m.get("bleu1_pct", 0.0))
+                        - float(k0_m.get("bleu1_pct", 0.0)),
+                        2,
+                    ),
+                    "s3_word_acc_pct": _num(s3_m.get("word_acc_pct", 0.0), 2),
+                    "s3_in_vocab_word_acc_pct": _num(
+                        s3_m.get("in_vocabulary_word_acc_pct", 0.0), 2
+                    ),
+                    "s3_content_acc_pct": _num(
+                        s3_m.get("content_word_acc_pct", 0.0), 2
+                    ),
+                    "s3_bertscore_f1_pct": _num(
+                        s3_m.get("bertscore_f1_pct", 0.0), 2
+                    ),
+                    "shifted_s3_bleu1_pct": _num(sh_m.get("bleu1_pct", 0.0), 2),
+                    "clean_minus_shifted_bleu1_pp": _num(
+                        float(s3_m.get("bleu1_pct", 0.0))
+                        - float(sh_m.get("bleu1_pct", 0.0)),
+                        2,
+                    ),
+                }
+            )
+        if vs_rows:
+            vs_csv = _write_csv_table(
+                tables_dir / f"s3_vocabulary_scaling_{split}.csv",
+                list(vs_rows[0].keys()),
+                vs_rows,
+            )
+            exported["s3_vocabulary_scaling_csv"] = str(vs_csv)
+
+    # 4. 导出 C-gated 帕累托表 s3_confidence_gate_pareto_{split}.csv
+    s3_pareto = (
+        pareto_map.get("S3_clean") or pareto_map.get("S3") or {}
+        if isinstance(pareto_map, Mapping)
+        else {}
+    )
+    pareto_pts = (
+        s3_pareto.get("pareto_curve") or []
+        if isinstance(s3_pareto, Mapping)
+        else []
+    )
+    if pareto_pts:
+        p_rows = [
+            {
+                "tau_gate": _num(pt.get("tau_gate", 0.0), 2),
+                "screen_rewrite_rate_pct": _num(
+                    pt.get("screen_rewrite_rate_pct", 0.0), 2
+                ),
+                "beneficial_repair_rate_pct": _num(
+                    pt.get("beneficial_repair_rate_pct", 0.0), 2
+                ),
+                "harmful_rewrite_rate_pct": _num(
+                    pt.get("harmful_rewrite_rate_pct", 0.0), 2
+                ),
+                "invalid_flicker_rate_pct": _num(
+                    pt.get("invalid_flicker_rate_pct", 0.0), 2
+                ),
+                "invalid_flicker_filtered_pct": _num(
+                    pt.get("invalid_flicker_filtered_pct", 0.0), 2
+                ),
+                "net_beneficial_gain_pct": _num(
+                    pt.get("net_beneficial_gain_pct", 0.0), 2
+                ),
+                "bleu1_pct": _num(pt.get("bleu1_pct", 0.0), 2),
+                "word_acc_pct": _num(pt.get("word_acc_pct", 0.0), 2),
+                "content_word_acc_pct": _num(
+                    pt.get("content_word_acc_pct", 0.0), 2
+                ),
+                "bertscore_f1_pct": _num(pt.get("bertscore_f1_pct", 0.0), 2),
+                "beneficial_repairs": int(pt.get("beneficial_repairs", 0)),
+                "harmful_rewrites": int(pt.get("harmful_rewrites", 0)),
+                "triggered_rewrites": int(pt.get("triggered_rewrites", 0)),
+            }
+            for pt in pareto_pts
+            if isinstance(pt, Mapping)
+        ]
+        if p_rows:
+            p_csv = _write_csv_table(
+                tables_dir / f"s3_confidence_gate_pareto_{split}.csv",
+                list(p_rows[0].keys()),
+                p_rows,
+            )
+            exported["s3_pareto_csv"] = str(p_csv)
+
+    # 5. 导出逐句对照可读表 s3_decoded_sentences_{split}.csv 与 s3_decoded_sentences_{split}.md
+    s3_bundle = (
+        decoded_bundles.get("S3_clean") or decoded_bundles.get("S3")
+        if isinstance(decoded_bundles, Mapping)
+        else None
+    )
+    k0_bundle = (
+        decoded_bundles.get("K0")
+        if isinstance(decoded_bundles, Mapping)
+        else None
+    )
+    k1_bundle = (
+        decoded_bundles.get("K1")
+        if isinstance(decoded_bundles, Mapping)
+        else None
+    )
+    if isinstance(s3_bundle, Mapping) and s3_bundle.get("final_sentences"):
+        s3_sents = s3_bundle.get("final_sentences") or []
+        k0_sents = (
+            k0_bundle.get("final_sentences") or []
+            if isinstance(k0_bundle, Mapping)
+            else []
+        )
+        k1_sents = (
+            k1_bundle.get("final_sentences") or []
+            if isinstance(k1_bundle, Mapping)
+            else []
+        )
+
+        sentence_rows: list[dict[str, Any]] = []
+        for idx, rec in enumerate(s3_sents):
+            if not isinstance(rec, Mapping):
+                continue
+            ref_w = [str(w) for w in rec.get("reference_words") or ()]
+            s3_w = [str(w) for w in rec.get("predicted_words") or ()]
+            k0_w = (
+                [str(w) for w in k0_sents[idx].get("predicted_words") or ()]
+                if idx < len(k0_sents) and isinstance(k0_sents[idx], Mapping)
+                else [str(w) for w in rec.get("initial_k0_words") or s3_w]
+            )
+            k1_w = (
+                [str(w) for w in k1_sents[idx].get("predicted_words") or ()]
+                if idx < len(k1_sents) and isinstance(k1_sents[idx], Mapping)
+                else s3_w
+            )
+            iv_mask = rec.get("in_vocabulary_mask") or [True] * len(ref_w)
+            n_w = max(1, len(ref_w))
+            cov_pct = sum(1 for f in iv_mask if bool(f)) / n_w * 100.0
+            k0_hits = sum(int(a == b) for a, b in zip(ref_w, k0_w))
+            s3_hits = sum(int(a == b) for a, b in zip(ref_w, s3_w))
+            k0_acc = k0_hits / n_w * 100.0
+            s3_acc = s3_hits / n_w * 100.0
+
+            repairs: list[str] = []
+            harms: list[str] = []
+            for pos, r_tok in enumerate(ref_w):
+                w0 = k0_w[pos] if pos < len(k0_w) else ""
+                w2 = s3_w[pos] if pos < len(s3_w) else ""
+                if w0 != r_tok and w2 == r_tok:
+                    repairs.append(f"#{pos + 1}:{w0}->{w2}")
+                elif w0 == r_tok and w2 != r_tok:
+                    harms.append(f"#{pos + 1}:{w0}->{w2}")
+
+            sentence_rows.append(
+                {
+                    "segment_index": int(rec.get("segment_index", idx)),
+                    "subject_id": str(rec.get("subject_id", "-")),
+                    "group_id": str(rec.get("group_id", "-")),
+                    "word_count": len(ref_w),
+                    "in_vocab_coverage_pct": round(cov_pct, 1),
+                    "reference_sentence": _join_tokens_natural(ref_w, language),
+                    "k0_initial_sentence": _join_tokens_natural(k0_w, language),
+                    "k1_step1_sentence": _join_tokens_natural(k1_w, language),
+                    "s3_final_sentence": _join_tokens_natural(s3_w, language),
+                    "k0_word_acc_pct": round(k0_acc, 2),
+                    "s3_word_acc_pct": round(s3_acc, 2),
+                    "net_word_acc_gain_pp": round(s3_acc - k0_acc, 2),
+                    "beneficial_repairs": len(repairs),
+                    "harmful_overwrites": len(harms),
+                    "repair_highlights": "; ".join(repairs),
+                    "harm_highlights": "; ".join(harms),
+                }
+            )
+
+        if sentence_rows:
+            sent_csv = _write_csv_table(
+                tables_dir / f"s3_decoded_sentences_{split}.csv",
+                list(sentence_rows[0].keys()),
+                sentence_rows,
+            )
+            exported["s3_decoded_sentences_csv"] = str(sent_csv)
+
+            # 生成人类易读的逐句对照 Markdown 文件
+            repaired_top = sorted(
+                [r for r in sentence_rows if r["beneficial_repairs"] > r["harmful_overwrites"]],
+                key=lambda r: (
+                    r["beneficial_repairs"] - r["harmful_overwrites"],
+                    r["s3_word_acc_pct"],
+                ),
+                reverse=True,
+            )[:15]
+            accurate_top = sorted(
+                sentence_rows,
+                key=lambda r: (r["s3_word_acc_pct"], r["word_count"]),
+                reverse=True,
+            )[:15]
+
+            sent_md: list[str] = [
+                f"# S3 Decoded Sentences Qualitative Inspection (`{dataset}` | `{split}`)",
+                "",
+                f"- **Total Segments**: `{len(sentence_rows)}` | **Language**: `{language}` | **Full Spreadsheet**: `tables/s3_decoded_sentences_{split}.csv`",
+                "",
+            ]
+            if repaired_top:
+                sent_md.extend(
+                    [
+                        "## 1. Top Beneficial Rolling Revision Examples (`K0 -> S3 (K2)` Repairs)",
+                        "",
+                        "| Seg # | Subject | Reference | K0 (Initial Draft) | S3 / K2 (Revised Final) | Word Acc (`K0 -> S3`) | Repaired Positions (`Miss -> Hit`) |",
+                        "| ---: | :--- | :--- | :--- | :--- | ---: | :--- |",
+                    ]
+                )
+                for r in repaired_top:
+                    sent_md.append(
+                        f"| `{r['segment_index']}` | `{r['subject_id']}` | {r['reference_sentence']} | "
+                        f"{r['k0_initial_sentence']} | **{r['s3_final_sentence']}** | "
+                        f"`{r['k0_word_acc_pct']:.1f}% -> {r['s3_word_acc_pct']:.1f}%` (**{r['net_word_acc_gain_pp']:+.1f} pp**) | "
+                        f"`{r['repair_highlights'] or '-'}` |"
+                    )
+                sent_md.append("")
+
+            if accurate_top:
+                sent_md.extend(
+                    [
+                        "## 2. Top Highest-Accuracy Decoded Segments",
+                        "",
+                        "| Seg # | Subject | Words (Cov%) | Reference | K0 (Initial) | K1 (+1w) | S3 / K2 (Final) | S3 Word Acc |",
+                        "| ---: | :--- | ---: | :--- | :--- | :--- | :--- | ---: |",
+                    ]
+                )
+                for r in accurate_top:
+                    sent_md.append(
+                        f"| `{r['segment_index']}` | `{r['subject_id']}` | {r['word_count']} ({r['in_vocab_coverage_pct']:.0f}%) | "
+                        f"{r['reference_sentence']} | {r['k0_initial_sentence']} | {r['k1_step1_sentence']} | "
+                        f"**{r['s3_final_sentence']}** | **{r['s3_word_acc_pct']:.1f}%** |"
+                    )
+                sent_md.append("")
+
+            max_preview = min(50, len(sentence_rows))
+            sent_md.extend(
+                [
+                    f"## 3. Segment-by-Segment Side-by-Side Comparison (First {max_preview} of {len(sentence_rows)} Segments)",
+                    "",
+                    "| Seg # | Subject | Reference | K0 (Initial) | S3 / K2 (Final) | Word Acc | Repairs |",
+                    "| ---: | :--- | :--- | :--- | :--- | ---: | :--- |",
+                ]
+            )
+            for r in sentence_rows[:max_preview]:
+                sent_md.append(
+                    f"| `{r['segment_index']}` | `{r['subject_id']}` | {r['reference_sentence']} | "
+                    f"{r['k0_initial_sentence']} | {r['s3_final_sentence']} | "
+                    f"{r['s3_word_acc_pct']:.1f}% | `{r['repair_highlights'] or '-'}` |"
+                )
+            sent_md.append("")
+            sent_md_path = out_dir / f"s3_decoded_sentences_{split}.md"
+            sent_md_path.write_text("\n".join(sent_md) + "\n", encoding="utf-8")
+            exported["s3_decoded_sentences_md"] = str(sent_md_path)
+
+    # 6. 生成 S3 结构化 Markdown 总报告 s3_evaluation_report_{split}.md
+    md_lines = [
+        f"# Stage 3 (S3) Sequence Decoding Evaluation Report (`{dataset}` | `{split}`)",
+        "",
+    ]
+    s3_clean_m = conditions.get("S3_clean") or conditions.get("S3") or {}
+    k0_m = conditions.get("K0") or {}
+    sh_m = conditions.get("S3_shifted_neg75s") or {}
+    if s3_clean_m:
+        md_lines.extend(
+            [
+                "> [!IMPORTANT]",
+                f"> **Executive Headline**: `S3_clean` BLEU-1 = **{ _num(s3_clean_m.get('bleu1_pct'), 2):.2f}%** "
+                f"(vs `K0` `{_num(k0_m.get('bleu1_pct'), 2):.2f}%`, Δ = `{float(s3_clean_m.get('bleu1_pct', 0.0)) - float(k0_m.get('bleu1_pct', 0.0)):+.2f} pp`; "
+                f"vs `Shifted -75s` `{_num(sh_m.get('bleu1_pct'), 2):.2f}%`, Δ = `{float(s3_clean_m.get('bleu1_pct', 0.0)) - float(sh_m.get('bleu1_pct', 0.0)):+.2f} pp`), "
+                f"Word Acc = **{_num(s3_clean_m.get('word_acc_pct'), 2):.2f}%** "
+                f"(Content: `{_num(s3_clean_m.get('content_word_acc_pct'), 2):.2f}%`, Function: `{_num(s3_clean_m.get('function_word_acc_pct'), 2):.2f}%`), "
+                f"BERTScore-F1 = **{_num(s3_clean_m.get('bertscore_f1_pct'), 2):.2f}%**.",
+                "",
+            ]
+        )
+
+    if cond_rows:
+        md_lines.extend(
+            [
+                "## 1. Decoding Conditions Summary",
+                "",
+                "| Condition | Segments (Words) | BLEU-1 (Subj) | Corpus BLEU-1 | Word Acc (In-Vocab) | Content / Function Acc | WER | BERTScore-F1 |",
+                "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for cr in cond_rows:
+            md_lines.append(
+                f"| **`{cr['condition']}`** | {cr['segment_count']} ({cr['total_words']}) | "
+                f"**{cr['bleu1_subject_macro_pct']:.2f}%** | {cr['corpus_bleu1_pct']:.2f}% | "
+                f"**{cr['word_acc_pct']:.2f}%** ({cr['in_vocabulary_word_acc_pct']:.2f}%) | "
+                f"{cr['content_word_acc_pct']:.2f}% / {cr['function_word_acc_pct']:.2f}% | "
+                f"{cr['wer_pct']:.2f}% | **{cr['bertscore_f1_pct']:.2f}%** |"
+            )
+        md_lines.append("")
+
+    if isinstance(sig_map, Mapping) and sig_map:
+        md_lines.extend(
+            [
+                "## 2. Paired Material-Block Statistical Significance (`95% CI & Permutation p-value`)",
+                "",
+                "| Comparison | Metric | Observed Effect (pp) | 95% Bootstrap CI (pp) | Two-Sided p-value | Significance | Blocks / Segments |",
+                "| :--- | :--- | ---: | ---: | ---: | :---: | ---: |",
+            ]
+        )
+        for comp_k, sig_d in sig_map.items():
+            if not isinstance(sig_d, Mapping):
+                continue
+            md_lines.append(
+                f"| **`{sig_d.get('label', comp_k)}`** | `{sig_d.get('metric', '-')}` | "
+                f"**{_num(sig_d.get('effect_pp', 0.0), 2):+.2f} pp** | "
+                f"`[{_num(sig_d.get('ci_lower_pp', 0.0), 2):+.2f}, {_num(sig_d.get('ci_upper_pp', 0.0), 2):+.2f}]` | "
+                f"`{_num(sig_d.get('p_two_sided', sig_d.get('p_one_sided', 1.0)), 4):.4f}` | "
+                f"**{sig_d.get('significance', 'ns')}** | {sig_d.get('blocks', '-')} |"
+            )
+        md_lines.append("")
+
+    if isinstance(per_subj, Sequence) and per_subj:
+        md_lines.extend(
+            [
+                "## 3. Per-Subject Sequence Decoding Performance (`Mean ± SD`)",
+                "",
+            ]
+        )
+        if isinstance(subj_sum, Mapping) and subj_sum:
+            md_lines.append(
+                f"- **Across-Subject BLEU-1**: `{_num(subj_sum.get('mean_bleu1_pct'), 2):.2f}% ± {_num(subj_sum.get('std_bleu1_pct'), 2):.2f}%` | "
+                f"**Word Acc**: `{_num(subj_sum.get('mean_word_acc_pct'), 2):.2f}% ± {_num(subj_sum.get('std_word_acc_pct'), 2):.2f}%` | "
+                f"**Improved Subjects (`S3 > K0`)**: `{subj_sum.get('improved_subjects_count', '-')}/{subj_sum.get('subject_count', len(per_subj))}`"
+            )
+            md_lines.append("")
+        md_lines.extend(
+            [
+                "| Subject | Segments (Words) | S3 BLEU-1 | K0 BLEU-1 | Δ BLEU-1 | S3 Word Acc | Content Acc | Function Acc | BERTScore-F1 |",
+                "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for s in per_subj:
+            if not isinstance(s, Mapping):
+                continue
+            k0_b = (
+                f"{_num(s.get('k0_bleu1_pct'), 2):.2f}%"
+                if "k0_bleu1_pct" in s
+                else "-"
+            )
+            d_b = (
+                f"**{_num(s.get('s3_minus_k0_bleu1_pp'), 2):+.2f} pp**"
+                if "s3_minus_k0_bleu1_pp" in s
+                else "-"
+            )
+            md_lines.append(
+                f"| `{s.get('subject_id', '-')}` | {s.get('segment_count', 0)} ({s.get('total_words', 0)}) | "
+                f"**{_num(s.get('bleu1_pct'), 2):.2f}%** | {k0_b} | {d_b} | "
+                f"**{_num(s.get('word_acc_pct'), 2):.2f}%** | {_num(s.get('content_word_acc_pct'), 2):.2f}% | "
+                f"{_num(s.get('function_word_acc_pct'), 2):.2f}% | {_num(s.get('bertscore_f1_pct'), 2):.2f}% |"
+            )
+        md_lines.append("")
+
+    md_path = out_dir / f"s3_evaluation_report_{split}.md"
+    md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+    exported["s3_report_md"] = str(md_path)
+    return exported
+
+
+__all__ = [
+    "export_multi_seed_tables_and_markdown",
+    "export_sequence_decoding_tables_and_markdown",
+    "export_stage_comparison_tables_and_markdown",
+    "export_word_evaluation_tables_and_markdown",
+]
