@@ -215,6 +215,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="计算设备（默认自动检测 cuda / cpu）",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="在终端打印完整宽表拆解报告（默认输出单屏 <= 86 列核心执行摘要）",
+    )
     return parser
 
 
@@ -957,7 +963,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             paths["evaluation_dir"] / f"s3_evaluation_report_{args.split}.txt"
         )
         report_txt_path.write_text(
-            format_sequence_decoding_report(results_summary) + "\n",
+            format_sequence_decoding_report(results_summary, verbose=True) + "\n",
             encoding="utf-8",
         )
         results_summary["report_txt_path"] = str(report_txt_path)
@@ -978,7 +984,10 @@ def main(argv: list[str] | None = None) -> int:
     ):
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
-        print_sequence_decoding_report(summary)
+        print_sequence_decoding_report(
+            summary,
+            verbose=bool(getattr(args, "verbose", False)),
+        )
     return 0
 
 

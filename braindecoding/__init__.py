@@ -26,6 +26,8 @@ _SUBPACKAGE_MAP: dict[str, str] = {
     "dataset_builder": "data",
     "derived_cache": "data",
     "environment_preflight": "training",
+    "evaluation_figures": "evaluation",
+    "evaluation_reporting": "evaluation",
     "event_table": "data",
     "full_vocabulary_evaluation": "evaluation",
     "language_model_scoring": "decoding",
@@ -46,6 +48,7 @@ _SUBPACKAGE_MAP: dict[str, str] = {
     "siamese_debiased_training": "training",
     "state_hyperparameter_calibrator": "decoding",
     "statistical_significance": "evaluation",
+    "subspace_coherence_debiasing_evaluation": "evaluation",
     "synthetic_timing_control": "training",
     "synthetic_timing_dataset": "data",
     "synthetic_timing_recovery": "training",
@@ -55,6 +58,7 @@ _SUBPACKAGE_MAP: dict[str, str] = {
     "vocabulary_coverage": "evaluation",
     "word_encoder_training": "training",
     "word_paired_statistics_evaluation": "evaluation",
+    "word_retrieval_evaluation": "evaluation",
     "workflow_runner": "training",
 }
 _MERGED_MODULE_ALIASES: dict[str, tuple[str, str]] = {

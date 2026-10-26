@@ -13,20 +13,28 @@ from matplotlib import font_manager
 from matplotlib.font_manager import FontProperties
 
 from braindecoding.config import PROJECT_ROOT
+from scripts.paper.paper_style import (
+    DATASET_COLORS as DATA_COLORS,
+    DATASET_DISPLAY_NAMES as NAMES,
+    PUBLICATION_PALETTE,
+    cjk_font_properties,
+    register_system_fonts,
+)
 
 OUT = PROJECT_ROOT / "paper" / "figures" / "publication_suite"
 EXPORT = PROJECT_ROOT / "data/results" / "exports"
-INK, MUTED, RULE = "#26343D", "#586873", "#D5DDE2"
-BLUE, TEAL, ORANGE, GRAY, PURPLE = "#356F99", "#287F82", "#B86A50", "#97A4AE", "#86699B"
-DATA_COLORS = {"pallier2025": BLUE, "chineseeeg2_littleprince": PURPLE,
-               "Pallier2025": BLUE, "ChineseEEG2": PURPLE}
-NAMES = {"pallier2025": "Pallier2025", "chineseeeg2_littleprince": "ChineseEEG-2",
-         "Pallier2025": "Pallier2025", "ChineseEEG2": "ChineseEEG-2"}
-for font in ("arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf"):
-    font_manager.fontManager.addfont("C:/Windows/Fonts/" + font)
+INK = PUBLICATION_PALETTE["ink"]
+MUTED = PUBLICATION_PALETTE["muted"]
+RULE = PUBLICATION_PALETTE["rule"]
+BLUE = PUBLICATION_PALETTE["blue"]
+TEAL = PUBLICATION_PALETTE["teal"]
+ORANGE = PUBLICATION_PALETTE["orange"]
+GRAY = PUBLICATION_PALETTE["gray"]
+PURPLE = PUBLICATION_PALETTE["purple"]
+register_system_fonts()
 
 STYLE = {
-    "font.family": "sans-serif", "font.sans-serif": ["Arial"],
+    "font.family": "sans-serif", "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
     "font.size": 6.5, "axes.labelsize": 6.5, "axes.titlesize": 7,
     "xtick.labelsize": 6, "ytick.labelsize": 6, "legend.fontsize": 6,
     "axes.linewidth": .55, "lines.linewidth": 1.1,
@@ -53,7 +61,7 @@ def clean(ax):
     ax.tick_params(length=2.5, width=.55, color="#9BAAB4")
 
 def cjk(bold=False):
-    return FontProperties(fname="C:/Windows/Fonts/" + ("msyhbd.ttc" if bold else "msyh.ttc"))
+    return cjk_font_properties(bold=bold)
 
 def verify_manifest(filename, required=()):
     manifest = json.loads((EXPORT / filename).read_text(encoding="utf-8"))

@@ -283,8 +283,38 @@ def _data_build(args) -> int:
     return 0
 
 
-def _report(selector: str, write: bool) -> int:
-    """只读取 canonical JSON，显示或写出派生的人类可读视图。"""
+def _report(args) -> int:
+    """只读取已保存评估 JSON/目录（0秒重打报表与重绘图表），或显示协议/历史运行报告。"""
+    target_input = getattr(args, "input_path", None) or getattr(args, "experiment", None)
+    if target_input is None:
+        raise ValueError("请通过 --input <path> 或位置参数指定评估 JSON 文件、运行目录或协议名称。")
+
+    candidate_path = Path(target_input)
+    if getattr(args, "input_path", None) is not None or candidate_path.exists():
+        from braindecoding.evaluation.evaluation_figures import (
+            replot_from_saved_json,
+        )
+        from braindecoding.evaluation.evaluation_reporting import (
+            render_saved_evaluation_report,
+        )
+
+        text = render_saved_evaluation_report(
+            candidate_path,
+            verbose=bool(getattr(args, "verbose", False)),
+        )
+        print(text, flush=True)
+        if bool(getattr(args, "replot", False)):
+            figs = replot_from_saved_json(
+                candidate_path,
+                output_dir=getattr(args, "output_dir", None),
+            )
+            print(f" [Replot Complete] Generated {len(figs)} figure asset(s):", flush=True)
+            for k, v in figs.items():
+                print(f"   - {k}: {v}", flush=True)
+        return 0
+
+    selector = str(target_input)
+    write = bool(getattr(args, "write", False))
     if "/" not in selector:
         record = resolve_protocol(selector)
         if write:
@@ -661,6 +691,12 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="禁用 tqdm 实时进度条",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="在终端打印完整宽表诊断拆解（默认输出紧凑单屏 <= 86 列 Executive Summary）",
+    )
 
 
 def _workflow_cache(args) -> int:
@@ -792,6 +828,7 @@ def _workflow_eval(args) -> int:
             plot=not bool(getattr(args, "no_plot", False)),
             show_progress=not bool(getattr(args, "no_progress", False)),
             max_eval_rows=args.max_eval_rows,
+            verbose=bool(getattr(args, "verbose", False)),
         )
     return 0
 
@@ -808,7 +845,10 @@ def _workflow_decode_sentences(args) -> int:
     ):
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
-        print_sequence_decoding_report(summary)
+        print_sequence_decoding_report(
+            summary,
+            verbose=bool(getattr(args, "verbose", False)),
+        )
     return 0
 
 
@@ -933,6 +973,7 @@ def build_parser() -> argparse.ArgumentParser:
     decode_cmd.add_argument("--json", dest="json_output", action="store_true", help="输出原始 JSON 而非格式化对比表格")
     decode_cmd.add_argument("--force", action="store_true", help="强制重跑全部步骤，忽略已保存的匹配缓存与中间解码产物")
     decode_cmd.add_argument("--device", default=None, help="计算设备（cuda / cpu）")
+    decode_cmd.add_argument("--verbose", "-v", action="store_true", help="打印完整宽表拆解报告（默认输出单屏 <= 86 列核心执行摘要）")
 
     show = commands.add_parser("show", help="显示当前协议或显式指定的历史配置")
     show.add_argument("experiment")
@@ -950,8 +991,39 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("experiment")
     audit.add_argument("--mapping-only", action="store_true")
     audit.add_argument("--device", default="auto")
-    report = commands.add_parser("report", help="查看当前报告位置或历史运行报告")
-    report.add_argument("experiment")
+    report = commands.add_parser(
+        "report",
+        help="0秒读取已保存评估 JSON/目录打印精简报表或独立重绘图表（亦支持查看协议报告）",
+    )
+    report.add_argument(
+        "experiment",
+        nargs="?",
+        default=None,
+        help="可选：评估 JSON 文件路径、运行目录或协议标识符",
+    )
+    report.add_argument(
+        "--input",
+        "-i",
+        dest="input_path",
+        default=None,
+        help="已保存评估 JSON 文件或运行目录路径（自动识别 5 种评估协议）",
+    )
+    report.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="输出完整宽表诊断拆解（默认输出紧凑单屏 <= 86 列 Executive Summary）",
+    )
+    report.add_argument(
+        "--replot",
+        action="store_true",
+        help="从已保存 JSON 零开销重新绘制对应 PNG + PDF 可视化图表",
+    )
+    report.add_argument(
+        "--output-dir",
+        default=None,
+        help="配合 --replot 时指定图表输出目录（默认输出至原 figures/ 目录）",
+    )
     report.add_argument("--write", action="store_true")
     return parser
 
@@ -986,7 +1058,7 @@ def main(argv=None) -> int:
         if args.command == "audit":
             return _retired_execution("audit", args.experiment)
         if args.command == "report":
-            return _report(args.experiment, args.write)
+            return _report(args)
     except (FileExistsError, FileNotFoundError, RuntimeError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 2

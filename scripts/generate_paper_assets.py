@@ -16,9 +16,9 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     steps = []
     if not args.figures_only:
-        steps.append(ROOT / "scripts/paper/unify_manuscript_tables_test_v2.py")
+        steps.append(ROOT / "scripts/paper/unify_manuscript_tables.py")
     if not args.tables_only:
-        steps.append(ROOT / "scripts/paper/polish_main_assets_test_v2.py")
+        steps.append(ROOT / "scripts/paper/polish_main_assets.py")
     for script in steps:
         print(f"[generate_paper_assets] Running {script.relative_to(ROOT).as_posix()}...", flush=True)
         subprocess.run([sys.executable, str(script)], cwd=str(ROOT), check=True)

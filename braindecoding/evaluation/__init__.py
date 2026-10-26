@@ -4,8 +4,46 @@ from __future__ import annotations
 import importlib
 import sys
 
+_LAZY_SYMBOL_MODULES: dict[str, str] = {
+    "EVALUATION_PALETTE": "evaluation_figures",
+    "STAGE_DISPLAY_NAMES": "evaluation_figures",
+    "STAGE_SHORT_LABELS": "evaluation_figures",
+    "evaluation_plot_context": "evaluation_figures",
+    "format_common_mode_subtraction_report": "evaluation_reporting",
+    "format_sequence_decoding_executive_summary": "evaluation_reporting",
+    "format_sequence_decoding_report": "evaluation_reporting",
+    "format_stage_comparison_report": "evaluation_reporting",
+    "format_subspace_coherence_debiasing_report": "evaluation_reporting",
+    "format_word_evaluation_report": "evaluation_reporting",
+    "plot_baseline_and_shifted_comparison": "evaluation_figures",
+    "plot_common_mode_subtraction_figures": "evaluation_figures",
+    "plot_confidence_gate_pareto_curve": "evaluation_figures",
+    "plot_evaluation_figures": "evaluation_figures",
+    "plot_multi_subject_observation_curve": "evaluation_figures",
+    "plot_negative_control_figures": "evaluation_figures",
+    "plot_stage_comparison_figure": "evaluation_figures",
+    "plot_stage_control_comparison_figure": "evaluation_figures",
+    "plot_subspace_coherence_debiasing_figures": "evaluation_figures",
+    "plot_vocabulary_scaling_curve": "evaluation_figures",
+    "print_common_mode_subtraction_report": "evaluation_reporting",
+    "print_sequence_decoding_report": "evaluation_reporting",
+    "print_stage_comparison_report": "evaluation_reporting",
+    "print_subspace_coherence_debiasing_report": "evaluation_reporting",
+    "print_word_evaluation_report": "evaluation_reporting",
+    "render_saved_evaluation_report": "evaluation_reporting",
+    "replot_from_saved_json": "evaluation_figures",
+    "run_evaluation_workflow": "word_retrieval_evaluation",
+}
+
 
 def __getattr__(name: str):
+    if name in _LAZY_SYMBOL_MODULES:
+        mod_name = _LAZY_SYMBOL_MODULES[name]
+        mod = importlib.import_module(f"braindecoding.evaluation.{mod_name}")
+        val = getattr(mod, name)
+        globals()[name] = val
+        return val
+
     from braindecoding import _MERGED_MODULE_ALIASES, _SUBPACKAGE_MAP
     if name in _SUBPACKAGE_MAP:
         target_sub = _SUBPACKAGE_MAP[name]

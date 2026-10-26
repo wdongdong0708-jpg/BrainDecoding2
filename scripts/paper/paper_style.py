@@ -9,6 +9,57 @@ from pathlib import Path
 from typing import Iterable
 
 
+WINDOWS_FONTS_DIR = Path("C:/Windows/Fonts")
+PUBLICATION_PALETTE = {
+    "ink": "#26343D",
+    "muted": "#586873",
+    "rule": "#D5DDE2",
+    "blue": "#356F99",
+    "teal": "#287F82",
+    "orange": "#B86A50",
+    "gray": "#97A4AE",
+    "purple": "#86699B",
+}
+DATASET_DISPLAY_NAMES = {
+    "pallier2025": "Pallier2025",
+    "chineseeeg2_littleprince": "ChineseEEG-2",
+    "Pallier2025": "Pallier2025",
+    "ChineseEEG2": "ChineseEEG-2",
+}
+DATASET_COLORS = {
+    "pallier2025": PUBLICATION_PALETTE["blue"],
+    "chineseeeg2_littleprince": PUBLICATION_PALETTE["purple"],
+    "Pallier2025": PUBLICATION_PALETTE["blue"],
+    "ChineseEEG2": PUBLICATION_PALETTE["purple"],
+}
+
+
+def register_system_fonts() -> None:
+    """Safely register Windows Arial and Microsoft YaHei fonts when present on disk."""
+    from matplotlib import font_manager
+
+    for font_name in ("arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf", "msyh.ttc", "msyhbd.ttc"):
+        font_path = WINDOWS_FONTS_DIR / font_name
+        if font_path.is_file():
+            try:
+                font_manager.fontManager.addfont(str(font_path))
+            except Exception:
+                pass
+
+
+def cjk_font_properties(bold: bool = False):
+    """Return FontProperties for CJK text with cross-platform fallback when Windows fonts are absent."""
+    from matplotlib.font_manager import FontProperties
+
+    font_path = WINDOWS_FONTS_DIR / ("msyhbd.ttc" if bold else "msyh.ttc")
+    if font_path.is_file():
+        return FontProperties(fname=str(font_path))
+    return FontProperties(
+        family=["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "PingFang SC", "DejaVu Sans"],
+        weight="bold" if bold else "normal",
+    )
+
+
 MODEL_LABELS = {"word": "Word", "context": "Context"}
 MODEL_STYLES = {
     "word": {"color": "#3B6EA8", "marker": "o", "linestyle": "-", "hatch": ""},
@@ -40,6 +91,7 @@ def configure_matplotlib(profile: str = "legacy") -> None:
 
     if profile not in {"legacy", "reference"}:
         raise ValueError("profile must be 'legacy' or 'reference'.")
+    register_system_fonts()
     mpl.rcParams.update(
         {
             "font.family": "sans-serif",

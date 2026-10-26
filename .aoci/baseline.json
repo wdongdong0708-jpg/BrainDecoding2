@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-10-25T14:02:08Z",
+  "updated_at": "2026-10-25T16:33:52Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "0497781b6163efb0ecf41b049c43b42bcafe991fc4488f5be80ae14b4c7d433a",
-      "size": 94069,
-      "normalized_sha256": "0497781b6163efb0ecf41b049c43b42bcafe991fc4488f5be80ae14b4c7d433a"
+      "sha256": "a9355418e654e6c0fdfa05cba0b90fc2f4e773a444aca32649d3855918a9dee2",
+      "size": 96597,
+      "normalized_sha256": "a9355418e654e6c0fdfa05cba0b90fc2f4e773a444aca32649d3855918a9dee2"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -47,9 +47,9 @@
     },
     "braindecoding/__init__.py": {
       "role": "index",
-      "sha256": "f7a324bb5d8750cfc0183563094bce884b65220d80e5ad90ef73b328e5186d8e",
-      "size": 9701,
-      "normalized_sha256": "f7a324bb5d8750cfc0183563094bce884b65220d80e5ad90ef73b328e5186d8e"
+      "sha256": "9993af0fd3e6d79b249d836f2b1f86c84a1388c94fde2371dfc3fea42885539b",
+      "size": 9891,
+      "normalized_sha256": "9993af0fd3e6d79b249d836f2b1f86c84a1388c94fde2371dfc3fea42885539b"
     },
     "braindecoding/__main__.py": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "braindecoding/cli.py": {
       "role": "index",
-      "sha256": "f03d52c34e11b07d83c092da76cd9a0784aecf5249625ebc20f5534cdfcbec1b",
-      "size": 40478,
-      "normalized_sha256": "f03d52c34e11b07d83c092da76cd9a0784aecf5249625ebc20f5534cdfcbec1b"
+      "sha256": "54015adc67a407332b38dcaf7c0993ffd487e495bd12db72e94231e31683b739",
+      "size": 43227,
+      "normalized_sha256": "54015adc67a407332b38dcaf7c0993ffd487e495bd12db72e94231e31683b739"
     },
     "braindecoding/config.py": {
       "role": "index",
@@ -215,9 +215,9 @@
     },
     "braindecoding/evaluation/__init__.py": {
       "role": "index",
-      "sha256": "b227fbf4f15cf911173003a83b56373c543f93071cfe63d0526611cf773a4872",
-      "size": 892,
-      "normalized_sha256": "8479037bd9043af27b44f772b0167c9bcad7b0671a3b144a13f668af11eef976"
+      "sha256": "915f02f41a143fde761e4d310b2369cea756fe85b2a7de3aec1af8b266591b30",
+      "size": 2884,
+      "normalized_sha256": "915f02f41a143fde761e4d310b2369cea756fe85b2a7de3aec1af8b266591b30"
     },
     "braindecoding/evaluation/block_length_sensitivity_evaluation.py": {
       "role": "index",
@@ -239,15 +239,27 @@
     },
     "braindecoding/evaluation/common_mode_subtraction_evaluation.py": {
       "role": "index",
-      "sha256": "8276096747bb74fc70feed98d7b4caffd8a42def3bfb83ddd034ffabd0dc5c84",
-      "size": 33899,
-      "normalized_sha256": "8276096747bb74fc70feed98d7b4caffd8a42def3bfb83ddd034ffabd0dc5c84"
+      "sha256": "2a2e7db4f005ea06a02733e440504c34cfe2be2ca9701cad9fac59f43fe49e6d",
+      "size": 19120,
+      "normalized_sha256": "2a2e7db4f005ea06a02733e440504c34cfe2be2ca9701cad9fac59f43fe49e6d"
     },
     "braindecoding/evaluation/context_heldout_evaluation.py": {
       "role": "index",
       "sha256": "c701bcb35872b213f19671e622108a85d9e7b13e3fced07c538a71caced2908b",
       "size": 18748,
       "normalized_sha256": "c701bcb35872b213f19671e622108a85d9e7b13e3fced07c538a71caced2908b"
+    },
+    "braindecoding/evaluation/evaluation_figures.py": {
+      "role": "index",
+      "sha256": "657561c835dbd80a73b11815f55a2aa99c69233c495c83a12c30ce8320f79053",
+      "size": 88115,
+      "normalized_sha256": "657561c835dbd80a73b11815f55a2aa99c69233c495c83a12c30ce8320f79053"
+    },
+    "braindecoding/evaluation/evaluation_reporting.py": {
+      "role": "index",
+      "sha256": "3dfbcc3653d35519c7dcb23171baa3d0b425488fd36e44c23f7002166fb7ae6c",
+      "size": 71495,
+      "normalized_sha256": "3dfbcc3653d35519c7dcb23171baa3d0b425488fd36e44c23f7002166fb7ae6c"
     },
     "braindecoding/evaluation/full_context_sentence_evaluation.py": {
       "role": "index",
@@ -317,9 +329,9 @@
     },
     "braindecoding/evaluation/sequence_decoding_evaluation.py": {
       "role": "index",
-      "sha256": "17fbff31794ade039f2f3e52b2975b7b139a1bf2b5171c4fec820343efc26e58",
-      "size": 84568,
-      "normalized_sha256": "17fbff31794ade039f2f3e52b2975b7b139a1bf2b5171c4fec820343efc26e58"
+      "sha256": "89c3d033158a585534692d239e4a3d0169a54013e52f28694d76f484be3f7d32",
+      "size": 53705,
+      "normalized_sha256": "89c3d033158a585534692d239e4a3d0169a54013e52f28694d76f484be3f7d32"
     },
     "braindecoding/evaluation/single_step_atomic_writer.py": {
       "role": "index",
@@ -347,9 +359,9 @@
     },
     "braindecoding/evaluation/subspace_coherence_debiasing_evaluation.py": {
       "role": "index",
-      "sha256": "3f8f3c7804300650935ee12d4250676170f1c3c1719d6222056b19b0002b0765",
-      "size": 94426,
-      "normalized_sha256": "3f8f3c7804300650935ee12d4250676170f1c3c1719d6222056b19b0002b0765"
+      "sha256": "ffa71111294a8e2cefa6bf6c4e5e0bc6c4bf7781117038713632c89cc3343037",
+      "size": 74696,
+      "normalized_sha256": "ffa71111294a8e2cefa6bf6c4e5e0bc6c4bf7781117038713632c89cc3343037"
     },
     "braindecoding/evaluation/vocabulary_coverage.py": {
       "role": "index",
@@ -362,6 +374,12 @@
       "sha256": "2a157662544e17a3c41a88b5f51c1140f04fe2768848415d10fe29bbe9b5c4c0",
       "size": 18325,
       "normalized_sha256": "c09e7a56f371fbf5e785bf92463ebc752ea98fdfdb1fb1d8ce4b5bf1e0ebed30"
+    },
+    "braindecoding/evaluation/word_retrieval_evaluation.py": {
+      "role": "index",
+      "sha256": "d0c472d1c16c3ae6d2a69baf765818d1239bb6bc23387719af92d22d7e65625c",
+      "size": 67274,
+      "normalized_sha256": "d0c472d1c16c3ae6d2a69baf765818d1239bb6bc23387719af92d22d7e65625c"
     },
     "braindecoding/experiment.py": {
       "role": "index",
@@ -563,9 +581,9 @@
     },
     "braindecoding/training/workflow_runner.py": {
       "role": "index",
-      "sha256": "e4dc706c7a4263edeb4d858375ae267370ce7c599ed0c5dd090fed28f11d7e49",
-      "size": 185051,
-      "normalized_sha256": "e4dc706c7a4263edeb4d858375ae267370ce7c599ed0c5dd090fed28f11d7e49"
+      "sha256": "9604db371334bfef1bef30029a576e2d9a0ec6371ca90ad93a861236a5cea309",
+      "size": 87198,
+      "normalized_sha256": "9604db371334bfef1bef30029a576e2d9a0ec6371ca90ad93a861236a5cea309"
     },
     "configs/controls/common_mode_subtraction/chineseeeg2_common_mode_subtraction_control.yaml": {
       "role": "index",
@@ -1180,9 +1198,9 @@
     },
     "scripts/colab/colab_gpu_evaluation.ipynb": {
       "role": "index",
-      "sha256": "c2de8a5e8773edd549967460c1d59c1c147efb1d6e95097353f9f288e7ead6ee",
-      "size": 21409,
-      "normalized_sha256": "c2de8a5e8773edd549967460c1d59c1c147efb1d6e95097353f9f288e7ead6ee"
+      "sha256": "5a63678d28bf8f0ff78e219dbb391f78252c5a31fad65421d8b3d1cd9e95c49c",
+      "size": 22505,
+      "normalized_sha256": "5a63678d28bf8f0ff78e219dbb391f78252c5a31fad65421d8b3d1cd9e95c49c"
     },
     "scripts/colab/colab_gpu_train.ipynb": {
       "role": "index",
@@ -1204,15 +1222,15 @@
     },
     "scripts/decode_sentences.py": {
       "role": "index",
-      "sha256": "a67969fab5e5e192b7864cb8017b9bfcce1eb231196cd73e2868e601e01673f9",
-      "size": 37196,
-      "normalized_sha256": "a67969fab5e5e192b7864cb8017b9bfcce1eb231196cd73e2868e601e01673f9"
+      "sha256": "ec29c818df3a2461754eab31010e7def5dfe8b4c88a78dd23e8c36b6fc8b8249",
+      "size": 37495,
+      "normalized_sha256": "ec29c818df3a2461754eab31010e7def5dfe8b4c88a78dd23e8c36b6fc8b8249"
     },
     "scripts/generate_paper_assets.py": {
       "role": "index",
-      "sha256": "3e4b68826fc8b981d6139e2c2286a615d1cebb7a459e243dca70c78bc457ecbb",
-      "size": 1055,
-      "normalized_sha256": "3e4b68826fc8b981d6139e2c2286a615d1cebb7a459e243dca70c78bc457ecbb"
+      "sha256": "c2bfd351d40fb74ea099fa58338908dc07f82cd3da1c03154a692faabb44c6b0",
+      "size": 1039,
+      "normalized_sha256": "c2bfd351d40fb74ea099fa58338908dc07f82cd3da1c03154a692faabb44c6b0"
     },
     "scripts/paper/add_full_context_comparison.py": {
       "role": "index",
@@ -1270,9 +1288,9 @@
     },
     "scripts/paper/paper_style.py": {
       "role": "index",
-      "sha256": "a9125925666dfedc1d64477d103890e71989d289c1aeba4dbd522aa89fd0a41d",
-      "size": 5003,
-      "normalized_sha256": "cd776638f6068ec11eb217a4746f1335cffb1f6e92fe8011c9a332f561bdf6d7"
+      "sha256": "1f2f738c1018bfc522e72be2b3dea24574d9566c79d89e54706cd9cbff4c8493",
+      "size": 6597,
+      "normalized_sha256": "1f2f738c1018bfc522e72be2b3dea24574d9566c79d89e54706cd9cbff4c8493"
     },
     "scripts/paper/polish_main_assets.py": {
       "role": "index",
@@ -1282,9 +1300,9 @@
     },
     "scripts/paper/publication_suite_style.py": {
       "role": "index",
-      "sha256": "9d9816c376ae6267f961f63e815ddcfbc9b252dff74ecb1fb5b16e4981731abc",
-      "size": 3235,
-      "normalized_sha256": "3def8a07d01ec0e6b92693d7cbc921716ea3a30ba41682a38b03b1517b33082f"
+      "sha256": "148e4ad45d2a0b701413a2b74bfb9e6e5afa99de7f5e1013d810a2c3e9be6cda",
+      "size": 3075,
+      "normalized_sha256": "148e4ad45d2a0b701413a2b74bfb9e6e5afa99de7f5e1013d810a2c3e9be6cda"
     },
     "scripts/paper/refine_publication_style.py": {
       "role": "index",

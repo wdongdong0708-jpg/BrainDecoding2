@@ -462,7 +462,7 @@ def _build_fast_summary_evaluator(
         retrieval_ranks,
         summarize_retrieval,
     )
-    from braindecoding.training.workflow_runner import (
+    from braindecoding.evaluation.word_retrieval_evaluation import (
         _extract_control_summary_row,
         _score_full_vocabulary_population,
     )
@@ -859,9 +859,10 @@ def run_subspace_coherence_debiasing_sweep(
     output_dir: str | Path | None = None,
     plot: bool = True,
     print_report: bool = True,
+    verbose: bool = False,
 ) -> dict:
     """在单次编码特征上运行方案一（中心化 SVD + 严格留一法基底 U_{K,LOO} + 相干度门控 LOO）完整网格扫描、诊断分析、落盘与作图。"""
-    from braindecoding.training.workflow_runner import (
+    from braindecoding.evaluation.word_retrieval_evaluation import (
         _summarize_shifted_conditions,
     )
 
@@ -1125,7 +1126,11 @@ def run_subspace_coherence_debiasing_sweep(
     }
 
     if print_report:
-        print_subspace_coherence_debiasing_report(report_payload)
+        print_subspace_coherence_debiasing_report(
+            report_payload,
+            verbose=verbose,
+            output_dir=output_dir,
+        )
 
     if output_dir is not None:
         out_path = Path(output_dir)
@@ -1152,433 +1157,14 @@ def run_subspace_coherence_debiasing_sweep(
     return report_payload
 
 
-def print_subspace_coherence_debiasing_report(report: dict) -> None:
-    """在终端打印方案一（中心化 SVD + 严格留一法基底 U_{K,LOO} + 纯特征空间 Subspace LOO）诊断与对比报表（含 50w Macro Top-10 与 Top-1）。"""
-    sep = "=" * 150
-    thin = "-" * 150
-    dataset = report.get("dataset", "")
-    stage = report.get("stage", "")
-    split = report.get("split", "test")
-    seed = report.get("seed", 0)
-    exp_tag = report.get("exp_tag", "") or "(default)"
-    f_info = report.get("formula", {})
-    m_count = f_info.get("num_shifted_conditions_M", 6)
-    center_svd = bool(f_info.get("center_svd", True))
+from braindecoding.evaluation.evaluation_figures import (
+    plot_subspace_coherence_debiasing_figures,
+)
+from braindecoding.evaluation.evaluation_reporting import (
+    format_subspace_coherence_debiasing_report,
+    print_subspace_coherence_debiasing_report,
+)
 
-    print(
-        f"\n{sep}\n"
-        f" [Scheme 1 Exploratory] Subspace-Projected + Coherence-Gated LOO Debiasing (Strict LOO Basis U_{{K,LOO}})\n"
-        f" dataset={dataset}  |  stage={stage}  |  split={split}  |  seed={seed}  |  exp_tag={exp_tag}  |  center_svd={center_svd} (uncentered_svd={not center_svd})\n"
-        f" Clean Subspace LOO  : y_hat^(0)  = Norm(y^(0)  - (eta * gate) * (y_shift_mean @ U_K @ U_K^T))         [M={m_count} historical shifts]\n"
-        f" Shifted Strict LOO  : y_hat^(dk) = Norm(y^(dk) - (eta * gate) * (y_loo_mean   @ U_{{K,LOO}} @ U_{{K,LOO}}^T)) [Strict LOO M-1={m_count - 1} shifts]\n"
-        f"{thin}",
-        flush=True,
-    )
-
-    # 1. 打印奇异值子空间能量谱与相干度门控诊断
-    diags = report.get("subspace_and_coherence_diagnostics") or {}
-    if diags:
-        print(
-            " 1. Shift Common-Mode Centered SVD Energy Spectrum & Cross-Shift Coherence Gate Diagnostics:\n"
-            f" {'Horizon':<8} | {'Dim D':>5} | {'EffRank':>7} | {'Top-8 Var%':>10} | {'Top-12 Var%':>11} | {'Top-16 Var%':>11} | {'Top-24 Var%':>11} || {'||y_shift|| Mean+-SD':>20} | {'RandFloor':>9} | {'Gate Mean':>9}\n"
-            f" {'-' * 8}-+-{'-' * 5}-+-{'-' * 7}-+-{'-' * 10}-+-{'-' * 11}-+-{'-' * 11}-+-{'-' * 11}-++----------------------+-----------+----------",
-            flush=True,
-        )
-        for h_key, d_item in diags.items():
-            cum = d_item.get("cumulative_energy_explained", {})
-            coh = d_item.get("coherence_norm", {})
-            gt = d_item.get("adaptive_gate", {})
-            e8 = float(cum.get("top_8", 0.0)) * 100.0
-            e12 = float(cum.get("top_12", 0.0)) * 100.0
-            e16 = float(cum.get("top_16", 0.0)) * 100.0
-            e24 = float(cum.get("top_24", 0.0)) * 100.0
-            c_m = float(coh.get("mean", 0.0))
-            c_sd = float(coh.get("std", 0.0))
-            r_fl = float(d_item.get("theoretical_random_orthogonal_norm", 0.4082))
-            g_m = float(gt.get("mean", 1.0))
-            print(
-                f" {h_key:<8} | {int(d_item.get('feature_dim_D', 1024)):5d} | {float(d_item.get('effective_rank_participation_ratio', 0.0)):7.1f} |"
-                f" {e8:9.2f}% | {e12:10.2f}% | {e16:10.2f}% | {e24:10.2f}% ||"
-                f" {f'{c_m:.3f} +- {c_sd:.3f}':>20} | {r_fl:9.3f} | {g_m:9.3f}",
-                flush=True,
-            )
-        print(thin, flush=True)
-
-    # 若提供了 Stage 2.1 (context) 基准结果，打印参考线
-    ctx_ref = report.get("context_stage_reference")
-    if isinstance(ctx_ref, dict) and ctx_ref.get("vocab50_macro_top10") is not None:
-        ctx_50 = float(ctx_ref["vocab50_macro_top10"]) * 100.0
-        ctx_50_t1 = float(ctx_ref.get("vocab50_macro_top1", 0.0)) * 100.0
-        ctx_fv = float(ctx_ref.get("full_vocab_macro_top10", 0.0)) * 100.0
-        print(
-            f" [Reference] Stage 2.1 (Context Full-Window) Clean 50-Word Macro Top-10 = {ctx_50:.2f}%  |  50-Word Macro Top-1 = {ctx_50_t1:.2f}%  |  Full-Vocab Top-10 = {ctx_fv:.2f}%\n"
-            f"{thin}",
-            flush=True,
-        )
-
-    # 2. 打印主表：Raw vs Full-Rank LOO vs Scheme 1 Subspace LOO（同时展示 50w Macro Top-10 与 50w Macro Top-1）
-    print(
-        " 2. Feature-Space Subspace LOO Retrieval Comparison (50-Word Macro Top-10 & Top-1 + Full-Vocab 2020w):\n"
-        f" {'Configuration':<44} | {'50w Clean Top10':>15} | {'50w Shift Top10':>15} | {'Top10 Gap':>10} || {'50w Clean Top1':>14} | {'50w Shift Top1':>14} | {'Top1 Gap':>9} || {'FV Micro C/S':>15} | {'FV WordMacro C/S':>16}\n"
-        f" {'-' * 44}-+-{'-' * 15}-+-{'-' * 15}-+-{'-' * 10}-++----------------+----------------+-----------++-----------------+-----------------",
-        flush=True,
-    )
-
-    all_rows = [
-        report["raw_baseline"],
-        *report.get("full_rank_loo_baselines", ()),
-        *report.get("subspace_sweep", ()),
-    ]
-    for item in all_rows:
-        lbl = str(item["label"])
-        c_ref = item["clean_reference"]
-        agg = item["shifted_aggregate"]
-
-        c50 = float(c_ref.get("vocab50_macro_top10", 0.0)) * 100.0
-        s50 = float(agg.get("mean_vocab50_macro_top10", 0.0)) * 100.0
-        gap50 = float(agg.get("clean_minus_shifted_vocab50_macro_top10", 0.0)) * 100.0
-
-        c50_t1 = float(c_ref.get("vocab50_macro_top1", 0.0)) * 100.0
-        s50_t1 = float(agg.get("mean_vocab50_macro_top1", 0.0)) * 100.0
-        gap50_t1 = float(
-            agg.get(
-                "clean_minus_shifted_vocab50_macro_top1",
-                (c50_t1 - s50_t1) / 100.0,
-            )
-        ) * 100.0
-
-        cfv = float(c_ref.get("full_vocab_macro_top10", 0.0)) * 100.0
-        sfv = float(agg.get("mean_full_vocab_macro_top10", 0.0)) * 100.0
-        cw_fv = float(c_ref.get("full_vocab_word_macro_top10", cfv / 100.0)) * 100.0
-        sw_fv = float(agg.get("mean_full_vocab_word_macro_top10", sfv / 100.0)) * 100.0
-
-        print(
-            f" {lbl:<44} | {c50:14.2f}% | {s50:14.2f}% | {gap50:+9.2f}% ||"
-            f" {c50_t1:13.2f}% | {s50_t1:13.2f}% | {gap50_t1:+8.2f}% ||"
-            f" {f'{cfv:5.2f}%/{sfv:5.2f}%':>15} | {f'{cw_fv:5.2f}%/{sw_fv:5.2f}%':>16}",
-            flush=True,
-        )
-
-    # 3. 若包含 K0 / K1 / K2 视野，打印 50w Macro Top-10 与 50w Macro Top-1 视野拆解对比表
-    raw_hz = report["raw_baseline"]["clean_reference"].get("horizons") or {}
-    if raw_hz:
-        print(
-            f"{thin}\n"
-            " 3A. Revision Horizons (K0 / K1 / K2) 50-Word Macro Top-10 Clean vs Strict-LOO Shifted Mean Breakdown:\n"
-            f" {'Configuration':<44} | {'K0 Top-10 Clean/Shift (Gap)':>28} | {'K1 Top-10 Clean/Shift (Gap)':>28} | {'K2 Top-10 Clean/Shift (Gap)':>28}\n"
-            f" {'-' * 44}-+-{'-' * 28}-+-{'-' * 28}-+-{'-' * 28}",
-            flush=True,
-        )
-        for item in all_rows:
-            lbl = str(item["label"])
-            c_hz = item["clean_reference"].get("horizons") or {}
-            s_hz = item["shifted_aggregate"].get("horizons") or {}
-            cols: list[str] = []
-            for hk in ("K0", "K1", "K2"):
-                if hk in c_hz:
-                    ch_val = float(c_hz[hk].get("common_vocab50_macro_top10", 0.0)) * 100.0
-                    sh_val = float(s_hz.get(hk, {}).get("mean_common_vocab50_macro_top10", 0.0)) * 100.0
-                    gp_val = ch_val - sh_val
-                    cols.append(f"{ch_val:5.2f}/{sh_val:5.2f} ({gp_val:+6.2f}%)")
-                else:
-                    cols.append("N/A")
-            print(
-                f" {lbl:<44} | {cols[0]:>28} | {cols[1]:>28} | {cols[2]:>28}",
-                flush=True,
-            )
-
-        print(
-            f"{thin}\n"
-            " 3B. Revision Horizons (K0 / K1 / K2) 50-Word Macro Top-1 Clean vs Strict-LOO Shifted Mean Breakdown:\n"
-            f" {'Configuration':<44} | {'K0 Top-1 Clean/Shift (Gap)':>28} | {'K1 Top-1 Clean/Shift (Gap)':>28} | {'K2 Top-1 Clean/Shift (Gap)':>28}\n"
-            f" {'-' * 44}-+-{'-' * 28}-+-{'-' * 28}-+-{'-' * 28}",
-            flush=True,
-        )
-        for item in all_rows:
-            lbl = str(item["label"])
-            c_hz = item["clean_reference"].get("horizons") or {}
-            s_hz = item["shifted_aggregate"].get("horizons") or {}
-            cols_t1: list[str] = []
-            for hk in ("K0", "K1", "K2"):
-                if hk in c_hz:
-                    ch_t1 = float(c_hz[hk].get("common_vocab50_macro_top1", 0.0)) * 100.0
-                    sh_t1 = float(s_hz.get(hk, {}).get("mean_common_vocab50_macro_top1", 0.0)) * 100.0
-                    gp_t1 = ch_t1 - sh_t1
-                    cols_t1.append(f"{ch_t1:5.2f}/{sh_t1:5.2f} ({gp_t1:+6.2f}%)")
-                else:
-                    cols_t1.append("N/A")
-            print(
-                f" {lbl:<44} | {cols_t1[0]:>28} | {cols_t1[1]:>28} | {cols_t1[2]:>28}",
-                flush=True,
-            )
-
-    # 4. 打印推荐的最优配置摘要（含 Top-10 与 Top-1）
-    best_gap = report.get("best_by_net_gap_vocab50")
-    best_clean = report.get("best_by_clean_preservation_vocab50")
-    print(thin, flush=True)
-    if best_clean:
-        bc_c50 = float(best_clean["clean_reference"]["vocab50_macro_top10"]) * 100.0
-        bc_s50 = float(best_clean["shifted_aggregate"]["mean_vocab50_macro_top10"]) * 100.0
-        bc_g50 = float(best_clean["shifted_aggregate"]["clean_minus_shifted_vocab50_macro_top10"]) * 100.0
-        bc_c1 = float(best_clean["clean_reference"].get("vocab50_macro_top1", 0.0)) * 100.0
-        bc_s1 = float(best_clean["shifted_aggregate"].get("mean_vocab50_macro_top1", 0.0)) * 100.0
-        bc_g1 = bc_c1 - bc_s1
-        print(
-            f" ★ Best 50w Clean-Preserving : {best_clean['label']:<46} -> Top-10: {bc_c50:.2f}% / {bc_s50:.2f}% (Gap {bc_g50:+.2f}%)  |  Top-1: {bc_c1:.2f}% / {bc_s1:.2f}% (Gap {bc_g1:+.2f}%)",
-            flush=True,
-        )
-    if best_gap:
-        bg_c50 = float(best_gap["clean_reference"]["vocab50_macro_top10"]) * 100.0
-        bg_s50 = float(best_gap["shifted_aggregate"]["mean_vocab50_macro_top10"]) * 100.0
-        bg_g50 = float(best_gap["shifted_aggregate"]["clean_minus_shifted_vocab50_macro_top10"]) * 100.0
-        bg_c1 = float(best_gap["clean_reference"].get("vocab50_macro_top1", 0.0)) * 100.0
-        bg_s1 = float(best_gap["shifted_aggregate"].get("mean_vocab50_macro_top1", 0.0)) * 100.0
-        bg_g1 = bg_c1 - bg_s1
-        print(
-            f" ★ Best 50w Net-Gap          : {best_gap['label']:<46} -> Top-10: {bg_c50:.2f}% / {bg_s50:.2f}% (Gap {bg_g50:+.2f}%)  |  Top-1: {bg_c1:.2f}% / {bg_s1:.2f}% (Gap {bg_g1:+.2f}%)",
-            flush=True,
-        )
-    print(f"{sep}\n", flush=True)
-
-
-def plot_subspace_coherence_debiasing_figures(
-    report: dict,
-    figures_dir: str | Path,
-) -> dict[str, str]:
-    """生成方案一（低秩子空间投影 + 严格留一法基底 LOO 去偏）专属四宫格诊断看板图，保存至 figures/ 目录。"""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    out_dir = Path(figures_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    split = report.get("split", "test")
-    dataset = report.get("dataset", "")
-    stage = report.get("stage", "")
-    seed = report.get("seed", 0)
-    raw_entry = report["raw_baseline"]
-    full_entries = list(report.get("full_rank_loo_baselines", ()))
-    subspace_entries = list(report.get("subspace_sweep", ()))
-    if not subspace_entries:
-        return {}
-
-    fig, axes = plt.subplots(2, 2, figsize=(15.6, 11.0), dpi=160)
-    fig.suptitle(
-        f"Scheme 1: Subspace-Projected LOO Debiasing (Strict LOO Basis U_{{K,LOO}})  |  {dataset}  |  stage={stage}  |  split={split}  |  seed={seed}",
-        fontsize=13,
-        fontweight="bold",
-        y=0.98,
-    )
-
-    # Panel A: Singular Value Cumulative Energy Explained across Rank K
-    ax0 = axes[0, 0]
-    diags = report.get("subspace_and_coherence_diagnostics") or {}
-    rank_ticks = [1, 2, 4, 8, 12, 16, 24, 32, 48, 64]
-    colors_h = {"K0": "#4e79a7", "K1": "#f28e2b", "K2": "#59a14f", "main": "#1f77b4"}
-    for h_key, d_item in diags.items():
-        cum = d_item.get("cumulative_energy_explained", {})
-        xs = [r for r in rank_ticks if f"top_{r}" in cum]
-        ys = [float(cum[f"top_{r}"]) * 100.0 for r in xs]
-        if xs:
-            eff_r = float(d_item.get("effective_rank_participation_ratio", 0.0))
-            ax0.plot(
-                xs,
-                ys,
-                "-o",
-                linewidth=2.0,
-                color=colors_h.get(h_key, "#1f77b4"),
-                label=f"{h_key} (EffRank={eff_r:.1f})",
-            )
-    ax0.axvline(8, color="#d62728", linestyle="--", linewidth=1.2, label="Recommended Rank K=8..12")
-    ax0.set_xlabel("Subspace Rank K (Centered SVD Singular Vectors)")
-    ax0.set_ylabel("Cumulative Shift Bias Variance Explained (%)")
-    ax0.set_title("A. Shift Common-Mode Centered SVD Energy Spectrum", fontweight="bold")
-    ax0.grid(True, linestyle=":", alpha=0.5)
-    ax0.legend(loc="lower right", fontsize=8.5)
-
-    # Panel B: Clean vs Shifted Mean vs Net Gap Across Rank K (50-Word Macro Top-10, Gate=Off)
-    ax1 = axes[0, 1]
-    gate_off_sub = [
-        e
-        for e in subspace_entries
-        if (not e.get("use_coherence_gate")) and abs(float(e["eta"]) - 0.8) <= 1e-6
-    ]
-    if not gate_off_sub:
-        target_eta = float(subspace_entries[0]["eta"])
-        gate_off_sub = [
-            e
-            for e in subspace_entries
-            if (not e.get("use_coherence_gate"))
-            and abs(float(e["eta"]) - target_eta) <= 1e-6
-        ]
-        if not gate_off_sub:
-            gate_off_sub = [
-                e for e in subspace_entries if abs(float(e["eta"]) - target_eta) <= 1e-6
-            ]
-    else:
-        target_eta = 0.8
-
-    full_eta1 = next(
-        (e for e in full_entries if abs(float(e["eta"]) - 1.0) <= 1e-6),
-        full_entries[-1] if full_entries else raw_entry,
-    )
-    compare_items = [raw_entry, *gate_off_sub, full_eta1]
-    x_labels = [
-        "Raw\n(η=0)"
-        if item["method_family"] == "raw_baseline"
-        else (
-            f"Full-Rank\n(D, η={item['eta']:g})"
-            if item["method_family"] == "full_rank_loo"
-            else f"Rank K={item['rank_k']}\n(η={item['eta']:g}, Gate={'On' if item.get('use_coherence_gate') else 'Off'})"
-        )
-        for item in compare_items
-    ]
-    x_pos = np.arange(len(compare_items))
-    c_vals = [
-        float(item["clean_reference"].get("vocab50_macro_top10", 0.0)) * 100.0
-        for item in compare_items
-    ]
-    s_vals = [
-        float(item["shifted_aggregate"].get("mean_vocab50_macro_top10", 0.0)) * 100.0
-        for item in compare_items
-    ]
-    g_vals = [
-        float(
-            item["shifted_aggregate"].get("clean_minus_shifted_vocab50_macro_top10", 0.0)
-        )
-        * 100.0
-        for item in compare_items
-    ]
-    width = 0.26
-    bars_c = ax1.bar(x_pos - width, c_vals, width=width, label="Clean (0s)", color="#1f77b4")
-    bars_s = ax1.bar(x_pos, s_vals, width=width, label="Shifted Mean (Strict LOO)", color="#ff7f0e")
-    bars_g = ax1.bar(x_pos + width, g_vals, width=width, label="Net Gap (Clean - Shift)", color="#2ca02c")
-
-    ctx_ref = report.get("context_stage_reference")
-    if isinstance(ctx_ref, dict) and ctx_ref.get("vocab50_macro_top10") is not None:
-        ctx_50 = float(ctx_ref["vocab50_macro_top10"]) * 100.0
-        ax1.axhline(
-            ctx_50,
-            color="#9467bd",
-            linestyle="-.",
-            linewidth=1.4,
-            label=f"Stage 2.1 Context ({ctx_50:.2f}%)",
-        )
-    chance_50 = float(raw_entry["clean_reference"].get("vocab50_chance_top10", 0.2)) * 100.0
-    ax1.axhline(chance_50, color="#666666", linestyle="--", linewidth=1.0, label=f"Chance ({chance_50:.1f}%)")
-    ax1.set_xticks(x_pos)
-    ax1.set_xticklabels(x_labels, fontsize=8.5)
-    ax1.set_ylabel("50-Word Macro Top-10 (%)")
-    ax1.set_title("B. 50-Word Macro Top-10: Subspace Rank K vs Full-Rank LOO", fontweight="bold")
-    ax1.grid(axis="y", linestyle=":", alpha=0.5)
-    ax1.legend(loc="best", fontsize=8.0)
-    for b_group in (bars_c, bars_s, bars_g):
-        for b in b_group:
-            h = b.get_height()
-            ax1.annotate(
-                f"{h:.1f}%",
-                xy=(b.get_x() + b.get_width() / 2.0, h),
-                xytext=(0, 3),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=7.2,
-            )
-
-    # Panel C: Revision Horizons (K0 / K1 / K2) Clean vs Shifted Mean
-    ax2 = axes[1, 0]
-    best_sub = report.get("best_by_clean_preservation_vocab50") or subspace_entries[0]
-    raw_hz = raw_entry["clean_reference"].get("horizons") or {}
-    if raw_hz and all(k in raw_hz for k in ("K0", "K1", "K2")):
-        hz_keys = ["K0", "K1", "K2"]
-        hz_x = np.arange(len(hz_keys))
-        series = [
-            ("Raw (η=0)", raw_entry, "#333333"),
-            (f"Full-Rank LOO (η={full_eta1['eta']:g})", full_eta1, "#d62728"),
-            (f"Scheme 1 ({best_sub['label']})", best_sub, "#2ca02c"),
-        ]
-        for s_label, item, col in series:
-            c_hz = item["clean_reference"].get("horizons") or {}
-            s_hz = item["shifted_aggregate"].get("horizons") or {}
-            c_line = [
-                float(c_hz.get(k, {}).get("common_vocab50_macro_top10", 0.0)) * 100.0
-                for k in hz_keys
-            ]
-            s_line = [
-                float(s_hz.get(k, {}).get("mean_common_vocab50_macro_top10", 0.0)) * 100.0
-                for k in hz_keys
-            ]
-            ax2.plot(hz_x, c_line, "-o", linewidth=2.0, color=col, label=f"Clean: {s_label}")
-            ax2.plot(hz_x, s_line, ":s", linewidth=1.8, color=col, label=f"Shifted: {s_label}")
-        ax2.axhline(chance_50, color="#888888", linestyle="--", linewidth=1.0)
-        ax2.set_xticks(hz_x)
-        ax2.set_xticklabels(["K0 (0w)", "K1 (+1w)", "K2 (+2w)"])
-        ax2.set_ylabel("Common 50-Word Macro Top-10 (%)")
-        ax2.set_title("C. Horizons K0/K1/K2: Preserving Clean While Suppressing Shift", fontweight="bold")
-        ax2.grid(True, linestyle=":", alpha=0.5)
-        ax2.legend(loc="best", fontsize=7.8)
-    else:
-        for rank_k in report.get("grid", {}).get("rank_k_values", ()):
-            sub_k = [
-                e
-                for e in subspace_entries
-                if e.get("rank_k") == rank_k and (not e.get("use_coherence_gate"))
-            ]
-            if sub_k:
-                etas_k = [float(e["eta"]) for e in sub_k]
-                gaps_k = [
-                    float(
-                        e["shifted_aggregate"].get(
-                            "clean_minus_shifted_vocab50_macro_top10", 0.0
-                        )
-                    )
-                    * 100.0
-                    for e in sub_k
-                ]
-                ax2.plot(etas_k, gaps_k, "-o", linewidth=2.0, label=f"Rank K={rank_k} (Gate=Off)")
-        ax2.set_xlabel("Subtraction Weight η")
-        ax2.set_ylabel("Net Gap: Clean - Shifted Mean (%)")
-        ax2.set_title("C. Net Gap Across η and Subspace Rank K", fontweight="bold")
-        ax2.grid(True, linestyle=":", alpha=0.5)
-        ax2.legend(loc="best", fontsize=8.5)
-
-    # Panel D: Per-Shift Condition Profile (-15s .. -120s vs Clean 0s)
-    ax3 = axes[1, 1]
-    cond_list = raw_entry.get("conditions", ())
-    cond_names = ["Clean (0s)"] + [c["label"] for c in cond_list]
-    cond_x = np.arange(len(cond_names))
-    profile_series = [
-        ("Raw Baseline (η=0)", raw_entry, "#333333", "--"),
-        (f"Full-Rank LOO (η={full_eta1['eta']:g})", full_eta1, "#d62728", "-."),
-        (best_sub["label"], best_sub, "#2ca02c", "-"),
-    ]
-    for p_label, item, col, ls in profile_series:
-        vals = [float(item["clean_reference"].get("vocab50_macro_top10", 0.0)) * 100.0] + [
-            float(c["summary"].get("vocab50_macro_top10", 0.0)) * 100.0
-            for c in item.get("conditions", ())
-        ]
-        ax3.plot(cond_x, vals, marker="o", linestyle=ls, linewidth=2.0, color=col, label=p_label)
-    ax3.axhline(chance_50, color="#888888", linestyle=":", linewidth=1.0, label="Chance (20.0%)")
-    ax3.set_xticks(cond_x)
-    ax3.set_xticklabels(cond_names, rotation=25, ha="right")
-    ax3.set_ylabel("50-Word Macro Top-10 (%)")
-    ax3.set_title("D. Clean (0s) vs Historical Shifted Conditions (-15s..-120s)", fontweight="bold")
-    ax3.grid(True, linestyle=":", alpha=0.5)
-    ax3.legend(loc="best", fontsize=8.0)
-
-    fig.tight_layout(rect=[0, 0.01, 1, 0.95])
-    png_path = out_dir / f"subspace_coherence_debiasing_{split}.png"
-    pdf_path = out_dir / f"subspace_coherence_debiasing_{split}.pdf"
-    fig.savefig(png_path, dpi=160)
-    fig.savefig(pdf_path)
-    plt.close(fig)
-
-    return {
-        "subspace_coherence_debiasing_png": str(png_path),
-        "subspace_coherence_debiasing_pdf": str(pdf_path),
-    }
 
 
 class _CachedEvalDatasetProxy:
@@ -1641,6 +1227,7 @@ def evaluate_cached_pt_subspace_loo(
     output_dir: str | Path | None = None,
     plot: bool = True,
     print_report: bool = True,
+    verbose: bool = False,
 ) -> dict:
     """直接加载已保存的 subspace_encoded_cache_{split}.pt 文件并在 3~5 秒内完成中心化 SVD + 严格留一法基底 Subspace LOO 全量扫描。"""
     pt_path = Path(cache_pt_path)
@@ -1698,6 +1285,7 @@ def evaluate_cached_pt_subspace_loo(
         output_dir=resolved_out,
         plot=plot,
         print_report=print_report,
+        verbose=verbose,
     )
 
 
@@ -1729,6 +1317,7 @@ def run_standalone_subspace_evaluation(
     force_reencode: bool = False,
     plot: bool = True,
     show_progress: bool = True,
+    verbose: bool = False,
 ) -> dict:
     """独立运行单阶段（如 revision 或 context）的方案一评估工作流，自动支持已编码特征缓存秒级复用。"""
     gate_mode_str = str(coherence_gate_mode or "both").strip().lower()
@@ -1759,8 +1348,14 @@ def run_standalone_subspace_evaluation(
             gate_max=gate_max,
             plot=plot,
             print_report=True,
+            verbose=verbose,
         )
 
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        STAGE_DISPLAY_NAMES,
+        _format_shift_label,
+        _parse_shift_seconds_list,
+    )
     from braindecoding.experiment import file_sha256
     from braindecoding.models import build_brain_embedding_model
     from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import (
@@ -1780,9 +1375,6 @@ def run_standalone_subspace_evaluation(
         resolve_amp_dtype,
     )
     from braindecoding.training.workflow_runner import (
-        STAGE_DISPLAY_NAMES,
-        _format_shift_label,
-        _parse_shift_seconds_list,
         build_workflow_config,
         group_column,
         verify_cache_ready,
@@ -1959,6 +1551,7 @@ def run_standalone_subspace_evaluation(
                     output_dir=out,
                     plot=plot,
                     print_report=True,
+                    verbose=verbose,
                 )
         except Exception as exc:
             print(
@@ -2157,6 +1750,7 @@ def run_standalone_subspace_evaluation(
         output_dir=out,
         plot=plot,
         print_report=True,
+        verbose=verbose,
     )
 
     del model, eval_ds, eval_loader, checkpoint
@@ -2228,6 +1822,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gate-max", type=float, default=1.2, help="门控最大增强系数 (默认 1.2)")
     parser.add_argument("--force-reencode", action="store_true", help="强制重新运行 GPU 前向编码而不使用已有特征缓存")
     parser.add_argument("--no-plot", action="store_true", help="禁用图表生成")
+    parser.add_argument("--verbose", action="store_true", help="打印完整宽表诊断拆解")
     return parser
 
 
@@ -2248,6 +1843,7 @@ def main(argv: list[str] | None = None) -> int:
             gate_min=args.gate_min,
             gate_max=args.gate_max,
             plot=not bool(args.no_plot),
+            verbose=bool(args.verbose),
         )
         return 0
 
@@ -2284,6 +1880,7 @@ def main(argv: list[str] | None = None) -> int:
             force_reencode=bool(args.force_reencode),
             plot=not bool(args.no_plot),
             show_progress=True,
+            verbose=bool(args.verbose),
         )
     return 0
 

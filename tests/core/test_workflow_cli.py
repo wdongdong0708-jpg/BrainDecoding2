@@ -1787,6 +1787,224 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
     assert "--taus" not in nb_raw
 
 
+def test_decoupled_evaluation_reporting_replotting_and_cli_report(
+    tmp_path: Path, capsys
+) -> None:
+    """Verify 3-layer evaluation decoupling, <=86-column Executive Summary, and CLI report/replot."""
+    from braindecoding.evaluation.evaluation_figures import replot_from_saved_json
+    from braindecoding.evaluation.evaluation_reporting import (
+        REPORT_WIDTH,
+        format_sequence_decoding_report,
+        format_stage_comparison_report,
+        format_word_evaluation_report,
+        render_saved_evaluation_report,
+    )
+    import scripts.generate_paper_assets as generate_paper_assets
+
+    # 1. Verify scripts/generate_paper_assets.py targets existing paper scripts
+    assert (PROJECT_ROOT / "scripts/paper/unify_manuscript_tables.py").is_file()
+    assert (PROJECT_ROOT / "scripts/paper/polish_main_assets.py").is_file()
+    gpa_src = Path(generate_paper_assets.__file__).read_text(encoding="utf-8")
+    assert "scripts/paper/unify_manuscript_tables.py" in gpa_src
+    assert "scripts/paper/polish_main_assets.py" in gpa_src
+    assert "_test_v2.py" not in gpa_src
+
+    # 2. Single-stage word evaluation JSON -> compact Executive Summary (<= 86 cols) & replot
+    eval_dir = tmp_path / "pallier2025" / "revision" / "all" / "seed-000"
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    eval_json = eval_dir / "evaluation_test.json"
+    eval_payload = {
+        "dataset": "pallier2025",
+        "stage": "revision",
+        "split": "test",
+        "seed": 0,
+        "checkpoint": str(eval_dir / "best.pt"),
+        "evaluated_epoch": 28,
+        "window_seconds": 1.0,
+        "window_samples": 50,
+        "selection_metric": "pallier2025_50_macro",
+        "selection_score": 0.569,
+        "metrics": {
+            "pallier2025_50_macro": 0.569,
+            "pallier2025_50_micro": 0.575,
+            "pallier2025_50_macro_top1": 0.194,
+            "pallier2025_50_micro_top1": 0.201,
+            "pallier2025_50_macro_top5": 0.432,
+            "pallier2025_50_mrr_macro": 0.312,
+            "pallier2025_50_median_rank_macro": 8.0,
+            "vocab_50_macro_top10": 0.569,
+            "vocab_50_micro_top10": 0.575,
+            "vocab_50_macro_top1": 0.194,
+            "vocab_50_micro_top1": 0.201,
+            "vocab_50_macro_top5": 0.432,
+            "vocab_50_mrr_macro": 0.312,
+            "vocab_50_median_rank_macro": 8.0,
+            "full_vocab_size": 2020,
+            "full_vocab_macro_top10": 0.214,
+            "full_vocab_micro_top10": 0.228,
+            "full_vocab_macro_top1": 0.052,
+            "full_vocab_mrr_macro": 0.105,
+            "full_vocab_median_rank_macro": 84.0,
+            "revision_horizons": {
+                "K0": {
+                    "delay_words": 0,
+                    "common_query_count": 400,
+                    "common_vocab50_macro_top10": 0.512,
+                    "common_vocab50_micro_top10": 0.520,
+                    "common_vocab50_macro_top1": 0.165,
+                    "common_vocab50_mrr_macro": 0.275,
+                    "common_vocab50_median_rank_macro": 10.0,
+                },
+                "K1": {
+                    "delay_words": 1,
+                    "common_query_count": 400,
+                    "common_vocab50_macro_top10": 0.548,
+                    "common_vocab50_micro_top10": 0.555,
+                    "common_vocab50_macro_top1": 0.181,
+                    "common_vocab50_mrr_macro": 0.296,
+                    "common_vocab50_median_rank_macro": 9.0,
+                },
+                "K2": {
+                    "delay_words": 2,
+                    "common_query_count": 400,
+                    "common_vocab50_macro_top10": 0.569,
+                    "common_vocab50_micro_top10": 0.575,
+                    "common_vocab50_macro_top1": 0.194,
+                    "common_vocab50_mrr_macro": 0.312,
+                    "common_vocab50_median_rank_macro": 8.0,
+                },
+            },
+            "per_subject_vocab50": {
+                "sub-01": {
+                    "query_count": 200,
+                    "unique_words": 48,
+                    "macro_top10": 0.580,
+                    "micro_top10": 0.585,
+                    "macro_top1": 0.200,
+                    "mrr_macro": 0.320,
+                    "median_rank_macro": 7.5,
+                }
+            },
+        },
+        "negative_control": {
+            "control_type": "temporal_shift",
+            "shift_seconds_list": [-15.0, -30.0],
+            "clean_reference": {
+                "label": "Clean (0s)",
+                "vocab50_macro_top10": 0.569,
+                "vocab50_micro_top10": 0.575,
+                "vocab50_macro_top1": 0.194,
+                "vocab50_mrr_macro": 0.312,
+                "vocab50_median_rank_macro": 8.0,
+                "full_vocab_macro_top10": 0.214,
+            },
+            "conditions": {
+                "shift_neg15s": {
+                    "shift_seconds": -15.0,
+                    "summary": {
+                        "label": "Shifted (-15s)",
+                        "vocab50_macro_top10": 0.235,
+                        "vocab50_micro_top10": 0.240,
+                        "vocab50_macro_top1": 0.042,
+                        "vocab50_mrr_macro": 0.118,
+                        "vocab50_median_rank_macro": 24.0,
+                        "full_vocab_macro_top10": 0.012,
+                    },
+                }
+            },
+            "shifted_aggregate": {
+                "num_shifts": 1,
+                "shift_seconds_list": [-15.0],
+                "mean_vocab50_macro_top10": 0.235,
+                "std_vocab50_macro_top10": 0.0,
+                "mean_vocab50_micro_top10": 0.240,
+                "mean_vocab50_macro_top1": 0.042,
+                "mean_vocab50_mrr_macro": 0.118,
+                "mean_vocab50_median_rank_macro": 24.0,
+                "mean_full_vocab_macro_top10": 0.012,
+                "clean_minus_shifted_vocab50_macro_top10": 0.334,
+                "clean_minus_shifted_vocab50_micro_top10": 0.335,
+                "clean_minus_shifted_vocab50_macro_top1": 0.152,
+                "clean_minus_shifted_vocab50_mrr_macro": 0.194,
+                "clean_minus_shifted_full_vocab_macro_top10": 0.202,
+            },
+        },
+    }
+    eval_json.write_text(json.dumps(eval_payload, indent=2), encoding="utf-8")
+
+    compact_word = format_word_evaluation_report(eval_payload, verbose=False)
+    verbose_word = format_word_evaluation_report(eval_payload, verbose=True)
+    assert max(len(line) for line in compact_word.splitlines()) <= REPORT_WIDTH
+    assert "sub-01" not in compact_word
+    assert "sub-01" in verbose_word
+    assert "Revision Gain (K2 - K0)" in compact_word
+
+    # 3. Stage comparison JSON -> compact Executive Summary (<= 86 cols)
+    stage_cmp_json = tmp_path / "pallier2025" / "stage_comparison_seed-000_test.json"
+    stage_cmp_payload = {
+        "dataset": "pallier2025",
+        "split": "test",
+        "seed": 0,
+        "stages": {
+            "word": {**eval_payload, "stage": "word", "selection_score": 0.382},
+            "revision": eval_payload,
+        },
+    }
+    stage_cmp_json.write_text(json.dumps(stage_cmp_payload, indent=2), encoding="utf-8")
+    compact_stage = format_stage_comparison_report(stage_cmp_payload, verbose=False)
+    assert max(len(line) for line in compact_stage.splitlines()) <= REPORT_WIDTH
+    assert "Stage 1: Word (CNN Only)" in compact_stage
+    assert "Stage 2.2: Revision" in compact_stage
+
+    # 4. S3 sequence decoding executive summary width check
+    s3_payload = {
+        "dataset": "pallier2025",
+        "split": "test",
+        "seed": 0,
+        "conditions": {
+            "K0": {
+                "segment_count": 20,
+                "total_words": 200,
+                "bleu1_pct": 18.5,
+                "in_vocabulary_word_acc_pct": 15.2,
+                "word_acc_pct": 14.0,
+                "word_acc_top5_pct": 28.0,
+                "cer_pct": 72.1,
+                "bertscore_f1_pct": 68.4,
+            },
+            "S3_clean": {
+                "segment_count": 20,
+                "total_words": 200,
+                "bleu1_pct": 22.8,
+                "in_vocabulary_word_acc_pct": 19.6,
+                "word_acc_pct": 18.1,
+                "word_acc_top5_pct": 34.5,
+                "cer_pct": 67.3,
+                "bertscore_f1_pct": 71.2,
+            },
+        },
+    }
+    compact_s3 = format_sequence_decoding_report(s3_payload, verbose=False)
+    assert max(len(line) for line in compact_s3.splitlines()) <= REPORT_WIDTH
+    assert "Clean Revision Gain (S3 - K0)" in compact_s3
+
+    # 5. CLI `brain-decoding report --input <json> --replot`
+    rc = cli.main(["report", "--input", str(eval_json), "--replot"])
+    assert rc == 0
+    cli_out = capsys.readouterr().out
+    assert "Word Evaluation Summary" in cli_out
+    assert "[Replot Complete] Generated" in cli_out
+    assert (eval_dir / "figures" / "evaluation_test_overview.png").exists()
+    assert (eval_dir / "figures" / "negative_control_test.png").exists()
+
+    # 6. Directory auto-discovery via render_saved_evaluation_report and replot_from_saved_json
+    dir_rendered = render_saved_evaluation_report(eval_dir, verbose=False)
+    assert "Word Evaluation Summary" in dir_rendered
+    replotted = replot_from_saved_json(stage_cmp_json)
+    assert any(p.endswith("stage_comparison_test.png") for p in replotted.values())
+
+
+
 
 
 
