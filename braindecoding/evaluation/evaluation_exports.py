@@ -1761,9 +1761,254 @@ def export_sequence_decoding_tables_and_markdown(
     return exported
 
 
+def export_common_mode_subtraction_tables_and_markdown(
+    cms_report: Mapping[str, Any],
+    output_dir: str | Path | None = None,
+) -> dict[str, str]:
+    """将留一法共模扣除（Leave-One-Out Common-Mode Subtraction）评估结果导出为 tables/*.csv 与 exploratory/*.md。"""
+    target_dir_raw = output_dir
+    if not target_dir_raw:
+        json_p = cms_report.get("exploratory_json")
+        if json_p:
+            p = Path(str(json_p))
+            target_dir_raw = p.parent.parent if p.parent.name == "exploratory" else p.parent
+    if not target_dir_raw:
+        return {}
+    out_dir = Path(str(target_dir_raw))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tables_dir = out_dir / "tables"
+    tables_dir.mkdir(parents=True, exist_ok=True)
+    exploratory_dir = out_dir / "exploratory"
+    exploratory_dir.mkdir(parents=True, exist_ok=True)
+
+    split = str(cms_report.get("split", "test"))
+    dataset = str(cms_report.get("dataset", "-"))
+    stage = str(cms_report.get("stage", "revision"))
+    seed = cms_report.get("seed", 0)
+    exp_tag = str(cms_report.get("exp_tag", "")) or "default"
+
+    raw_entry = cms_report.get("baseline_raw_eta0") or {}
+    sweep_entries = list(
+        cms_report.get("sweep") or cms_report.get("subtraction_sweep") or []
+    )
+    all_entries = (
+        ([raw_entry] + sweep_entries)
+        if (raw_entry and raw_entry not in sweep_entries)
+        else sweep_entries
+    )
+
+    exported: dict[str, str] = {}
+    rows: list[dict[str, Any]] = []
+    for entry in all_entries:
+        if not isinstance(entry, Mapping):
+            continue
+        c_ref = entry.get("clean_reference") or {}
+        s_agg = entry.get("shifted_aggregate") or {}
+        c_hz = c_ref.get("horizons") or {}
+        s_hz = s_agg.get("horizons") or {}
+        rows.append(
+            {
+                "eta": _num(entry.get("eta", 0.0), 3),
+                "label": str(entry.get("label", f"eta={entry.get('eta', 0.0)}")),
+                "clean_vocab50_macro_top10_pct": _pct(c_ref.get("vocab50_macro_top10")),
+                "shifted_mean_vocab50_macro_top10_pct": _pct(s_agg.get("mean_vocab50_macro_top10")),
+                "clean_minus_shifted_vocab50_top10_pp": _pct(s_agg.get("clean_minus_shifted_vocab50_macro_top10")),
+                "clean_vocab50_macro_top1_pct": _pct(c_ref.get("vocab50_macro_top1")),
+                "shifted_mean_vocab50_macro_top1_pct": _pct(s_agg.get("mean_vocab50_macro_top1")),
+                "clean_minus_shifted_vocab50_top1_pp": _pct(s_agg.get("clean_minus_shifted_vocab50_macro_top1")),
+                "clean_full_vocab_top10_pct": _pct(c_ref.get("full_vocab_macro_top10")),
+                "shifted_mean_full_vocab_top10_pct": _pct(s_agg.get("mean_full_vocab_macro_top10")),
+                "clean_minus_shifted_full_vocab_top10_pp": _pct(s_agg.get("clean_minus_shifted_full_vocab_macro_top10")),
+                "k0_clean_vocab50_top10_pct": _pct((c_hz.get("K0") or {}).get("common_vocab50_macro_top10")),
+                "k1_clean_vocab50_top10_pct": _pct((c_hz.get("K1") or {}).get("common_vocab50_macro_top10")),
+                "k2_clean_vocab50_top10_pct": _pct((c_hz.get("K2") or {}).get("common_vocab50_macro_top10")),
+                "k2_shifted_vocab50_top10_pct": _pct((s_hz.get("K2") or {}).get("mean_common_vocab50_macro_top10")),
+            }
+        )
+
+    if rows:
+        csv_path = _write_csv_table(
+            tables_dir / f"common_mode_subtraction_{split}.csv",
+            list(rows[0].keys()),
+            rows,
+        )
+        exported["common_mode_subtraction_csv"] = str(csv_path)
+
+    md_lines = [
+        f"# Leave-One-Out Common-Mode Subtraction Report — `{dataset}` | `{stage}` (`{split.upper()}`)",
+        "",
+        f"- **Experiment Tag**: `{exp_tag}` | **Seed**: `{seed}`",
+        "",
+        "## 1. Full-Rank LOO Common-Mode Subtraction Sweep",
+        "",
+        "| Subtraction Weight (`η`) | 50w Clean Top-10 | 50w Shifted Mean | 50w Net Gap (`Clean - Shift`) | 50w Clean Top-1 | 50w Shift Top-1 | Full-Vocab Clean Top-10 | Full-Vocab Shift Mean |",
+        "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for r in rows:
+        md_lines.append(
+            f"| **`{r['label']}`** | **{r['clean_vocab50_macro_top10_pct']:.2f}%** | "
+            f"{r['shifted_mean_vocab50_macro_top10_pct']:.2f}% | "
+            f"**{r['clean_minus_shifted_vocab50_top10_pp']:+.2f} pp** | "
+            f"{r['clean_vocab50_macro_top1_pct']:.2f}% | {r['shifted_mean_vocab50_macro_top1_pct']:.2f}% | "
+            f"{r['clean_full_vocab_top10_pct']:.2f}% | {r['shifted_mean_full_vocab_top10_pct']:.2f}% |"
+        )
+    md_lines.append("")
+
+    md_path = exploratory_dir / f"common_mode_subtraction_{split}.md"
+    md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+    exported["common_mode_subtraction_md"] = str(md_path)
+    return exported
+
+
+def export_subspace_coherence_debiasing_tables_and_markdown(
+    subspace_report: Mapping[str, Any],
+    output_dir: str | Path | None = None,
+) -> dict[str, str]:
+    """将方案一（中心化 SVD 低秩子空间投影 + 严格留一法基底 LOO 去偏）导出为 tables/*.csv 与 exploratory/*.md。"""
+    target_dir_raw = output_dir
+    if not target_dir_raw:
+        json_p = subspace_report.get("exploratory_json")
+        if json_p:
+            p = Path(str(json_p))
+            target_dir_raw = p.parent.parent if p.parent.name == "exploratory" else p.parent
+    if not target_dir_raw:
+        return {}
+    out_dir = Path(str(target_dir_raw))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tables_dir = out_dir / "tables"
+    tables_dir.mkdir(parents=True, exist_ok=True)
+    exploratory_dir = out_dir / "exploratory"
+    exploratory_dir.mkdir(parents=True, exist_ok=True)
+
+    split = str(subspace_report.get("split", "test"))
+    dataset = str(subspace_report.get("dataset", "-"))
+    stage = str(subspace_report.get("stage", "revision"))
+    seed = subspace_report.get("seed", 0)
+    exp_tag = str(subspace_report.get("exp_tag", "")) or "default"
+
+    raw_entry = subspace_report.get("raw_baseline") or {}
+    full_entries = list(subspace_report.get("full_rank_loo_baselines") or [])
+    sub_entries = list(subspace_report.get("subspace_sweep") or [])
+    all_entries = ([raw_entry] if raw_entry else []) + full_entries + sub_entries
+
+    exported: dict[str, str] = {}
+    rows: list[dict[str, Any]] = []
+    for entry in all_entries:
+        if not isinstance(entry, Mapping) or not entry:
+            continue
+        c_ref = entry.get("clean_reference") or {}
+        s_agg = entry.get("shifted_aggregate") or {}
+        c_hz = c_ref.get("horizons") or {}
+        s_hz = s_agg.get("horizons") or {}
+        rk = entry.get("rank_k")
+        rows.append(
+            {
+                "method_id": str(entry.get("method_id", "-")),
+                "method_family": str(entry.get("method_family", "-")),
+                "label": str(entry.get("label", "-")),
+                "rank_k": "Full" if rk is None else int(rk),
+                "eta": _num(entry.get("eta", 0.0), 3),
+                "coherence_gate": "On" if entry.get("use_coherence_gate") else "Off",
+                "clean_vocab50_macro_top10_pct": _pct(c_ref.get("vocab50_macro_top10")),
+                "shifted_mean_vocab50_macro_top10_pct": _pct(s_agg.get("mean_vocab50_macro_top10")),
+                "clean_minus_shifted_vocab50_top10_pp": _pct(s_agg.get("clean_minus_shifted_vocab50_macro_top10")),
+                "clean_vocab50_macro_top1_pct": _pct(c_ref.get("vocab50_macro_top1")),
+                "shifted_mean_vocab50_macro_top1_pct": _pct(s_agg.get("mean_vocab50_macro_top1")),
+                "clean_minus_shifted_vocab50_top1_pp": _pct(s_agg.get("clean_minus_shifted_vocab50_macro_top1")),
+                "clean_full_vocab_top10_pct": _pct(c_ref.get("full_vocab_macro_top10")),
+                "shifted_mean_full_vocab_top10_pct": _pct(s_agg.get("mean_full_vocab_macro_top10")),
+                "clean_minus_shifted_full_vocab_top10_pp": _pct(s_agg.get("clean_minus_shifted_full_vocab_macro_top10")),
+                "k0_clean_vocab50_top10_pct": _pct((c_hz.get("K0") or {}).get("common_vocab50_macro_top10")),
+                "k1_clean_vocab50_top10_pct": _pct((c_hz.get("K1") or {}).get("common_vocab50_macro_top10")),
+                "k2_clean_vocab50_top10_pct": _pct((c_hz.get("K2") or {}).get("common_vocab50_macro_top10")),
+                "k2_shifted_vocab50_top10_pct": _pct((s_hz.get("K2") or {}).get("mean_common_vocab50_macro_top10")),
+            }
+        )
+
+    if rows:
+        csv_path = _write_csv_table(
+            tables_dir / f"subspace_debiasing_sweep_{split}.csv",
+            list(rows[0].keys()),
+            rows,
+        )
+        exported["subspace_debiasing_sweep_csv"] = str(csv_path)
+
+    diag_map = subspace_report.get("subspace_and_coherence_diagnostics") or {}
+    best_gap = subspace_report.get("best_by_net_gap_vocab50") or {}
+    best_clean = subspace_report.get("best_by_clean_preservation_vocab50") or {}
+
+    md_lines = [
+        f"# Subspace-Projected & Coherence-Gated LOO Debiasing Report — `{dataset}` | `{stage}` (`{split.upper()}`)",
+        "",
+        f"- **Experiment Tag**: `{exp_tag}` | **Seed**: `{seed}` | **Centered SVD**: `{subspace_report.get('formula', {}).get('center_svd', True)}`",
+    ]
+    if isinstance(best_gap, Mapping) and best_gap.get("label"):
+        bg_c = _pct((best_gap.get("clean_reference") or {}).get("vocab50_macro_top10"))
+        bg_s = _pct((best_gap.get("shifted_aggregate") or {}).get("mean_vocab50_macro_top10"))
+        bg_d = _pct((best_gap.get("shifted_aggregate") or {}).get("clean_minus_shifted_vocab50_macro_top10"))
+        md_lines.append(
+            f"- **Best by Net Gap (`Clean - Shifted`)**: **`{best_gap['label']}`** (`Clean={bg_c:.2f}%`, `Shifted={bg_s:.2f}%`, `Gap={bg_d:+.2f} pp`)"
+        )
+    if isinstance(best_clean, Mapping) and best_clean.get("label"):
+        bc_c = _pct((best_clean.get("clean_reference") or {}).get("vocab50_macro_top10"))
+        bc_s = _pct((best_clean.get("shifted_aggregate") or {}).get("mean_vocab50_macro_top10"))
+        bc_d = _pct((best_clean.get("shifted_aggregate") or {}).get("clean_minus_shifted_vocab50_macro_top10"))
+        md_lines.append(
+            f"- **Best Clean-Preserving**: **`{best_clean['label']}`** (`Clean={bc_c:.2f}%`, `Shifted={bc_s:.2f}%`, `Gap={bc_d:+.2f} pp`)"
+        )
+    md_lines.append("")
+
+    if isinstance(diag_map, Mapping) and diag_map:
+        md_lines.extend(
+            [
+                "## 1. Centered SVD Bias Subspace & Coherence Diagnostics",
+                "",
+                "| Horizon / Key | Effective Rank | Top-4 Energy | Top-8 Energy | Top-16 Energy | Mean Coherence Norm | Random Orth Norm |",
+                "| :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for hk, d_info in diag_map.items():
+            if not isinstance(d_info, Mapping):
+                continue
+            cum_e = d_info.get("cumulative_energy_explained") or {}
+            c_norm = d_info.get("coherence_norm") or {}
+            md_lines.append(
+                f"| **`{hk}`** | `{_num(d_info.get('effective_rank', 0.0), 2):.2f}` | "
+                f"{_pct(cum_e.get('top_4', 0.0)):.2f}% | **{_pct(cum_e.get('top_8', 0.0)):.2f}%** | "
+                f"{_pct(cum_e.get('top_16', 0.0)):.2f}% | `{_num(c_norm.get('mean', 0.0), 3):.3f}` | "
+                f"`{_num(d_info.get('theoretical_random_orthogonal_norm', 0.408), 3):.3f}` |"
+            )
+        md_lines.append("")
+
+    md_lines.extend(
+        [
+            "## 2. Raw vs. Full-Rank LOO vs. Subspace LOO Comparison Table",
+            "",
+            "| Method Configuration | Rank `K` | Weight `η` | Gate | 50w Clean Top-10 | 50w Shift Top-10 | 50w Net Gap | 50w Clean Top-1 | 50w Shift Top-1 | Full-Vocab Clean Top-10 |",
+            "| :--- | :---: | ---: | :---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for r in rows:
+        md_lines.append(
+            f"| **`{r['label']}`** | `{r['rank_k']}` | `{r['eta']:.2f}` | `{r['coherence_gate']}` | "
+            f"**{r['clean_vocab50_macro_top10_pct']:.2f}%** | {r['shifted_mean_vocab50_macro_top10_pct']:.2f}% | "
+            f"**{r['clean_minus_shifted_vocab50_top10_pp']:+.2f} pp** | "
+            f"{r['clean_vocab50_macro_top1_pct']:.2f}% | {r['shifted_mean_vocab50_macro_top1_pct']:.2f}% | "
+            f"{r['clean_full_vocab_top10_pct']:.2f}% |"
+        )
+    md_lines.append("")
+
+    md_path = exploratory_dir / f"subspace_coherence_debiasing_{split}.md"
+    md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+    exported["subspace_coherence_debiasing_md"] = str(md_path)
+    return exported
+
+
 __all__ = [
+    "export_common_mode_subtraction_tables_and_markdown",
     "export_multi_seed_tables_and_markdown",
     "export_sequence_decoding_tables_and_markdown",
     "export_stage_comparison_tables_and_markdown",
+    "export_subspace_coherence_debiasing_tables_and_markdown",
     "export_word_evaluation_tables_and_markdown",
 ]

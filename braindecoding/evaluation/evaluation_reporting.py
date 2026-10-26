@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from braindecoding.evaluation.evaluation_exports import (
+    export_common_mode_subtraction_tables_and_markdown,
     export_multi_seed_tables_and_markdown,
     export_sequence_decoding_tables_and_markdown,
     export_stage_comparison_tables_and_markdown,
+    export_subspace_coherence_debiasing_tables_and_markdown,
     export_word_evaluation_tables_and_markdown,
 )
 from braindecoding.evaluation.evaluation_figures import (
@@ -971,6 +973,7 @@ def print_common_mode_subtraction_report(
                 format_common_mode_subtraction_report(report, verbose=True) + "\n",
                 encoding="utf-8",
             )
+            export_common_mode_subtraction_tables_and_markdown(report, output_dir)
         except OSError:
             pass
     print("\n" + rendered, flush=True)
@@ -1230,6 +1233,9 @@ def print_subspace_coherence_debiasing_report(
                 format_subspace_coherence_debiasing_report(report, verbose=True)
                 + "\n",
                 encoding="utf-8",
+            )
+            export_subspace_coherence_debiasing_tables_and_markdown(
+                report, output_dir
             )
         except OSError:
             pass
@@ -1919,12 +1925,18 @@ def render_saved_evaluation_report(
     if exp_type == "exploratory_subspace_coherence_loo_debiasing" or (
         "subspace_and_coherence_diagnostics" in payload and "subspace_sweep" in payload
     ):
-        return print_subspace_coherence_debiasing_report(payload, verbose=verbose)
+        base_out = src.parent.parent if src.parent.name == "exploratory" else src.parent
+        return print_subspace_coherence_debiasing_report(
+            payload, verbose=verbose, output_dir=base_out
+        )
 
     if exp_type == "exploratory_leave_one_out_common_mode_subtraction" or (
         "eta_grid" in payload and "sweep" in payload
     ):
-        return print_common_mode_subtraction_report(payload, verbose=verbose)
+        base_out = src.parent.parent if src.parent.name == "exploratory" else src.parent
+        return print_common_mode_subtraction_report(
+            payload, verbose=verbose, output_dir=base_out
+        )
 
     if (
         "metrics" in payload

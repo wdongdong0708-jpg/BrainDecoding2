@@ -1133,9 +1133,18 @@ def run_subspace_coherence_debiasing_sweep(
         )
 
     if output_dir is not None:
+        from braindecoding.evaluation.evaluation_exports import (
+            export_subspace_coherence_debiasing_tables_and_markdown,
+        )
+
         out_path = Path(output_dir)
         exploratory_dir = out_path / "exploratory"
         exploratory_dir.mkdir(parents=True, exist_ok=True)
+        report_payload["exported_files"] = (
+            export_subspace_coherence_debiasing_tables_and_markdown(
+                report_payload, out_path
+            )
+        )
         json_file = (
             exploratory_dir / f"subspace_coherence_debiasing_{split}.json"
         )
@@ -1164,6 +1173,98 @@ from braindecoding.evaluation.evaluation_reporting import (
     format_subspace_coherence_debiasing_report,
     print_subspace_coherence_debiasing_report,
 )
+
+
+def save_subspace_encoded_cache(
+    output_dir: str | Path,
+    *,
+    split: str,
+    checkpoint_sha256: str,
+    dataset: str,
+    stage: str,
+    seed: int,
+    exp_tag: str,
+    word_exp_tag: str,
+    eval_ds,
+    shifts: Sequence[float] | None = None,
+    shift_seconds: Sequence[float] | None = None,
+    window_seconds: float | None = None,
+    window_samples: int | None = None,
+    vocabulary: Sequence[str],
+    vocab50: Sequence[str],
+    clean_encoded: dict,
+    shifted_encoded_by_shift: Sequence[tuple[float, str, str, dict]],
+) -> Path | None:
+    """将单次编码的 Clean + M 个 Shifted 特征压缩保存至 exploratory/subspace_encoded_cache_{split}.pt (~45MB)。"""
+    try:
+        out_path = Path(output_dir)
+        exploratory_dir = out_path / "exploratory"
+        exploratory_dir.mkdir(parents=True, exist_ok=True)
+        encoded_cache_path = (
+            exploratory_dir / f"subspace_encoded_cache_{split}.pt"
+        )
+        compact_clean = _compact_encoded_dict(clean_encoded)
+        compact_shifts = [
+            (float(sec), str(k), str(lbl), _compact_encoded_dict(enc))
+            for sec, k, lbl, enc in shifted_encoded_by_shift
+        ]
+        resolved_shifts = (
+            shifts
+            if shifts is not None
+            else (
+                shift_seconds
+                if shift_seconds is not None
+                else [sec for sec, _, _, _ in shifted_encoded_by_shift]
+            )
+        )
+        resolved_win_sec = (
+            float(window_seconds)
+            if window_seconds is not None
+            else float(getattr(eval_ds, "window_seconds", 1.0))
+        )
+        resolved_win_samp = (
+            int(window_samples)
+            if window_samples is not None
+            else int(getattr(eval_ds, "window_samples", 50))
+        )
+        eval_table_minimal = eval_ds.table[["event_id", "subject_id"]].copy()
+        all_needed_words = (
+            set(str(w) for w in vocabulary)
+            | set(str(w) for w in vocab50)
+            | set(str(w) for w in compact_clean["words"])
+        )
+        minimal_emb_map = {
+            w: np.asarray(eval_ds.embedding_map[w], dtype=np.float32)
+            for w in all_needed_words
+            if w in eval_ds.embedding_map
+        }
+        tmp_cache = encoded_cache_path.with_suffix(".pt.tmp")
+        torch.save(
+            {
+                "version": "subspace_encoded_cache_v1",
+                "checkpoint_sha256": str(checkpoint_sha256),
+                "dataset": str(dataset),
+                "stage": str(stage),
+                "split": str(split),
+                "seed": int(seed),
+                "exp_tag": str(exp_tag),
+                "word_exp_tag": str(word_exp_tag),
+                "window_seconds": resolved_win_sec,
+                "window_samples": resolved_win_samp,
+                "shift_seconds": [float(s) for s in resolved_shifts],
+                "vocabulary": [str(w) for w in vocabulary],
+                "vocab50": [str(w) for w in vocab50],
+                "eval_table": eval_table_minimal,
+                "embedding_map": minimal_emb_map,
+                "clean_encoded": compact_clean,
+                "shifted_encoded_by_shift": compact_shifts,
+            },
+            tmp_cache,
+        )
+        tmp_cache.replace(encoded_cache_path)
+        return encoded_cache_path
+    except Exception:
+        return None
 
 
 
@@ -1687,44 +1788,27 @@ def run_standalone_subspace_evaluation(
         del shift_ds, shift_loader
 
     # 保存紧凑编码缓存至 exploratory/subspace_encoded_cache_{split}.pt，供后续秒级重跑与调参复用
-    try:
-        eval_table_minimal = eval_ds.table[["event_id", "subject_id"]].copy()
-        all_needed_words = set(vocabulary) | set(vocab50) | set(clean_encoded["words"])
-        minimal_emb_map = {
-            w: np.asarray(eval_ds.embedding_map[w], dtype=np.float32)
-            for w in all_needed_words
-            if w in eval_ds.embedding_map
-        }
-        tmp_cache = encoded_cache_path.with_suffix(".pt.tmp")
-        torch.save(
-            {
-                "version": "subspace_encoded_cache_v1",
-                "checkpoint_sha256": ckpt_sha,
-                "dataset": dataset,
-                "stage": stage,
-                "split": split,
-                "seed": int(seed),
-                "exp_tag": resolved_exp_tag,
-                "word_exp_tag": resolved_word_exp_tag,
-                "window_seconds": float(getattr(eval_ds, "window_seconds", 1.0)),
-                "window_samples": int(getattr(eval_ds, "window_samples", 50)),
-                "shift_seconds": [float(s) for s in shifts],
-                "vocabulary": vocabulary,
-                "vocab50": vocab50,
-                "eval_table": eval_table_minimal,
-                "embedding_map": minimal_emb_map,
-                "clean_encoded": clean_encoded,
-                "shifted_encoded_by_shift": shifted_encoded_by_shift,
-            },
-            tmp_cache,
-        )
-        tmp_cache.replace(encoded_cache_path)
+    saved_cache = save_subspace_encoded_cache(
+        out,
+        split=split,
+        checkpoint_sha256=ckpt_sha,
+        dataset=dataset,
+        stage=stage,
+        seed=seed,
+        exp_tag=resolved_exp_tag,
+        word_exp_tag=resolved_word_exp_tag,
+        eval_ds=eval_ds,
+        shifts=shifts,
+        vocabulary=vocabulary,
+        vocab50=vocab50,
+        clean_encoded=clean_encoded,
+        shifted_encoded_by_shift=shifted_encoded_by_shift,
+    )
+    if saved_cache is not None:
         print(
-            f" [Feature Cache Saved] Cached Clean + {len(shifts)} Shifted features to {encoded_cache_path}",
+            f" [Feature Cache Saved] Cached Clean + {len(shifts)} Shifted features to {saved_cache}",
             flush=True,
         )
-    except Exception:
-        pass
 
     report = run_subspace_coherence_debiasing_sweep(
         dataset=dataset,
@@ -1781,7 +1865,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="可选：直接指定已保存的 subspace_encoded_cache_{split}.pt 路径，无需训练配置与信号缓存即可在 3 秒内完成全量扫描",
     )
-    parser.add_argument("--seed", type=int, default=0, help="随机种子 (默认 0)")
+    parser.add_argument("--seed", "--seeds", dest="seed", default="0", help="随机种子（支持单种子 0 或逗号分隔列表 0,1,2）")
     parser.add_argument("--split", default="test", choices=("val", "test"), help="评估集划分 (默认 test)")
     parser.add_argument("--subject", default="all", help="受试者子集 (默认 all)")
     parser.add_argument("--num-subjects", type=int, default=None)
@@ -1853,35 +1937,44 @@ def main(argv: list[str] | None = None) -> int:
     else:
         stages = [s.strip() for s in stage_raw.split(",") if s.strip()]
 
-    for st in stages:
-        run_standalone_subspace_evaluation(
-            dataset=args.dataset,
-            stage=st,
-            seed=args.seed,
-            split=args.split,
-            subject=args.subject,
-            num_subjects=args.num_subjects,
-            subjects=args.subjects,
-            config_path=args.config if len(stages) == 1 else None,
-            control_config_path=args.control_config,
-            exp_tag=args.exp_tag,
-            word_exp_tag=args.word_exp_tag,
-            window_seconds=args.window_seconds,
-            window_start_offset_seconds=args.window_start_offset_seconds,
-            shift_seconds=args.shift_seconds,
-            eta_values=args.etas,
-            rank_k_values=args.rank_ks,
-            coherence_gate_mode=args.coherence_gate,
-            center_svd=center_svd,
-            coherence_low=args.coherence_low,
-            coherence_high=args.coherence_high,
-            gate_min=args.gate_min,
-            gate_max=args.gate_max,
-            force_reencode=bool(args.force_reencode),
-            plot=not bool(args.no_plot),
-            show_progress=True,
-            verbose=bool(args.verbose),
-        )
+    seed_tokens = [
+        int(tok.strip())
+        for tok in str(args.seed).replace(";", ",").split(",")
+        if tok.strip()
+    ]
+    if not seed_tokens:
+        seed_tokens = [0]
+
+    for sd in seed_tokens:
+        for st in stages:
+            run_standalone_subspace_evaluation(
+                dataset=args.dataset,
+                stage=st,
+                seed=sd,
+                split=args.split,
+                subject=args.subject,
+                num_subjects=args.num_subjects,
+                subjects=args.subjects,
+                config_path=args.config if len(stages) == 1 else None,
+                control_config_path=args.control_config,
+                exp_tag=args.exp_tag,
+                word_exp_tag=args.word_exp_tag,
+                window_seconds=args.window_seconds,
+                window_start_offset_seconds=args.window_start_offset_seconds,
+                shift_seconds=args.shift_seconds,
+                eta_values=args.etas,
+                rank_k_values=args.rank_ks,
+                coherence_gate_mode=args.coherence_gate,
+                center_svd=center_svd,
+                coherence_low=args.coherence_low,
+                coherence_high=args.coherence_high,
+                gate_min=args.gate_min,
+                gate_max=args.gate_max,
+                force_reencode=bool(args.force_reencode),
+                plot=not bool(args.no_plot),
+                show_progress=True,
+                verbose=bool(args.verbose),
+            )
     return 0
 
 

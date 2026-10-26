@@ -478,9 +478,18 @@ def run_common_mode_subtraction_sweep(
         )
 
     if output_dir is not None:
+        from braindecoding.evaluation.evaluation_exports import (
+            export_common_mode_subtraction_tables_and_markdown,
+        )
+
         out_path = Path(output_dir)
         exploratory_dir = out_path / "exploratory"
         exploratory_dir.mkdir(parents=True, exist_ok=True)
+        report_payload["exported_files"] = (
+            export_common_mode_subtraction_tables_and_markdown(
+                report_payload, out_path
+            )
+        )
         json_file = exploratory_dir / f"common_mode_subtraction_{split}.json"
         json_file.write_text(
             json.dumps(report_payload, ensure_ascii=False, indent=2),

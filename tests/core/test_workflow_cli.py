@@ -1740,33 +1740,39 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
     assert len(report["subspace_sweep"]) == 2 * 2 * 2
     assert "column_calibration_sweep" not in report
     assert (tmp_path / "exploratory" / "subspace_coherence_debiasing_test.json").exists()
+    assert (tmp_path / "exploratory" / "subspace_coherence_debiasing_test.md").exists()
+    assert (tmp_path / "tables" / "subspace_debiasing_sweep_test.csv").exists()
     assert (tmp_path / "figures" / "subspace_coherence_debiasing_test.png").exists()
 
-    # 4. Verify direct .pt cache evaluation via evaluate_cached_pt_subspace_loo
-    dummy_ds = _DummySubspaceDataset()
-    cache_pt = tmp_path / "exploratory" / "subspace_encoded_cache_test.pt"
-    torch.save(
-        {
-            "version": "subspace_encoded_cache_v1",
-            "checkpoint_sha256": "dummy_sha",
-            "dataset": "pallier2025",
-            "stage": "revision",
-            "split": "test",
-            "seed": 0,
-            "exp_tag": "win1000ms_siamese_e080_l10_causal",
-            "word_exp_tag": "win1000ms",
-            "window_seconds": 1.0,
-            "window_samples": 50,
-            "shift_seconds": [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0],
-            "vocabulary": full_vocabulary,
-            "vocab50": vocab50,
-            "eval_table": dummy_ds.table,
-            "embedding_map": dummy_ds.embedding_map,
-            "clean_encoded": clean_encoded,
-            "shifted_encoded_by_shift": shifted_by_shift,
-        },
-        cache_pt,
+    # 4. Verify save_subspace_encoded_cache and direct .pt cache evaluation via evaluate_cached_pt_subspace_loo
+    from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+        save_subspace_encoded_cache,
     )
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        _resolve_control_specification,
+    )
+
+    dummy_ds = _DummySubspaceDataset()
+    cache_pt = save_subspace_encoded_cache(
+        output_dir=tmp_path,
+        split="test",
+        checkpoint_sha256="dummy_sha",
+        dataset="pallier2025",
+        stage="revision",
+        seed=0,
+        exp_tag="win1000ms_siamese_e080_l10_causal",
+        word_exp_tag="win1000ms",
+        window_seconds=1.0,
+        window_samples=50,
+        shift_seconds=[-15.0, -30.0, -45.0, -60.0, -90.0, -120.0],
+        vocabulary=full_vocabulary,
+        vocab50=vocab50,
+        eval_ds=dummy_ds,
+        clean_encoded=clean_encoded,
+        shifted_encoded_by_shift=shifted_by_shift,
+    )
+    assert cache_pt == tmp_path / "exploratory" / "subspace_encoded_cache_test.pt"
+    assert cache_pt.is_file()
     cached_report = evaluate_cached_pt_subspace_loo(
         cache_pt,
         eta_values=[0.8, 1.0],
@@ -1777,12 +1783,24 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
     )
     assert len(cached_report["subspace_sweep"]) == 4
 
-    nb_path = PROJECT_ROOT / "scripts/colab/colab_subspace_coherence_debiasing.ipynb"
+    subspace_ctrl_spec = _resolve_control_specification(
+        {"evaluation": {}},
+        control_config_path="configs/controls/subspace_coherence_debiasing/subspace_coherence_debiasing_control.yaml",
+        shift_seconds=None,
+        zero_signal_control=False,
+    )
+    assert subspace_ctrl_spec["subspace_coherence_debiasing"]["enabled"] is True
+    assert subspace_ctrl_spec["subspace_coherence_debiasing"]["rank_k_values"] == [8, 12, 16, 24]
+
+    nb_path = PROJECT_ROOT / "scripts/colab/colab_gpu_evaluation.ipynb"
+    old_nb_path = PROJECT_ROOT / "scripts/colab/colab_subspace_coherence_debiasing.ipynb"
     assert nb_path.exists()
+    assert not old_nb_path.exists()
     nb_obj = json.loads(nb_path.read_text(encoding="utf-8"))
     assert nb_obj["nbformat"] == 4
     nb_raw = nb_path.read_text(encoding="utf-8")
     assert "braindecoding.evaluation.subspace_coherence_debiasing_evaluation" in nb_raw
+    assert "subspace_coherence_debiasing_control.yaml" in nb_raw
     assert "--cache-pt" in nb_raw
     assert "--taus" not in nb_raw
 

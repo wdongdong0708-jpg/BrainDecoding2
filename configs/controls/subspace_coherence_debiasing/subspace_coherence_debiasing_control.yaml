@@ -23,6 +23,11 @@ control:
   non_overlapping_window: true
   include_clean_reference: true
   include_zero_signal: false
+  common_mode_subtraction:
+    enabled: true
+    mode: leave_one_out
+    eta_values: [0.5, 0.8, 1.0]
+    normalize_before_subtraction: true
   subspace_coherence_debiasing:
     enabled: true
     mode: subspace_coherence_leave_one_out

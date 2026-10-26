@@ -1404,13 +1404,43 @@ def _resolve_control_specification(
     )
     cms_normalize = bool(cms_raw.get("normalize_before_subtraction", True))
 
+    sub_raw = (
+        merged_control.get("subspace_coherence_debiasing")
+        if isinstance(merged_control.get("subspace_coherence_debiasing"), dict)
+        else (
+            merged_eval.get("subspace_coherence_debiasing")
+            if isinstance(merged_eval.get("subspace_coherence_debiasing"), dict)
+            else {}
+        )
+    )
+    sub_enabled = (
+        bool(sub_raw.get("enabled", False))
+        or str(merged_control.get("control_type", "")).strip().lower()
+        == "subspace_coherence_debiasing"
+        or str(merged_eval.get("negative_control", "")).strip().lower()
+        == "subspace_coherence_debiasing"
+    )
+    sub_ranks = [
+        int(k)
+        for k in (sub_raw.get("rank_k_values") or (8, 12, 16, 24))
+        if int(k) > 0
+    ]
+    sub_etas = parse_eta_values(
+        subtraction_etas
+        if (subtraction_etas is not None and sub_enabled)
+        else sub_raw.get("eta_values", (0.8, 1.0, 1.2))
+    )
+    sub_full_etas = parse_eta_values(
+        sub_raw.get("full_loo_eta_values", (0.5, 0.8, 1.0))
+    )
+
     if shift_seconds is not None:
         shifts = _parse_shift_seconds_list(shift_seconds)
     elif "shift_seconds" in merged_control:
         shifts = _parse_shift_seconds_list(merged_control.get("shift_seconds"))
     elif "shift_seconds" in merged_eval:
         shifts = _parse_shift_seconds_list(merged_eval.get("shift_seconds"))
-    elif cms_enabled:
+    elif cms_enabled or sub_enabled:
         shifts = list(DEFAULT_CONTROL_SHIFTS_SECONDS)
     else:
         shifts = []
@@ -1422,7 +1452,7 @@ def _resolve_control_specification(
         or str(merged_control.get("control_type", "")).strip().lower()
         == "zero_signal"
     )
-    enabled = bool(shifts) or enable_zero or cms_enabled
+    enabled = bool(shifts) or enable_zero or cms_enabled or sub_enabled
     if not enabled:
         return {
             "enabled": False,
@@ -1437,15 +1467,32 @@ def _resolve_control_specification(
                 "eta_values": [],
                 "normalize_before_subtraction": True,
             },
+            "subspace_coherence_debiasing": {
+                "enabled": False,
+                "mode": "subspace_coherence_leave_one_out",
+                "rank_k_values": [],
+                "eta_values": [],
+                "full_loo_eta_values": [],
+                "center_svd": True,
+                "use_coherence_gate": "both",
+            },
         }
 
     default_type = (
-        "common_mode_subtraction"
-        if cms_enabled
+        "subspace_coherence_debiasing"
+        if sub_enabled
         else (
-            "temporal_shift"
-            if shifts and not enable_zero
-            else ("zero_signal" if enable_zero and not shifts else "combined_control")
+            "common_mode_subtraction"
+            if cms_enabled
+            else (
+                "temporal_shift"
+                if shifts and not enable_zero
+                else (
+                    "zero_signal"
+                    if enable_zero and not shifts
+                    else "combined_control"
+                )
+            )
         )
     )
     control_type = str(merged_control.get("control_type") or default_type)
@@ -1485,6 +1532,24 @@ def _resolve_control_specification(
             "mode": str(cms_raw.get("mode", "leave_one_out")),
             "eta_values": cms_etas,
             "normalize_before_subtraction": cms_normalize,
+        },
+        "subspace_coherence_debiasing": {
+            "enabled": bool(sub_enabled),
+            "mode": str(
+                sub_raw.get("mode", "subspace_coherence_leave_one_out")
+            ),
+            "rank_k_values": sub_ranks,
+            "eta_values": sub_etas,
+            "full_loo_eta_values": sub_full_etas,
+            "center_svd": bool(sub_raw.get("center_svd", True)),
+            "use_coherence_gate": sub_raw.get("use_coherence_gate", "both"),
+            "coherence_low": float(sub_raw.get("coherence_low", 0.35)),
+            "coherence_high": float(sub_raw.get("coherence_high", 0.65)),
+            "gate_min": float(sub_raw.get("gate_min", 0.2)),
+            "gate_max": float(sub_raw.get("gate_max", 1.2)),
+            "normalize_before_subtraction": bool(
+                sub_raw.get("normalize_before_subtraction", True)
+            ),
         },
     }
 
@@ -2001,6 +2066,13 @@ def _evaluate_single_stage(
     }
     cms_cfg = control_spec.get("common_mode_subtraction") or {}
     cms_enabled = bool(cms_cfg.get("enabled", False))
+    sub_cfg = control_spec.get("subspace_coherence_debiasing") or {}
+    sub_enabled = bool(sub_cfg.get("enabled", False))
+    keep_shifted_encoded = (
+        cms_enabled
+        or sub_enabled
+        or len(control_spec.get("shift_seconds", ())) >= 2
+    )
     shifted_encoded_by_shift: list[tuple[float, str, str, dict]] = []
     shifted_ds_by_shift: dict[float, object] = {}
 
@@ -2058,11 +2130,14 @@ def _evaluate_single_stage(
                     },
                 }
             )
-            if cms_enabled:
+            if keep_shifted_encoded:
                 shifted_encoded_by_shift.append(
                     (float(shift_sec), cond_key, cond_label, shift_encoded)
                 )
-                shifted_ds_by_shift[float(shift_sec)] = shift_ds
+                if cms_enabled:
+                    shifted_ds_by_shift[float(shift_sec)] = shift_ds
+                else:
+                    del shift_ds
                 del shift_loader
             else:
                 del shift_ds, shift_loader, shift_encoded
@@ -2181,54 +2256,142 @@ def _evaluate_single_stage(
         figs = plot_evaluation_figures(eval_result, out / "figures")
         eval_result["figures"].update(figs)
 
-    if cms_enabled and len(shifted_encoded_by_shift) >= 2:
-        from braindecoding.evaluation.common_mode_subtraction_evaluation import (
-            run_common_mode_subtraction_sweep,
+    if len(shifted_encoded_by_shift) >= 2:
+        from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+            run_subspace_coherence_debiasing_sweep,
+            save_subspace_encoded_cache,
         )
 
-        cms_report = run_common_mode_subtraction_sweep(
+        saved_cache_pt = save_subspace_encoded_cache(
+            out,
+            split=split,
+            checkpoint_sha256=eval_result["checkpoint"]["sha256"],
             dataset=dataset,
             stage=stage,
-            split=split,
             seed=seed,
             exp_tag=resolved_exp_tag,
             word_exp_tag=resolved_word_exp_tag,
-            clean_encoded=encoded,
-            shifted_encoded_by_shift=shifted_encoded_by_shift,
             eval_ds=eval_ds,
-            shifted_ds_by_shift=shifted_ds_by_shift,
+            shifts=[sec for sec, _, _, _ in shifted_encoded_by_shift],
             vocabulary=vocabulary,
             vocab50=vocab50,
-            cfg=cfg,
-            eta_values=cms_cfg.get("eta_values", (0.5, 0.8, 1.0)),
-            normalize_inputs=bool(
-                cms_cfg.get("normalize_before_subtraction", True)
-            ),
-            baseline_clean_summary=negative_controls_result["clean_reference"],
-            baseline_condition_entries=negative_controls_result["conditions"],
-            baseline_shifted_aggregate=negative_controls_result[
-                "shifted_aggregate"
-            ],
-            compute_metrics_fn=_compute_encoded_evaluation_metrics,
-            extract_summary_row_fn=_extract_control_summary_row,
-            summarize_shifted_fn=_summarize_shifted_conditions,
-            output_dir=out,
-            plot=plot,
-            print_report=print_report,
+            clean_encoded=encoded,
+            shifted_encoded_by_shift=shifted_encoded_by_shift,
         )
-        eval_result["exploratory_common_mode_subtraction_json"] = cms_report.get(
-            "exploratory_json"
-        )
-        eval_result["exploratory_common_mode_subtraction_summary"] = {
-            "eta_grid": cms_report["eta_grid"],
-            "best_eta_by_clean_vocab50_top10": cms_report[
-                "best_eta_by_clean_vocab50_top10"
-            ],
-            "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
-                "best_eta_by_clean_minus_shifted_vocab50_top10"
-            ],
-        }
-        eval_result["figures"].update(cms_report.get("figures", {}))
+        if saved_cache_pt is not None:
+            eval_result["subspace_encoded_cache_pt"] = str(saved_cache_pt)
+
+        if cms_enabled:
+            from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+                run_common_mode_subtraction_sweep,
+            )
+
+            cms_report = run_common_mode_subtraction_sweep(
+                dataset=dataset,
+                stage=stage,
+                split=split,
+                seed=seed,
+                exp_tag=resolved_exp_tag,
+                word_exp_tag=resolved_word_exp_tag,
+                clean_encoded=encoded,
+                shifted_encoded_by_shift=shifted_encoded_by_shift,
+                eval_ds=eval_ds,
+                shifted_ds_by_shift=shifted_ds_by_shift,
+                vocabulary=vocabulary,
+                vocab50=vocab50,
+                cfg=cfg,
+                eta_values=cms_cfg.get("eta_values", (0.5, 0.8, 1.0)),
+                normalize_inputs=bool(
+                    cms_cfg.get("normalize_before_subtraction", True)
+                ),
+                baseline_clean_summary=negative_controls_result[
+                    "clean_reference"
+                ],
+                baseline_condition_entries=negative_controls_result[
+                    "conditions"
+                ],
+                baseline_shifted_aggregate=negative_controls_result[
+                    "shifted_aggregate"
+                ],
+                compute_metrics_fn=_compute_encoded_evaluation_metrics,
+                extract_summary_row_fn=_extract_control_summary_row,
+                summarize_shifted_fn=_summarize_shifted_conditions,
+                output_dir=out,
+                plot=plot,
+                print_report=print_report,
+            )
+            eval_result["exploratory_common_mode_subtraction_json"] = (
+                cms_report.get("exploratory_json")
+            )
+            eval_result["exploratory_common_mode_subtraction_summary"] = {
+                "eta_grid": cms_report["eta_grid"],
+                "best_eta_by_clean_vocab50_top10": cms_report[
+                    "best_eta_by_clean_vocab50_top10"
+                ],
+                "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
+                    "best_eta_by_clean_minus_shifted_vocab50_top10"
+                ],
+            }
+            eval_result["figures"].update(cms_report.get("figures", {}))
+
+        if sub_enabled:
+            gate_raw = sub_cfg.get("use_coherence_gate", "both")
+            if isinstance(gate_raw, bool):
+                gate_modes = [False, True]
+            else:
+                g_str = str(gate_raw).strip().lower()
+                if g_str in {"true", "on", "1", "yes"}:
+                    gate_modes = [True]
+                elif g_str in {"false", "off", "0", "no"}:
+                    gate_modes = [False]
+                else:
+                    gate_modes = [False, True]
+
+            sub_report = run_subspace_coherence_debiasing_sweep(
+                dataset=dataset,
+                stage=stage,
+                split=split,
+                seed=seed,
+                exp_tag=resolved_exp_tag,
+                word_exp_tag=resolved_word_exp_tag,
+                clean_encoded=encoded,
+                shifted_encoded_by_shift=shifted_encoded_by_shift,
+                eval_ds=eval_ds,
+                vocabulary=vocabulary,
+                vocab50=vocab50,
+                eta_values=sub_cfg.get("eta_values", (0.8, 1.0, 1.2)),
+                rank_k_values=sub_cfg.get("rank_k_values", (8, 12, 16, 24)),
+                coherence_gate_modes=gate_modes,
+                full_loo_etas=sub_cfg.get(
+                    "full_loo_eta_values", (0.5, 0.8, 1.0)
+                ),
+                center_svd=bool(sub_cfg.get("center_svd", True)),
+                coherence_low=float(sub_cfg.get("coherence_low", 0.35)),
+                coherence_high=float(sub_cfg.get("coherence_high", 0.65)),
+                gate_min=float(sub_cfg.get("gate_min", 0.2)),
+                gate_max=float(sub_cfg.get("gate_max", 1.2)),
+                normalize_inputs=bool(
+                    sub_cfg.get("normalize_before_subtraction", True)
+                ),
+                output_dir=out,
+                plot=plot,
+                print_report=print_report,
+                verbose=verbose,
+            )
+            eval_result["exploratory_subspace_coherence_debiasing_json"] = (
+                sub_report.get("exploratory_json")
+            )
+            eval_result["exploratory_subspace_coherence_debiasing_summary"] = {
+                "grid": sub_report.get("grid"),
+                "best_by_net_gap_vocab50": (
+                    sub_report.get("best_by_net_gap_vocab50") or {}
+                ).get("label"),
+                "best_by_clean_preservation_vocab50": (
+                    sub_report.get("best_by_clean_preservation_vocab50") or {}
+                ).get("label"),
+            }
+            eval_result["figures"].update(sub_report.get("figures", {}))
+
         shifted_encoded_by_shift.clear()
         shifted_ds_by_shift.clear()
 
