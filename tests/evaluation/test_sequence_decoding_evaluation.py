@@ -409,6 +409,8 @@ def test_core_vocabulary_subsets_and_scaling_curve_export(tmp_path: Path) -> Non
         plot=True,
     )
     assert report["core_vocabulary_benchmark"]["vocabulary_size"] == 250
+    assert "V=50" in report["core_vocabulary_benchmarks"]
+    assert "V=250" in report["core_vocabulary_benchmarks"]
     assert (
         report["core_vocabulary_benchmark"]["subsets"]["core_subset_100pct"][
             "segment_count"
@@ -432,6 +434,7 @@ def test_core_vocabulary_subsets_and_scaling_curve_export(tmp_path: Path) -> Non
     assert "[表 2]" in txt_content
     assert "[表 4A]" in txt_content
     assert "[表 4B]" in txt_content
+    assert "expanded_subset_70pct" not in txt_content
     assert "V=250      |   76.92 |     68.33" in txt_content
     assert "V=250      |        1 |       100.00 |      100.00" in txt_content
 

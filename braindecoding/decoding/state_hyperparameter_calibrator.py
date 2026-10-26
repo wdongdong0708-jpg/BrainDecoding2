@@ -29,15 +29,14 @@ from braindecoding.training.training_runtime import save_json
 
 
 DEFAULT_TEMPERATURE_GRID: tuple[float, ...] = (0.05, 0.07)
+DEFAULT_MIN_LANGUAGE_WEIGHT: float = 0.05
 DEFAULT_LANGUAGE_WEIGHT_GRID: tuple[float, ...] = (
-    0.0,
     0.05,
     0.10,
     0.15,
     0.25,
     0.40,
     0.60,
-    1.00,
 )
 
 
@@ -133,12 +132,14 @@ def calibrate_state_hyperparameters(
     segment_batch_size: int = 32,
     metric_name: str = "composite",
     enforce_monotonic_lambda: bool = True,
+    shared_language_weight: bool = False,
+    min_language_weight: float = DEFAULT_MIN_LANGUAGE_WEIGHT,
     use_calibration_partition: bool = True,
     max_calibration_segments: int | None = None,
     output_path: str | Path | None = None,
     show_progress: bool = False,
 ) -> dict:
-    """在验证集上按状态独立网格搜索 (T_r, λ_r) 并检验/约束 λ_{K0} >= λ_{K1} >= λ_{K2}。"""
+    """在验证集上按状态网格搜索 (T_r, λ_r) 并强制约束 λ_{K0} >= λ_{K1} >= λ_{K2} >= λ_min > 0。"""
     from tqdm.auto import tqdm
 
     if exported_val_payload.get("split") not in {"val", None}:
@@ -168,9 +169,13 @@ def calibrate_state_hyperparameters(
         raise ValueError("验证集校准句段列表为空。")
 
     temp_list = sorted({float(t) for t in temperature_grid if float(t) > 0.0})
-    lam_list = sorted({float(l) for l in language_weight_grid if float(l) >= 0.0})
-    if not temp_list or not lam_list:
+    raw_lam_list = sorted({float(l) for l in language_weight_grid if float(l) >= 0.0})
+    if not temp_list or not raw_lam_list:
         raise ValueError("temperature_grid 与 language_weight_grid 不能为空。")
+
+    min_lam = max(0.0, float(min_language_weight))
+    positive_lam_list = [l for l in raw_lam_list if l >= min_lam - 1e-12]
+    lam_list = positive_lam_list if positive_lam_list else raw_lam_list
 
     clean_scores = exported_val_payload["clean_scores"]
     state_grids: dict[str, list[dict]] = {}
@@ -348,11 +353,39 @@ def calibrate_state_hyperparameters(
             == unconstrained_best["K2"]["temperature"]
         )
 
-    if has_k012 and enforce_monotonic_lambda:
-        # 锁定同一锐利温度 T_0 = T_1 = T_2 = T，并在满足 λ_{K0} >= λ_{K1} >= λ_{K2} 的所有网格三元组中寻找总校准分最高的组合
-        # 彻底杜绝 K2 通过跳变到高温度 T_2 (如 0.20) 变相放大语言模型权重并压扁神经概率
+    if shared_language_weight and has_k012:
+        # 全状态锁定单一共享 (T*, λ*)：严格控制解码器超参，使各档位差异 100% 源自输入神经表征
+        best_shared_pair: tuple[float, float] | None = None
+        best_shared_key: tuple[float, float, float, float] | None = None
+        for shared_temp in temp_list:
+            for shared_lam in lam_list:
+                r0 = by_state_temp_lam["K0"][(shared_temp, shared_lam)]
+                r1 = by_state_temp_lam["K1"][(shared_temp, shared_lam)]
+                r2 = by_state_temp_lam["K2"][(shared_temp, shared_lam)]
+                total_score = (
+                    r0["selection_score"]
+                    + r1["selection_score"]
+                    + r2["selection_score"]
+                )
+                cand_key = (
+                    round(total_score, 8),
+                    round(r2["selection_score"], 8),
+                    -shared_temp,
+                    -shared_lam,
+                )
+                if best_shared_key is None or cand_key > best_shared_key:
+                    best_shared_key = cand_key
+                    best_shared_pair = (shared_temp, shared_lam)
+        if best_shared_pair is not None:
+            for st in states:
+                if best_shared_pair in by_state_temp_lam.get(st, {}):
+                    selected_states[st] = dict(
+                        by_state_temp_lam[st][best_shared_pair]
+                    )
+    elif has_k012 and enforce_monotonic_lambda:
+        # 锁定同一锐利温度 T_0 = T_1 = T_2 = T，并在满足 λ_{K0} >= λ_{K1} >= λ_{K2} >= λ_min > 0 的所有网格三元组中寻找总校准分最高的组合
         best_triple: tuple[dict, dict, dict] | None = None
-        best_key: tuple[float, int, float, float] | None = None
+        best_key: tuple[float, float, float, float] | None = None
 
         for shared_temp in temp_list:
             for l0 in lam_list:
@@ -370,10 +403,9 @@ def calibrate_state_hyperparameters(
                             + r1["selection_score"]
                             + r2["selection_score"]
                         )
-                        strict_steps = int(l0 > l1) + int(l1 > l2)
                         cand_key = (
                             round(total_score, 8),
-                            strict_steps,
+                            round(r2["selection_score"], 8),
                             -shared_temp,
                             -(l0 + l1 + l2),
                         )
@@ -391,7 +423,7 @@ def calibrate_state_hyperparameters(
             if (
                 "F" in selected_states
                 and ckpt_prov.get("context")
-                in (None, "", "fallback_from_revision_mature")
+                in (None, "", "not_available", "fallback_from_revision_mature")
             ):
                 selected_states["F"] = {
                     **best_triple[2],
@@ -408,7 +440,7 @@ def calibrate_state_hyperparameters(
 
     cms_meta = dict(exported_val_payload.get("cms_metadata") or {})
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "protocol": "sequence_decoding_s3_calibration",
         "dataset": exported_val_payload.get("dataset"),
         "language": language,
@@ -419,6 +451,8 @@ def calibrate_state_hyperparameters(
         "metric": metric_name,
         "temperature_grid": temp_list,
         "language_weight_grid": lam_list,
+        "min_language_weight": min_lam,
+        "shared_language_weight": bool(shared_language_weight),
         "enforce_monotonic_lambda": bool(enforce_monotonic_lambda),
         "unconstrained_monotonic": unconstrained_monotonic,
         "monotonicity_satisfied": monotonicity_satisfied,

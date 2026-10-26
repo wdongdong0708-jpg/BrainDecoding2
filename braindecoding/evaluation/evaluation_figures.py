@@ -2032,8 +2032,15 @@ def plot_baseline_and_shifted_comparison(
     dataset: str = "pallier2025",
     split: str = "test",
 ) -> dict[str, str]:
-    """绘制 LM-Only、S0、K0、S3 (C-gated)、F 及 Shifted (-75s) 的 6 维指标对比图。"""
-    labels = list(condition_metrics.keys())
+    """绘制 4 档输入延迟预算（S0, K0, K1, S3_clean, F）、LM-Only 及 Shifted (-75s) 的 6 维指标对比图。"""
+    filtered_labels = [
+        k
+        for k, v in condition_metrics.items()
+        if str(k) != "F_local"
+        and not str(k).endswith("_c_gated")
+        and not (isinstance(v, Mapping) and bool(v.get("is_online_screen_gate")))
+    ]
+    labels = filtered_labels if filtered_labels else list(condition_metrics.keys())
     if not labels:
         return {}
 
@@ -2051,7 +2058,7 @@ def plot_baseline_and_shifted_comparison(
     with evaluation_plot_context():
         fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(14.0, 5.2), dpi=160)
         fig.suptitle(
-            f"S3 Sequence Decoding Baselines & Shifted (-75s) Control | {dataset} ({split.upper()})",
+            f"S3 Latency-Budget Tiers & Shifted (-75s) Control | {dataset} ({split.upper()})",
             fontsize=12.5,
             fontweight="bold",
         )
@@ -2157,13 +2164,13 @@ def plot_baseline_and_shifted_comparison(
 
 
 def plot_multi_subject_observation_curve(
-    multi_subject_scaling: Mapping[str, Mapping[str, float | int]],
+    multi_subject_scaling: Mapping[str, Mapping[str, Any]],
     output_dir: str | Path,
     *,
     dataset: str = "pallier2025",
     split: str = "test",
 ) -> dict[str, str]:
-    """绘制跨被试观测数 k ∈ {1, 2, 5, 10} 聚合下的序列解码性能跃升曲线。"""
+    """绘制跨被试观测数 k ∈ {1, 2, 5, 10} 聚合下的序列解码性能跃升曲线（含核心词表子集轨迹）。"""
     if not multi_subject_scaling:
         return {}
 
@@ -2214,7 +2221,7 @@ def plot_multi_subject_observation_curve(
             color=EVALUATION_PALETTE["clean"],
             linewidth=2.2,
             markersize=6,
-            label="Sentence BLEU-1 (%)",
+            label="Full Vocab BLEU-1 (%)",
         )
         ax_left.plot(
             k_vals,
@@ -2234,16 +2241,6 @@ def plot_multi_subject_observation_curve(
             markersize=6,
             label="Beam-5 Oracle BLEU-1 (%)",
         )
-        ax_left.set_title(
-            "(A) Sequence BLEU-1 vs. Aggregated Subject Observations k",
-            fontsize=10.5,
-            fontweight="bold",
-        )
-        ax_left.set_xlabel("Number of Averaged Subject Observations (k)", fontsize=10)
-        ax_left.set_ylabel("BLEU-1 (%)", fontsize=10)
-        ax_left.set_xticks(k_vals)
-        ax_left.grid(True, linestyle=":", alpha=0.5)
-        ax_left.legend(loc="best", fontsize=8.5)
 
         ax_right.plot(
             k_vals,
@@ -2252,7 +2249,7 @@ def plot_multi_subject_observation_curve(
             color=EVALUATION_PALETTE["shifted"],
             linewidth=2.2,
             markersize=6,
-            label="All-Word Acc@1 (%)",
+            label="Full Vocab Word Acc@1 (%)",
         )
         ax_right.plot(
             k_vals,
@@ -2272,8 +2269,54 @@ def plot_multi_subject_observation_curve(
             markersize=6,
             label="Position Candidate Acc@5 (%)",
         )
+
+        core_colors = {"V=50": "#2ca02c", "V=100": "#ff7f0e", "V=250": "#d62728"}
+        for vk, v_col in core_colors.items():
+            v_c80_bleu: list[float] = []
+            v_c80_acc: list[float] = []
+            valid_v = True
+            for _, item_val in ordered_items:
+                by_v = item_val.get("by_vocabulary_size") if isinstance(item_val, Mapping) else None
+                v_blk = by_v.get(vk) if isinstance(by_v, Mapping) else None
+                c80 = v_blk.get("core_subset_80pct") if isinstance(v_blk, Mapping) else None
+                if not isinstance(c80, Mapping) or "bleu1_pct" not in c80:
+                    valid_v = False
+                    break
+                v_c80_bleu.append(float(c80.get("bleu1_pct", 0.0)))
+                v_c80_acc.append(float(c80.get("word_acc_pct", 0.0)))
+            if valid_v and v_c80_bleu:
+                ax_left.plot(
+                    k_vals,
+                    v_c80_bleu,
+                    ":D",
+                    color=v_col,
+                    linewidth=1.8,
+                    markersize=5,
+                    label=f"{vk} (>=80% Core) BLEU-1",
+                )
+                ax_right.plot(
+                    k_vals,
+                    v_c80_acc,
+                    ":D",
+                    color=v_col,
+                    linewidth=1.8,
+                    markersize=5,
+                    label=f"{vk} (>=80% Core) Word Acc",
+                )
+
+        ax_left.set_title(
+            "(A) Sequence BLEU-1 vs. Aggregated Subject Observations k",
+            fontsize=10.5,
+            fontweight="bold",
+        )
+        ax_left.set_xlabel("Number of Averaged Subject Observations (k)", fontsize=10)
+        ax_left.set_ylabel("BLEU-1 (%)", fontsize=10)
+        ax_left.set_xticks(k_vals)
+        ax_left.grid(True, linestyle=":", alpha=0.5)
+        ax_left.legend(loc="best", fontsize=8.0)
+
         ax_right.set_title(
-            "(B) Word Accuracy (Top-1 / In-Vocab / Top-5) vs. Observations k",
+            "(B) Word Accuracy (Top-1 / In-Vocab / Core) vs. Observations k",
             fontsize=10.5,
             fontweight="bold",
         )
@@ -2281,7 +2324,7 @@ def plot_multi_subject_observation_curve(
         ax_right.set_ylabel("Word Accuracy (%)", fontsize=10)
         ax_right.set_xticks(k_vals)
         ax_right.grid(True, linestyle=":", alpha=0.5)
-        ax_right.legend(loc="best", fontsize=8.5)
+        ax_right.legend(loc="best", fontsize=8.0)
 
         fig.tight_layout(rect=[0, 0, 1, 0.94])
 

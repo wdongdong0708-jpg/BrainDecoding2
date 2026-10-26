@@ -210,6 +210,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="输出原始 JSON 而非格式化对比表格",
     )
     parser.add_argument(
+        "--shared-language-weight",
+        action="store_true",
+        default=None,
+        help="校准时令 K0/K1/K2 共享同一语言模型权重 λ_r >= 0.05（默认按状态自适应正下界单调递减 λ_K0 >= λ_K1 >= λ_K2 >= 0.05）",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="强制重跑全部步骤，忽略已保存的匹配缓存与中间解码产物",
@@ -308,6 +314,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         seed_list = [int(raw_seed)]
     if len(seed_list) > 1:
         per_seed_summaries: dict[str, dict[str, Any]] = {}
+        shared_scorer_box: dict[str, Any] = getattr(
+            args, "_shared_scorer_box", {}
+        )
         for idx, seed_val in enumerate(seed_list):
             print(
                 f"\n{'#' * 86}\n"
@@ -322,6 +331,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             seed_args.export_path = None
             seed_args.calibration_path = None
             seed_args.decoding_path = None
+            seed_args._shared_scorer_box = shared_scorer_box
             per_seed_summaries[f"seed-{int(seed_val):03d}"] = (
                 run_sequence_decoding_pipeline(seed_args)
             )
@@ -404,6 +414,18 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         args.core_vocab_size
         if getattr(args, "core_vocab_size", None) is not None
         else eval_cfg.get("core_vocabulary_size", 250)
+    )
+    core_vocab_sizes = tuple(
+        int(x)
+        for x in eval_cfg.get("core_vocabulary_sizes", [50, 100, 250])
+        if int(x) > 0
+    )
+    multi_subject_vocab_sizes = tuple(
+        int(x)
+        for x in eval_cfg.get(
+            "multi_subject_vocabulary_sizes", [50, 100, 250, 2020]
+        )
+        if int(x) > 0
     )
     raw_vocab_sizes = getattr(args, "vocab_sizes", None)
     if raw_vocab_sizes is not None:
@@ -536,7 +558,28 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         results_summary["export_path"] = str(out_pt)
         results_summary["vocabulary_size"] = int(exported_payload["vocabulary_size"])
 
+    shared_scorer_box: dict[str, Any] = getattr(args, "_shared_scorer_box", {})
     scorer = None
+
+    def _get_or_init_shared_scorer(vocab: list[str]):
+        nonlocal scorer
+        if scorer is not None:
+            return scorer
+        cached_sc = shared_scorer_box.get("scorer")
+        cached_vocab = shared_scorer_box.get("vocabulary")
+        if cached_sc is not None and cached_vocab == list(vocab):
+            scorer = cached_sc
+            return scorer
+        scorer = _load_or_init_language_scorer(
+            protocol_cfg,
+            dataset=args.dataset,
+            vocabulary=list(vocab),
+            language_model_override=args.language_model,
+            device=args.device,
+        )
+        shared_scorer_box["scorer"] = scorer
+        shared_scorer_box["vocabulary"] = list(vocab)
+        return scorer
 
     if args.step in ("calibrate", "all"):
         raw_temp_override = getattr(args, "temperature", None)
@@ -558,8 +601,15 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             float(x)
             for x in cal_cfg.get(
                 "language_weight_grid",
-                [0.00, 0.05, 0.10, 0.15, 0.25, 0.40, 0.60, 1.00],
+                [0.05, 0.10, 0.15, 0.25, 0.40, 0.60],
             )
+        )
+        min_lam_cfg = float(cal_cfg.get("min_language_weight", 0.05))
+        shared_lam_arg = getattr(args, "shared_language_weight", None)
+        shared_lam_cfg = (
+            bool(shared_lam_arg)
+            if shared_lam_arg is not None
+            else bool(cal_cfg.get("shared_language_weight", False))
         )
 
         reused_calibration: dict[str, Any] | None = None
@@ -579,9 +629,24 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 eta_ok = saved_eta is None or (
                     abs(float(saved_eta) - float(cms_eta)) <= 1e-6
                 )
+                k2_lam_ok = (
+                    isinstance(existing_cal.get("states"), dict)
+                    and float(
+                        existing_cal["states"]
+                        .get("K2", {})
+                        .get("language_weight", 0.0)
+                    )
+                    >= min_lam_cfg - 1e-6
+                )
+                shared_mode_ok = (
+                    bool(existing_cal.get("shared_language_weight", False))
+                    == shared_lam_cfg
+                )
                 if (
                     saved_temps == expected_temps
                     and eta_ok
+                    and k2_lam_ok
+                    and shared_mode_ok
                     and isinstance(existing_cal.get("states"), dict)
                     and all(
                         k in existing_cal["states"] for k in ("K0", "K1", "K2")
@@ -602,13 +667,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             if force_rerun or not _export_matches_cms_eta(cal_source_path, cms_eta):
                 _run_export_for_split("val", cal_source_path)
             val_payload = load_neural_vocabulary_scores(cal_source_path)
-            scorer = _load_or_init_language_scorer(
-                protocol_cfg,
-                dataset=args.dataset,
-                vocabulary=list(val_payload["vocabulary"]),
-                language_model_override=args.language_model,
-                device=args.device,
-            )
+            scorer = _get_or_init_shared_scorer(list(val_payload["vocabulary"]))
             calibration_res = calibrate_state_hyperparameters(
                 val_payload,
                 scorer,
@@ -621,6 +680,8 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 enforce_monotonic_lambda=bool(
                     cal_cfg.get("enforce_monotonic_lambda", True)
                 ),
+                shared_language_weight=shared_lam_cfg,
+                min_language_weight=min_lam_cfg,
                 use_calibration_partition=bool(
                     cal_cfg.get("use_calibration_partition", True)
                 ),
@@ -651,13 +712,16 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         multi_subject_bundles: dict[str, Any] = {}
         vocabulary_scaling_bundles: dict[str, Any] = {}
         available_clean = split_payload.get("clean_scores", {})
+        available_shifted = split_payload.get("shifted_scores", {})
         ckpt_prov = dict(split_payload.get("checkpoint_provenance") or {})
-        f_mode = (
-            "F_local_fallback"
-            if ckpt_prov.get("context")
-            in (None, "", "fallback_from_revision_mature")
-            else "F_full_context"
+        has_real_context = bool(
+            ckpt_prov.get("has_context_checkpoint")
+            or (
+                ckpt_prov.get("context")
+                not in (None, "", "not_available", "fallback_from_revision_mature")
+            )
         )
+        f_mode = "F_full_context" if has_real_context else "not_available"
         total_split_segs = len(split_payload.get("segments") or [])
         expected_seg_count = (
             min(total_split_segs, int(args.max_segments))
@@ -697,6 +761,8 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     for cond_k, cond_b in (
                         existing_dec.get("decoded_bundles") or {}
                     ).items():
+                        if cond_k in ("F", "F_clean", "F_local") and not has_real_context:
+                            continue
                         if (
                             isinstance(cond_b, dict)
                             and int(cond_b.get("segment_count", -1))
@@ -730,21 +796,16 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 vocabulary_scaling_bundles = {}
 
         def _ensure_scorer():
-            nonlocal scorer
-            if scorer is None:
-                scorer = _load_or_init_language_scorer(
-                    protocol_cfg,
-                    dataset=args.dataset,
-                    vocabulary=list(split_payload["vocabulary"]),
-                    language_model_override=args.language_model,
-                    device=args.device,
-                )
-            return scorer
+            return _get_or_init_shared_scorer(list(split_payload["vocabulary"]))
 
         def _persist_decoding_bundle() -> None:
             _backfill_intermediate_and_shifted_bundles(decoded_bundles)
+            if not has_real_context:
+                decoded_bundles.pop("F", None)
+                decoded_bundles.pop("F_clean", None)
+                decoded_bundles.pop("F_local", None)
             bundle_obj = {
-                "schema_version": "s3-decoding-bundle/v1",
+                "schema_version": "s3-decoding-bundle/v2",
                 "dataset": args.dataset,
                 "split": args.split,
                 "seed": int(args.seed),
@@ -762,7 +823,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 encoding="utf-8",
             )
 
-        for baseline_mode in ("LM-Only", "S0", "K0"):
+        for baseline_mode in ("LM-Only", "S0", "K0", "K1"):
             if baseline_mode != "LM-Only" and baseline_mode not in available_clean:
                 continue
             if baseline_mode in decoded_bundles:
@@ -794,11 +855,11 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 segment_batch_size=segment_batch_size,
                 max_segments=args.max_segments,
                 show_progress=show_progress,
-                progress_desc=f"S3 Decode [S3_clean | {args.split}]",
+                progress_desc=f"S3 Decode [Rolling-K2 | {args.split}]",
             )
             _persist_decoding_bundle()
 
-        if "F" in available_clean and "F" not in decoded_bundles:
+        if has_real_context and "F" in available_clean and "F" not in decoded_bundles:
             decoded_bundles["F"] = decode_dataset_segments(
                 split_payload,
                 _ensure_scorer(),
@@ -810,7 +871,23 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 segment_batch_size=segment_batch_size,
                 max_segments=args.max_segments,
                 show_progress=show_progress,
-                progress_desc=f"S3 Decode [F ({f_mode}) | {args.split}]",
+                progress_desc=f"S3 Decode [Full-Context | {args.split}]",
+            )
+            _persist_decoding_bundle()
+
+        if "K0" in available_shifted and "K0_shifted_neg75s" not in decoded_bundles:
+            decoded_bundles["K0_shifted_neg75s"] = decode_dataset_segments(
+                split_payload,
+                _ensure_scorer(),
+                hyperparameters,
+                condition="K0",
+                alignment="shifted",
+                beam_width=beam_width,
+                candidate_top_k=top_k,
+                segment_batch_size=segment_batch_size,
+                max_segments=args.max_segments,
+                show_progress=show_progress,
+                progress_desc=f"S3 Decode [K0_shifted_-75s | {args.split}]",
             )
             _persist_decoding_bundle()
 
@@ -826,37 +903,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 segment_batch_size=segment_batch_size,
                 max_segments=args.max_segments,
                 show_progress=show_progress,
-                progress_desc=f"S3 Decode [S3_shifted_-75s | {args.split}]",
-            )
-            _persist_decoding_bundle()
-
-        unique_subjects = {
-            str(seg.get("subject_id", "default"))
-            for seg in split_payload.get("segments") or []
-        }
-        expected_k_keys = [
-            f"k={int(k)}"
-            for k in sorted({int(x) for x in k_observations if int(x) >= 1})
-            if int(k) <= len(unique_subjects)
-        ]
-        if (
-            len(k_observations) >= 2
-            and len(unique_subjects) > 1
-            and not all(k_key in multi_subject_bundles for k_key in expected_k_keys)
-        ):
-            multi_subject_bundles = run_multi_subject_observation_sweep(
-                split_payload,
-                _ensure_scorer(),
-                hyperparameters,
-                k_observations=k_observations,
-                condition="S3",
-                alignment="clean",
-                single_subject_s3_bundle=decoded_bundles.get("S3_clean"),
-                beam_width=beam_width,
-                candidate_top_k=top_k,
-                segment_batch_size=segment_batch_size,
-                max_segments=args.max_segments,
-                show_progress=show_progress,
+                progress_desc=f"S3 Decode [K2_shifted_-75s | {args.split}]",
             )
             _persist_decoding_bundle()
 
@@ -910,6 +957,45 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 on_scale_completed=_on_scale_completed,
             )
 
+        unique_subjects = {
+            str(seg.get("subject_id", "default"))
+            for seg in split_payload.get("segments") or []
+        }
+        expected_k_keys = [
+            f"k={int(k)}"
+            for k in sorted({int(x) for x in k_observations if int(x) >= 1})
+            if int(k) <= len(unique_subjects)
+        ]
+        if (
+            len(k_observations) >= 2
+            and len(unique_subjects) > 1
+            and not all(
+                k_key in multi_subject_bundles
+                and isinstance(
+                    multi_subject_bundles[k_key].get("by_vocabulary_size"),
+                    dict,
+                )
+                for k_key in expected_k_keys
+            )
+        ):
+            multi_subject_bundles = run_multi_subject_observation_sweep(
+                split_payload,
+                _ensure_scorer(),
+                hyperparameters,
+                k_observations=k_observations,
+                vocab_sizes=multi_subject_vocab_sizes,
+                condition="S3",
+                alignment="clean",
+                single_subject_s3_bundle=decoded_bundles.get("S3_clean"),
+                single_subject_vocab_scaling_bundles=vocabulary_scaling_bundles,
+                beam_width=beam_width,
+                candidate_top_k=top_k,
+                segment_batch_size=segment_batch_size,
+                max_segments=args.max_segments,
+                show_progress=show_progress,
+            )
+            _persist_decoding_bundle()
+
         _persist_decoding_bundle()
         results_summary["decoding_path"] = str(decoding_path)
         results_summary["checkpoint_provenance"] = ckpt_prov
@@ -937,6 +1023,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         if "decoding_path" not in results_summary:
             results_summary["decoding_path"] = str(decoding_path)
         decoded_bundles_map = dict(bundle.get("decoded_bundles") or {})
+        if bundle.get("f_condition_mode") != "F_full_context":
+            decoded_bundles_map.pop("F", None)
+            decoded_bundles_map.pop("F_clean", None)
+            decoded_bundles_map.pop("F_local", None)
         multi_subject_bundles_map = dict(bundle.get("multi_subject_bundles") or {})
         vocabulary_scaling_bundles_map = dict(
             bundle.get("vocabulary_scaling_bundles") or {}
@@ -980,6 +1070,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             multi_subject_bundles=multi_subject_bundles_map,
             vocabulary_scaling_bundles=vocabulary_scaling_bundles_map,
             core_vocab_size=core_vocab_size,
+            core_vocab_sizes=core_vocab_sizes,
             plot=plot_enabled,
         )
         results_summary["evaluation_dir"] = str(paths["evaluation_dir"])
@@ -989,6 +1080,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
         results_summary["core_vocabulary_benchmark"] = eval_report.get(
             "core_vocabulary_benchmark", {}
+        )
+        results_summary["core_vocabulary_benchmarks"] = eval_report.get(
+            "core_vocabulary_benchmarks", {}
         )
         results_summary["full_vocab_core_subsets"] = eval_report.get(
             "full_vocab_core_subsets", {}

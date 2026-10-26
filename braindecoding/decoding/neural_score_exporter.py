@@ -812,19 +812,14 @@ def export_neural_vocabulary_scores(
         shifted_embeddings.update(ctx_res["shifted_embeddings"])
         availability_masks.update(ctx_res["availability_masks"])
         checkpoint_provenance["context"] = ctx_res["checkpoint_path"]
+        checkpoint_provenance["has_context_checkpoint"] = True
     else:
-        # 若未单独训练 Stage 2.1 全局上下文检查点，按段内最大可用视界拼装 F-local 回退
+        # 未单独训练 Stage 2.1 全局上下文检查点时标记为 not_available（保持张量键兼容但禁止下游解码伪条件 F-local）
         clean_embeddings["F"] = clean_embeddings["K2"].clone()
         shifted_embeddings["F"] = shifted_embeddings["K2"].clone()
-        k2_mask = availability_masks["K2"]
-        k1_mask = availability_masks["K1"]
-        for idx in range(len(event_ids)):
-            if not bool(k2_mask[idx]):
-                src_state = "K1" if bool(k1_mask[idx]) else "K0"
-                clean_embeddings["F"][idx] = clean_embeddings[src_state][idx]
-                shifted_embeddings["F"][idx] = shifted_embeddings[src_state][idx]
-        availability_masks["F"] = torch.ones(len(event_ids), dtype=torch.bool)
-        checkpoint_provenance["context"] = "fallback_from_revision_mature"
+        availability_masks["F"] = availability_masks["K2"].clone()
+        checkpoint_provenance["context"] = "not_available"
+        checkpoint_provenance["has_context_checkpoint"] = False
 
     clean_scores: dict[str, torch.Tensor] = {}
     shifted_scores: dict[str, torch.Tensor] = {}

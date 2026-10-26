@@ -1,11 +1,12 @@
 protocol:
   name: sequence_decoding_s3
-  version: 1
+  version: 2
   description: >
-    Stage 3 (S3) closed-vocabulary Top-K neural retrieval + KV-Cache incremental
-    language model scoring with Scheme 1 (committed K2 backbone + draft K1/K0 tail),
-    state-adaptive (T_r, lambda_r) calibration, 6-window historical CMS + unseen
-    -75s shifted negative control, 6D semantic metrics, and C-gated Pareto filtering.
+    Stage 3 (S3) unified left-to-right beam search across the 4-tier input latency
+    budget (Isolated S0 1.00s, Rolling-K0 1.00s, Rolling-K1 1.27s, Rolling-K2 1.50s,
+    and optional Full-Context 3.31s), state-adaptive monotonic (T_r, lambda_r >= 0.05)
+    calibration, |V| in {50, 100, 250} core vocabulary & k in {1, 2, 5, 10} multi-subject
+    scaling, and decoupled C-gated streaming screen anti-flicker analysis.
 
 language_model:
   model_name_or_path: Qwen/Qwen3-8B-Base
@@ -18,7 +19,7 @@ language_model:
   context_tokens: 8192
 
 decoding:
-  architecture: scheme_1_committed_k2_draft_k1_k0
+  architecture: unified_left_to_right_beam_search_with_streaming_screen_audit
   beam_width: 5
   candidate_top_k: 20
   segment_batch_size: 32
@@ -32,6 +33,7 @@ decoding:
     - LM-Only
     - S0
     - K0
+    - K1
     - S3
     - F
 
@@ -43,18 +45,18 @@ calibration:
   adjacent_components_per_block: 5
   metric: composite
   enforce_monotonic_lambda: true
+  shared_language_weight: false
+  min_language_weight: 0.05
   temperature_grid:
     - 0.05
     - 0.07
   language_weight_grid:
-    - 0.00
     - 0.05
     - 0.10
     - 0.15
     - 0.25
     - 0.40
     - 0.60
-    - 1.00
 
 control:
   common_mode_subtraction:
@@ -91,7 +93,16 @@ evaluation:
     - 2
     - 5
     - 10
+  multi_subject_vocabulary_sizes:
+    - 50
+    - 100
+    - 250
+    - 2020
   core_vocabulary_size: 250
+  core_vocabulary_sizes:
+    - 50
+    - 100
+    - 250
   vocabulary_scaling_sizes:
     - 50
     - 100

@@ -1295,6 +1295,42 @@ def _compute_s3_revision_gain_deltas(
     return gains
 
 
+def _filter_main_latency_conditions(
+    conds_map: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    """Filter out F_local and online C-Gated entries from main accuracy tables and order by latency tier."""
+    preferred_order = (
+        "S0",
+        "S0_clean",
+        "K0",
+        "K0_clean",
+        "K1",
+        "K1_clean",
+        "S3_clean",
+        "F",
+        "F_clean",
+        "LM-Only",
+        "LM-Only_clean",
+        "K0_shifted_neg75s",
+        "S3_shifted_neg75s",
+    )
+    filtered: dict[str, Mapping[str, Any]] = {}
+    for k in preferred_order:
+        m = conds_map.get(k)
+        if not isinstance(m, Mapping):
+            continue
+        if k == "F_local" or str(k).endswith("_c_gated") or bool(m.get("is_online_screen_gate")):
+            continue
+        filtered[str(k)] = m
+    for k, m in conds_map.items():
+        if str(k) in filtered or not isinstance(m, Mapping):
+            continue
+        if str(k) == "F_local" or str(k).endswith("_c_gated") or bool(m.get("is_online_screen_gate")):
+            continue
+        filtered[str(k)] = m
+    return filtered
+
+
 def format_sequence_decoding_executive_summary(
     report: Mapping[str, Any],
 ) -> str:
@@ -1327,11 +1363,12 @@ def format_sequence_decoding_executive_summary(
 
     conds = report.get("conditions")
     if isinstance(conds, Mapping) and conds:
-        first_c = next(iter(conds.values()), {})
+        main_conds = _filter_main_latency_conditions(conds)
+        first_c = next(iter(main_conds.values()), next(iter(conds.values()), {}))
         segs = first_c.get("segment_count", "-")
         words = first_c.get("total_words", "-")
         lines.append(
-            f"[1] Full-Vocabulary Conditions (Segments={segs}, TotalWords={words})"[:REPORT_WIDTH]
+            f"[1] Latency-Budget Conditions (Segments={segs}, TotalWords={words})"[:REPORT_WIDTH]
         )
         c_hdr = (
             f"{'Condition':<22} | {'BLEU-1':>7} | {'InVoc%':>7} | "
@@ -1340,9 +1377,7 @@ def format_sequence_decoding_executive_summary(
         lines.append(rule)
         lines.append(c_hdr)
         lines.append(rule)
-        for c_name, m in conds.items():
-            if not isinstance(m, Mapping):
-                continue
+        for c_name, m in main_conds.items():
             lines.append(
                 f"{str(c_name)[:22]:<22} | "
                 f"{_fmt_pct(m.get('bleu1_pct'), 7)} | "
@@ -1353,7 +1388,7 @@ def format_sequence_decoding_executive_summary(
                 f"{_fmt_pct(m.get('bertscore_f1_pct'), 7)}"
             )
         lines.append(rule)
-        gains = _compute_s3_revision_gain_deltas(conds)
+        gains = _compute_s3_revision_gain_deltas(main_conds)
         for g_key, g_lbl in (
             ("clean_C_minus_A_pp", "Clean Revision Gain (S3 - K0)"),
             ("clean_minus_shifted_S3_pp", "Net Neural Advantage (Clean - Shift)"),
@@ -1371,7 +1406,7 @@ def format_sequence_decoding_executive_summary(
             sig_c = s3_sig.get("s3_clean_vs_k0_bleu1")
             if isinstance(sig_c, Mapping) and sig_c.get("ci_lower_pp") is not None:
                 lines.append(
-                    f" * S3 vs K0 BLEU-1 95% CI: "
+                    f" * K2 vs K0 BLEU-1 95% CI: "
                     f"[{float(sig_c['ci_lower_pp']):+.2f}, {float(sig_c['ci_upper_pp']):+.2f}] pp "
                     f"(p={float(sig_c.get('p_two_sided', 1.0)):.4f} {sig_c.get('significance', '')})"[
                         :REPORT_WIDTH
@@ -1393,7 +1428,7 @@ def format_sequence_decoding_executive_summary(
             mw = float(s3_sub_sum.get("mean_word_acc_pct", 0.0))
             sw = float(s3_sub_sum.get("std_word_acc_pct", 0.0))
             lines.append(
-                f" * Across-Subject S3: BLEU1={mb:.2f}±{sb:.2f}% | WordAcc={mw:.2f}±{sw:.2f}%"[
+                f" * Across-Subject K2: BLEU1={mb:.2f}±{sb:.2f}% | WordAcc={mw:.2f}±{sw:.2f}%"[
                     :REPORT_WIDTH
                 ]
             )
@@ -1401,10 +1436,10 @@ def format_sequence_decoding_executive_summary(
     vs = report.get("vocabulary_scaling")
     if isinstance(vs, Mapping) and vs:
         lines.append(
-            "\n[2] Multi-Scale Candidate Vocabulary Scaling (All Segments vs. >=80% Core)"
+            "\n[2] Core & Multi-Scale Vocabulary Scaling (All Segments vs. >=80% Core)"
         )
         v_hdr = (
-            f"{'Scale |V|':<10} | {'TokCov':>6} | {'All S3':>9} | "
+            f"{'Scale |V|':<10} | {'TokCov':>6} | {'All K2':>9} | "
             f"{'All K0':>9} | {'All InV%':>8} | {'Core80':>9} | {'CoreInV%':>9}"
         )
         lines.append(rule)
@@ -1523,9 +1558,9 @@ def _format_s3_revision_gains_block_full(
     if not gains:
         return []
     label_map = {
-        "clean_C_minus_A_pp": "Clean 滚动修正净增益 (C - A = S3_clean - K0)",
-        "shifted_C_minus_A_pp": "Shifted 错位滚动增益 (C_shift - A_shift)",
-        "clean_minus_shifted_S3_pp": "真实 vs 错位地面实况净优势 (S3_clean - S3_shift)",
+        "clean_C_minus_A_pp": "Clean 滚动修正净增益 (Rolling-K2 - Rolling-K0)",
+        "shifted_C_minus_A_pp": "Shifted 错位滚动增益 (K2_shift - K0_shift)",
+        "clean_minus_shifted_S3_pp": "真实 vs 错位地面实况净优势 (K2_clean - K2_shift)",
     }
     out: list[str] = []
     for g_key in (
@@ -1559,7 +1594,7 @@ def format_sequence_decoding_report(
     """Format S3 sequence decoding evaluation report.
 
     When ``verbose=True`` (default for `.txt` export and backward compatibility),
-    returns the full 6-table report (`[表 1]` .. `[表 5]`).
+    returns the full 6-table report (`[表 1]` .. `[表 6]`).
     When ``verbose=False``, returns the compact ``<= 86``-column Executive Summary.
     """
     if not verbose:
@@ -1595,55 +1630,79 @@ def format_sequence_decoding_report(
 
     conds = report.get("conditions")
     if isinstance(conds, Mapping) and conds:
-        first_cond = next(iter(conds.values()), {})
+        main_conds = _filter_main_latency_conditions(conds)
+        first_cond = next(iter(main_conds.values()), next(iter(conds.values()), {}))
         tot_segs = first_cond.get("segment_count", "-")
         tot_words = first_cond.get("total_words", "-")
         invoc_rate = first_cond.get("in_vocabulary_rate_pct", None)
         cov_str = f"{float(invoc_rate):.2f}%" if invoc_rate is not None else "-"
         lines.append(
-            f"\n[表 1] 全词库主实验结果 (Full Vocabulary | Segments={tot_segs}, TotalWords={tot_words}, TokenCoverage={cov_str})"
+            f"\n[表 1] 全词库主实验结果 — 4 档输入延迟预算统一束搜索对比 (Full Vocabulary | Segments={tot_segs}, TotalWords={tot_words}, TokenCoverage={cov_str})"
         )
-        lines.extend(_format_s3_conditions_table_full(conds))
-        main_gains = _compute_s3_revision_gain_deltas(conds)
+        lines.extend(_format_s3_conditions_table_full(main_conds))
+        main_gains = _compute_s3_revision_gain_deltas(main_conds)
         lines.extend(_format_s3_revision_gains_block_full(main_gains))
 
-    core_bench = report.get("core_vocabulary_benchmark")
-    if isinstance(core_bench, Mapping) and core_bench.get("subsets"):
-        v_core = core_bench.get("vocabulary_size", 250)
-        tok_cov_core = core_bench.get("test_token_coverage_pct")
-        cov_core_str = (
-            f"{float(tok_cov_core):.2f}%" if tok_cov_core is not None else "-"
+    core_benchmarks = report.get("core_vocabulary_benchmarks")
+    core_bench_list: list[Mapping[str, Any]] = []
+    if isinstance(core_benchmarks, Mapping) and core_benchmarks:
+        ordered_cb = sorted(
+            core_benchmarks.items(),
+            key=lambda kv: int(
+                kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
+            )
+            if isinstance(kv[1], Mapping)
+            else 0,
         )
+        core_bench_list = [
+            cb for _, cb in ordered_cb if isinstance(cb, Mapping) and cb.get("subsets")
+        ]
+    else:
+        single_cb = report.get("core_vocabulary_benchmark")
+        if isinstance(single_cb, Mapping) and single_cb.get("subsets"):
+            core_bench_list = [single_cb]
+
+    if core_bench_list:
         lines.append(
-            f"\n[表 2] 高覆盖核心词表平行基准 (Core Vocabulary |V| = {v_core}, 全集词位覆盖率 = {cov_core_str}，对标 SimpleB2T & Jayalath 2025)"
+            "\n[表 2] 高频核心词表三档基准对比 (Core Vocabulary |V| ∈ {50, 100, 250}，对标 Moses 2021 / SimpleB2T / Jayalath 2025 / d'Ascoli 2025)"
         )
-        subsets_map = core_bench.get("subsets") or {}
         subset_titles = (
             ("all_segments", "口径 1 [all_segments]: 全部测试句段 (含 In-Vocab Word Acc)"),
             ("core_subset_100pct", "口径 2a [core_subset_100pct]: 100% 词表内核心句 (0% OOV Core Set，直接对标 SimpleB2T)"),
             ("core_subset_80pct", "口径 2b [core_subset_80pct]: >=80% 词表内高覆盖核心句"),
-            ("expanded_subset_70pct", "口径 2c [expanded_subset_70pct]: >=70% 词表内扩展高覆盖句"),
         )
-        for sub_key, sub_title in subset_titles:
-            sub_block = subsets_map.get(sub_key)
-            if not isinstance(sub_block, Mapping):
-                continue
-            sub_conds = sub_block.get("conditions") or {}
-            if not sub_conds:
-                continue
-            seg_cnt = sub_block.get("segment_count", 0)
-            lines.append(f"\n  >>> {sub_title} (Segments = {seg_cnt}) <<<")
-            lines.extend(_format_s3_conditions_table_full(sub_conds))
-            lines.extend(
-                _format_s3_revision_gains_block_full(
-                    sub_block.get("revision_gains") or {}
-                )
+        for cb_entry in core_bench_list:
+            v_core = cb_entry.get("vocabulary_size", 250)
+            tok_cov_core = cb_entry.get("test_token_coverage_pct")
+            cov_core_str = (
+                f"{float(tok_cov_core):.2f}%" if tok_cov_core is not None else "-"
             )
+            lines.append(
+                f"\n  === 核心词表档位 |V| = {v_core} (全集词位覆盖率 = {cov_core_str}) ==="
+            )
+            subsets_map = cb_entry.get("subsets") or {}
+            for sub_key, sub_title in subset_titles:
+                sub_block = subsets_map.get(sub_key)
+                if not isinstance(sub_block, Mapping):
+                    continue
+                sub_conds = _filter_main_latency_conditions(
+                    sub_block.get("conditions") or {}
+                )
+                if not sub_conds:
+                    continue
+                seg_cnt = sub_block.get("segment_count", 0)
+                lines.append(f"\n  >>> {sub_title} (Segments = {seg_cnt}) <<<")
+                lines.extend(_format_s3_conditions_table_full(sub_conds))
+                lines.extend(
+                    _format_s3_revision_gains_block_full(
+                        sub_block.get("revision_gains") or {}
+                    )
+                )
 
     full_core = report.get("full_vocab_core_subsets")
     if isinstance(full_core, Mapping) and full_core.get("subsets"):
         lines.append(
-            "\n[表 3] 全词库 (Full Vocabulary) 下的高覆盖核心子集拆解 (100% 零 OOV / >=80% / >=70%)"
+            "\n[表 3] 全词库 (Full Vocabulary) 下的高覆盖核心子集拆解 (100% 零 OOV / >=80% 高覆盖核心集)"
         )
         fc_header = (
             f"{'Subset':<26} | {'Segs':>5} | {'Condition':<18} | {'BLEU-1':>7} | "
@@ -1659,24 +1718,13 @@ def format_sequence_decoding_report(
             "all_segments",
             "core_subset_100pct",
             "core_subset_80pct",
-            "expanded_subset_70pct",
         ):
             sb = fc_subsets.get(sub_key)
             if not isinstance(sb, Mapping):
                 continue
             seg_cnt = sb.get("segment_count", 0)
-            sb_conds = sb.get("conditions") or {}
-            for c_name in (
-                "S0",
-                "K0",
-                "K1",
-                "S3_clean",
-                "K0_shifted_neg75s",
-                "S3_shifted_neg75s",
-            ):
-                if c_name not in sb_conds:
-                    continue
-                m = sb_conds[c_name]
+            sb_conds = _filter_main_latency_conditions(sb.get("conditions") or {})
+            for c_name, m in sb_conds.items():
                 lines.append(
                     f"{sub_key:<26} | {int(seg_cnt):>5d} | {c_name:<18} | "
                     f"{_fmt_pct(m.get('bleu1_pct'), 7)} | "
@@ -1808,6 +1856,75 @@ def format_sequence_decoding_report(
             )
         )
         lines.extend(_format_s3_conditions_table_full(ordered_ms))
+
+        has_ms_by_vocab = any(
+            isinstance(v, Mapping) and isinstance(v.get("by_vocabulary_size"), Mapping) and v.get("by_vocabulary_size")
+            for v in ordered_ms.values()
+        )
+        if has_ms_by_vocab:
+            lines.append(
+                "\n[表 5B] 跨被试多观测神经聚合 × 核心词表规模 (k ∈ {1, 2, 5, 10} × |V| ∈ {50, 100, 250, Full})"
+            )
+            msv_hdr = (
+                f"{'Scale |V|':<10} | {'Subjects':<8} | {'All BLEU1':>9} | {'All WAcc':>8} | "
+                f"{'All InV%':>8} | {'Core80 BLEU':>11} | {'Core80 Acc':>10} | "
+                f"{'100%Segs':>8} | {'Core100 BLEU':>12} | {'Core100 Acc':>11}"
+            )
+            msv_sep = "-" * len(msv_hdr)
+            lines.append(msv_sep)
+            lines.append(msv_hdr)
+            lines.append(msv_sep)
+            vocab_keys_seen: list[str] = []
+            for m_entry in ordered_ms.values():
+                if not isinstance(m_entry, Mapping):
+                    continue
+                by_v = m_entry.get("by_vocabulary_size") or {}
+                if isinstance(by_v, Mapping):
+                    for vk in by_v.keys():
+                        if str(vk) not in vocab_keys_seen:
+                            vocab_keys_seen.append(str(vk))
+            vocab_keys_sorted = sorted(
+                vocab_keys_seen,
+                key=lambda s: int(str(s).lstrip("vV=_") or 0),
+            )
+            for vk in vocab_keys_sorted:
+                for k_lbl, m_entry in ordered_ms.items():
+                    if not isinstance(m_entry, Mapping):
+                        continue
+                    by_v = m_entry.get("by_vocabulary_size") or {}
+                    v_blk = by_v.get(vk) if isinstance(by_v, Mapping) else None
+                    if not isinstance(v_blk, Mapping):
+                        continue
+                    c80 = v_blk.get("core_subset_80pct") or {}
+                    c100 = v_blk.get("core_subset_100pct") or {}
+                    lines.append(
+                        f"{vk:<10} | {str(k_lbl):<8} | "
+                        f"{_fmt_pct(v_blk.get('bleu1_pct'), 9)} | "
+                        f"{_fmt_pct(v_blk.get('word_acc_pct'), 8)} | "
+                        f"{_fmt_pct(v_blk.get('in_vocabulary_word_acc_pct'), 8)} | "
+                        f"{_fmt_pct(c80.get('bleu1_pct'), 11)} | "
+                        f"{_fmt_pct(c80.get('word_acc_pct'), 10)} | "
+                        f"{int(v_blk.get('core_100pct_segment_count', 0)):>8d} | "
+                        f"{_fmt_pct(c100.get('bleu1_pct'), 12)} | "
+                        f"{_fmt_pct(c100.get('word_acc_pct'), 11)}"
+                    )
+                lines.append(msv_sep)
+
+    cg_stab = report.get("c_gated_online_stability")
+    if isinstance(cg_stab, Mapping) and cg_stab:
+        tau_val = cg_stab.get("recommended_tau_gate", 0.5)
+        lines.append(
+            f"\n[表 6] 在线屏幕防闪烁置信度门控稳定性分析 (Online Screen Anti-Flicker C-Gated | τ_gate = {tau_val})"
+        )
+        cg_conds: dict[str, Mapping[str, Any]] = {}
+        if isinstance(cg_stab.get("S3_clean_ungated"), Mapping):
+            cg_conds["Rolling-K2 (Ungated τ=0)"] = cg_stab["S3_clean_ungated"]
+        if isinstance(cg_stab.get("S3_clean_c_gated"), Mapping):
+            cg_conds[f"C-Gated (τ={tau_val})"] = cg_stab["S3_clean_c_gated"]
+        if isinstance(cg_stab.get("S3_shifted_neg75s_c_gated"), Mapping):
+            cg_conds[f"C-Gated Shift (τ={tau_val})"] = cg_stab["S3_shifted_neg75s_c_gated"]
+        if cg_conds:
+            lines.extend(_format_s3_conditions_table_full(cg_conds))
 
     lines.append("\n[导出产物与可视化图表路径]")
     for path_key in (

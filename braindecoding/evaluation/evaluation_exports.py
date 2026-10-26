@@ -1241,43 +1241,48 @@ def export_sequence_decoding_tables_and_markdown(
 
     exported: dict[str, str] = {}
 
-    # 1. 导出条件对比表 s3_conditions_summary_{split}.csv
+    # 1. 导出条件对比表 s3_conditions_summary_{split}.csv（仅含 4 档输入延迟预算与负对照，不含 F_local 与在线屏幕 C-Gated）
     cond_rows: list[dict[str, Any]] = []
+    cgated_rows: list[dict[str, Any]] = []
     for cond_name, cm in conditions.items():
         if not isinstance(cm, Mapping):
             continue
-        cond_rows.append(
-            {
-                "condition": cond_name,
-                "segment_count": int(cm.get("segment_count", 0)),
-                "total_words": int(cm.get("total_words", 0)),
-                "bleu1_subject_macro_pct": _num(cm.get("bleu1_pct", 0.0), 2),
-                "corpus_bleu1_pct": _num(cm.get("corpus_bleu1_pct", 0.0), 2),
-                "beam_oracle_bleu1_pct": _num(
-                    cm.get("beam_oracle_bleu1_pct", 0.0), 2
-                ),
-                "word_acc_pct": _num(cm.get("word_acc_pct", 0.0), 2),
-                "in_vocabulary_word_acc_pct": _num(
-                    cm.get("in_vocabulary_word_acc_pct", 0.0), 2
-                ),
-                "word_acc_top5_pct": _num(cm.get("word_acc_top5_pct", 0.0), 2),
-                "content_word_acc_pct": _num(
-                    cm.get("content_word_acc_pct", 0.0), 2
-                ),
-                "function_word_acc_pct": _num(
-                    cm.get("function_word_acc_pct", 0.0), 2
-                ),
-                "wer_pct": _num(cm.get("wer_pct", 0.0), 2),
-                "cer_pct": _num(cm.get("cer_pct", 0.0), 2),
-                "bertscore_f1_pct": _num(cm.get("bertscore_f1_pct", 0.0), 2),
-                "screen_rewrite_rate_pct": _num(
-                    cm.get("screen_rewrite_rate_pct", 0.0), 2
-                )
-                if "screen_rewrite_rate_pct" in cm
-                else "",
-                "recommended_tau_gate": cm.get("recommended_tau_gate", ""),
-            }
-        )
+        if str(cond_name) == "F_local":
+            continue
+        row_item = {
+            "condition": cond_name,
+            "segment_count": int(cm.get("segment_count", 0)),
+            "total_words": int(cm.get("total_words", 0)),
+            "bleu1_subject_macro_pct": _num(cm.get("bleu1_pct", 0.0), 2),
+            "corpus_bleu1_pct": _num(cm.get("corpus_bleu1_pct", 0.0), 2),
+            "beam_oracle_bleu1_pct": _num(
+                cm.get("beam_oracle_bleu1_pct", 0.0), 2
+            ),
+            "word_acc_pct": _num(cm.get("word_acc_pct", 0.0), 2),
+            "in_vocabulary_word_acc_pct": _num(
+                cm.get("in_vocabulary_word_acc_pct", 0.0), 2
+            ),
+            "word_acc_top5_pct": _num(cm.get("word_acc_top5_pct", 0.0), 2),
+            "content_word_acc_pct": _num(
+                cm.get("content_word_acc_pct", 0.0), 2
+            ),
+            "function_word_acc_pct": _num(
+                cm.get("function_word_acc_pct", 0.0), 2
+            ),
+            "wer_pct": _num(cm.get("wer_pct", 0.0), 2),
+            "cer_pct": _num(cm.get("cer_pct", 0.0), 2),
+            "bertscore_f1_pct": _num(cm.get("bertscore_f1_pct", 0.0), 2),
+            "screen_rewrite_rate_pct": _num(
+                cm.get("screen_rewrite_rate_pct", 0.0), 2
+            )
+            if "screen_rewrite_rate_pct" in cm
+            else "",
+            "recommended_tau_gate": cm.get("recommended_tau_gate", ""),
+        }
+        if str(cond_name).endswith("_c_gated") or bool(cm.get("is_online_screen_gate")):
+            cgated_rows.append(row_item)
+        else:
+            cond_rows.append(row_item)
     if cond_rows:
         c_csv = _write_csv_table(
             tables_dir / f"s3_conditions_summary_{split}.csv",
@@ -1285,6 +1290,144 @@ def export_sequence_decoding_tables_and_markdown(
             cond_rows,
         )
         exported["s3_conditions_csv"] = str(c_csv)
+
+    # 1B. 导出三档核心词表基准表 s3_core_vocabulary_benchmarks_{split}.csv
+    core_benchmarks = report.get("core_vocabulary_benchmarks") or {}
+    if isinstance(core_benchmarks, Mapping) and core_benchmarks:
+        cb_rows: list[dict[str, Any]] = []
+        for v_key, cb_entry in sorted(
+            core_benchmarks.items(),
+            key=lambda kv: int(
+                kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
+            )
+            if isinstance(kv[1], Mapping)
+            else 0,
+        ):
+            if not isinstance(cb_entry, Mapping):
+                continue
+            v_sz = int(cb_entry.get("vocabulary_size", 0))
+            tok_cov = _num(cb_entry.get("test_token_coverage_pct", 0.0), 2)
+            subsets_map = cb_entry.get("subsets") or {}
+            for sub_key in ("all_segments", "core_subset_100pct", "core_subset_80pct"):
+                sub_blk = subsets_map.get(sub_key)
+                if not isinstance(sub_blk, Mapping):
+                    continue
+                seg_cnt = int(sub_blk.get("segment_count", 0))
+                sub_conds = sub_blk.get("conditions") or {}
+                for cond_name, cm in sub_conds.items():
+                    if not isinstance(cm, Mapping) or str(cond_name) == "F_local" or str(cond_name).endswith("_c_gated"):
+                        continue
+                    cb_rows.append(
+                        {
+                            "scale_key": str(v_key),
+                            "vocabulary_size": v_sz,
+                            "test_token_coverage_pct": tok_cov,
+                            "subset": sub_key,
+                            "segment_count": seg_cnt,
+                            "condition": str(cond_name),
+                            "bleu1_pct": _num(cm.get("bleu1_pct", 0.0), 2),
+                            "word_acc_pct": _num(cm.get("word_acc_pct", 0.0), 2),
+                            "in_vocabulary_word_acc_pct": _num(
+                                cm.get("in_vocabulary_word_acc_pct", 0.0), 2
+                            ),
+                            "word_acc_top5_pct": _num(
+                                cm.get("word_acc_top5_pct", 0.0), 2
+                            ),
+                            "wer_pct": _num(cm.get("wer_pct", 0.0), 2),
+                            "cer_pct": _num(cm.get("cer_pct", 0.0), 2),
+                            "bertscore_f1_pct": _num(
+                                cm.get("bertscore_f1_pct", 0.0), 2
+                            ),
+                        }
+                    )
+        if cb_rows:
+            cb_csv = _write_csv_table(
+                tables_dir / f"s3_core_vocabulary_benchmarks_{split}.csv",
+                list(cb_rows[0].keys()),
+                cb_rows,
+            )
+            exported["s3_core_vocabulary_benchmarks_csv"] = str(cb_csv)
+
+    # 1C. 导出跨被试多观测神经聚合表 s3_multi_subject_scaling_{split}.csv
+    if isinstance(multi_subj, Mapping) and multi_subj:
+        ms_rows: list[dict[str, Any]] = []
+        for k_lbl, m_entry in sorted(
+            multi_subj.items(),
+            key=lambda kv: int(
+                kv[1].get("k_observations", str(kv[0]).lstrip("kK=_") or 1)
+            )
+            if isinstance(kv[1], Mapping)
+            else 1,
+        ):
+            if not isinstance(m_entry, Mapping):
+                continue
+            k_obs = int(m_entry.get("k_observations", str(k_lbl).lstrip("kK=_") or 1))
+            by_v = m_entry.get("by_vocabulary_size")
+            if isinstance(by_v, Mapping) and by_v:
+                for v_key, v_blk in sorted(
+                    by_v.items(),
+                    key=lambda kv: int(
+                        kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
+                    )
+                    if isinstance(kv[1], Mapping)
+                    else 0,
+                ):
+                    if not isinstance(v_blk, Mapping):
+                        continue
+                    c80 = v_blk.get("core_subset_80pct") or {}
+                    c100 = v_blk.get("core_subset_100pct") or {}
+                    ms_rows.append(
+                        {
+                            "k_label": str(k_lbl),
+                            "k_observations": k_obs,
+                            "scale_key": str(v_key),
+                            "vocabulary_size": int(v_blk.get("vocabulary_size", 0)),
+                            "all_bleu1_pct": _num(v_blk.get("bleu1_pct", 0.0), 2),
+                            "all_word_acc_pct": _num(v_blk.get("word_acc_pct", 0.0), 2),
+                            "all_in_vocab_word_acc_pct": _num(
+                                v_blk.get("in_vocabulary_word_acc_pct", 0.0), 2
+                            ),
+                            "core80_segment_count": int(
+                                v_blk.get("core_80pct_segment_count", 0)
+                            ),
+                            "core80_bleu1_pct": _num(c80.get("bleu1_pct", 0.0), 2),
+                            "core80_word_acc_pct": _num(c80.get("word_acc_pct", 0.0), 2),
+                            "core100_segment_count": int(
+                                v_blk.get("core_100pct_segment_count", 0)
+                            ),
+                            "core100_bleu1_pct": _num(c100.get("bleu1_pct", 0.0), 2),
+                            "core100_word_acc_pct": _num(
+                                c100.get("word_acc_pct", 0.0), 2
+                            ),
+                        }
+                    )
+            else:
+                ms_rows.append(
+                    {
+                        "k_label": str(k_lbl),
+                        "k_observations": k_obs,
+                        "scale_key": "full",
+                        "vocabulary_size": 0,
+                        "all_bleu1_pct": _num(m_entry.get("bleu1_pct", 0.0), 2),
+                        "all_word_acc_pct": _num(m_entry.get("word_acc_pct", 0.0), 2),
+                        "all_in_vocab_word_acc_pct": _num(
+                            m_entry.get("in_vocabulary_word_acc_pct", 0.0), 2
+                        ),
+                        "core80_segment_count": 0,
+                        "core80_bleu1_pct": "",
+                        "core80_word_acc_pct": "",
+                        "core100_segment_count": 0,
+                        "core100_bleu1_pct": "",
+                        "core100_word_acc_pct": "",
+                    }
+                )
+        if ms_rows:
+            ms_csv = _write_csv_table(
+                tables_dir / f"s3_multi_subject_scaling_{split}.csv",
+                list(ms_rows[0].keys()),
+                ms_rows,
+            )
+            exported["s3_multi_subject_scaling_csv"] = str(ms_csv)
 
     # 2. 导出受试者级序列解码表 s3_per_subject_{split}.csv
     if isinstance(per_subj, Sequence) and per_subj:
@@ -1752,6 +1895,124 @@ def export_sequence_decoding_tables_and_markdown(
                 f"**{_num(s.get('bleu1_pct'), 2):.2f}%** | {k0_b} | {d_b} | "
                 f"**{_num(s.get('word_acc_pct'), 2):.2f}%** | {_num(s.get('content_word_acc_pct'), 2):.2f}% | "
                 f"{_num(s.get('function_word_acc_pct'), 2):.2f}% | {_num(s.get('bertscore_f1_pct'), 2):.2f}% |"
+            )
+        md_lines.append("")
+
+    if isinstance(core_benchmarks, Mapping) and core_benchmarks:
+        md_lines.extend(
+            [
+                "## 4. Core Vocabulary Benchmarks (`|V| ∈ {50, 100, 250}`)",
+                "",
+                "| Scale `|V|` | Token Coverage | Subset | Segments | Rolling-K2 BLEU-1 | Rolling-K0 BLEU-1 | Rolling-K2 Word Acc | In-Vocab Word Acc | BERTScore-F1 |",
+                "| :--- | ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for v_key, cb_entry in sorted(
+            core_benchmarks.items(),
+            key=lambda kv: int(
+                kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
+            )
+            if isinstance(kv[1], Mapping)
+            else 0,
+        ):
+            if not isinstance(cb_entry, Mapping):
+                continue
+            tok_cov = _num(cb_entry.get("test_token_coverage_pct", 0.0), 2)
+            subsets_map = cb_entry.get("subsets") or {}
+            for sub_key in ("all_segments", "core_subset_100pct", "core_subset_80pct"):
+                sub_blk = subsets_map.get(sub_key)
+                if not isinstance(sub_blk, Mapping):
+                    continue
+                seg_cnt = int(sub_blk.get("segment_count", 0))
+                sub_conds = sub_blk.get("conditions") or {}
+                s3_m = sub_conds.get("S3_clean") or {}
+                k0_m_sub = sub_conds.get("K0") or {}
+                if not s3_m:
+                    continue
+                md_lines.append(
+                    f"| **`{v_key}`** | {tok_cov:.2f}% | `{sub_key}` | {seg_cnt} | "
+                    f"**{_num(s3_m.get('bleu1_pct'), 2):.2f}%** | {_num(k0_m_sub.get('bleu1_pct'), 2):.2f}% | "
+                    f"**{_num(s3_m.get('word_acc_pct'), 2):.2f}%** | {_num(s3_m.get('in_vocabulary_word_acc_pct'), 2):.2f}% | "
+                    f"{_num(s3_m.get('bertscore_f1_pct'), 2):.2f}% |"
+                )
+        md_lines.append("")
+
+    if isinstance(multi_subj, Mapping) and multi_subj:
+        md_lines.extend(
+            [
+                "## 5. Multi-Subject Observation Scaling (`k ∈ {1, 2, 5, 10}`)",
+                "",
+                "| Subjects `k` | Scale `|V|` | All BLEU-1 | All Word Acc | In-Vocab Word Acc | `>=80%` Core BLEU-1 (`Word Acc`) | `100%` 0-OOV Core BLEU-1 (`Word Acc`) |",
+                "| :--- | :--- | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for k_lbl, m_entry in sorted(
+            multi_subj.items(),
+            key=lambda kv: int(
+                kv[1].get("k_observations", str(kv[0]).lstrip("kK=_") or 1)
+            )
+            if isinstance(kv[1], Mapping)
+            else 1,
+        ):
+            if not isinstance(m_entry, Mapping):
+                continue
+            by_v = m_entry.get("by_vocabulary_size")
+            if isinstance(by_v, Mapping) and by_v:
+                for v_key, v_blk in sorted(
+                    by_v.items(),
+                    key=lambda kv: int(
+                        kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
+                    )
+                    if isinstance(kv[1], Mapping)
+                    else 0,
+                ):
+                    if not isinstance(v_blk, Mapping):
+                        continue
+                    c80 = v_blk.get("core_subset_80pct") or {}
+                    c100 = v_blk.get("core_subset_100pct") or {}
+                    c80_str = (
+                        f"**{_num(c80.get('bleu1_pct'), 2):.2f}%** (`{_num(c80.get('word_acc_pct'), 2):.2f}%`)"
+                        if c80
+                        else "-"
+                    )
+                    c100_str = (
+                        f"**{_num(c100.get('bleu1_pct'), 2):.2f}%** (`{_num(c100.get('word_acc_pct'), 2):.2f}%`)"
+                        if c100
+                        else "-"
+                    )
+                    md_lines.append(
+                        f"| **`{k_lbl}`** | `{v_key}` | "
+                        f"**{_num(v_blk.get('bleu1_pct'), 2):.2f}%** | {_num(v_blk.get('word_acc_pct'), 2):.2f}% | "
+                        f"{_num(v_blk.get('in_vocabulary_word_acc_pct'), 2):.2f}% | {c80_str} | {c100_str} |"
+                    )
+            else:
+                md_lines.append(
+                    f"| **`{k_lbl}`** | `Full` | "
+                    f"**{_num(m_entry.get('bleu1_pct'), 2):.2f}%** | {_num(m_entry.get('word_acc_pct'), 2):.2f}% | "
+                    f"{_num(m_entry.get('in_vocabulary_word_acc_pct'), 2):.2f}% | - | - |"
+                )
+        md_lines.append("")
+
+    if cgated_rows:
+        md_lines.extend(
+            [
+                "## 6. Online Screen Anti-Flicker Stability (`C-Gated`)",
+                "",
+                "| Condition | Recommended `τ_gate` | Screen Rewrite Rate | BLEU-1 (Subj) | Word Acc (In-Vocab) | WER | BERTScore-F1 |",
+                "| :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for cr in cgated_rows:
+            rw_str = (
+                f"{float(cr['screen_rewrite_rate_pct']):.2f}%"
+                if cr.get("screen_rewrite_rate_pct") not in ("", None)
+                else "-"
+            )
+            md_lines.append(
+                f"| **`{cr['condition']}`** | `{cr.get('recommended_tau_gate', '-')}` | "
+                f"`{rw_str}` | **{cr['bleu1_subject_macro_pct']:.2f}%** | "
+                f"**{cr['word_acc_pct']:.2f}%** ({cr['in_vocabulary_word_acc_pct']:.2f}%) | "
+                f"{cr['wer_pct']:.2f}% | **{cr['bertscore_f1_pct']:.2f}%** |"
             )
         md_lines.append("")
 

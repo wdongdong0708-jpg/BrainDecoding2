@@ -690,8 +690,9 @@ def _top5_from_trajectory(traj: Mapping[str, object], fallback_word: str = "") -
 def _backfill_intermediate_and_shifted_bundles(
     decoded_bundles: Mapping[str, dict],
 ) -> dict[str, dict]:
-    """若历史解码产物未单独显式保存 K1（C1）或 K0_shifted_neg75s，则从流式轨迹中零开销回填。"""
+    """若历史或合成测试载荷未单独显式提供 K1 或 K0_shifted_neg75s，则从流式轨迹回填；同时移除废弃的 F_local。"""
     bundles: dict[str, dict] = dict(decoded_bundles)
+    bundles.pop("F_local", None)
 
     for key in ("S3_clean", "S3", "S3_shifted_neg75s"):
         b = bundles.get(key)
@@ -1415,9 +1416,10 @@ def evaluate_and_export_sequence_decoding(
     multi_subject_bundles: Mapping[str | int, dict] | None = None,
     vocabulary_scaling_bundles: Mapping[str, dict] | None = None,
     core_vocab_size: int = 250,
+    core_vocab_sizes: Sequence[int] = (50, 100, 250),
     plot: bool = True,
 ) -> dict:
-    """汇总各解码条件（LM-Only, S0, K0, K1, S3, F 及 Shifted -75s）、跨被试聚合与多尺度候选词表实验，输出 6 维指标表与可视化图表。"""
+    """汇总四级延迟预算阶梯（Isolated S0, Rolling-K0, Rolling-K1, Rolling-K2, Full-Context 及对照）、|V| in {50,100,250} 核心词表、k in {1,2,5,10} 跨被试聚合与独立 C-Gated 防闪烁模块。"""
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1425,13 +1427,17 @@ def evaluate_and_export_sequence_decoding(
         decoded_bundles
     )
     condition_summaries: dict[str, dict] = {}
+    c_gated_online_stability: dict[str, dict] = {}
     pareto_results: dict[str, dict] = {}
     figure_paths: dict[str, str] = {}
     multi_subject_summaries: dict[str, dict] = {}
     vocabulary_scaling_summaries: dict[str, dict] = {}
     core_vocabulary_benchmark: dict[str, Any] = {}
+    core_vocabulary_benchmarks: dict[str, Any] = {}
 
     for key, bundle in expanded_bundles.items():
+        if key == "F_local":
+            continue
         records = bundle["final_sentences"]
         metrics_6d = evaluate_six_dimensional_metrics(
             records,
@@ -1453,23 +1459,32 @@ def evaluate_and_export_sequence_decoding(
             )
             pareto_results[key] = pareto
             rec_pt = pareto["recommended_operating_point"]
-            condition_summaries[f"{key}_c_gated"] = {
+            gated_entry = {
                 k: rec_pt[k]
                 for k in metrics_6d
                 if k in rec_pt
             }
-            condition_summaries[f"{key}_c_gated"]["recommended_tau_gate"] = (
-                rec_pt["tau_gate"]
-            )
-            condition_summaries[f"{key}_c_gated"]["screen_rewrite_rate_pct"] = (
+            gated_entry["recommended_tau_gate"] = rec_pt["tau_gate"]
+            gated_entry["screen_rewrite_rate_pct"] = (
                 rec_pt["screen_rewrite_rate_pct"]
             )
-            condition_summaries[f"{key}_c_gated"][
-                "invalid_flicker_filtered_pct"
-            ] = rec_pt["invalid_flicker_filtered_pct"]
-            condition_summaries[f"{key}_c_gated"][
-                "mean_seconds_per_segment"
-            ] = float(bundle.get("mean_seconds_per_segment", 0.0))
+            gated_entry["invalid_flicker_filtered_pct"] = (
+                rec_pt["invalid_flicker_filtered_pct"]
+            )
+            gated_entry["triggered_rewrites"] = rec_pt.get(
+                "triggered_rewrites", 0
+            )
+            gated_entry["beneficial_repairs"] = rec_pt.get(
+                "beneficial_repairs", 0
+            )
+            gated_entry["harmful_rewrites"] = rec_pt.get("harmful_rewrites", 0)
+            gated_entry["invalid_flickers"] = rec_pt.get("invalid_flickers", 0)
+            gated_entry["mean_seconds_per_segment"] = float(
+                bundle.get("mean_seconds_per_segment", 0.0)
+            )
+            gated_entry["is_online_screen_gate"] = True
+            c_gated_online_stability[f"{key}_c_gated"] = gated_entry
+            condition_summaries[f"{key}_c_gated"] = gated_entry
 
             if plot and key in {"S3_clean", "S3"}:
                 figure_paths.update(
@@ -1479,16 +1494,18 @@ def evaluate_and_export_sequence_decoding(
                 )
 
     canonical_order = (
-        "LM-Only",
         "S0",
+        "S0_clean",
         "K0",
         "K1",
         "S3_clean",
-        "S3_clean_c_gated",
         "F",
-        "F_local",
+        "F_clean",
+        "LM-Only",
+        "LM-Only_clean",
         "K0_shifted_neg75s",
         "S3_shifted_neg75s",
+        "S3_clean_c_gated",
         "S3_shifted_neg75s_c_gated",
     )
     ordered_summaries: dict[str, dict] = {}
@@ -1526,9 +1543,36 @@ def evaluate_and_export_sequence_decoding(
                 word_embedding_map=word_embedding_map,
             )
             ms_metrics["k_observations"] = k_obs
+            ms_metrics["effective_k_observations"] = int(
+                ms_bundle.get("effective_k_observations", k_obs)
+            )
             ms_metrics["mean_seconds_per_segment"] = float(
                 ms_bundle.get("mean_seconds_per_segment", 0.0)
             )
+            ms_conds_map = ms_bundle.get("conditions")
+            if isinstance(ms_conds_map, Mapping) and ms_conds_map:
+                ms_subsets = evaluate_high_coverage_core_subsets(
+                    ms_conds_map,
+                    language=language,
+                    word_embedding_map=word_embedding_map,
+                )
+            else:
+                ms_subsets = evaluate_high_coverage_core_subsets(
+                    {"S3_clean": ms_bundle},
+                    language=language,
+                    word_embedding_map=word_embedding_map,
+                )
+            ms_metrics["subsets"] = ms_subsets.get("subsets", {})
+
+            ms_by_vocab = ms_bundle.get("by_vocabulary_size")
+            if isinstance(ms_by_vocab, Mapping) and ms_by_vocab:
+                ms_metrics["by_vocabulary_size"] = (
+                    evaluate_vocabulary_scaling_summary(
+                        ms_by_vocab,
+                        language=language,
+                        word_embedding_map=word_embedding_map,
+                    )
+                )
             multi_subject_summaries[f"k={k_obs}"] = ms_metrics
         if plot and len(multi_subject_summaries) >= 2:
             figure_paths.update(
@@ -1546,18 +1590,35 @@ def evaluate_and_export_sequence_decoding(
             language=language,
             word_embedding_map=word_embedding_map,
         )
+        target_core_sizes = sorted(
+            {int(v) for v in (core_vocab_sizes or ()) if int(v) > 0}
+            | ({int(core_vocab_size)} if core_vocab_size else set())
+        )
+        for v_sz in target_core_sizes:
+            v_key = f"V={v_sz}"
+            if v_key in vocabulary_scaling_bundles:
+                v_entry = vocabulary_scaling_bundles[v_key]
+                v_bench = evaluate_high_coverage_core_subsets(
+                    v_entry.get("conditions") or {},
+                    language=language,
+                    word_embedding_map=word_embedding_map,
+                    vocabulary_size=int(v_sz),
+                )
+                v_bench["test_token_coverage_pct"] = v_entry.get(
+                    "test_token_coverage_pct"
+                )
+                core_vocabulary_benchmarks[v_key] = v_bench
+
         core_key = f"V={int(core_vocab_size)}"
-        if core_key in vocabulary_scaling_bundles:
-            core_entry = vocabulary_scaling_bundles[core_key]
-            core_vocabulary_benchmark = evaluate_high_coverage_core_subsets(
-                core_entry.get("conditions") or {},
-                language=language,
-                word_embedding_map=word_embedding_map,
-                vocabulary_size=int(core_vocab_size),
-            )
-            core_vocabulary_benchmark["test_token_coverage_pct"] = (
-                core_entry.get("test_token_coverage_pct")
-            )
+        if core_key in core_vocabulary_benchmarks:
+            core_vocabulary_benchmark = core_vocabulary_benchmarks[core_key]
+        elif core_vocabulary_benchmarks:
+            first_k = sorted(
+                core_vocabulary_benchmarks.keys(),
+                key=lambda s: int(s.lstrip("vV=")),
+            )[-1]
+            core_vocabulary_benchmark = core_vocabulary_benchmarks[first_k]
+
         if plot and len(vocabulary_scaling_summaries) >= 2:
             figure_paths.update(
                 plot_vocabulary_scaling_curve(
@@ -1587,17 +1648,19 @@ def evaluate_and_export_sequence_decoding(
     revision_gains = _compute_revision_gain_deltas(condition_summaries)
 
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "protocol": "sequence_decoding_s3_evaluation",
         "dataset": dataset,
         "language": language,
         "split": split,
         "conditions": condition_summaries,
+        "c_gated_online_stability": c_gated_online_stability,
         "revision_gains": revision_gains,
         "statistical_significance": statistical_significance,
         "per_subject": per_subject,
         "per_subject_summary": per_subject_summary,
         "core_vocabulary_benchmark": core_vocabulary_benchmark,
+        "core_vocabulary_benchmarks": core_vocabulary_benchmarks,
         "full_vocab_core_subsets": full_vocab_core_subsets,
         "vocabulary_scaling": vocabulary_scaling_summaries,
         "multi_subject_scaling": multi_subject_summaries,

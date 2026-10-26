@@ -405,8 +405,26 @@ def test_static_baselines_and_state_hyperparameter_calibration() -> None:
         states_map["K0"]["language_weight"]
         >= states_map["K1"]["language_weight"]
         >= states_map["K2"]["language_weight"]
+        >= 0.05
     )
     assert cal_report["monotonicity_satisfied"] is True
+
+    # 2B. 验证 shared_language_weight=True 模式：K0/K1/K2 共享完全相同的 (T, λ >= 0.05)
+    cal_shared = calibrate_state_hyperparameters(
+        exported_val,
+        scorer,
+        temperature_grid=(0.07,),
+        language_weight_grid=(0.0, 0.05, 0.15),
+        beam_width=3,
+        candidate_top_k=6,
+        shared_language_weight=True,
+    )
+    assert (
+        cal_shared["states"]["K0"]["language_weight"]
+        == cal_shared["states"]["K1"]["language_weight"]
+        == cal_shared["states"]["K2"]["language_weight"]
+        >= 0.05
+    )
 
     # 3. 验证批量句段解码入口 `decode_dataset_segments`
     s3_clean_bundle = decode_dataset_segments(
@@ -728,6 +746,7 @@ def test_top_k_local_softmax_and_multi_subject_observation_sweep() -> None:
         scorer,
         hyperparams,
         k_observations=(1, 2, 4),
+        vocab_sizes=(2, 3),
         beam_width=3,
         candidate_top_k=5,
         show_progress=False,
@@ -738,6 +757,8 @@ def test_top_k_local_softmax_and_multi_subject_observation_sweep() -> None:
         vocabulary[1],
         vocabulary[2],
     ]
+    assert "V=2" in sweep["k=4"]["by_vocabulary_size"]
+    assert "V=3" in sweep["k=4"]["by_vocabulary_size"]
 
 
 def test_vocabulary_frequency_order_and_scaling_sweep() -> None:
@@ -838,6 +859,17 @@ def test_vocabulary_frequency_order_and_scaling_sweep() -> None:
     assert set(v2_s3["predicted_words"]).issubset({"ami", "prince"})
     assert v2_s3["in_vocabulary_mask"] == [True, True, False]
     assert scaling_bundles["V=2"]["test_token_coverage_pct"] == round(200.0 / 3.0, 4)
+    # 验证每个尺度均对 S0 / K0 / K1 / S3_clean / K0_shifted_neg75s / S3_shifted_neg75s 执行统一静态束搜索，且未生成 F-local
+    assert {
+        "S0",
+        "K0",
+        "K1",
+        "S3_clean",
+        "K0_shifted_neg75s",
+        "S3_shifted_neg75s",
+    }.issubset(set(scaling_bundles["V=2"]["conditions"].keys()))
+    assert "F" not in scaling_bundles["V=2"]["conditions"]
+    assert "F_local" not in scaling_bundles["V=2"]["conditions"]
 
 
 
