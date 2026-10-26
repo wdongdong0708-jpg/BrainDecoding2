@@ -71,6 +71,7 @@ from braindecoding.evaluation.word_retrieval_evaluation import (
     _score_full_vocabulary_population,
     _summarize_shifted_conditions,
     run_evaluation_workflow,
+    summarize_multi_seed_evaluation,
 )
 from braindecoding.experiment import file_sha256
 from braindecoding.losses import build_siglip_loss

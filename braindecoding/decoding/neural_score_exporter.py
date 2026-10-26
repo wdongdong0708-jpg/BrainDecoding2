@@ -268,6 +268,7 @@ def _locate_stage_checkpoint(
     seed: int,
     *,
     exp_tag: str | None = None,
+    fallback_exp_tags: tuple[str | None, ...] = (),
     explicit_checkpoint: str | Path | None = None,
     fallback_checkpoint: str | Path | None = None,
 ) -> Path | None:
@@ -278,19 +279,26 @@ def _locate_stage_checkpoint(
             raise FileNotFoundError(f"显式指定的 {stage} 阶段检查点不存在：{path}")
         return path
 
-    for mode in ("train", "smoke"):
-        stage_dir = workflow_output_directory(
-            dataset,
-            stage,
-            subset_tag,
-            seed,
-            mode=mode,
-            exp_tag=exp_tag,
-        )
-        for name in ("best.ckpt", "best.pt", "last.ckpt"):
-            candidate = stage_dir / name
-            if candidate.is_file():
-                return candidate
+    candidate_tags: list[str | None] = [exp_tag]
+    for fb_tag in fallback_exp_tags:
+        if fb_tag not in candidate_tags:
+            candidate_tags.append(fb_tag)
+
+    for tag_cand in candidate_tags:
+        for mode in ("train", "smoke"):
+            stage_dir = workflow_output_directory(
+                dataset,
+                stage,
+                subset_tag,
+                seed,
+                mode=mode,
+                exp_tag=tag_cand,
+                ignore_implicit_tag=(tag_cand == ""),
+            )
+            for name in ("best.ckpt", "best.pt", "last.ckpt"):
+                candidate = stage_dir / name
+                if candidate.is_file():
+                    return candidate
 
     if fallback_checkpoint is not None:
         fb = Path(fallback_checkpoint).resolve()
@@ -639,11 +647,6 @@ def export_neural_vocabulary_scores(
         exp_tag=rev_tag,
         explicit_checkpoint=revision_checkpoint,
     )
-    if rev_ckpt is None:
-        raise FileNotFoundError(
-            f"未找到 Stage 2.2 (revision) 检查点（dataset={dataset}, subset={subset_tag}, seed={seed}）。"
-        )
-
     warmstart_fallback = rev_cfg["training"].get("pretrained_brain_encoder_checkpoint")
     word_ckpt = _locate_stage_checkpoint(
         dataset,
@@ -651,6 +654,7 @@ def export_neural_vocabulary_scores(
         subset_tag,
         seed,
         exp_tag=w_tag,
+        fallback_exp_tags=(rev_tag, ""),
         explicit_checkpoint=word_checkpoint,
         fallback_checkpoint=warmstart_fallback,
     )
@@ -662,32 +666,77 @@ def export_neural_vocabulary_scores(
         exp_tag=ctx_tag,
         explicit_checkpoint=context_checkpoint,
     )
+    if rev_ckpt is None and word_ckpt is None:
+        raise FileNotFoundError(
+            f"未找到 Stage 2.2 (revision) 或 Stage 1 (word) 检查点（dataset={dataset}, subset={subset_tag}, seed={seed}）。"
+        )
 
     bg_shifts = tuple(float(s) for s in background_shift_seconds)
     ctrl_shift = float(control_shift_seconds)
     eta_val = float(subtraction_eta)
 
     started = time.perf_counter()
-    rev_result = _encode_stage_with_shifts(
-        rev_cfg,
-        eval_table,
-        rev_ckpt,
-        stage="revision",
-        split=split,
-        device=torch_device,
-        background_shift_seconds=bg_shifts,
-        control_shift_seconds=ctrl_shift,
-        subtraction_eta=eta_val,
-        show_progress=show_progress,
-    )
+    if rev_ckpt is not None:
+        rev_result = _encode_stage_with_shifts(
+            rev_cfg,
+            eval_table,
+            rev_ckpt,
+            stage="revision",
+            split=split,
+            device=torch_device,
+            background_shift_seconds=bg_shifts,
+            control_shift_seconds=ctrl_shift,
+            subtraction_eta=eta_val,
+            show_progress=show_progress,
+        )
 
-    event_ids = rev_result["event_ids"]
-    clean_embeddings: dict[str, torch.Tensor] = dict(rev_result["clean_embeddings"])
-    shifted_embeddings: dict[str, torch.Tensor] = dict(rev_result["shifted_embeddings"])
-    availability_masks: dict[str, torch.Tensor] = dict(rev_result["availability_masks"])
-    checkpoint_provenance: dict[str, str] = {"revision": rev_result["checkpoint_path"]}
+        event_ids = rev_result["event_ids"]
+        clean_embeddings: dict[str, torch.Tensor] = dict(rev_result["clean_embeddings"])
+        shifted_embeddings: dict[str, torch.Tensor] = dict(rev_result["shifted_embeddings"])
+        availability_masks: dict[str, torch.Tensor] = dict(rev_result["availability_masks"])
+        checkpoint_provenance: dict[str, str] = {"revision": rev_result["checkpoint_path"]}
 
-    if word_ckpt is not None:
+        if word_ckpt is not None:
+            word_cfg, _ = build_workflow_config(
+                dataset,
+                stage="word",
+                seed=seed,
+                subject=subject,
+                num_subjects=num_subjects,
+                subjects=subjects,
+                eval_batch_size=eval_batch_size,
+                num_workers=num_workers,
+                precision=precision,
+                window_seconds=window_seconds,
+                window_start_offset_seconds=window_start_offset_seconds,
+                mode="train",
+                exp_tag=w_tag,
+            )
+            word_res = _encode_stage_with_shifts(
+                word_cfg,
+                eval_table,
+                word_ckpt,
+                stage="word",
+                split=split,
+                device=torch_device,
+                background_shift_seconds=bg_shifts,
+                control_shift_seconds=ctrl_shift,
+                subtraction_eta=eta_val,
+                show_progress=show_progress,
+            )
+            if word_res["event_ids"] != event_ids:
+                raise ValueError("Stage 1 (word) 与 Stage 2.2 (revision) 的编码事件顺序不一致。")
+            clean_embeddings.update(word_res["clean_embeddings"])
+            shifted_embeddings.update(word_res["shifted_embeddings"])
+            availability_masks.update(word_res["availability_masks"])
+            checkpoint_provenance["word"] = word_res["checkpoint_path"]
+        else:
+            clean_embeddings["S0"] = clean_embeddings["K0"].clone()
+            shifted_embeddings["S0"] = shifted_embeddings["K0"].clone()
+            availability_masks["S0"] = availability_masks["K0"].clone()
+            checkpoint_provenance["word"] = "fallback_from_K0"
+    else:
+        assert word_ckpt is not None
         word_cfg, _ = build_workflow_config(
             dataset,
             stage="word",
@@ -715,17 +764,18 @@ def export_neural_vocabulary_scores(
             subtraction_eta=eta_val,
             show_progress=show_progress,
         )
-        if word_res["event_ids"] != event_ids:
-            raise ValueError("Stage 1 (word) 与 Stage 2.2 (revision) 的编码事件顺序不一致。")
-        clean_embeddings.update(word_res["clean_embeddings"])
-        shifted_embeddings.update(word_res["shifted_embeddings"])
-        availability_masks.update(word_res["availability_masks"])
-        checkpoint_provenance["word"] = word_res["checkpoint_path"]
-    else:
-        clean_embeddings["S0"] = clean_embeddings["K0"].clone()
-        shifted_embeddings["S0"] = shifted_embeddings["K0"].clone()
-        availability_masks["S0"] = availability_masks["K0"].clone()
-        checkpoint_provenance["word"] = "fallback_from_K0"
+        event_ids = word_res["event_ids"]
+        clean_embeddings = dict(word_res["clean_embeddings"])
+        shifted_embeddings = dict(word_res["shifted_embeddings"])
+        availability_masks = dict(word_res["availability_masks"])
+        for h_state in ("K0", "K1", "K2"):
+            clean_embeddings[h_state] = clean_embeddings["S0"].clone()
+            shifted_embeddings[h_state] = shifted_embeddings["S0"].clone()
+            availability_masks[h_state] = availability_masks["S0"].clone()
+        checkpoint_provenance = {
+            "word": word_res["checkpoint_path"],
+            "revision": "fallback_from_word_S0",
+        }
 
     if ctx_ckpt is not None:
         ctx_cfg, _ = build_workflow_config(

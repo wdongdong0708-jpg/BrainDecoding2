@@ -2004,6 +2004,200 @@ def test_decoupled_evaluation_reporting_replotting_and_cli_report(
     assert any(p.endswith("stage_comparison_test.png") for p in replotted.values())
 
 
+def test_stage1_standalone_and_multi_seed_training_and_evaluation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Verify Stage 1 standalone training/evaluation, WORD_EXP_TAG fallback, and multi-seed aggregation."""
+    import numpy as np
+    from braindecoding.decoding.neural_score_exporter import _locate_stage_checkpoint
+    from braindecoding.evaluation.evaluation_reporting import (
+        REPORT_WIDTH,
+        format_multi_seed_evaluation_report,
+        render_saved_evaluation_report,
+    )
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        summarize_multi_seed_evaluation,
+    )
+    import scripts.decode_sentences as decode_sentences_script
+
+    # 1. Stage 1 (word) ignores implicit leftover Siamese parameters (eta_train, lambda_null, shifts_per_step)
+    cfg_word, _ = build_workflow_config(
+        config_path="configs/training/pallier2025_word_encoder.yaml",
+        seed=0,
+        eta_train=0.8,
+        lambda_null=0.5,
+        shifts_per_step=6,
+    )
+    assert cfg_word["workflow"]["stage"] == "word"
+    assert cfg_word.get("siamese_debiased", {}).get("enabled", False) is False
+
+    # Explicit siamese_debiased=True on Stage 1 still raises ValueError
+    with pytest.raises(ValueError, match="仅适用于 context"):
+        build_workflow_config(
+            config_path="configs/training/pallier2025_word_encoder.yaml",
+            seed=0,
+            siamese_debiased=True,
+        )
+
+    # 2. Multi-seed CLI parsing across train, eval-run, and decode-sentences
+    parser = cli.build_parser()
+    for subcmd in ("train", "smoke", "eval-run", "decode-sentences"):
+        parsed = parser.parse_args(
+            [subcmd, "--dataset", "pallier2025", "--seed", "0,1,2"]
+        )
+        assert parsed.seed == [0, 1, 2]
+        assert cli._resolve_seed_list(parsed) == [0, 1, 2]
+
+    ds_parser = decode_sentences_script.build_parser()
+    ds_parsed = ds_parser.parse_args(
+        ["--dataset", "pallier2025", "--seeds", "0,1,2"]
+    )
+    assert ds_parsed.seed == [0, 1, 2]
+
+    # 3. _locate_stage_checkpoint falls back from EXP_TAG to WORD_EXP_TAG / untagged for Stage 1
+    runs_dir = tmp_path / "runs"
+    monkeypatch.setenv("BRAINDECODING_RESULTS_DIR", str(runs_dir))
+    word_tag_ckpt = (
+        runs_dir
+        / "pallier2025"
+        / "lr4e-4_bs256"
+        / "word"
+        / "all-n10"
+        / "seed-001"
+        / "best.ckpt"
+    )
+    word_tag_ckpt.parent.mkdir(parents=True, exist_ok=True)
+    word_tag_ckpt.write_bytes(b"dummy-word-ckpt")
+
+    located_ckpt = _locate_stage_checkpoint(
+        "pallier2025",
+        "word",
+        "all-n10",
+        1,
+        exp_tag="lr4e-4_bs256",
+        fallback_exp_tags=("siamese_stage2_tag", ""),
+    )
+    assert located_ckpt == word_tag_ckpt.resolve()
+
+    # 4. Multi-seed single-stage (Stage 1 word) aggregation & <=86-col report formatting
+    ms_dir = tmp_path / "ms_word_dir"
+    ms_dir.mkdir(parents=True, exist_ok=True)
+    seed_results: list[dict] = []
+    for s_idx, top10_val in ((0, 0.410), (1, 0.430), (2, 0.420)):
+        seed_out = ms_dir / f"seed-{s_idx:03d}"
+        seed_out.mkdir(parents=True, exist_ok=True)
+        seed_results.append(
+            {
+                "dataset": "pallier2025",
+                "stage": "word",
+                "split": "test",
+                "seed": s_idx,
+                "exp_tag": "lr4e-4_bs256",
+                "output_dir": str(seed_out),
+                "subset": {
+                    "subset_tag": "all-n10",
+                    "subject_count": 10,
+                    "total_canonical_subjects": 10,
+                },
+                "checkpoint": {"path": str(seed_out / "best.ckpt"), "epoch": 15},
+                "window_seconds": 1.0,
+                "window_samples": 50,
+                "selection_metric": "pallier2025_50_macro",
+                "selection_score": top10_val,
+                "metrics": {
+                    "vocabulary_sweep": {
+                        "N20": {
+                            "label": "Top-20 Vocab",
+                            "candidate_count": 20,
+                            "query_count": 1000,
+                            "chance_top10": 0.50,
+                            "macro_top10": top10_val + 0.25,
+                            "micro_top10": top10_val + 0.26,
+                            "macro_top5": 0.50,
+                            "macro_top1": 0.22,
+                            "mrr": 0.38,
+                            "median_rank": 6.0,
+                        },
+                        "N50": {
+                            "label": "Top-50 Vocab",
+                            "candidate_count": 50,
+                            "query_count": 1000,
+                            "chance_top10": 0.20,
+                            "macro_top10": top10_val,
+                            "micro_top10": top10_val + 0.01,
+                            "macro_top5": 0.280,
+                            "macro_top1": 0.120,
+                            "mrr": 0.215,
+                            "median_rank": 13.0,
+                        },
+                        "full_vocab": {
+                            "label": "Full Vocab (2020)",
+                            "candidate_count": 2020,
+                            "query_count": 1000,
+                            "chance_top10": 10.0 / 2020.0,
+                            "macro_top10": 0.085,
+                            "micro_top10": 0.092,
+                            "macro_top5": 0.045,
+                            "macro_top1": 0.018,
+                            "mrr": 0.042,
+                            "median_rank": 180.0,
+                        },
+                    },
+                },
+                "negative_controls": {
+                    "clean_reference": {
+                        "vocab50_macro_top10": top10_val,
+                        "vocab50_micro_top10": top10_val + 0.01,
+                        "vocab50_macro_top1": 0.120,
+                        "full_vocab_macro_top10": 0.085,
+                    },
+                    "shifted_aggregate": {
+                        "mean_vocab50_macro_top10": 0.205,
+                        "mean_vocab50_micro_top10": 0.210,
+                        "mean_vocab50_macro_top1": 0.021,
+                        "mean_full_vocab_macro_top10": 0.005,
+                    },
+                },
+            }
+        )
+
+    ms_summary = summarize_multi_seed_evaluation(
+        seed_results,
+        split="test",
+        output_dir=ms_dir,
+        print_report=False,
+    )
+    assert ms_summary["seed_count"] == 3
+    assert ms_summary["seeds"] == [0, 1, 2]
+    n50_agg = ms_summary["vocabulary_sweep_aggregate"]["N50"]
+    assert n50_agg["mean_macro_top10"] == pytest.approx(0.420)
+    assert n50_agg["std_macro_top10"] == pytest.approx(float(np.std([0.41, 0.43, 0.42], ddof=0)))
+
+    ms_compact = format_multi_seed_evaluation_report(ms_summary, verbose=False)
+    ms_verbose = format_multi_seed_evaluation_report(ms_summary, verbose=True)
+    assert max(len(line) for line in ms_compact.splitlines()) <= REPORT_WIDTH
+    assert "Multi-Seed Word Evaluation" in ms_compact
+    assert "42.00±0.82%" in ms_compact
+    assert "Top-20 Vocab" not in ms_compact
+    assert "Top-20 Vocab" in ms_verbose
+
+    auto_rendered = render_saved_evaluation_report(ms_dir, verbose=False)
+    assert "Multi-Seed Word Evaluation" in auto_rendered
+
+    # 5. Verify both colab_gpu_train.ipynb and colab_gpu_evaluation.ipynb handle multi-seed without int(SEED) crash
+    train_nb_raw = (PROJECT_ROOT / "scripts/colab/colab_gpu_train.ipynb").read_text(
+        encoding="utf-8"
+    )
+    eval_nb_raw = (PROJECT_ROOT / "scripts/colab/colab_gpu_evaluation.ipynb").read_text(
+        encoding="utf-8"
+    )
+    assert "SEED_LIST" in train_nb_raw and "SEED_ARG" in train_nb_raw
+    assert "SEED_LIST" in eval_nb_raw and "SEED_ARG" in eval_nb_raw
+    assert "int(SEED)" not in eval_nb_raw
+    assert "EVAL_ALL_STAGES" in eval_nb_raw
+
+
+
 
 
 

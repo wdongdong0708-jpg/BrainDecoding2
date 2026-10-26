@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from braindecoding.cli import _parse_seed_argument
 from braindecoding.config import (
     ensure_default_environment,
     load_yaml_with_extends,
@@ -66,9 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--seed",
-        type=int,
+        "--seeds",
+        dest="seed",
+        type=_parse_seed_argument,
         default=0,
-        help="神经模型随机种子（默认：0）",
+        help="神经模型随机种子：支持单种子（如 0）或逗号分隔的多种子列表（如 0,1,2；默认：0）",
     )
     parser.add_argument(
         "--subject",
@@ -294,6 +298,40 @@ def _load_or_init_language_scorer(
 
 def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     ensure_default_environment()
+    raw_seed = getattr(args, "seed", 0)
+    if isinstance(raw_seed, (list, tuple)):
+        seed_list = [int(s) for s in raw_seed]
+    elif isinstance(raw_seed, str) and ("," in raw_seed or " " in raw_seed):
+        parsed_s = _parse_seed_argument(raw_seed)
+        seed_list = parsed_s if isinstance(parsed_s, list) else [int(parsed_s)]
+    else:
+        seed_list = [int(raw_seed)]
+    if len(seed_list) > 1:
+        per_seed_summaries: dict[str, dict[str, Any]] = {}
+        for idx, seed_val in enumerate(seed_list):
+            print(
+                f"\n{'#' * 86}\n"
+                f" [Multi-Seed S3 Sequence Decoding {idx + 1}/{len(seed_list)}] "
+                f"Running seed={seed_val} (all seeds: {seed_list})\n"
+                f"{'#' * 86}",
+                flush=True,
+            )
+            seed_args = copy.copy(args)
+            seed_args.seed = int(seed_val)
+            seed_args.output_dir = None
+            seed_args.export_path = None
+            seed_args.calibration_path = None
+            seed_args.decoding_path = None
+            per_seed_summaries[f"seed-{int(seed_val):03d}"] = (
+                run_sequence_decoding_pipeline(seed_args)
+            )
+        return {
+            "dataset": args.dataset,
+            "split": args.split,
+            "seeds": seed_list,
+            "per_seed_summaries": per_seed_summaries,
+        }
+    args.seed = int(seed_list[0])
     cfg_path = resolve_config_path(project_path(args.config))
     protocol_cfg = load_yaml_with_extends(cfg_path) if cfg_path.is_file() else {}
 
@@ -979,9 +1017,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     summary = run_sequence_decoding_pipeline(args)
-    if bool(getattr(args, "json_output", False)) or (
-        "conditions" not in summary and "vocabulary_scaling" not in summary
-    ):
+    if bool(getattr(args, "json_output", False)):
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+    elif isinstance(summary, dict) and isinstance(summary.get("per_seed_summaries"), dict):
+        for seed_summary in summary["per_seed_summaries"].values():
+            if "conditions" in seed_summary or "vocabulary_scaling" in seed_summary:
+                print_sequence_decoding_report(
+                    seed_summary,
+                    verbose=bool(getattr(args, "verbose", False)),
+                )
+    elif "conditions" not in summary and "vocabulary_scaling" not in summary:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
         print_sequence_decoding_report(

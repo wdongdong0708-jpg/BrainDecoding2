@@ -11,7 +11,7 @@ from __future__ import annotations
 import gc
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import numpy as np
 import torch
@@ -29,6 +29,7 @@ from braindecoding.evaluation.evaluation_figures import (
     plot_stage_comparison_figure,
 )
 from braindecoding.evaluation.evaluation_reporting import (
+    print_multi_seed_evaluation_report,
     print_stage_comparison_report,
     print_word_evaluation_report,
 )
@@ -1070,6 +1071,36 @@ def _evaluate_single_stage(
                 ckpt_file = smoke_ckpt
                 if output_dir is None:
                     out = smoke_dir
+        if not ckpt_file.is_file() and stage == "word":
+            fallback_tags: list[tuple[str, bool]] = []
+            if resolved_word_exp_tag != resolved_exp_tag:
+                fallback_tags.append(
+                    (resolved_word_exp_tag, resolved_word_exp_tag == "")
+                )
+            if resolved_exp_tag and ("", True) not in fallback_tags:
+                fallback_tags.append(("", True))
+            for cand_tag, cand_ignore_imp in fallback_tags:
+                for cand_mode in ("train", "smoke"):
+                    cand_dir = workflow_output_directory(
+                        dataset,
+                        stage,
+                        subset_spec["subset_tag"],
+                        seed,
+                        mode=cand_mode,
+                        exp_tag=cand_tag,
+                        ignore_implicit_tag=cand_ignore_imp,
+                    )
+                    cand_ckpt = cand_dir / "best.ckpt"
+                    if not cand_ckpt.is_file():
+                        cand_ckpt = cand_dir / "best.pt"
+                    if cand_ckpt.is_file():
+                        ckpt_file = cand_ckpt
+                        resolved_exp_tag = cand_tag
+                        if output_dir is None:
+                            out = cand_dir
+                        break
+                if ckpt_file.is_file():
+                    break
         if not ckpt_file.is_file():
             raise FileNotFoundError(
                 f"未找到阶段 {stage} ({STAGE_DISPLAY_NAMES.get(stage, stage)}) 的训练检查点：{out / 'best.ckpt'}。"
@@ -1457,11 +1488,347 @@ def _evaluate_single_stage(
 evaluate_single_stage = _evaluate_single_stage
 
 
+def _parse_seed_list(
+    raw_seed: int | str | Iterable[int | str] | None,
+) -> list[int]:
+    """解析单种子或多种子输入（支持整数、逗号分隔字符串如 '0,1,2' 或序列如 [0, 1, 2]）。"""
+    if raw_seed is None:
+        return [0]
+    if isinstance(raw_seed, bool):
+        return [int(raw_seed)]
+    if isinstance(raw_seed, int):
+        return [int(raw_seed)]
+    if isinstance(raw_seed, str):
+        cleaned = raw_seed.strip().strip("[]()")
+        if not cleaned:
+            return [0]
+        tokens = [
+            tok.strip()
+            for tok in cleaned.replace(";", ",").replace(" ", ",").split(",")
+            if tok.strip()
+        ]
+    else:
+        tokens = []
+        for item in raw_seed:
+            if isinstance(item, str):
+                tokens.extend(
+                    tok.strip()
+                    for tok in item.strip("[]()")
+                    .replace(";", ",")
+                    .replace(" ", ",")
+                    .split(",")
+                    if tok.strip()
+                )
+            else:
+                tokens.append(item)
+    seeds: list[int] = []
+    for tok in tokens:
+        val = int(tok)
+        if val not in seeds:
+            seeds.append(val)
+    return seeds or [0]
+
+
+def _aggregate_single_stage_multi_seed(
+    seed_results: Sequence[dict],
+    *,
+    split: str = "val",
+) -> dict:
+    """聚合同一阶段在多个随机种子上的词级检索、滚动修订视界与负对照指标（Mean ± SD）。"""
+    if not seed_results:
+        return {}
+    first = seed_results[0]
+    dataset = str(first.get("dataset", "-"))
+    stage = str(first.get("stage", "word"))
+    exp_tag = str(first.get("exp_tag", ""))
+    word_exp_tag = str(first.get("word_exp_tag", exp_tag))
+    subset = first.get("subset", {})
+    win_sec = float(first.get("window_seconds", 1.0))
+    win_samp = int(first.get("window_samples", round(win_sec * 50.0)))
+    win_off = float(first.get("window_start_offset_seconds", 0.0))
+
+    per_seed: list[dict] = []
+    for res in seed_results:
+        sd = int(res.get("seed", 0))
+        ckpt_info = res.get("checkpoint") or {}
+        ep = int(ckpt_info.get("epoch", 0)) if isinstance(ckpt_info, dict) else 0
+        metrics = res.get("metrics") or {}
+        sweep = metrics.get("vocabulary_sweep") or {}
+        n50 = sweep.get("N50") or {}
+        fv = sweep.get("full_vocab") or {}
+        nc = res.get("negative_controls") or {}
+        sh_agg = nc.get("shifted_aggregate") or {}
+        row = {
+            "seed": sd,
+            "epoch": ep,
+            "output_dir": str(res.get("output_dir", "")),
+            "evaluation_json": str(res.get("evaluation_json", "")),
+            "vocab50_macro_top10": float(n50.get("macro_top10", 0.0)),
+            "vocab50_micro_top10": float(n50.get("micro_top10", 0.0)),
+            "vocab50_macro_top5": float(n50.get("macro_top5", 0.0)),
+            "vocab50_macro_top1": float(n50.get("macro_top1", 0.0)),
+            "vocab50_mrr": float(n50.get("mrr", 0.0)),
+            "vocab50_median_rank": float(n50.get("median_rank", 25.0)),
+            "full_vocab_macro_top10": float(fv.get("macro_top10", 0.0)),
+            "full_vocab_micro_top10": float(fv.get("micro_top10", 0.0)),
+            "full_vocab_macro_top1": float(fv.get("macro_top1", 0.0)),
+            "full_vocab_mrr": float(fv.get("mrr", 0.0)),
+            "full_vocab_median_rank": float(fv.get("median_rank", 1010.0)),
+        }
+        if sh_agg:
+            row["shifted_vocab50_macro_top10"] = float(
+                sh_agg.get("mean_vocab50_macro_top10", 0.0)
+            )
+            row["clean_minus_shifted_vocab50_macro_top10"] = float(
+                sh_agg.get("clean_minus_shifted_vocab50_macro_top10", 0.0)
+            )
+            row["shifted_full_vocab_macro_top10"] = float(
+                sh_agg.get("mean_full_vocab_macro_top10", 0.0)
+            )
+            row["clean_minus_shifted_full_vocab_macro_top10"] = float(
+                sh_agg.get("clean_minus_shifted_full_vocab_macro_top10", 0.0)
+            )
+        per_seed.append(row)
+
+    vocab_sweep_agg: dict[str, dict] = {}
+    for scale_key in ("N20", "N50", "N100", "N150", "full_vocab"):
+        scale_rows = [
+            (r.get("metrics") or {}).get("vocabulary_sweep", {}).get(scale_key)
+            for r in seed_results
+        ]
+        scale_rows = [sr for sr in scale_rows if isinstance(sr, dict)]
+        if not scale_rows:
+            continue
+        agg_entry: dict[str, object] = {
+            "label": str(scale_rows[0].get("label", scale_key)),
+            "candidate_count": int(scale_rows[0].get("candidate_count", 0)),
+            "query_count": int(scale_rows[0].get("query_count", 0)),
+            "seed_count": len(scale_rows),
+        }
+        for m_key in (
+            "macro_top10",
+            "micro_top10",
+            "macro_top5",
+            "macro_top1",
+            "mrr",
+            "median_rank",
+        ):
+            vals = np.asarray(
+                [float(sr.get(m_key, 0.0)) for sr in scale_rows],
+                dtype=np.float64,
+            )
+            agg_entry[f"mean_{m_key}"] = float(np.mean(vals))
+            agg_entry[f"std_{m_key}"] = float(np.std(vals, ddof=0))
+        vocab_sweep_agg[scale_key] = agg_entry
+
+    horizons_agg: dict[str, dict] = {}
+    for h_key in ("K0", "K1", "K2"):
+        h_rows = [
+            (r.get("metrics") or {}).get("revision_horizons", {}).get(h_key)
+            for r in seed_results
+        ]
+        h_rows = [hr for hr in h_rows if isinstance(hr, dict)]
+        if not h_rows:
+            continue
+        h_entry: dict[str, object] = {
+            "label": str(h_rows[0].get("label", h_key)),
+            "delay": int(h_rows[0].get("delay", 0)),
+        }
+        for hm_key in (
+            "common_vocab50_macro_top10",
+            "common_vocab50_micro_top10",
+            "common_vocab50_macro_top1",
+            "common_full_vocab_macro_top10",
+            "common_full_vocab_micro_top10",
+            "common_full_vocab_macro_top1",
+            "common_full_vocab_mrr",
+        ):
+            vals = np.asarray(
+                [float(hr.get(hm_key, 0.0)) for hr in h_rows], dtype=np.float64
+            )
+            h_entry[f"mean_{hm_key}"] = float(np.mean(vals))
+            h_entry[f"std_{hm_key}"] = float(np.std(vals, ddof=0))
+        horizons_agg[h_key] = h_entry
+
+    if "K0" in horizons_agg and "K2" in horizons_agg:
+        gain_entry: dict[str, float] = {}
+        for hm_key in (
+            "common_vocab50_macro_top10",
+            "common_vocab50_micro_top10",
+            "common_vocab50_macro_top1",
+            "common_full_vocab_macro_top10",
+        ):
+            diffs = []
+            for r in seed_results:
+                rh = (r.get("metrics") or {}).get("revision_horizons") or {}
+                if "K0" in rh and "K2" in rh:
+                    diffs.append(
+                        float(rh["K2"].get(hm_key, 0.0))
+                        - float(rh["K0"].get(hm_key, 0.0))
+                    )
+            if diffs:
+                arr = np.asarray(diffs, dtype=np.float64)
+                gain_entry[f"mean_{hm_key}"] = float(np.mean(arr))
+                gain_entry[f"std_{hm_key}"] = float(np.std(arr, ddof=0))
+        if gain_entry:
+            horizons_agg["K2_minus_K0"] = gain_entry
+
+    nc_agg: dict[str, object] = {"enabled": False}
+    nc_valid = [
+        r.get("negative_controls")
+        for r in seed_results
+        if isinstance(r.get("negative_controls"), dict)
+        and (r.get("negative_controls") or {}).get("shifted_aggregate")
+    ]
+    if nc_valid:
+        nc_agg["enabled"] = True
+        for m_key in (
+            "vocab50_macro_top10",
+            "vocab50_micro_top10",
+            "vocab50_macro_top1",
+            "full_vocab_macro_top10",
+        ):
+            clean_vals = np.asarray(
+                [
+                    float(
+                        (nc.get("clean_reference") or {}).get(m_key, 0.0)
+                    )
+                    for nc in nc_valid
+                ],
+                dtype=np.float64,
+            )
+            sh_vals = np.asarray(
+                [
+                    float(
+                        (nc.get("shifted_aggregate") or {}).get(
+                            f"mean_{m_key}", 0.0
+                        )
+                    )
+                    for nc in nc_valid
+                ],
+                dtype=np.float64,
+            )
+            gap_vals = clean_vals - sh_vals
+            nc_agg[f"mean_clean_{m_key}"] = float(np.mean(clean_vals))
+            nc_agg[f"std_clean_{m_key}"] = float(np.std(clean_vals, ddof=0))
+            nc_agg[f"mean_shifted_{m_key}"] = float(np.mean(sh_vals))
+            nc_agg[f"std_shifted_{m_key}"] = float(np.std(sh_vals, ddof=0))
+            nc_agg[f"mean_gap_{m_key}"] = float(np.mean(gap_vals))
+            nc_agg[f"std_gap_{m_key}"] = float(np.std(gap_vals, ddof=0))
+
+    return {
+        "status": "multi_seed_evaluation_completed",
+        "dataset": dataset,
+        "stage": stage,
+        "stage_display_name": STAGE_DISPLAY_NAMES.get(stage, stage),
+        "exp_tag": exp_tag,
+        "word_exp_tag": word_exp_tag,
+        "split": split,
+        "seeds": [int(r["seed"]) for r in per_seed],
+        "seed_count": len(per_seed),
+        "window_seconds": win_sec,
+        "window_samples": win_samp,
+        "window_start_offset_seconds": win_off,
+        "subset": subset,
+        "per_seed": per_seed,
+        "vocabulary_sweep_aggregate": vocab_sweep_agg,
+        "revision_horizons_aggregate": horizons_agg,
+        "negative_controls_aggregate": nc_agg,
+    }
+
+
+def summarize_multi_seed_evaluation(
+    seed_results: Sequence[dict] | dict,
+    *,
+    split: str = "val",
+    output_dir: str | Path | None = None,
+    verbose: bool = False,
+    print_report: bool = True,
+    **_extra_kwargs,
+) -> dict:
+    """将多个随机种子的评估结果汇总为 Multi-Seed Summary JSON 与报表并落盘。"""
+    if isinstance(seed_results, dict):
+        seed_results = list(seed_results.values())
+    if not seed_results:
+        raise ValueError("seed_results 不能为空。")
+    first = seed_results[0]
+    is_multi_stage = (
+        "stages" in first and isinstance(first.get("stages"), dict)
+    )
+    if is_multi_stage:
+        stages_agg: dict[str, dict] = {}
+        for st_key in ("word", "context", "revision"):
+            st_list = [
+                r["stages"][st_key]
+                for r in seed_results
+                if isinstance(r.get("stages"), dict) and st_key in r["stages"]
+            ]
+            if st_list:
+                stages_agg[st_key] = _aggregate_single_stage_multi_seed(
+                    st_list, split=split
+                )
+        target_dir = (
+            Path(output_dir).resolve()
+            if output_dir is not None
+            else Path(str(first.get("output_dir", "."))).resolve().parent
+        )
+        target_dir.mkdir(parents=True, exist_ok=True)
+        summary = {
+            "status": "multi_seed_stage_comparison_completed",
+            "dataset": str(first.get("dataset", "-")),
+            "exp_tag": str(first.get("exp_tag", "")),
+            "word_exp_tag": str(first.get("word_exp_tag", "")),
+            "split": split,
+            "seeds": [int(r.get("seed", 0)) for r in seed_results],
+            "seed_count": len(seed_results),
+            "window_seconds": float(first.get("window_seconds", 1.0)),
+            "window_samples": int(first.get("window_samples", 50)),
+            "window_start_offset_seconds": float(
+                first.get("window_start_offset_seconds", 0.0)
+            ),
+            "subset": first.get("subset", {}),
+            "evaluated_stages": list(stages_agg.keys()),
+            "stages_aggregate": stages_agg,
+            "seed_results": list(seed_results),
+            "output_dir": str(target_dir),
+        }
+        json_path = target_dir / f"multi_seed_stage_comparison_{split}.json"
+        save_json(json_path, summary)
+        summary["evaluation_json"] = str(json_path)
+        print_multi_seed_evaluation_report(
+            summary,
+            verbose=verbose,
+            output_dir=target_dir,
+            print_to_stdout=print_report,
+        )
+        return summary
+
+    summary = _aggregate_single_stage_multi_seed(seed_results, split=split)
+    target_dir = (
+        Path(output_dir).resolve()
+        if output_dir is not None
+        else Path(str(first.get("output_dir", "."))).resolve().parent
+    )
+    target_dir.mkdir(parents=True, exist_ok=True)
+    summary["seed_results"] = list(seed_results)
+    summary["output_dir"] = str(target_dir)
+    json_path = target_dir / f"multi_seed_evaluation_{split}.json"
+    save_json(json_path, summary)
+    summary["evaluation_json"] = str(json_path)
+    print_multi_seed_evaluation_report(
+        summary,
+        verbose=verbose,
+        output_dir=target_dir,
+        print_to_stdout=print_report,
+    )
+    return summary
+
+
 def run_evaluation_workflow(
     dataset: str | None = None,
     *,
     stage: str | None = None,
-    seed: int | None = 0,
+    seed: int | str | Iterable[int | str] | None = 0,
     split: str = "val",
     subject: str | None = None,
     num_subjects: int | None = None,
@@ -1487,7 +1854,7 @@ def run_evaluation_workflow(
     max_eval_rows: int | None = None,
     verbose: bool = False,
 ) -> dict:
-    """运行验证集 (val) 或测试集 (test) 评估与可视化工作流（支持单阶段、全阶段对比、负对照及探索性留一法共模扣除）。"""
+    """运行验证集 (val) 或测试集 (test) 评估与可视化工作流（支持单阶段、全阶段对比、多种子聚合、负对照及探索性留一法共模扣除）。"""
     from braindecoding.training.workflow_runner import (
         WORKFLOW_STAGES,
         _resolve_results_root_and_exp_tag,
@@ -1499,6 +1866,55 @@ def run_evaluation_workflow(
     if split not in {"val", "test"}:
         raise ValueError(f"评估 split 只能是 'val' 或 'test'，收到：{split!r}")
 
+    seed_list = _parse_seed_list(seed)
+    if len(seed_list) > 1:
+        seed_results: list[dict] = []
+        for idx, sd_val in enumerate(seed_list):
+            print(
+                f"\n{'#' * 86}\n"
+                f" [Multi-Seed Evaluation {idx + 1}/{len(seed_list)}] Evaluating seed={sd_val} (all seeds: {seed_list})\n"
+                f"{'#' * 86}",
+                flush=True,
+            )
+            res_i = run_evaluation_workflow(
+                dataset,
+                stage=stage,
+                seed=sd_val,
+                split=split,
+                subject=subject,
+                num_subjects=num_subjects,
+                subjects=subjects,
+                eval_batch_size=eval_batch_size,
+                num_workers=num_workers,
+                precision=precision,
+                window_seconds=window_seconds,
+                window_start_offset_seconds=window_start_offset_seconds,
+                require_cache=require_cache,
+                checkpoint_path=None,
+                output_dir=None,
+                exp_tag=exp_tag,
+                word_exp_tag=word_exp_tag,
+                config_path=config_path,
+                control_config_path=control_config_path,
+                shift_seconds=shift_seconds,
+                zero_signal_control=zero_signal_control,
+                subtraction_etas=subtraction_etas,
+                all_stages=all_stages,
+                plot=plot,
+                show_progress=show_progress,
+                max_eval_rows=max_eval_rows,
+                verbose=verbose,
+            )
+            seed_results.append(res_i)
+        return summarize_multi_seed_evaluation(
+            seed_results,
+            split=split,
+            output_dir=output_dir,
+            verbose=verbose,
+            print_report=True,
+        )
+
+    seed = int(seed_list[0])
     if not all_stages:
         single_res = _evaluate_single_stage(
             dataset,
@@ -1666,17 +2082,50 @@ def run_evaluation_workflow(
         word_exp_tag
     )
 
+    has_stage2_under_exp_tag = False
+    for st2 in ("context", "revision"):
+        for mode_cand in ("train", "smoke"):
+            cand_dir2 = workflow_output_directory(
+                ds_name,
+                st2,
+                sub_tag,
+                sd,
+                mode=mode_cand,
+                exp_tag=resolved_exp_tag,
+                ignore_implicit_tag=False,
+            )
+            if (cand_dir2 / "best.ckpt").is_file() or (
+                cand_dir2 / "best.pt"
+            ).is_file():
+                has_stage2_under_exp_tag = True
+                break
+        if has_stage2_under_exp_tag:
+            break
+
     available_stages: list[tuple[str, str, bool]] = []
     for st in WORKFLOW_STAGES:
         candidate_tags: list[tuple[str, bool]] = []
-        if st == "word" and has_explicit_word_tag:
-            candidate_tags.append(
-                (resolved_word_exp_tag, resolved_word_exp_tag == "")
-            )
+        if st == "word":
+            if has_explicit_word_tag and (
+                has_stage2_under_exp_tag or word_exp_tag is not None
+            ):
+                candidate_tags.append(
+                    (resolved_word_exp_tag, resolved_word_exp_tag == "")
+                )
+            if (resolved_exp_tag, False) not in candidate_tags:
+                candidate_tags.append((resolved_exp_tag, False))
+            if (
+                has_explicit_word_tag
+                and (resolved_word_exp_tag, resolved_word_exp_tag == "")
+                not in candidate_tags
+            ):
+                candidate_tags.append(
+                    (resolved_word_exp_tag, resolved_word_exp_tag == "")
+                )
+            if resolved_exp_tag and ("", True) not in candidate_tags:
+                candidate_tags.append(("", True))
         else:
             candidate_tags.append((resolved_exp_tag, False))
-            if st == "word" and resolved_exp_tag:
-                candidate_tags.append(("", True))
 
         found = False
         for tag_cand, ignore_imp in candidate_tags:
@@ -1751,9 +2200,14 @@ def run_evaluation_workflow(
             print_report=False,
         )
 
+    effective_summary_tag = (
+        available_stages[0][1]
+        if len(available_stages) == 1
+        else resolved_exp_tag
+    )
     dataset_eval_root = base_root / ds_name
-    if resolved_exp_tag:
-        dataset_eval_root = dataset_eval_root / resolved_exp_tag
+    if effective_summary_tag:
+        dataset_eval_root = dataset_eval_root / effective_summary_tag
     comp_dir = (
         Path(output_dir).resolve()
         if output_dir is not None
@@ -1780,7 +2234,7 @@ def run_evaluation_workflow(
     multi_summary = {
         "status": "multi_stage_evaluation_completed",
         "dataset": ds_name,
-        "exp_tag": resolved_exp_tag,
+        "exp_tag": effective_summary_tag,
         "word_exp_tag": resolved_word_exp_tag
         if has_explicit_word_tag
         else resolved_exp_tag,
@@ -1808,12 +2262,14 @@ def run_evaluation_workflow(
 
 __all__ = [
     "DEFAULT_CONTROL_SHIFTS_SECONDS",
+    "_aggregate_single_stage_multi_seed",
     "_build_enriched_full_vocabulary_metrics",
     "_compute_encoded_evaluation_metrics",
     "_compute_full_vocabulary_horizon_details",
     "_evaluate_single_stage",
     "_extract_control_summary_row",
     "_format_shift_label",
+    "_parse_seed_list",
     "_parse_shift_seconds_list",
     "_resolve_control_specification",
     "_score_full_vocabulary_population",
@@ -1826,5 +2282,6 @@ __all__ = [
     "resolve_control_specification",
     "run_evaluation_workflow",
     "score_full_vocabulary_population",
+    "summarize_multi_seed_evaluation",
     "summarize_shifted_conditions",
 ]

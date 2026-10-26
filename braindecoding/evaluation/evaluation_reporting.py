@@ -1631,11 +1631,15 @@ def render_saved_evaluation_report(
     if src.is_dir():
         candidates = (
             list(sorted(src.glob("s3_evaluation_summary_*.json")))
+            + list(sorted(src.glob("multi_seed_stage_comparison_*.json")))
+            + list(sorted(src.glob("multi_seed_evaluation_*.json")))
             + list(sorted(src.glob("multi_stage_evaluation_*.json")))
             + list(sorted(src.glob("subspace_coherence_debiasing_*.json")))
             + list(sorted(src.glob("common_mode_subtraction_*.json")))
             + list(sorted(src.glob("evaluation_*.json")))
             + list(sorted(src.rglob("s3_evaluation_summary_*.json")))
+            + list(sorted(src.rglob("multi_seed_stage_comparison_*.json")))
+            + list(sorted(src.rglob("multi_seed_evaluation_*.json")))
             + list(sorted(src.rglob("multi_stage_evaluation_*.json")))
             + list(sorted(src.rglob("subspace_coherence_debiasing_*.json")))
             + list(sorted(src.rglob("common_mode_subtraction_*.json")))
@@ -1663,8 +1667,20 @@ def render_saved_evaluation_report(
     if not isinstance(payload, Mapping):
         raise ValueError(f"Expected JSON object in {src}")
 
+    status_str = str(payload.get("status", ""))
     protocol = str(payload.get("protocol", ""))
     exp_type = str(payload.get("experiment_type", ""))
+    if (
+        status_str
+        in (
+            "multi_seed_evaluation_completed",
+            "multi_seed_stage_comparison_completed",
+        )
+        or ("per_seed" in payload and "vocabulary_sweep_aggregate" in payload)
+        or "stages_aggregate" in payload
+    ):
+        return print_multi_seed_evaluation_report(payload, verbose=verbose)
+
     if protocol == "sequence_decoding_s3_evaluation" or (
         "conditions" in payload and "vocabulary_scaling" in payload
     ):
@@ -1696,9 +1712,305 @@ def render_saved_evaluation_report(
     raise ValueError(f"Unrecognized evaluation JSON schema in {src}")
 
 
+def _fmt_mean_sd_pct(
+    mean_val: object,
+    std_val: object,
+    width: int = 12,
+    *,
+    decimals: int = 2,
+) -> str:
+    """Format a 0..1 ratio mean ± sd as percentage string (e.g. '45.20±0.51%')."""
+    if mean_val is None or mean_val == "":
+        return "-".rjust(width)
+    try:
+        m = float(mean_val) * 100.0
+        s = float(std_val or 0.0) * 100.0
+        txt = f"{m:.{decimals}f}±{s:.{decimals}f}%"
+        if len(txt) > width and decimals > 1:
+            txt = f"{m:.1f}±{s:.1f}%"
+        return txt.rjust(width)
+    except (TypeError, ValueError):
+        return "-".rjust(width)
+
+
+def _fmt_signed_mean_sd_pct(
+    mean_val: object,
+    std_val: object,
+    width: int = 12,
+    *,
+    decimals: int = 2,
+) -> str:
+    """Format a 0..1 signed delta mean ± sd as percentage points (e.g. '+5.12±0.34%')."""
+    if mean_val is None or mean_val == "":
+        return "-".rjust(width)
+    try:
+        m = float(mean_val) * 100.0
+        s = float(std_val or 0.0) * 100.0
+        txt = f"{m:+.{decimals}f}±{s:.{decimals}f}%"
+        if len(txt) > width and decimals > 1:
+            txt = f"{m:+.1f}±{s:.1f}%"
+        return txt.rjust(width)
+    except (TypeError, ValueError):
+        return "-".rjust(width)
+
+
+def format_multi_seed_evaluation_report(
+    summary: Mapping[str, Any],
+    *,
+    verbose: bool = False,
+) -> str:
+    """Format a multi-seed evaluation summary (single-stage or multi-stage)."""
+    banner = "=" * REPORT_WIDTH
+    rule = "-" * REPORT_WIDTH
+    dataset = str(summary.get("dataset", "-"))
+    split = str(summary.get("split", "val")).upper()
+    seeds = list(summary.get("seeds") or [])
+    seeds_str = ",".join(str(s) for s in seeds) if seeds else "-"
+    subset = summary.get("subset") or {}
+    subset_tag = (
+        subset.get("subset_tag", "all")
+        if isinstance(subset, Mapping)
+        else str(subset)
+    )
+    win_sec = float(summary.get("window_seconds", 1.0))
+    exp_tag = str(summary.get("exp_tag", "") or "default")
+
+    # Multi-stage multi-seed comparison schema
+    stages_agg = summary.get("stages_aggregate")
+    if isinstance(stages_agg, Mapping) and stages_agg:
+        lines: list[str] = [
+            banner,
+            f"Multi-Seed Stage Comparison | {dataset} | Seeds: {seeds_str} (n={len(seeds)})"[:REPORT_WIDTH],
+            f"Split: {split} | Subset: {subset_tag} | Win: {win_sec:.2f}s | Tag: {exp_tag}"[:REPORT_WIDTH],
+            banner,
+            "[1] Multi-Stage Retrieval Summary Across Seeds (Mean ± SD)",
+            rule,
+            (
+                f"{'Stage':<22} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
+                f"{'50w MacTop1':>13} | {'FullVoc Top10':>13}"
+            ),
+            rule,
+        ]
+        for st_key in ("word", "context", "revision"):
+            if st_key not in stages_agg:
+                continue
+            st_block = stages_agg[st_key]
+            lbl = STAGE_SHORT_LABELS.get(st_key, STAGE_DISPLAY_NAMES.get(st_key, st_key))[:22]
+            sw_agg = st_block.get("vocabulary_sweep_aggregate") or {}
+            n50_a = sw_agg.get("N50") or {}
+            fv_a = sw_agg.get("full_vocab") or {}
+            lines.append(
+                f"{lbl:<22} | "
+                f"{_fmt_mean_sd_pct(n50_a.get('mean_macro_top10'), n50_a.get('std_macro_top10'), 13)} | "
+                f"{_fmt_mean_sd_pct(n50_a.get('mean_micro_top10'), n50_a.get('std_micro_top10'), 13)} | "
+                f"{_fmt_mean_sd_pct(n50_a.get('mean_macro_top1'), n50_a.get('std_macro_top1'), 13)} | "
+                f"{_fmt_mean_sd_pct(fv_a.get('mean_macro_top10'), fv_a.get('std_macro_top10'), 13)}"
+            )
+            hz_agg = st_block.get("revision_horizons_aggregate") or {}
+            if hz_agg:
+                for h_key, h_lbl in (
+                    ("K0", "  ├─ K0 (0.0s Onset)"),
+                    ("K1", "  ├─ K1 (+1.0s Delay)"),
+                    ("K2", "  └─ K2 (+2.0s Delay)"),
+                ):
+                    if h_key not in hz_agg:
+                        continue
+                    hb = hz_agg[h_key]
+                    lines.append(
+                        f"{h_lbl:<22} | "
+                        f"{_fmt_mean_sd_pct(hb.get('mean_common_vocab50_macro_top10'), hb.get('std_common_vocab50_macro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(hb.get('mean_common_vocab50_micro_top10'), hb.get('std_common_vocab50_micro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(hb.get('mean_common_vocab50_macro_top1'), hb.get('std_common_vocab50_macro_top1'), 13)} | "
+                        f"{_fmt_mean_sd_pct(hb.get('mean_common_full_vocab_macro_top10'), hb.get('std_common_full_vocab_macro_top10'), 13)}"
+                    )
+        lines.append(rule)
+        if verbose:
+            for st_key in ("word", "context", "revision"):
+                if st_key in stages_agg:
+                    lines.append("")
+                    lines.append(
+                        format_multi_seed_evaluation_report(
+                            stages_agg[st_key], verbose=True
+                        )
+                    )
+        lines.append(banner)
+        return "\n".join(lines)
+
+    # Single-stage multi-seed schema
+    stage = str(summary.get("stage", "word"))
+    stage_label = STAGE_DISPLAY_NAMES.get(stage, stage)
+    per_seed = list(summary.get("per_seed") or [])
+    sweep_agg = dict(summary.get("vocabulary_sweep_aggregate") or {})
+    n50_agg = sweep_agg.get("N50") or {}
+    fv_agg = sweep_agg.get("full_vocab") or {}
+
+    lines = [
+        banner,
+        f"Multi-Seed Word Evaluation | {dataset} | {stage_label}"[:REPORT_WIDTH],
+        f"Split: {split} | Subset: {subset_tag} | Seeds: {seeds_str} (n={len(per_seed)}) | Win: {win_sec:.2f}s"[:REPORT_WIDTH],
+        banner,
+        "[1] Per-Seed & Multi-Seed Aggregate (50-Word Bank & Full Training Vocab)",
+        rule,
+        (
+            f"{'Seed / Summary':<15} | {'50w MacTop10':>12} | {'50w MicTop10':>12} | "
+            f"{'50w MacTop1':>11} | {'FullTop10':>11} | {'50w MRR':>10}"
+        ),
+        rule,
+    ]
+    for row in per_seed:
+        sd = int(row.get("seed", 0))
+        ep = row.get("epoch", "-")
+        seed_lbl = f"seed-{sd:03d} (e{ep})"[:15]
+        lines.append(
+            f"{seed_lbl:<15} | "
+            f"{_fmt_ratio_pct(row.get('vocab50_macro_top10'), 12)} | "
+            f"{_fmt_ratio_pct(row.get('vocab50_micro_top10'), 12)} | "
+            f"{_fmt_ratio_pct(row.get('vocab50_macro_top1'), 11)} | "
+            f"{_fmt_ratio_pct(row.get('full_vocab_macro_top10'), 11)} | "
+            f"{_fmt_ratio_pct(row.get('vocab50_mrr'), 10)}"
+        )
+    if per_seed:
+        lines.append(rule)
+        mean_lbl = f"Mean±SD (n={len(per_seed)})"[:15]
+        lines.append(
+            f"{mean_lbl:<15} | "
+            f"{_fmt_mean_sd_pct(n50_agg.get('mean_macro_top10'), n50_agg.get('std_macro_top10'), 12)} | "
+            f"{_fmt_mean_sd_pct(n50_agg.get('mean_micro_top10'), n50_agg.get('std_micro_top10'), 12)} | "
+            f"{_fmt_mean_sd_pct(n50_agg.get('mean_macro_top1'), n50_agg.get('std_macro_top1'), 11)} | "
+            f"{_fmt_mean_sd_pct(fv_agg.get('mean_macro_top10'), fv_agg.get('std_macro_top10'), 11)} | "
+            f"{_fmt_mean_sd_pct(n50_agg.get('mean_mrr'), n50_agg.get('std_mrr'), 10, decimals=1)}"
+        )
+    lines.append(rule)
+
+    if sweep_agg and (verbose or len(sweep_agg) > 1):
+        lines.append("\n[2] Vocabulary Scale Sweep Across Seeds (Mean ± SD)")
+        lines.append(rule)
+        lines.append(
+            f"{'Vocabulary Scale':<18} | {'MacTop10 (M±SD)':>15} | {'MicTop10 (M±SD)':>15} | "
+            f"{'MacTop1 (M±SD)':>14} | {'MRR (M±SD)':>12}"
+        )
+        lines.append(rule)
+        scale_keys = (
+            ("N20", "N50", "N100", "N150", "full_vocab")
+            if verbose
+            else ("N50", "full_vocab")
+        )
+        for sk in scale_keys:
+            if sk not in sweep_agg:
+                continue
+            sb = sweep_agg[sk]
+            lbl = str(sb.get("label", sk))[:18]
+            lines.append(
+                f"{lbl:<18} | "
+                f"{_fmt_mean_sd_pct(sb.get('mean_macro_top10'), sb.get('std_macro_top10'), 15)} | "
+                f"{_fmt_mean_sd_pct(sb.get('mean_micro_top10'), sb.get('std_micro_top10'), 15)} | "
+                f"{_fmt_mean_sd_pct(sb.get('mean_macro_top1'), sb.get('std_macro_top1'), 14)} | "
+                f"{_fmt_mean_sd_pct(sb.get('mean_mrr'), sb.get('std_mrr'), 12)}"
+            )
+        lines.append(rule)
+
+    hz_agg = summary.get("revision_horizons_aggregate") or {}
+    if isinstance(hz_agg, Mapping) and hz_agg:
+        lines.append("\n[3] Rolling Revision Horizons Across Seeds (Mean ± SD)")
+        lines.append(rule)
+        lines.append(
+            f"{'Horizon':<22} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
+            f"{'50w MacTop1':>13} | {'FullVoc Top10':>13}"
+        )
+        lines.append(rule)
+        for h_key in ("K0", "K1", "K2"):
+            if h_key not in hz_agg:
+                continue
+            hb = hz_agg[h_key]
+            lbl = str(hb.get("label", h_key))[:22]
+            lines.append(
+                f"{lbl:<22} | "
+                f"{_fmt_mean_sd_pct(hb.get('mean_common_vocab50_macro_top10'), hb.get('std_common_vocab50_macro_top10'), 13)} | "
+                f"{_fmt_mean_sd_pct(hb.get('mean_common_vocab50_micro_top10'), hb.get('std_common_vocab50_micro_top10'), 13)} | "
+                f"{_fmt_mean_sd_pct(hb.get('mean_common_vocab50_macro_top1'), hb.get('std_common_vocab50_macro_top1'), 13)} | "
+                f"{_fmt_mean_sd_pct(hb.get('mean_common_full_vocab_macro_top10'), hb.get('std_common_full_vocab_macro_top10'), 13)}"
+            )
+        if "K2_minus_K0" in hz_agg:
+            gb = hz_agg["K2_minus_K0"]
+            lines.append(
+                f"{'Revision Gain (K2-K0)':<22} | "
+                f"{_fmt_signed_mean_sd_pct(gb.get('mean_common_vocab50_macro_top10'), gb.get('std_common_vocab50_macro_top10'), 13)} | "
+                f"{_fmt_signed_mean_sd_pct(gb.get('mean_common_vocab50_micro_top10'), gb.get('std_common_vocab50_micro_top10'), 13)} | "
+                f"{_fmt_signed_mean_sd_pct(gb.get('mean_common_vocab50_macro_top1'), gb.get('std_common_vocab50_macro_top1'), 13)} | "
+                f"{_fmt_signed_mean_sd_pct(gb.get('mean_common_full_vocab_macro_top10'), gb.get('std_common_full_vocab_macro_top10'), 13)}"
+            )
+        lines.append(rule)
+
+    nc_agg = summary.get("negative_controls_aggregate") or {}
+    if isinstance(nc_agg, Mapping) and nc_agg.get("enabled"):
+        lines.append(f"\n[4] Negative Control Multi-Seed Summary ({split}, Mean ± SD)")
+        lines.append(rule)
+        lines.append(
+            f"{'Condition':<22} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
+            f"{'50w MacTop1':>13} | {'FullVoc Top10':>13}"
+        )
+        lines.append(rule)
+        lines.append(
+            f"{'Clean (0s)':<22} | "
+            f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_vocab50_macro_top10'), nc_agg.get('std_clean_vocab50_macro_top10'), 13)} | "
+            f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_vocab50_micro_top10'), nc_agg.get('std_clean_vocab50_micro_top10'), 13)} | "
+            f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_vocab50_macro_top1'), nc_agg.get('std_clean_vocab50_macro_top1'), 13)} | "
+            f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_full_vocab_macro_top10'), nc_agg.get('std_clean_full_vocab_macro_top10'), 13)}"
+        )
+        lines.append(
+            f"{'Shifted Mean':<22} | "
+            f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_vocab50_macro_top10'), nc_agg.get('std_shifted_vocab50_macro_top10'), 13)} | "
+            f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_vocab50_micro_top10'), nc_agg.get('std_shifted_vocab50_micro_top10'), 13)} | "
+            f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_vocab50_macro_top1'), nc_agg.get('std_shifted_vocab50_macro_top1'), 13)} | "
+            f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_full_vocab_macro_top10'), nc_agg.get('std_shifted_full_vocab_macro_top10'), 13)}"
+        )
+        lines.append(
+            f"{'Net Gap (Clean-Shft)':<22} | "
+            f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_vocab50_macro_top10'), nc_agg.get('std_gap_vocab50_macro_top10'), 13)} | "
+            f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_vocab50_micro_top10'), nc_agg.get('std_gap_vocab50_micro_top10'), 13)} | "
+            f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_vocab50_macro_top1'), nc_agg.get('std_gap_vocab50_macro_top1'), 13)} | "
+            f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_full_vocab_macro_top10'), nc_agg.get('std_gap_full_vocab_macro_top10'), 13)}"
+        )
+        lines.append(rule)
+
+    lines.append(banner)
+    return "\n".join(lines)
+
+
+def print_multi_seed_evaluation_report(
+    summary: Mapping[str, Any],
+    *,
+    verbose: bool = False,
+    output_dir: Path | str | None = None,
+    print_to_stdout: bool = True,
+) -> str:
+    """Save full multi-seed .txt report to output_dir and print compact/verbose report."""
+    split = str(summary.get("split", "val")).lower()
+    target_dir = output_dir or summary.get("output_dir")
+    is_multi_stage = bool(summary.get("stages_aggregate"))
+    report_filename = (
+        f"multi_seed_stage_comparison_report_{split}.txt"
+        if is_multi_stage
+        else f"multi_seed_evaluation_report_{split}.txt"
+    )
+    if target_dir:
+        out_path = Path(str(target_dir)) / report_filename
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            full_txt = format_multi_seed_evaluation_report(summary, verbose=True)
+            out_path.write_text(full_txt + "\n", encoding="utf-8")
+        except OSError:
+            pass
+    rendered = format_multi_seed_evaluation_report(summary, verbose=verbose)
+    if print_to_stdout:
+        print("\n" + rendered, flush=True)
+    return rendered
+
+
 __all__ = [
     "REPORT_WIDTH",
     "format_common_mode_subtraction_report",
+    "format_multi_seed_evaluation_report",
     "format_sequence_decoding_executive_summary",
     "format_sequence_decoding_report",
     "format_stage_comparison_report",
@@ -1706,6 +2018,7 @@ __all__ = [
     "format_word_evaluation_report",
     "print_common_mode_subtraction_report",
     "print_evaluation_report",
+    "print_multi_seed_evaluation_report",
     "print_sequence_decoding_report",
     "print_stage_comparison_report",
     "print_subspace_coherence_debiasing_report",

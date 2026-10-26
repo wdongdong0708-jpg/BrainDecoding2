@@ -791,45 +791,37 @@ def _workflow_eval(args) -> int:
         if dataset is None:
             dataset = "chineseeeg2_littleprince"
     seed_list = _resolve_seed_list(args)
-    for idx, seed_val in enumerate(seed_list):
-        if len(seed_list) > 1:
-            print(
-                f"\n{'#' * 96}\n"
-                f" [Multi-Seed Evaluation {idx + 1}/{len(seed_list)}] Evaluating seed={seed_val} (all seeds: {seed_list})\n"
-                f"{'#' * 96}",
-                flush=True,
-            )
-        run_evaluation_workflow(
-            dataset,
-            stage=args.stage,
-            seed=seed_val,
-            split=args.split,
-            subject=args.subject,
-            num_subjects=args.num_subjects,
-            subjects=args.subjects,
-            eval_batch_size=args.eval_batch_size,
-            num_workers=args.num_workers,
-            precision=args.precision,
-            window_seconds=getattr(args, "window_seconds", None),
-            window_start_offset_seconds=getattr(
-                args, "window_start_offset_seconds", None
-            ),
-            require_cache=args.require_cache,
-            checkpoint_path=args.checkpoint if len(seed_list) == 1 else None,
-            output_dir=args.output_dir if len(seed_list) == 1 else None,
-            exp_tag=getattr(args, "exp_tag", None),
-            word_exp_tag=getattr(args, "word_exp_tag", None),
-            config_path=args.config,
-            control_config_path=control_cfg,
-            shift_seconds=getattr(args, "shift_seconds", None),
-            zero_signal_control=bool(getattr(args, "zero_signal_control", False)),
-            subtraction_etas=getattr(args, "subtraction_etas", None),
-            all_stages=args.all_stages,
-            plot=not bool(getattr(args, "no_plot", False)),
-            show_progress=not bool(getattr(args, "no_progress", False)),
-            max_eval_rows=args.max_eval_rows,
-            verbose=bool(getattr(args, "verbose", False)),
-        )
+    run_evaluation_workflow(
+        dataset,
+        stage=args.stage,
+        seed=seed_list if len(seed_list) > 1 else seed_list[0],
+        split=args.split,
+        subject=args.subject,
+        num_subjects=args.num_subjects,
+        subjects=args.subjects,
+        eval_batch_size=args.eval_batch_size,
+        num_workers=args.num_workers,
+        precision=args.precision,
+        window_seconds=getattr(args, "window_seconds", None),
+        window_start_offset_seconds=getattr(
+            args, "window_start_offset_seconds", None
+        ),
+        require_cache=args.require_cache,
+        checkpoint_path=args.checkpoint if len(seed_list) == 1 else None,
+        output_dir=args.output_dir,
+        exp_tag=getattr(args, "exp_tag", None),
+        word_exp_tag=getattr(args, "word_exp_tag", None),
+        config_path=args.config,
+        control_config_path=control_cfg,
+        shift_seconds=getattr(args, "shift_seconds", None),
+        zero_signal_control=bool(getattr(args, "zero_signal_control", False)),
+        subtraction_etas=getattr(args, "subtraction_etas", None),
+        all_stages=args.all_stages,
+        plot=not bool(getattr(args, "no_plot", False)),
+        show_progress=not bool(getattr(args, "no_progress", False)),
+        max_eval_rows=args.max_eval_rows,
+        verbose=bool(getattr(args, "verbose", False)),
+    )
     return 0
 
 
@@ -840,9 +832,16 @@ def _workflow_decode_sentences(args) -> int:
     from scripts.decode_sentences import run_sequence_decoding_pipeline
 
     summary = run_sequence_decoding_pipeline(args)
-    if bool(getattr(args, "json_output", False)) or (
-        "conditions" not in summary and "vocabulary_scaling" not in summary
-    ):
+    if bool(getattr(args, "json_output", False)):
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+    elif isinstance(summary, dict) and isinstance(summary.get("per_seed_summaries"), dict):
+        for seed_key, seed_summary in summary["per_seed_summaries"].items():
+            if "conditions" in seed_summary or "vocabulary_scaling" in seed_summary:
+                print_sequence_decoding_report(
+                    seed_summary,
+                    verbose=bool(getattr(args, "verbose", False)),
+                )
+    elif "conditions" not in summary and "vocabulary_scaling" not in summary:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
         print_sequence_decoding_report(
@@ -947,7 +946,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="test",
         help="解码与评估目标划分（默认：test）",
     )
-    decode_cmd.add_argument("--seed", type=int, default=0, help="随机种子（默认：0）")
+    decode_cmd.add_argument(
+        "--seed",
+        "--seeds",
+        dest="seed",
+        type=_parse_seed_argument,
+        default=0,
+        help="随机种子：支持单种子（如 0）或逗号分隔的多种子列表（如 0,1,2；默认：0）",
+    )
     _add_subject_subset_args(decode_cmd)
     decode_cmd.add_argument("--exp-tag", default=None, help="可选神经训练实验标签")
     decode_cmd.add_argument("--word-exp-tag", default=None, help="可选阶段 1 实验标签")

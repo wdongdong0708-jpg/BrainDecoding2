@@ -10,6 +10,7 @@ _LAZY_SYMBOL_MODULES: dict[str, str] = {
     "STAGE_SHORT_LABELS": "evaluation_figures",
     "evaluation_plot_context": "evaluation_figures",
     "format_common_mode_subtraction_report": "evaluation_reporting",
+    "format_multi_seed_evaluation_report": "evaluation_reporting",
     "format_sequence_decoding_executive_summary": "evaluation_reporting",
     "format_sequence_decoding_report": "evaluation_reporting",
     "format_stage_comparison_report": "evaluation_reporting",
@@ -26,6 +27,7 @@ _LAZY_SYMBOL_MODULES: dict[str, str] = {
     "plot_subspace_coherence_debiasing_figures": "evaluation_figures",
     "plot_vocabulary_scaling_curve": "evaluation_figures",
     "print_common_mode_subtraction_report": "evaluation_reporting",
+    "print_multi_seed_evaluation_report": "evaluation_reporting",
     "print_sequence_decoding_report": "evaluation_reporting",
     "print_stage_comparison_report": "evaluation_reporting",
     "print_subspace_coherence_debiasing_report": "evaluation_reporting",
@@ -33,6 +35,7 @@ _LAZY_SYMBOL_MODULES: dict[str, str] = {
     "render_saved_evaluation_report": "evaluation_reporting",
     "replot_from_saved_json": "evaluation_figures",
     "run_evaluation_workflow": "word_retrieval_evaluation",
+    "summarize_multi_seed_evaluation": "word_retrieval_evaluation",
 }
 
 
