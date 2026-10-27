@@ -14,18 +14,20 @@ from typing import Any, Mapping
 
 import numpy as np
 
-WORKFLOW_STAGES = ("word", "context", "revision")
+WORKFLOW_STAGES = ("word", "context", "revision", "prefix_revision")
 
 STAGE_DISPLAY_NAMES = {
     "word": "Stage 1: Word-Level Brain Encoder",
     "context": "Stage 2.1: Word-Level Context Transformer",
     "revision": "Stage 2.2: Local-Window Rolling Revision",
+    "prefix_revision": "Stage 2.3: Full-History Prefix Rolling Revision",
 }
 
 STAGE_SHORT_LABELS = {
     "word": "Stage 1: Word\n(CNN Only)",
     "context": "Stage 2.1: Context\n(CNN + 16L Full Window)",
     "revision": "Stage 2.2: Revision\n(CNN + 16L Local K2)",
+    "prefix_revision": "Stage 2.3: Prefix Rev\n(CNN + 16L Full-Prefix K2)",
 }
 
 EVALUATION_PALETTE = {
@@ -40,6 +42,7 @@ EVALUATION_PALETTE = {
     "word": "#4e79a7",
     "context": "#f28e2b",
     "revision": "#59a14f",
+    "prefix_revision": "#b07aa1",
     "K0": "#4e79a7",
     "K1": "#f28e2b",
     "K2": "#59a14f",

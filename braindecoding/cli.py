@@ -410,9 +410,22 @@ def _add_training_workflow_args(
     )
     parser.add_argument(
         "--stage",
-        choices=("word", "context", "revision", "1", "2.1", "2.2"),
+        choices=(
+            "word",
+            "context",
+            "revision",
+            "prefix_revision",
+            "1",
+            "2.1",
+            "2.2",
+            "2.3",
+            "stage1",
+            "stage2.1",
+            "stage2.2",
+            "stage2.3",
+        ),
         default=None,
-        help="训练阶段：word/1（阶段1：单窗脑编码器）、context/2.1（阶段2.1：脑编码器+16层Transformer）或 revision/2.2（阶段2.2：16层局部窗口滚动修订）",
+        help="训练阶段：word/1（阶段1：单窗脑编码器）、context/2.1（阶段2.1：脑编码器+16层Transformer）、revision/2.2（阶段2.2：16层对称局部窗口滚动修订）或 prefix_revision/2.3（阶段2.3：16层全历史前缀滚动修订）",
     )
     parser.add_argument(
         "--seed",
@@ -576,9 +589,22 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--stage",
-        choices=("word", "context", "revision", "1", "2.1", "2.2"),
+        choices=(
+            "word",
+            "context",
+            "revision",
+            "prefix_revision",
+            "1",
+            "2.1",
+            "2.2",
+            "2.3",
+            "stage1",
+            "stage2.1",
+            "stage2.2",
+            "stage2.3",
+        ),
         default=None,
-        help="要评估的阶段：word/1、context/2.1 或 revision/2.2",
+        help="要评估的阶段：word/1、context/2.1、revision/2.2 或 prefix_revision/2.3",
     )
     parser.add_argument(
         "--all-stages",

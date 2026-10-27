@@ -459,7 +459,7 @@ def _encode_stage_with_shifts(
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
-    if stage == "revision" and "revision_predictions" in clean_encoded:
+    if stage in ("revision", "prefix_revision") and "revision_predictions" in clean_encoded:
         clean_states: dict[str, torch.Tensor] = {}
         shifted_states: dict[str, torch.Tensor] = {}
         avail_masks: dict[str, torch.Tensor] = {}
@@ -522,6 +522,7 @@ def export_neural_vocabulary_scores(
     word_checkpoint: str | Path | None = None,
     context_checkpoint: str | Path | None = None,
     revision_checkpoint: str | Path | None = None,
+    revision_stage: str = "auto",
     window_seconds: float | None = None,
     window_start_offset_seconds: float | None = None,
     background_shift_seconds: Sequence[float] = DEFAULT_BACKGROUND_SHIFT_SECONDS,
@@ -545,9 +546,18 @@ def export_neural_vocabulary_scores(
     ctx_tag = context_exp_tag if context_exp_tag is not None else exp_tag
     w_tag = word_exp_tag if word_exp_tag is not None else exp_tag
 
+    rev_stage_mode = str(revision_stage or "auto").strip().lower()
+    if rev_stage_mode not in {"auto", "revision", "prefix_revision"}:
+        raise ValueError(
+            f"revision_stage 仅支持 'auto'、'revision' 或 'prefix_revision'，当前为：{revision_stage!r}"
+        )
+    initial_rev_stage = (
+        "prefix_revision" if rev_stage_mode == "prefix_revision" else "revision"
+    )
+
     rev_cfg, subset_spec = build_workflow_config(
         dataset,
-        stage="revision",
+        stage=initial_rev_stage,
         seed=seed,
         subject=subject,
         num_subjects=num_subjects,
@@ -639,14 +649,43 @@ def export_neural_vocabulary_scores(
     )
     vocab_tensor = _l2_normalize_tensor(torch.from_numpy(vocab_vectors))
 
+    resolved_rev_stage = initial_rev_stage
     rev_ckpt = _locate_stage_checkpoint(
         dataset,
-        "revision",
+        resolved_rev_stage,
         subset_tag,
         seed,
         exp_tag=rev_tag,
         explicit_checkpoint=revision_checkpoint,
     )
+    if rev_ckpt is None and rev_stage_mode == "auto":
+        alt_ckpt = _locate_stage_checkpoint(
+            dataset,
+            "prefix_revision",
+            subset_tag,
+            seed,
+            exp_tag=rev_tag,
+            explicit_checkpoint=None,
+        )
+        if alt_ckpt is not None:
+            resolved_rev_stage = "prefix_revision"
+            rev_ckpt = alt_ckpt
+            rev_cfg, _ = build_workflow_config(
+                dataset,
+                stage="prefix_revision",
+                seed=seed,
+                subject=subject,
+                num_subjects=num_subjects,
+                subjects=subjects,
+                eval_batch_size=eval_batch_size,
+                num_workers=num_workers,
+                precision=precision,
+                window_seconds=window_seconds,
+                window_start_offset_seconds=window_start_offset_seconds,
+                mode="train",
+                exp_tag=rev_tag,
+                word_exp_tag=w_tag,
+            )
     warmstart_fallback = rev_cfg["training"].get("pretrained_brain_encoder_checkpoint")
     word_ckpt = _locate_stage_checkpoint(
         dataset,
@@ -668,7 +707,7 @@ def export_neural_vocabulary_scores(
     )
     if rev_ckpt is None and word_ckpt is None:
         raise FileNotFoundError(
-            f"未找到 Stage 2.2 (revision) 或 Stage 1 (word) 检查点（dataset={dataset}, subset={subset_tag}, seed={seed}）。"
+            f"未找到 Stage 2.2/2.3 ({resolved_rev_stage}) 或 Stage 1 (word) 检查点（dataset={dataset}, subset={subset_tag}, seed={seed}）。"
         )
 
     bg_shifts = tuple(float(s) for s in background_shift_seconds)
@@ -681,7 +720,7 @@ def export_neural_vocabulary_scores(
             rev_cfg,
             eval_table,
             rev_ckpt,
-            stage="revision",
+            stage=resolved_rev_stage,
             split=split,
             device=torch_device,
             background_shift_seconds=bg_shifts,
@@ -694,7 +733,10 @@ def export_neural_vocabulary_scores(
         clean_embeddings: dict[str, torch.Tensor] = dict(rev_result["clean_embeddings"])
         shifted_embeddings: dict[str, torch.Tensor] = dict(rev_result["shifted_embeddings"])
         availability_masks: dict[str, torch.Tensor] = dict(rev_result["availability_masks"])
-        checkpoint_provenance: dict[str, str] = {"revision": rev_result["checkpoint_path"]}
+        checkpoint_provenance: dict[str, str] = {
+            "revision": rev_result["checkpoint_path"],
+            "revision_stage": resolved_rev_stage,
+        }
 
         if word_ckpt is not None:
             word_cfg, _ = build_workflow_config(

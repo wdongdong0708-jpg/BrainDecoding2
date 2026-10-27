@@ -2199,3 +2199,75 @@ def test_strided_encoder_supports_3d_scalp_positions():
     assert torch.allclose(
         torch.linalg.vector_norm(output, dim=1), torch.ones(2), atol=1e-5
     )
+
+
+def test_stage23_full_history_prefix_revision_window_and_shared_cutoff():
+    positions = np.stack(
+        [np.linspace(0, 1, 6), np.linspace(1, 0, 6)], axis=1
+    ).astype("float32")
+    config = _small_dilated_config()
+    config.update(
+        {
+            "use_transformer": True,
+            "context_mode": "grouped",
+            "transformer": {
+                "depth": 2,
+                "heads": 2,
+                "attention_dropout": 0.0,
+                "feedforward_dropout": 0.0,
+            },
+            "local_window_revision": {
+                "enabled": True,
+                "history_radius": None,
+                "horizons": [0, 1, 2],
+                "validation_query_batch_size": 16,
+            },
+        }
+    )
+    model = build_word_decoding_model(6, positions, 1, config).eval()
+    assert model.prefix_revision_enabled is True
+    assert model.prefix_revision_protocol == "full_prefix"
+    assert model.prefix_revision_separate_horizon_losses is True
+    assert model.prefix_revision_history_radius is None
+    assert model._revision_window_bounds(5, 2, 8) == (0, 8, 5)
+
+    signals = torch.randn(7, 6, 20)
+    subjects = torch.zeros(7, dtype=torch.long)
+    groups = torch.tensor([0, 0, 0, 0, 0, 1, 1], dtype=torch.long)
+
+    rev_preds, rev_rows, rev_delays = model.forward_prefix_revision_training(
+        signals, subjects, groups, cutoff_policy="all"
+    )
+    assert set(rev_delays.tolist()) == {0, 1, 2}
+    assert int((rev_delays == 0).sum().item()) == 7
+    assert int((rev_delays == 1).sum().item()) == 5
+    assert int((rev_delays == 2).sum().item()) == 3
+
+    eval_out = model.forward_prefix_revisions(signals, subjects, groups)
+    assert set(eval_out) == {0, 1, 2}
+    # For group 0 (len 5), word i=2 with delay r=2 uses prefix [0..4], which is the same
+    # physical prefix window as word i=3 with delay r=1 and word i=4 with delay r=0.
+    word_features = torch.nn.functional.normalize(
+        model.brain_encoder(signals, subjects), dim=-1
+    )
+    prefix_0_to_4 = model.context_transformer(
+        word_features[:5], torch.zeros(5, dtype=torch.long), causal_override=False
+    )
+    expected_i2_k2 = torch.nn.functional.normalize(prefix_0_to_4[2:3], dim=-1)[0]
+    expected_i3_k1 = torch.nn.functional.normalize(prefix_0_to_4[3:4], dim=-1)[0]
+    expected_i4_k0 = torch.nn.functional.normalize(prefix_0_to_4[4:5], dim=-1)[0]
+    torch.testing.assert_close(
+        eval_out[2][2], expected_i2_k2, rtol=1e-5, atol=1e-5
+    )
+    torch.testing.assert_close(
+        eval_out[1][3], expected_i3_k1, rtol=1e-5, atol=1e-5
+    )
+    torch.testing.assert_close(
+        eval_out[0][4], expected_i4_k0, rtol=1e-5, atol=1e-5
+    )
+    mask_i2_k2 = (rev_rows == 2) & (rev_delays == 2)
+    assert int(mask_i2_k2.sum().item()) == 1
+    torch.testing.assert_close(
+        rev_preds[mask_i2_k2][0], expected_i2_k2, rtol=1e-5, atol=1e-5
+    )
+

@@ -180,14 +180,33 @@ class BrainEmbeddingModel(nn.Module):
             local_window_revision_config.get("enabled", False)
         ):
             raise ValueError("完整前缀回修与局部窗口滚动回修不能同时启用。")
+        local_window_enabled = bool(
+            local_window_revision_config.get("enabled", False)
+        )
         revision_config = (
             local_window_revision_config
-            if bool(local_window_revision_config.get("enabled", False))
+            if local_window_enabled
             else prefix_revision_config
+        )
+        raw_history_radius = revision_config.get(
+            "history_radius",
+            2 if local_window_enabled else None,
+        )
+        if isinstance(raw_history_radius, str) and raw_history_radius.strip().lower() in {
+            "none",
+            "null",
+            "full",
+            "all",
+            "full_history",
+            "full_prefix",
+        }:
+            raw_history_radius = None
+        self.prefix_revision_history_radius = (
+            None if raw_history_radius is None else int(raw_history_radius)
         )
         self.prefix_revision_protocol = (
             "local_window"
-            if bool(local_window_revision_config.get("enabled", False))
+            if (local_window_enabled and self.prefix_revision_history_radius is not None)
             else "full_prefix"
         )
         self.prefix_revision_enabled = bool(
@@ -200,13 +219,11 @@ class BrainEmbeddingModel(nn.Module):
         self.prefix_revision_validation_query_batch_size = int(
             revision_config.get("validation_query_batch_size", 8)
         )
-        self.prefix_revision_history_radius = (
-            int(revision_config.get("history_radius", 2))
-            if self.prefix_revision_protocol == "local_window"
-            else None
-        )
         self.prefix_revision_separate_horizon_losses = bool(
-            self.prefix_revision_protocol == "local_window"
+            revision_config.get(
+                "separate_horizon_losses",
+                local_window_enabled or self.prefix_revision_protocol == "local_window",
+            )
         )
         if self.prefix_revision_enabled:
             if self.relation_auxiliary_enabled:
@@ -418,8 +435,6 @@ class BrainEmbeddingModel(nn.Module):
             raise ValueError("模型没有启用共享前缀回修训练。")
         if cutoff_policy not in {"sample_one", "all"}:
             raise ValueError("回修截止位置策略必须是 sample_one 或 all。")
-        if cutoff_policy == "all" and self.prefix_revision_protocol != "local_window":
-            raise ValueError("全部截止位置监督只支持局部窗口回修。")
         brain_embedding = F.normalize(
             self.brain_encoder(signals, subject_indices), dim=-1
         )
@@ -538,9 +553,75 @@ class BrainEmbeddingModel(nn.Module):
         outputs = {}
         groups = self._ordered_groups(group_indices)
         row_to_group = {}
-        for indices in groups:
+        for group_id, indices in enumerate(groups):
             for position, row_index in enumerate(indices):
-                row_to_group[row_index] = (indices, position)
+                row_to_group[row_index] = (group_id, indices, position)
+
+        if self.prefix_revision_history_radius is None:
+            # Stage 2.3 (full_prefix): 同组内相同 window_stop 的不同 (position, delay) 共享完全相同的前缀 [0 : window_stop]
+            outputs = {
+                delay: torch.empty_like(brain_embedding)
+                for delay in self.prefix_revision_horizons
+            }
+            unique_windows = []
+            window_key_to_idx = {}
+            query_specs = []
+            for delay in self.prefix_revision_horizons:
+                for row_index in range(len(brain_embedding)):
+                    group_id, indices, position = row_to_group[row_index]
+                    window_start, window_stop, target_offset = (
+                        self._revision_window_bounds(
+                            position, delay, len(indices)
+                        )
+                    )
+                    w_key = (group_id, window_start, window_stop)
+                    w_idx = window_key_to_idx.get(w_key)
+                    if w_idx is None:
+                        w_idx = len(unique_windows)
+                        window_key_to_idx[w_key] = w_idx
+                        unique_windows.append(indices[window_start:window_stop])
+                    query_specs.append((delay, row_index, w_idx, target_offset))
+
+            batch_size = self.prefix_revision_validation_query_batch_size
+            window_outputs = [None] * len(unique_windows)
+            for start in range(0, len(unique_windows), batch_size):
+                stop = min(start + batch_size, len(unique_windows))
+                prefix_parts = []
+                prefix_groups = []
+                lengths = []
+                for virtual_group, w_idx in enumerate(range(start, stop)):
+                    sel = torch.as_tensor(
+                        unique_windows[w_idx], device=brain_embedding.device
+                    )
+                    prefix = brain_embedding[sel]
+                    prefix_parts.append(prefix)
+                    lengths.append(len(prefix))
+                    prefix_groups.append(
+                        torch.full(
+                            (len(prefix),),
+                            virtual_group,
+                            device=group_indices.device,
+                            dtype=group_indices.dtype,
+                        )
+                    )
+                revised = F.normalize(
+                    self.context_transformer(
+                        torch.cat(prefix_parts, dim=0),
+                        torch.cat(prefix_groups, dim=0),
+                        causal_override=False,
+                    ),
+                    dim=-1,
+                )
+                cursor = 0
+                for offset_idx, w_len in enumerate(lengths):
+                    window_outputs[start + offset_idx] = revised[
+                        cursor : cursor + w_len
+                    ]
+                    cursor += w_len
+
+            for delay, row_index, w_idx, target_offset in query_specs:
+                outputs[delay][row_index] = window_outputs[w_idx][target_offset]
+            return outputs
 
         for delay in self.prefix_revision_horizons:
             delayed = torch.empty_like(brain_embedding)
@@ -552,7 +633,7 @@ class BrainEmbeddingModel(nn.Module):
                 target_locations = []
                 cursor = 0
                 for virtual_group, row_index in enumerate(range(start, stop)):
-                    indices, position = row_to_group[row_index]
+                    _, indices, position = row_to_group[row_index]
                     window_start, window_stop, target_offset = (
                         self._revision_window_bounds(
                             position, delay, len(indices)

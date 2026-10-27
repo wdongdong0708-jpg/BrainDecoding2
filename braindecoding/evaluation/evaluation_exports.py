@@ -954,7 +954,7 @@ def export_stage_comparison_tables_and_markdown(
         else {}
     )
 
-    for st_key in ("word", "context", "revision"):
+    for st_key in ("word", "context", "revision", "prefix_revision"):
         if st_key not in stages_map:
             continue
         res = stages_map[st_key]

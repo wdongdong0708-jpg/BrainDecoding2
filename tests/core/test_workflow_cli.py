@@ -2635,6 +2635,84 @@ def test_scientific_diagnostic_metrics_and_readable_csv_markdown_exports(
     assert max(len(line) for line in s3_exec.splitlines()) <= REPORT_WIDTH
 
 
+def test_stage23_prefix_revision_configs_cli_and_static_tables():
+    from braindecoding.training.siamese_debiased_training import (
+        _build_static_revision_eval_table,
+        _build_static_revision_train_table,
+    )
+    from braindecoding.models import build_word_decoding_model
+    import numpy as np
+    import torch
+
+    for alias in ("2.3", "stage2.3", "prefix_revision", "full_history_revision"):
+        assert normalize_workflow_stage(alias) == "prefix_revision"
+
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        ["train", "--dataset", "pallier2025", "--stage", "2.3", "--seed", "0"]
+    )
+    assert normalize_workflow_stage(args.stage) == "prefix_revision"
+
+    stage23_configs = [
+        ("pallier2025", "configs/training/pallier2025_prefix_revision.yaml", False),
+        ("chineseeeg2_littleprince", "configs/training/chineseeeg2_prefix_revision.yaml", False),
+        ("pallier2025", "configs/training/siamese_debiased/pallier2025_siamese_debiased_prefix_revision.yaml", True),
+        ("chineseeeg2_littleprince", "configs/training/siamese_debiased/chineseeeg2_siamese_debiased_prefix_revision.yaml", True),
+    ]
+    for expected_ds, rel_yaml, expect_siamese in stage23_configs:
+        cfg, subset = build_workflow_config(config_path=rel_yaml, seed=0, mode="train")
+        assert subset["dataset"] == expected_ds
+        assert cfg["workflow"]["stage"] == "prefix_revision"
+        assert cfg["model"]["use_transformer"] is True
+        assert cfg["model"]["local_window_revision"]["enabled"] is True
+        assert cfg["model"]["local_window_revision"]["history_radius"] is None
+        assert cfg["model"]["local_window_revision"]["horizons"] == [0, 1, 2]
+        assert cfg["training"]["revision_cutoff_policy"] == "all"
+        assert "pretrained_brain_encoder_checkpoint" in cfg["training"]
+        assert bool(cfg.get("siamese_debiased", {}).get("enabled", False)) is expect_siamese
+
+    positions = np.stack([np.linspace(0, 1, 6), np.linspace(1, 0, 6)], axis=1).astype("float32")
+    small_cfg = {
+        "embedding_dimension": 8,
+        "use_transformer": True,
+        "context_mode": "grouped",
+        "conv": {
+            "merger_channels": 4,
+            "merger_position_dimension": 8,
+            "merger_dropout": 0,
+            "initial_linear": 6,
+            "hidden": 4,
+            "depth": 2,
+            "kernel_size": 3,
+            "dilation_growth": 2,
+            "dilation_period": 2,
+            "dropout_input": 0,
+            "batch_norm": False,
+            "gelu": True,
+            "skip": True,
+            "glu_every": 0,
+            "temporal_attention_hidden": 4,
+        },
+        "transformer": {"depth": 1, "heads": 2, "attention_dropout": 0.0, "feedforward_dropout": 0.0},
+        "local_window_revision": {"enabled": True, "history_radius": None, "horizons": [0, 1, 2]},
+    }
+    model = build_word_decoding_model(6, positions, 1, small_cfg).eval()
+    sentence_indices = torch.tensor([0, 0, 0, 0, 1, 1], dtype=torch.long)
+    train_tbl = _build_static_revision_train_table(model, sentence_indices, torch.device("cpu"))
+    assert train_tbl is not None
+    # Group 0 (len 4) has 4 unique arrival cutoffs + Group 1 (len 2) has 2 unique arrival cutoffs = 6 unique windows
+    assert int(train_tbl["row_is_unique_win"].sum().item()) == 6
+    # Total (i, r) pairs: Group 0 has 4(r=0)+3(r=1)+2(r=2)=9; Group 1 has 2(r=0)+1(r=1)+0(r=2)=3 -> total 12
+    assert int(train_tbl["row_valid_delay"].sum().item()) == 12
+    assert train_tbl["row_win_global_idx"].shape == (6, 3, 4)
+
+    eval_tbl = _build_static_revision_eval_table(model, sentence_indices, torch.device("cpu"))
+    assert eval_tbl is not None
+    assert set(eval_tbl.keys()) == {0, 1, 2}
+    assert eval_tbl[2]["win_global_idx"].shape == (6, 4)
+
+
+
 
 
 

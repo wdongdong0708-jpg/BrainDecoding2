@@ -500,7 +500,7 @@ def _build_fast_summary_evaluator(
         shift_seconds: float | None,
         clean_summary: dict | None = None,
     ) -> dict:
-        revision = stage == "revision" and "revision_predictions" in encoded
+        revision = stage in ("revision", "prefix_revision") and "revision_predictions" in encoded
         if revision:
             max_delay = max(encoded["revision_predictions"])
             primary_preds = encoded["revision_predictions"][max_delay]
@@ -1550,7 +1550,7 @@ def run_standalone_subspace_evaluation(
 
     # 尝试读取同 EXP_TAG 下 Stage 2.1 (context) 的已有 Clean 评估结果作为横向对比参考线
     context_reference_summary: dict | None = None
-    if stage == "revision":
+    if stage in ("revision", "prefix_revision"):
         ctx_dir = workflow_output_directory(
             dataset,
             "context",
@@ -1855,7 +1855,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         r"^-\d+(?:\.\d+)?(?:,\s*[+-]?\d+(?:\.\d+)?)*$"
     )
     parser.add_argument("--dataset", default=None, help="数据集名称: pallier2025 或 chineseeeg2_littleprince")
-    parser.add_argument("--stage", default="revision", help="评估阶段: revision (默认) / context / word / all")
+    parser.add_argument("--stage", default="revision", help="评估阶段: revision (默认) / prefix_revision / context / word / all")
     parser.add_argument("--config", default=None, help="可选训练阶段 YAML 配置文件路径")
     parser.add_argument(
         "--control-config",

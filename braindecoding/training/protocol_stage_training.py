@@ -51,7 +51,8 @@ def config():
 def _identity(settings, dataset, seed, stage):
     if dataset not in DATASETS or dataset not in settings["adapters"]:
         raise ValueError(f"Unsupported dataset: {dataset}")
-    if stage not in STAGES or stage not in settings["protocol"]["stages"]:
+    adapter_stage = "revision" if stage == "prefix_revision" else stage
+    if adapter_stage not in STAGES or adapter_stage not in settings["protocol"]["stages"]:
         raise ValueError(f"Unsupported stage: {stage}")
     if seed not in settings["protocol"]["seeds"] or isinstance(seed, bool):
         raise ValueError(f"Unauthorized seed: {seed}")
@@ -61,28 +62,35 @@ def build_config(dataset, seed, stage, word_checkpoint=None):
     """Resolve the legacy dataset adapter and override only the v2 rules."""
     settings = config()
     _identity(settings, dataset, seed, stage)
+    adapter_stage = "revision" if stage == "prefix_revision" else stage
     adapter = settings["adapters"][dataset]
     loader = pallier.load_config if dataset == "pallier2025" else chinese.load_config
-    cfg = loader(project_path(adapter[f"{stage}_source_config"]))
+    cfg = loader(project_path(adapter[f"{adapter_stage}_source_config"]))
     cfg["experiment"]["output_group"] = settings["execution"]["output_group"]
+    if stage == "prefix_revision":
+        cfg["experiment"]["experiment_id"] = "full_history_prefix_revision"
     cfg["model"] = copy.deepcopy(settings["model"])
-    cfg["model"]["use_transformer"] = stage == "revision"
+    cfg["model"]["use_transformer"] = stage in ("revision", "prefix_revision")
     if stage == "word":
         cfg["model"].pop("local_window_revision", None)
+    elif stage == "prefix_revision":
+        cfg["model"].setdefault("local_window_revision", {})["enabled"] = True
+        cfg["model"]["local_window_revision"]["history_radius"] = None
+        cfg["model"]["local_window_revision"]["horizons"] = [0, 1, 2]
     cfg["text_embedding"] = copy.deepcopy(settings["text_embedding"])
     cfg["loss"] = copy.deepcopy(settings["loss"])
     cfg["cache"]["text_embeddings"] = str(project_path(adapter["embedding_cache"]))
     tc, common = cfg["training"], settings["training"]
     for key in COMMON_TRAINING_KEYS:
         tc[key] = copy.deepcopy(common[key])
-    tc.update(seed=int(seed), epochs=int(common[f"{stage}_epochs"]), top_ks=[1, 10])
+    tc.update(seed=int(seed), epochs=int(common[f"{adapter_stage}_epochs"]), top_ks=[1, 10])
     # These flags belong to revision only: word retains its original sampler.
     for key in ("loss_normalization", "amp_dtype", "preserve_complete_groups",
                 "revision_cutoff_policy", "freeze_brain_encoder_epochs",
                 "warm_start_from", "warm_start_seed", "warm_start_output_group",
                 "pretrained_brain_encoder_checkpoint", "save_last_checkpoint"):
         tc.pop(key, None)
-    if stage == "revision":
+    if stage in ("revision", "prefix_revision"):
         tc.update(preserve_complete_groups=True, revision_cutoff_policy="all",
                   freeze_brain_encoder_epochs=int(common["freeze_brain_encoder_epochs"]),
                   save_last_checkpoint=False, warm_start_from="main_word", warm_start_seed=int(seed),
@@ -91,7 +99,7 @@ def build_config(dataset, seed, stage, word_checkpoint=None):
         tc["pretrained_brain_encoder_checkpoint"] = str(source)
     elif word_checkpoint is not None:
         raise ValueError("A word stage must train from scratch.")
-    cfg["evaluation"]["selection_metric"] = adapter[f"main_selection_metric_{stage}"]
+    cfg["evaluation"]["selection_metric"] = adapter[f"main_selection_metric_{adapter_stage}"]
     cfg["evaluation"]["default_split"] = "val"
     cfg.setdefault("provenance", {}).update(text_embedding="bge_m3_final_cls_normalized",
         unified_protocol="unified_rolling_v2", test_status="locked_not_evaluated")

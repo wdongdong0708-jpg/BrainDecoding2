@@ -115,7 +115,12 @@ CANONICAL_SUBJECTS: dict[str, tuple[str, ...]] = {
     "pallier2025": tuple(pallier2025.SUBJECTS),
 }
 
-WORKFLOW_STAGES: tuple[str, ...] = ("word", "context", "revision")
+WORKFLOW_STAGES: tuple[str, ...] = (
+    "word",
+    "context",
+    "revision",
+    "prefix_revision",
+)
 
 _STAGE_ALIASES: dict[str, str] = {
     "1": "word",
@@ -134,20 +139,29 @@ _STAGE_ALIASES: dict[str, str] = {
     "stage_2_2": "revision",
     "revision": "revision",
     "rolling_revision": "revision",
+    "2.3": "prefix_revision",
+    "stage2.3": "prefix_revision",
+    "stage_2_3": "prefix_revision",
+    "stage-2.3": "prefix_revision",
+    "prefix_revision": "prefix_revision",
+    "full_history_revision": "prefix_revision",
+    "full_prefix_revision": "prefix_revision",
 }
 
 DEFAULT_STAGE_CONFIGS: dict[tuple[str, str], str] = {
     ("pallier2025", "word"): "configs/training/pallier2025_word_encoder.yaml",
     ("pallier2025", "context"): "configs/training/pallier2025_context_transformer.yaml",
     ("pallier2025", "revision"): "configs/training/pallier2025_rolling_revision.yaml",
+    ("pallier2025", "prefix_revision"): "configs/training/pallier2025_prefix_revision.yaml",
     ("chineseeeg2_littleprince", "word"): "configs/training/chineseeeg2_word_encoder.yaml",
     ("chineseeeg2_littleprince", "context"): "configs/training/chineseeeg2_context_transformer.yaml",
     ("chineseeeg2_littleprince", "revision"): "configs/training/chineseeeg2_rolling_revision.yaml",
+    ("chineseeeg2_littleprince", "prefix_revision"): "configs/training/chineseeeg2_prefix_revision.yaml",
 }
 
 
 def normalize_workflow_stage(stage: str | None) -> str:
-    """将用户输入或配置中的阶段标识标准化为 'word' | 'context' | 'revision'。"""
+    """将用户输入或配置中的阶段标识标准化为 'word' | 'context' | 'revision' | 'prefix_revision'。"""
     if stage is None:
         return "word"
     token = str(stage).strip().lower()
@@ -403,11 +417,26 @@ def _infer_dataset_and_stage_from_yaml(
         else:
             lwr = model_block.get("local_window_revision")
             pr = model_block.get("prefix_revision")
-            has_revision = (
-                (isinstance(lwr, dict) and bool(lwr.get("enabled", False)))
-                or (isinstance(pr, dict) and bool(pr.get("enabled", False)))
-            )
-            yaml_stage = "revision" if has_revision else "context"
+            has_lwr = isinstance(lwr, dict) and bool(lwr.get("enabled", False))
+            has_pr = isinstance(pr, dict) and bool(pr.get("enabled", False))
+            has_revision = has_lwr or has_pr
+            if not has_revision:
+                yaml_stage = "context"
+            else:
+                is_full_history_lwr = (
+                    has_lwr
+                    and "history_radius" in lwr
+                    and (
+                        lwr.get("history_radius") is None
+                        or str(lwr.get("history_radius")).strip().lower()
+                        in {"none", "null", "full", "all"}
+                    )
+                )
+                yaml_stage = (
+                    "prefix_revision"
+                    if (has_pr or is_full_history_lwr)
+                    else "revision"
+                )
 
     norm_explicit_stage = (
         normalize_workflow_stage(stage) if stage is not None else None
@@ -612,9 +641,10 @@ def build_workflow_config(
         if dataset == "pallier2025"
         else chinese_task.load_config
     )
+    adapter_stage = "revision" if stage == "prefix_revision" else stage
     default_source_rel = DEFAULT_STAGE_CONFIGS.get(
         (dataset, stage),
-        adapter.get(f"{stage}_source_config", adapter["word_source_config"]),
+        adapter.get(f"{adapter_stage}_source_config", adapter["word_source_config"]),
     )
     default_config_path = resolve_config_path(project_path(default_source_rel))
     active_config_path = (
@@ -735,9 +765,28 @@ def build_workflow_config(
     )
     if active_yaml is None or "model" not in active_yaml:
         cfg["model"] = copy.deepcopy(settings["model"])
-    cfg["model"]["use_transformer"] = stage in ("context", "revision")
+    cfg["model"]["use_transformer"] = stage in (
+        "context",
+        "revision",
+        "prefix_revision",
+    )
     if stage in ("word", "context"):
         cfg["model"].pop("local_window_revision", None)
+        cfg["model"].pop("prefix_revision", None)
+    elif stage == "prefix_revision":
+        if isinstance(cfg["model"].get("prefix_revision"), dict) and bool(
+            cfg["model"]["prefix_revision"].get("enabled", False)
+        ):
+            cfg["model"].pop("local_window_revision", None)
+            cfg["model"]["prefix_revision"].setdefault("horizons", [0, 1, 2])
+            cfg["model"]["prefix_revision"].setdefault(
+                "separate_horizon_losses", True
+            )
+        else:
+            lwr_cfg = cfg["model"].setdefault("local_window_revision", {})
+            lwr_cfg["enabled"] = True
+            lwr_cfg["history_radius"] = None
+            lwr_cfg.setdefault("horizons", [0, 1, 2])
     if active_yaml is None or "text_embedding" not in active_yaml:
         cfg["text_embedding"] = copy.deepcopy(settings["text_embedding"])
     if active_yaml is None or "loss" not in active_yaml:
@@ -785,7 +834,9 @@ def build_workflow_config(
         else int(
             yaml_epochs
             if yaml_epochs is not None
-            else common.get(f"{stage}_epochs", common.get("revision_epochs", 30))
+            else common.get(
+                f"{adapter_stage}_epochs", common.get("revision_epochs", 30)
+            )
         )
     )
     tc.update(
@@ -844,7 +895,7 @@ def build_workflow_config(
     effective_word_exp_tag = (
         resolved_word_exp_tag if has_explicit_word_tag else resolved_exp_tag
     )
-    if stage in ("context", "revision"):
+    if stage in ("context", "revision", "prefix_revision"):
         tc.update(
             preserve_complete_groups=bool(yaml_tc.get("preserve_complete_groups", True)),
             freeze_brain_encoder_epochs=int(
@@ -856,7 +907,7 @@ def build_workflow_config(
             warm_start_output_group=cfg["experiment"]["output_group"],
             warm_start_exp_tag=effective_word_exp_tag,
         )
-        if stage == "revision":
+        if stage in ("revision", "prefix_revision"):
             tc["revision_cutoff_policy"] = str(
                 yaml_tc.get("revision_cutoff_policy", "all")
             )
@@ -926,7 +977,7 @@ def build_workflow_config(
         or tc.get("preextract_frozen_cnn", False)
     )
     ignore_implicit_siamese_on_word = (
-        stage not in ("context", "revision")
+        stage not in ("context", "revision", "prefix_revision")
         and siamese_debiased is not True
         and preextract_frozen_cnn is not True
         and not yaml_siam_enabled
@@ -943,13 +994,13 @@ def build_workflow_config(
     )
     if (
         siamese_spec["enabled"] or siamese_spec["preextract_frozen_cnn"]
-    ) and stage not in ("context", "revision"):
+    ) and stage not in ("context", "revision", "prefix_revision"):
         raise ValueError(
-            "孪生共模抵消与冻结 CNN 预提取仅适用于 context (Stage 2.1) 或 revision (Stage 2.2) 阶段。"
+            "孪生共模抵消与冻结 CNN 预提取仅适用于 context (Stage 2.1)、revision (Stage 2.2) 或 prefix_revision (Stage 2.3) 阶段。"
         )
     if (
         siamese_spec["enabled"] or siamese_spec["preextract_frozen_cnn"]
-    ) and stage in ("context", "revision"):
+    ) and stage in ("context", "revision", "prefix_revision"):
         tc["freeze_brain_encoder_epochs"] = max(
             int(tc.get("freeze_brain_encoder_epochs", 0)),
             int(tc["epochs"]),
@@ -963,7 +1014,10 @@ def build_workflow_config(
 
     cfg["evaluation"]["selection_metric"] = (
         cfg.get("evaluation", {}).get("selection_metric")
-        or adapter.get(f"main_selection_metric_{stage}", adapter["main_selection_metric_word"])
+        or adapter.get(
+            f"main_selection_metric_{adapter_stage}",
+            adapter["main_selection_metric_word"],
+        )
     )
     cfg["evaluation"]["default_split"] = "val"
     out_dir = workflow_output_directory(
@@ -1632,8 +1686,8 @@ def run_training_workflow(
     tc = cfg["training"]
     seed = int(tc["seed"])
     out = Path(tc["output_dir"])
-    revision = stage == "revision"
-    warm_start_stage = stage in ("context", "revision")
+    revision = stage in ("revision", "prefix_revision")
+    warm_start_stage = stage in ("context", "revision", "prefix_revision")
 
     if require_cache:
         cache_verification = verify_cache_ready(cfg, splits=("train", "val"))

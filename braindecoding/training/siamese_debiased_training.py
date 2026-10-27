@@ -443,16 +443,18 @@ def _build_static_revision_train_table(
     """
     if not getattr(model, "prefix_revision_enabled", False):
         return None
-    if getattr(model, "prefix_revision_protocol", "local_window") == "full_prefix":
-        return None
 
     horizons = tuple(int(d) for d in getattr(model, "prefix_revision_horizons", (0, 1, 2)))
     num_horizons = len(horizons)
-    history_radius = int(getattr(model, "prefix_revision_history_radius", 2))
-    max_win_len = history_radius + max(horizons, default=0) + 1
+    history_radius = getattr(model, "prefix_revision_history_radius", 2)
     n_rows = int(len(sentence_indices))
 
     groups = model._ordered_groups(sentence_indices)
+    max_win_len = (
+        max((len(g) for g in groups), default=1)
+        if history_radius is None
+        else int(history_radius) + max(horizons, default=0) + 1
+    )
     win_idx_np = np.full((n_rows, num_horizons, max_win_len), n_rows, dtype=np.int64)
     mask_np = np.zeros((n_rows, num_horizons, max_win_len), dtype=np.bool_)
     target_col_np = np.zeros((n_rows, num_horizons), dtype=np.int64)
@@ -515,18 +517,21 @@ def _build_static_revision_eval_table(
     """在训练开始前一次性构建验证集/评估集各延迟视野的 GPU 静态窗口查表。"""
     if not getattr(model, "prefix_revision_enabled", False):
         return None
-    if getattr(model, "prefix_revision_protocol", "local_window") == "full_prefix":
-        return None
 
     horizons = tuple(int(d) for d in getattr(model, "prefix_revision_horizons", (0, 1, 2)))
-    history_radius = int(getattr(model, "prefix_revision_history_radius", 2))
+    history_radius = getattr(model, "prefix_revision_history_radius", 2)
     n_rows = int(len(sentence_indices))
     groups = model._ordered_groups(sentence_indices)
+    max_group_len = max((len(g) for g in groups), default=1)
     avail_masks = model.revision_availability_masks(sentence_indices)
 
     table_by_delay: dict[int, dict[str, torch.Tensor]] = {}
     for delay in horizons:
-        max_w_len = history_radius + int(delay) + 1
+        max_w_len = (
+            max_group_len
+            if history_radius is None
+            else int(history_radius) + int(delay) + 1
+        )
         win_idx_np = np.full((n_rows, max_w_len), n_rows, dtype=np.int64)
         mask_np = np.zeros((n_rows, max_w_len), dtype=np.bool_)
         target_col_np = np.zeros(n_rows, dtype=np.int64)

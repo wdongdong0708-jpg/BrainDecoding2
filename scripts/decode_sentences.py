@@ -101,6 +101,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="可选阶段 1 (word) 实验标签（默认读取环境变量 BRAINDECODING_WORD_EXP_TAG）",
     )
     parser.add_argument(
+        "--revision-stage",
+        choices=("auto", "revision", "prefix_revision"),
+        default="auto",
+        help="可选指定 K0/K1/K2 神经表征来源阶段：auto（默认优先 revision 并自动回退 prefix_revision）、revision (Stage 2.2) 或 prefix_revision (Stage 2.3)",
+    )
+    parser.add_argument(
         "--window-seconds",
         type=float,
         default=None,
@@ -517,6 +523,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             subjects=args.subjects,
             exp_tag=exp_tag,
             word_exp_tag=word_exp_tag,
+            revision_stage=str(getattr(args, "revision_stage", "auto") or "auto"),
             window_seconds=window_seconds,
             window_start_offset_seconds=window_start_offset_seconds,
             background_shift_seconds=cms_shifts,

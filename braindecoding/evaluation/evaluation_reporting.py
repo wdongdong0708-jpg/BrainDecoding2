@@ -648,6 +648,9 @@ def format_stage_comparison_report(
         "context_transformer",
         "revision",
         "rolling_revision",
+        "prefix_revision",
+        "full_history_revision",
+        "full_prefix_revision",
     )
     ordered_keys = [k for k in canonical_order if k in stages_map] + [
         k for k in stages_map if k not in canonical_order
@@ -2194,7 +2197,7 @@ def format_multi_seed_evaluation_report(
             ),
             rule,
         ]
-        for st_key in ("word", "context", "revision"):
+        for st_key in ("word", "context", "revision", "prefix_revision"):
             if st_key not in stages_agg:
                 continue
             st_block = stages_agg[st_key]
@@ -2228,7 +2231,7 @@ def format_multi_seed_evaluation_report(
                     )
         lines.append(rule)
         if verbose:
-            for st_key in ("word", "context", "revision"):
+            for st_key in ("word", "context", "revision", "prefix_revision"):
                 if st_key in stages_agg:
                     lines.append("")
                     lines.append(

@@ -529,7 +529,10 @@ def _compute_encoded_evaluation_metrics(
 
     dataset = cfg["experiment"]["dataset"]
     language = "fr" if dataset == "pallier2025" else "zh"
-    revision = stage == "revision" and "revision_predictions" in encoded
+    revision = (
+        stage in ("revision", "prefix_revision")
+        and "revision_predictions" in encoded
+    )
     manifest_dir = PROJECT_ROOT / "data/manifests" / (
         "pallier2025" if dataset == "pallier2025" else "chineseeeg2"
     )
@@ -2761,7 +2764,7 @@ def summarize_multi_seed_evaluation(
     )
     if is_multi_stage:
         stages_agg: dict[str, dict] = {}
-        for st_key in ("word", "context", "revision"):
+        for st_key in ("word", "context", "revision", "prefix_revision"):
             st_list = [
                 r["stages"][st_key]
                 for r in seed_results
@@ -3093,7 +3096,7 @@ def run_evaluation_workflow(
     )
 
     has_stage2_under_exp_tag = False
-    for st2 in ("context", "revision"):
+    for st2 in ("context", "revision", "prefix_revision"):
         for mode_cand in ("train", "smoke"):
             cand_dir2 = workflow_output_directory(
                 ds_name,
@@ -3252,6 +3255,7 @@ def run_evaluation_workflow(
         for st_comp, comp_key in (
             ("context", "context_vs_word_n50_top10"),
             ("revision", "revision_vs_word_n50_top10"),
+            ("prefix_revision", "prefix_revision_vs_word_n50_top10"),
         ):
             if st_comp in stage_results:
                 c_subs = stage_results[st_comp].get("per_subject") or []
