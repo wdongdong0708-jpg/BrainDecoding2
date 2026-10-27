@@ -640,6 +640,15 @@ def _build_fast_summary_evaluator(
                     "common_vocab50_macro_top1": float(
                         s50_common.get("macro_recall_at_1", 0.0)
                     ),
+                    "common_vocab50_micro_top1": float(
+                        s50_common.get("micro_recall_at_1", 0.0)
+                    ),
+                    "common_vocab50_mrr": float(
+                        s50_common.get("mean_reciprocal_rank", 0.0)
+                    ),
+                    "common_vocab50_median_rank": float(
+                        s50_common.get("median_rank", 25.0)
+                    ),
                     "all_vocab50_macro_top10": float(
                         s50_all.get("macro_recall_at_10", 0.0)
                     ),
@@ -654,6 +663,9 @@ def _build_fast_summary_evaluator(
                     ),
                     "common_full_vocab_macro_top1": float(
                         fv_common.get("word_macro_recall_at_1", 0.0)
+                    ),
+                    "common_full_vocab_micro_top1": float(
+                        fv_common.get("micro_recall_at_1", 0.0)
                     ),
                     "common_full_vocab_mrr": float(
                         fv_common.get("mean_reciprocal_rank", 0.0)
@@ -726,7 +738,7 @@ def _build_method_entry(
     baseline_raw_entry: dict | None = None,
     baseline_full_loo_entry: dict | None = None,
 ) -> dict:
-    """构建单个特征空间 Subspace LOO 去偏配置的完整指标条目（含 50w Macro Top-10 与 50w Macro Top-1）。"""
+    """构建单个特征空间 Subspace LOO 去偏配置的完整指标条目（含 50w / Full-Vocab Macro Top-10 与 Top-1 及 K0/K1/K2 视野拆解）。"""
     s_word_macro = [
         float(c["summary"].get("full_vocab_word_macro_top10", 0.0))
         for c in condition_entries
@@ -739,32 +751,6 @@ def _build_method_entry(
             clean_summary.get("full_vocab_word_macro_top10", 0.0)
             - float(np.mean(s_word_macro))
         )
-
-    # 补充各修订视野 K0 / K1 / K2 的 50w Macro Top-1 错位均值与净增益
-    c_hz = clean_summary.get("horizons") or {}
-    s_hz = shifted_aggregate.get("horizons") or {}
-    for hk in ("K0", "K1", "K2"):
-        if hk in c_hz and hk in s_hz:
-            top1_vals = [
-                float(
-                    c["summary"]
-                    .get("horizons", {})
-                    .get(hk, {})
-                    .get("common_vocab50_macro_top1", 0.0)
-                )
-                for c in condition_entries
-                if hk in (c["summary"].get("horizons") or {})
-            ]
-            if top1_vals:
-                m_top1 = float(np.mean(top1_vals))
-                c_top1 = float(c_hz[hk].get("common_vocab50_macro_top1", 0.0))
-                s_hz[hk]["mean_common_vocab50_macro_top1"] = m_top1
-                s_hz[hk]["std_common_vocab50_macro_top1"] = float(
-                    np.std(top1_vals, ddof=0)
-                )
-                s_hz[hk]["clean_minus_shifted_common_vocab50_macro_top1"] = float(
-                    c_top1 - m_top1
-                )
 
     entry = {
         "method_id": method_id,
@@ -817,6 +803,22 @@ def _build_method_entry(
             "clean_minus_shifted_full_vocab_macro_top10": float(
                 shifted_aggregate.get("clean_minus_shifted_full_vocab_macro_top10", 0.0)
                 - ref_agg.get("clean_minus_shifted_full_vocab_macro_top10", 0.0)
+            ),
+            "full_vocab_word_macro_top10": float(
+                clean_summary.get("full_vocab_word_macro_top10", 0.0)
+                - ref_clean.get("full_vocab_word_macro_top10", 0.0)
+            ),
+            "full_vocab_macro_top1": float(
+                clean_summary.get("full_vocab_macro_top1", 0.0)
+                - ref_clean.get("full_vocab_macro_top1", 0.0)
+            ),
+            "shifted_mean_full_vocab_macro_top1": float(
+                shifted_aggregate.get("mean_full_vocab_macro_top1", 0.0)
+                - ref_agg.get("mean_full_vocab_macro_top1", 0.0)
+            ),
+            "clean_minus_shifted_full_vocab_macro_top1": float(
+                shifted_aggregate.get("clean_minus_shifted_full_vocab_macro_top1", 0.0)
+                - ref_agg.get("clean_minus_shifted_full_vocab_macro_top1", 0.0)
             ),
             "full_vocab_mrr": float(
                 clean_summary.get("full_vocab_mrr", 0.0)

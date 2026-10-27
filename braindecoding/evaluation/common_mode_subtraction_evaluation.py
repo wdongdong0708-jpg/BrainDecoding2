@@ -257,9 +257,25 @@ def _build_eta_entry(
                 shifted_aggregate.get("clean_minus_shifted_vocab50_macro_top10", 0.0)
                 - base_agg.get("clean_minus_shifted_vocab50_macro_top10", 0.0)
             ),
+            "shifted_mean_vocab50_macro_top1": float(
+                shifted_aggregate.get("mean_vocab50_macro_top1", 0.0)
+                - base_agg.get("mean_vocab50_macro_top1", 0.0)
+            ),
+            "clean_minus_shifted_vocab50_macro_top1": float(
+                shifted_aggregate.get("clean_minus_shifted_vocab50_macro_top1", 0.0)
+                - base_agg.get("clean_minus_shifted_vocab50_macro_top1", 0.0)
+            ),
             "clean_minus_shifted_full_vocab_macro_top10": float(
                 shifted_aggregate.get("clean_minus_shifted_full_vocab_macro_top10", 0.0)
                 - base_agg.get("clean_minus_shifted_full_vocab_macro_top10", 0.0)
+            ),
+            "shifted_mean_full_vocab_macro_top1": float(
+                shifted_aggregate.get("mean_full_vocab_macro_top1", 0.0)
+                - base_agg.get("mean_full_vocab_macro_top1", 0.0)
+            ),
+            "clean_minus_shifted_full_vocab_macro_top1": float(
+                shifted_aggregate.get("clean_minus_shifted_full_vocab_macro_top1", 0.0)
+                - base_agg.get("clean_minus_shifted_full_vocab_macro_top1", 0.0)
             ),
         }
         entry["delta_vs_eta0"] = delta_clean

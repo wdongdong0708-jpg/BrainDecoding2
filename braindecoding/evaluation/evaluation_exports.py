@@ -2022,6 +2022,386 @@ def export_sequence_decoding_tables_and_markdown(
     return exported
 
 
+def _extract_debiasing_row_metrics(
+    c_ref: Mapping[str, Any],
+    s_agg: Mapping[str, Any],
+) -> dict[str, Any]:
+    """提取留一法共模扣除与子空间去偏共用的 50 词、全词表及 K0/K1/K2 完整列字典。"""
+    c_hz = c_ref.get("horizons") if isinstance(c_ref.get("horizons"), Mapping) else {}
+    s_hz = s_agg.get("horizons") if isinstance(s_agg.get("horizons"), Mapping) else {}
+
+    def _gap_pct(gap_key: str, c_key: str, s_key: str) -> float:
+        if gap_key in s_agg and s_agg.get(gap_key) is not None:
+            return _pct(s_agg.get(gap_key))
+        return round(_pct(c_ref.get(c_key)) - _pct(s_agg.get(s_key)), 2)
+
+    def _gap_num(gap_key: str, c_key: str, s_key: str, digits: int = 4) -> float:
+        if gap_key in s_agg and s_agg.get(gap_key) is not None:
+            return _num(s_agg.get(gap_key), digits)
+        return round(_num(c_ref.get(c_key), digits) - _num(s_agg.get(s_key), digits), digits)
+
+    row: dict[str, Any] = {
+        # 50-Word Overall Metrics
+        "clean_vocab50_macro_top10_pct": _pct(c_ref.get("vocab50_macro_top10")),
+        "shifted_mean_vocab50_macro_top10_pct": _pct(s_agg.get("mean_vocab50_macro_top10")),
+        "clean_minus_shifted_vocab50_top10_pp": _gap_pct(
+            "clean_minus_shifted_vocab50_macro_top10", "vocab50_macro_top10", "mean_vocab50_macro_top10"
+        ),
+        "clean_vocab50_micro_top10_pct": _pct(c_ref.get("vocab50_micro_top10")),
+        "shifted_mean_vocab50_micro_top10_pct": _pct(s_agg.get("mean_vocab50_micro_top10")),
+        "clean_minus_shifted_vocab50_micro_top10_pp": _gap_pct(
+            "clean_minus_shifted_vocab50_micro_top10", "vocab50_micro_top10", "mean_vocab50_micro_top10"
+        ),
+        "clean_vocab50_macro_top1_pct": _pct(c_ref.get("vocab50_macro_top1")),
+        "shifted_mean_vocab50_macro_top1_pct": _pct(s_agg.get("mean_vocab50_macro_top1")),
+        "clean_minus_shifted_vocab50_top1_pp": _gap_pct(
+            "clean_minus_shifted_vocab50_macro_top1", "vocab50_macro_top1", "mean_vocab50_macro_top1"
+        ),
+        "clean_vocab50_micro_top1_pct": _pct(c_ref.get("vocab50_micro_top1")),
+        "shifted_mean_vocab50_micro_top1_pct": _pct(s_agg.get("mean_vocab50_micro_top1")),
+        "clean_minus_shifted_vocab50_micro_top1_pp": _gap_pct(
+            "clean_minus_shifted_vocab50_micro_top1", "vocab50_micro_top1", "mean_vocab50_micro_top1"
+        ),
+        "clean_vocab50_mrr": _num(c_ref.get("vocab50_mrr"), 4),
+        "shifted_mean_vocab50_mrr": _num(s_agg.get("mean_vocab50_mrr"), 4),
+        "clean_minus_shifted_vocab50_mrr": _gap_num(
+            "clean_minus_shifted_vocab50_mrr", "vocab50_mrr", "mean_vocab50_mrr", 4
+        ),
+        "clean_vocab50_median_rank": _num(c_ref.get("vocab50_median_rank"), 2),
+        "shifted_mean_vocab50_median_rank": _num(s_agg.get("mean_vocab50_median_rank"), 2),
+        # Full-Vocabulary Overall Metrics (Subject-Macro, Word-Macro, Micro, Top-1, MRR, Median Rank)
+        "clean_full_vocab_macro_top10_pct": _pct(c_ref.get("full_vocab_macro_top10")),
+        "shifted_mean_full_vocab_macro_top10_pct": _pct(s_agg.get("mean_full_vocab_macro_top10")),
+        "clean_minus_shifted_full_vocab_macro_top10_pp": _gap_pct(
+            "clean_minus_shifted_full_vocab_macro_top10", "full_vocab_macro_top10", "mean_full_vocab_macro_top10"
+        ),
+        # Backward-compatible aliases for full_vocab_top10
+        "clean_full_vocab_top10_pct": _pct(c_ref.get("full_vocab_macro_top10")),
+        "shifted_mean_full_vocab_top10_pct": _pct(s_agg.get("mean_full_vocab_macro_top10")),
+        "clean_minus_shifted_full_vocab_top10_pp": _gap_pct(
+            "clean_minus_shifted_full_vocab_macro_top10", "full_vocab_macro_top10", "mean_full_vocab_macro_top10"
+        ),
+        "clean_full_vocab_word_macro_top10_pct": _pct(
+            c_ref.get("full_vocab_word_macro_top10", c_ref.get("full_vocab_macro_top10"))
+        ),
+        "shifted_mean_full_vocab_word_macro_top10_pct": _pct(
+            s_agg.get("mean_full_vocab_word_macro_top10", s_agg.get("mean_full_vocab_macro_top10"))
+        ),
+        "clean_minus_shifted_full_vocab_word_macro_top10_pp": _gap_pct(
+            "clean_minus_shifted_full_vocab_word_macro_top10",
+            "full_vocab_word_macro_top10",
+            "mean_full_vocab_word_macro_top10",
+        ),
+        "clean_full_vocab_micro_top10_pct": _pct(c_ref.get("full_vocab_micro_top10")),
+        "shifted_mean_full_vocab_micro_top10_pct": _pct(s_agg.get("mean_full_vocab_micro_top10")),
+        "clean_minus_shifted_full_vocab_micro_top10_pp": _gap_pct(
+            "clean_minus_shifted_full_vocab_micro_top10", "full_vocab_micro_top10", "mean_full_vocab_micro_top10"
+        ),
+        "clean_full_vocab_macro_top1_pct": _pct(c_ref.get("full_vocab_macro_top1")),
+        "shifted_mean_full_vocab_macro_top1_pct": _pct(s_agg.get("mean_full_vocab_macro_top1")),
+        "clean_minus_shifted_full_vocab_macro_top1_pp": _gap_pct(
+            "clean_minus_shifted_full_vocab_macro_top1", "full_vocab_macro_top1", "mean_full_vocab_macro_top1"
+        ),
+        "clean_minus_shifted_full_vocab_top1_pp": _gap_pct(
+            "clean_minus_shifted_full_vocab_macro_top1", "full_vocab_macro_top1", "mean_full_vocab_macro_top1"
+        ),
+        "clean_full_vocab_micro_top1_pct": _pct(c_ref.get("full_vocab_micro_top1")),
+        "shifted_mean_full_vocab_micro_top1_pct": _pct(s_agg.get("mean_full_vocab_micro_top1")),
+        "clean_minus_shifted_full_vocab_micro_top1_pp": _gap_pct(
+            "clean_minus_shifted_full_vocab_micro_top1", "full_vocab_micro_top1", "mean_full_vocab_micro_top1"
+        ),
+        "clean_full_vocab_mrr": _num(c_ref.get("full_vocab_mrr"), 4),
+        "shifted_mean_full_vocab_mrr": _num(s_agg.get("mean_full_vocab_mrr"), 4),
+        "clean_minus_shifted_full_vocab_mrr": _gap_num(
+            "clean_minus_shifted_full_vocab_mrr", "full_vocab_mrr", "mean_full_vocab_mrr", 4
+        ),
+        "clean_full_vocab_median_rank": _num(c_ref.get("full_vocab_median_rank"), 2),
+        "shifted_mean_full_vocab_median_rank": _num(s_agg.get("mean_full_vocab_median_rank"), 2),
+    }
+
+    for hk in ("K0", "K1", "K2"):
+        pfx = hk.lower()
+        ch = c_hz.get(hk) if isinstance(c_hz.get(hk), Mapping) else {}
+        sh = s_hz.get(hk) if isinstance(s_hz.get(hk), Mapping) else {}
+
+        def _hz_gap_pct(base_k: str, _ch: Mapping[str, Any] = ch, _sh: Mapping[str, Any] = sh) -> float:
+            gk = f"clean_minus_shifted_{base_k}"
+            if gk in _sh and _sh.get(gk) is not None:
+                return _pct(_sh.get(gk))
+            return round(_pct(_ch.get(base_k)) - _pct(_sh.get(f"mean_{base_k}")), 2)
+
+        def _hz_gap_num(
+            base_k: str,
+            digits: int = 4,
+            _ch: Mapping[str, Any] = ch,
+            _sh: Mapping[str, Any] = sh,
+        ) -> float:
+            gk = f"clean_minus_shifted_{base_k}"
+            if gk in _sh and _sh.get(gk) is not None:
+                return _num(_sh.get(gk), digits)
+            return round(_num(_ch.get(base_k), digits) - _num(_sh.get(f"mean_{base_k}"), digits), digits)
+
+        # 50w Horizon Metrics + backward-compatible aliases
+        row[f"{pfx}_clean_vocab50_macro_top10_pct"] = _pct(ch.get("common_vocab50_macro_top10"))
+        row[f"{pfx}_shifted_vocab50_macro_top10_pct"] = _pct(sh.get("mean_common_vocab50_macro_top10"))
+        row[f"{pfx}_gap_vocab50_macro_top10_pp"] = _hz_gap_pct("common_vocab50_macro_top10")
+        row[f"{pfx}_clean_vocab50_top10_pct"] = _pct(ch.get("common_vocab50_macro_top10"))
+        row[f"{pfx}_shifted_vocab50_top10_pct"] = _pct(sh.get("mean_common_vocab50_macro_top10"))
+
+        row[f"{pfx}_clean_vocab50_macro_top1_pct"] = _pct(ch.get("common_vocab50_macro_top1"))
+        row[f"{pfx}_shifted_vocab50_macro_top1_pct"] = _pct(sh.get("mean_common_vocab50_macro_top1"))
+        row[f"{pfx}_gap_vocab50_macro_top1_pp"] = _hz_gap_pct("common_vocab50_macro_top1")
+
+        row[f"{pfx}_clean_vocab50_micro_top10_pct"] = _pct(ch.get("common_vocab50_micro_top10"))
+        row[f"{pfx}_shifted_vocab50_micro_top10_pct"] = _pct(sh.get("mean_common_vocab50_micro_top10"))
+        row[f"{pfx}_gap_vocab50_micro_top10_pp"] = _hz_gap_pct("common_vocab50_micro_top10")
+
+        row[f"{pfx}_clean_vocab50_micro_top1_pct"] = _pct(ch.get("common_vocab50_micro_top1"))
+        row[f"{pfx}_shifted_vocab50_micro_top1_pct"] = _pct(sh.get("mean_common_vocab50_micro_top1"))
+        row[f"{pfx}_gap_vocab50_micro_top1_pp"] = _hz_gap_pct("common_vocab50_micro_top1")
+
+        row[f"{pfx}_clean_vocab50_mrr"] = _num(ch.get("common_vocab50_mrr"), 4)
+        row[f"{pfx}_shifted_vocab50_mrr"] = _num(sh.get("mean_common_vocab50_mrr"), 4)
+        row[f"{pfx}_gap_vocab50_mrr"] = _hz_gap_num("common_vocab50_mrr", 4)
+
+        row[f"{pfx}_clean_vocab50_median_rank"] = _num(ch.get("common_vocab50_median_rank"), 2)
+        row[f"{pfx}_shifted_vocab50_median_rank"] = _num(sh.get("mean_common_vocab50_median_rank"), 2)
+
+        # Full-Vocab Horizon Metrics
+        row[f"{pfx}_clean_full_vocab_macro_top10_pct"] = _pct(ch.get("common_full_vocab_macro_top10"))
+        row[f"{pfx}_shifted_full_vocab_macro_top10_pct"] = _pct(sh.get("mean_common_full_vocab_macro_top10"))
+        row[f"{pfx}_gap_full_vocab_macro_top10_pp"] = _hz_gap_pct("common_full_vocab_macro_top10")
+
+        row[f"{pfx}_clean_full_vocab_word_macro_top10_pct"] = _pct(
+            ch.get("common_full_vocab_word_macro_top10", ch.get("common_full_vocab_macro_top10"))
+        )
+        row[f"{pfx}_shifted_full_vocab_word_macro_top10_pct"] = _pct(
+            sh.get("mean_common_full_vocab_word_macro_top10", sh.get("mean_common_full_vocab_macro_top10"))
+        )
+        row[f"{pfx}_gap_full_vocab_word_macro_top10_pp"] = _hz_gap_pct("common_full_vocab_word_macro_top10")
+
+        row[f"{pfx}_clean_full_vocab_macro_top1_pct"] = _pct(ch.get("common_full_vocab_macro_top1"))
+        row[f"{pfx}_shifted_full_vocab_macro_top1_pct"] = _pct(sh.get("mean_common_full_vocab_macro_top1"))
+        row[f"{pfx}_gap_full_vocab_macro_top1_pp"] = _hz_gap_pct("common_full_vocab_macro_top1")
+
+        row[f"{pfx}_clean_full_vocab_micro_top10_pct"] = _pct(ch.get("common_full_vocab_micro_top10"))
+        row[f"{pfx}_shifted_full_vocab_micro_top10_pct"] = _pct(sh.get("mean_common_full_vocab_micro_top10"))
+        row[f"{pfx}_gap_full_vocab_micro_top10_pp"] = _hz_gap_pct("common_full_vocab_micro_top10")
+
+        row[f"{pfx}_clean_full_vocab_micro_top1_pct"] = _pct(ch.get("common_full_vocab_micro_top1"))
+        row[f"{pfx}_shifted_full_vocab_micro_top1_pct"] = _pct(sh.get("mean_common_full_vocab_micro_top1"))
+        row[f"{pfx}_gap_full_vocab_micro_top1_pp"] = _hz_gap_pct("common_full_vocab_micro_top1")
+
+        row[f"{pfx}_clean_full_vocab_mrr"] = _num(ch.get("common_full_vocab_mrr"), 4)
+        row[f"{pfx}_shifted_full_vocab_mrr"] = _num(sh.get("mean_common_full_vocab_mrr"), 4)
+        row[f"{pfx}_gap_full_vocab_mrr"] = _hz_gap_num("common_full_vocab_mrr", 4)
+
+        row[f"{pfx}_clean_full_vocab_median_rank"] = _num(ch.get("common_full_vocab_median_rank"), 2)
+        row[f"{pfx}_shifted_full_vocab_median_rank"] = _num(sh.get("mean_common_full_vocab_median_rank"), 2)
+
+    # K2 - K0 Revision Gains
+    row["k2_minus_k0_clean_vocab50_macro_top10_pp"] = round(
+        row["k2_clean_vocab50_macro_top10_pct"] - row["k0_clean_vocab50_macro_top10_pct"], 2
+    )
+    row["k2_minus_k0_shifted_vocab50_macro_top10_pp"] = round(
+        row["k2_shifted_vocab50_macro_top10_pct"] - row["k0_shifted_vocab50_macro_top10_pct"], 2
+    )
+    row["k2_minus_k0_clean_vocab50_macro_top1_pp"] = round(
+        row["k2_clean_vocab50_macro_top1_pct"] - row["k0_clean_vocab50_macro_top1_pct"], 2
+    )
+    row["k2_minus_k0_shifted_vocab50_macro_top1_pp"] = round(
+        row["k2_shifted_vocab50_macro_top1_pct"] - row["k0_shifted_vocab50_macro_top1_pct"], 2
+    )
+    row["k2_minus_k0_clean_full_vocab_macro_top10_pp"] = round(
+        row["k2_clean_full_vocab_macro_top10_pct"] - row["k0_clean_full_vocab_macro_top10_pct"], 2
+    )
+    row["k2_minus_k0_shifted_full_vocab_macro_top10_pp"] = round(
+        row["k2_shifted_full_vocab_macro_top10_pct"] - row["k0_shifted_full_vocab_macro_top10_pct"], 2
+    )
+    row["k2_minus_k0_clean_full_vocab_macro_top1_pp"] = round(
+        row["k2_clean_full_vocab_macro_top1_pct"] - row["k0_clean_full_vocab_macro_top1_pct"], 2
+    )
+    row["k2_minus_k0_shifted_full_vocab_macro_top1_pp"] = round(
+        row["k2_shifted_full_vocab_macro_top1_pct"] - row["k0_shifted_full_vocab_macro_top1_pct"], 2
+    )
+    return row
+
+
+def _extract_debiasing_horizon_rows(
+    base_meta: Mapping[str, Any],
+    c_ref: Mapping[str, Any],
+    s_agg: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """展开每个方法在 K0 / K1 / K2 三个回修步上的独立明细行，供 *_horizons_{split}.csv 导出。"""
+    c_hz = c_ref.get("horizons") if isinstance(c_ref.get("horizons"), Mapping) else {}
+    s_hz = s_agg.get("horizons") if isinstance(s_agg.get("horizons"), Mapping) else {}
+    hz_rows: list[dict[str, Any]] = []
+    for hk in ("K0", "K1", "K2"):
+        ch = c_hz.get(hk) if isinstance(c_hz.get(hk), Mapping) else {}
+        sh = s_hz.get(hk) if isinstance(s_hz.get(hk), Mapping) else {}
+        if not ch and not sh:
+            continue
+        row: dict[str, Any] = dict(base_meta)
+        row["horizon"] = hk
+        for base_k, out_prefix, is_pct in (
+            ("common_vocab50_macro_top10", "vocab50_macro_top10", True),
+            ("common_vocab50_micro_top10", "vocab50_micro_top10", True),
+            ("common_vocab50_macro_top1", "vocab50_macro_top1", True),
+            ("common_vocab50_micro_top1", "vocab50_micro_top1", True),
+            ("common_vocab50_mrr", "vocab50_mrr", False),
+            ("common_vocab50_median_rank", "vocab50_median_rank", False),
+            ("common_full_vocab_macro_top10", "full_vocab_macro_top10", True),
+            ("common_full_vocab_word_macro_top10", "full_vocab_word_macro_top10", True),
+            ("common_full_vocab_micro_top10", "full_vocab_micro_top10", True),
+            ("common_full_vocab_macro_top1", "full_vocab_macro_top1", True),
+            ("common_full_vocab_micro_top1", "full_vocab_micro_top1", True),
+            ("common_full_vocab_mrr", "full_vocab_mrr", False),
+            ("common_full_vocab_median_rank", "full_vocab_median_rank", False),
+        ):
+            if is_pct:
+                c_val = _pct(ch.get(base_k))
+                s_mean = _pct(sh.get(f"mean_{base_k}"))
+                s_std = _pct(sh.get(f"std_{base_k}"))
+                gap_raw = sh.get(f"clean_minus_shifted_{base_k}")
+                gap_val = _pct(gap_raw) if gap_raw is not None else round(c_val - s_mean, 2)
+                row[f"clean_{out_prefix}_pct"] = c_val
+                row[f"shifted_mean_{out_prefix}_pct"] = s_mean
+                row[f"shifted_std_{out_prefix}_pct"] = s_std
+                row[f"clean_minus_shifted_{out_prefix}_pp"] = gap_val
+            else:
+                digits = 2 if "median_rank" in base_k else 4
+                c_val = _num(ch.get(base_k), digits)
+                s_mean = _num(sh.get(f"mean_{base_k}"), digits)
+                s_std = _num(sh.get(f"std_{base_k}"), digits)
+                gap_raw = sh.get(f"clean_minus_shifted_{base_k}")
+                gap_val = _num(gap_raw, digits) if gap_raw is not None else round(c_val - s_mean, digits)
+                row[f"clean_{out_prefix}"] = c_val
+                row[f"shifted_mean_{out_prefix}"] = s_mean
+                row[f"shifted_std_{out_prefix}"] = s_std
+                row[f"clean_minus_shifted_{out_prefix}"] = gap_val
+        hz_rows.append(row)
+    return hz_rows
+
+
+def _append_debiasing_markdown_tables(
+    md_lines: list[str],
+    rows: list[dict[str, Any]],
+    *,
+    section_offset: int = 1,
+    include_subspace_meta: bool = False,
+) -> None:
+    """将 50 词总表、全词表总表（含 Macro Top-1）及 K0/K1/K2 50词与全词表拆解表追加至 Markdown。"""
+    s1 = section_offset
+    s2 = section_offset + 1
+    s3a = f"{section_offset + 2}A"
+    s3b = f"{section_offset + 2}B"
+
+    if include_subspace_meta:
+        meta_hdr = "| Method Configuration | Rank `K` | Weight `η` | Gate |"
+        meta_sep = "| :--- | :---: | ---: | :---: |"
+
+        def _meta_cols(r: Mapping[str, Any]) -> str:
+            return f"| **`{r['label']}`** | `{r['rank_k']}` | `{r['eta']:.2f}` | `{r['coherence_gate']}` |"
+    else:
+        meta_hdr = "| Subtraction Weight (`η`) |"
+        meta_sep = "| :--- |"
+
+        def _meta_cols(r: Mapping[str, Any]) -> str:
+            return f"| **`{r['label']}`** |"
+
+    # Table 1: 50-Word Retrieval Summary
+    md_lines.extend(
+        [
+            f"## {s1}. 50-Word Retrieval Summary (Macro / Micro Top-10, Top-1, MRR, Median Rank)",
+            "",
+            f"{meta_hdr} 50w Clean Top-10 | 50w Shift Top-10 | 50w Net Gap | 50w Clean Top-1 | 50w Shift Top-1 | 50w Top-1 Gap | 50w Clean Micro Top-10 | 50w Shift Micro Top-10 | 50w Clean MRR | 50w Shift MRR | 50w Clean MedRank | 50w Shift MedRank |",
+            f"{meta_sep} ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for r in rows:
+        md_lines.append(
+            f"{_meta_cols(r)} **{r['clean_vocab50_macro_top10_pct']:.2f}%** | "
+            f"{r['shifted_mean_vocab50_macro_top10_pct']:.2f}% | "
+            f"**{r['clean_minus_shifted_vocab50_top10_pp']:+.2f} pp** | "
+            f"**{r['clean_vocab50_macro_top1_pct']:.2f}%** | {r['shifted_mean_vocab50_macro_top1_pct']:.2f}% | "
+            f"{r['clean_minus_shifted_vocab50_top1_pp']:+.2f} pp | "
+            f"{r['clean_vocab50_micro_top10_pct']:.2f}% | {r['shifted_mean_vocab50_micro_top10_pct']:.2f}% | "
+            f"{r['clean_vocab50_mrr']:.4f} | {r['shifted_mean_vocab50_mrr']:.4f} | "
+            f"{r['clean_vocab50_median_rank']:.1f} | {r['shifted_mean_vocab50_median_rank']:.1f} |"
+        )
+    md_lines.append("")
+
+    # Table 2: Full-Vocabulary Retrieval Summary (explicitly includes Full-Vocab Macro Top-1 & Word-Macro Top-10)
+    md_lines.extend(
+        [
+            f"## {s2}. Full-Vocabulary Retrieval Summary (Subject-Macro & Word-Macro Top-10, Macro Top-1, Micro, MRR, Median Rank)",
+            "",
+            f"{meta_hdr} Full Clean Macro Top-10 | Full Shift Macro Top-10 | Full Top-10 Gap | Full Clean Word-Macro Top-10 | Full Shift Word-Macro Top-10 | Full Clean Macro Top-1 | Full Shift Macro Top-1 | Full Top-1 Gap | Full Clean Micro Top-10 | Full Shift Micro Top-10 | Full Clean MRR | Full Shift MRR | Full Clean MedRank | Full Shift MedRank |",
+            f"{meta_sep} ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for r in rows:
+        md_lines.append(
+            f"{_meta_cols(r)} **{r['clean_full_vocab_macro_top10_pct']:.2f}%** | "
+            f"{r['shifted_mean_full_vocab_macro_top10_pct']:.2f}% | "
+            f"**{r['clean_minus_shifted_full_vocab_top10_pp']:+.2f} pp** | "
+            f"{r['clean_full_vocab_word_macro_top10_pct']:.2f}% | "
+            f"{r['shifted_mean_full_vocab_word_macro_top10_pct']:.2f}% | "
+            f"**{r['clean_full_vocab_macro_top1_pct']:.2f}%** | "
+            f"{r['shifted_mean_full_vocab_macro_top1_pct']:.2f}% | "
+            f"**{r['clean_minus_shifted_full_vocab_top1_pp']:+.2f} pp** | "
+            f"{r['clean_full_vocab_micro_top10_pct']:.2f}% | {r['shifted_mean_full_vocab_micro_top10_pct']:.2f}% | "
+            f"{r['clean_full_vocab_mrr']:.4f} | {r['shifted_mean_full_vocab_mrr']:.4f} | "
+            f"{r['clean_full_vocab_median_rank']:.1f} | {r['shifted_mean_full_vocab_median_rank']:.1f} |"
+        )
+    md_lines.append("")
+
+    # Table 3A: Revision Horizons (K0 / K1 / K2) — 50-Word Breakdown
+    md_lines.extend(
+        [
+            f"## {s3a}. Revision Horizons (`K0 / K1 / K2`) — 50-Word Macro Top-10 & Macro Top-1 Breakdown",
+            "",
+            f"{meta_hdr} K0 50w Clean Top-10 | K0 50w Shift Top-10 | K1 50w Clean Top-10 | K1 50w Shift Top-10 | K2 50w Clean Top-10 | K2 50w Shift Top-10 | K2 50w Gap Top-10 | K2-K0 Clean Top-10 | K0 50w Clean Top-1 | K0 50w Shift Top-1 | K1 50w Clean Top-1 | K1 50w Shift Top-1 | K2 50w Clean Top-1 | K2 50w Shift Top-1 | K2 50w Gap Top-1 | K2-K0 Clean Top-1 |",
+            f"{meta_sep} ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for r in rows:
+        md_lines.append(
+            f"{_meta_cols(r)} {r['k0_clean_vocab50_macro_top10_pct']:.2f}% | {r['k0_shifted_vocab50_macro_top10_pct']:.2f}% | "
+            f"{r['k1_clean_vocab50_macro_top10_pct']:.2f}% | {r['k1_shifted_vocab50_macro_top10_pct']:.2f}% | "
+            f"**{r['k2_clean_vocab50_macro_top10_pct']:.2f}%** | {r['k2_shifted_vocab50_macro_top10_pct']:.2f}% | "
+            f"**{r['k2_gap_vocab50_macro_top10_pp']:+.2f} pp** | {r['k2_minus_k0_clean_vocab50_macro_top10_pp']:+.2f} pp | "
+            f"{r['k0_clean_vocab50_macro_top1_pct']:.2f}% | {r['k0_shifted_vocab50_macro_top1_pct']:.2f}% | "
+            f"{r['k1_clean_vocab50_macro_top1_pct']:.2f}% | {r['k1_shifted_vocab50_macro_top1_pct']:.2f}% | "
+            f"**{r['k2_clean_vocab50_macro_top1_pct']:.2f}%** | {r['k2_shifted_vocab50_macro_top1_pct']:.2f}% | "
+            f"**{r['k2_gap_vocab50_macro_top1_pp']:+.2f} pp** | {r['k2_minus_k0_clean_vocab50_macro_top1_pp']:+.2f} pp |"
+        )
+    md_lines.append("")
+
+    # Table 3B: Revision Horizons (K0 / K1 / K2) — Full-Vocabulary Breakdown
+    md_lines.extend(
+        [
+            f"## {s3b}. Revision Horizons (`K0 / K1 / K2`) — Full-Vocabulary Macro Top-10, Macro Top-1 & MRR Breakdown",
+            "",
+            f"{meta_hdr} K0 Full Clean Top-10 | K0 Full Shift Top-10 | K1 Full Clean Top-10 | K1 Full Shift Top-10 | K2 Full Clean Top-10 | K2 Full Shift Top-10 | K2 Full Gap Top-10 | K2-K0 Full Clean Top-10 | K0 Full Clean Top-1 | K0 Full Shift Top-1 | K1 Full Clean Top-1 | K1 Full Shift Top-1 | K2 Full Clean Top-1 | K2 Full Shift Top-1 | K2 Full Gap Top-1 | K2-K0 Full Clean Top-1 | K0 Full Clean MRR | K2 Full Clean MRR |",
+            f"{meta_sep} ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for r in rows:
+        md_lines.append(
+            f"{_meta_cols(r)} {r['k0_clean_full_vocab_macro_top10_pct']:.2f}% | {r['k0_shifted_full_vocab_macro_top10_pct']:.2f}% | "
+            f"{r['k1_clean_full_vocab_macro_top10_pct']:.2f}% | {r['k1_shifted_full_vocab_macro_top10_pct']:.2f}% | "
+            f"**{r['k2_clean_full_vocab_macro_top10_pct']:.2f}%** | {r['k2_shifted_full_vocab_macro_top10_pct']:.2f}% | "
+            f"**{r['k2_gap_full_vocab_macro_top10_pp']:+.2f} pp** | {r['k2_minus_k0_clean_full_vocab_macro_top10_pp']:+.2f} pp | "
+            f"{r['k0_clean_full_vocab_macro_top1_pct']:.2f}% | {r['k0_shifted_full_vocab_macro_top1_pct']:.2f}% | "
+            f"{r['k1_clean_full_vocab_macro_top1_pct']:.2f}% | {r['k1_shifted_full_vocab_macro_top1_pct']:.2f}% | "
+            f"**{r['k2_clean_full_vocab_macro_top1_pct']:.2f}%** | {r['k2_shifted_full_vocab_macro_top1_pct']:.2f}% | "
+            f"**{r['k2_gap_full_vocab_macro_top1_pp']:+.2f} pp** | {r['k2_minus_k0_clean_full_vocab_macro_top1_pp']:+.2f} pp | "
+            f"{r['k0_clean_full_vocab_mrr']:.4f} | {r['k2_clean_full_vocab_mrr']:.4f} |"
+        )
+    md_lines.append("")
+
+
 def export_common_mode_subtraction_tables_and_markdown(
     cms_report: Mapping[str, Any],
     output_dir: str | Path | None = None,
@@ -2060,32 +2440,20 @@ def export_common_mode_subtraction_tables_and_markdown(
 
     exported: dict[str, str] = {}
     rows: list[dict[str, Any]] = []
+    horizon_rows: list[dict[str, Any]] = []
     for entry in all_entries:
         if not isinstance(entry, Mapping):
             continue
         c_ref = entry.get("clean_reference") or {}
         s_agg = entry.get("shifted_aggregate") or {}
-        c_hz = c_ref.get("horizons") or {}
-        s_hz = s_agg.get("horizons") or {}
-        rows.append(
-            {
-                "eta": _num(entry.get("eta", 0.0), 3),
-                "label": str(entry.get("label", f"eta={entry.get('eta', 0.0)}")),
-                "clean_vocab50_macro_top10_pct": _pct(c_ref.get("vocab50_macro_top10")),
-                "shifted_mean_vocab50_macro_top10_pct": _pct(s_agg.get("mean_vocab50_macro_top10")),
-                "clean_minus_shifted_vocab50_top10_pp": _pct(s_agg.get("clean_minus_shifted_vocab50_macro_top10")),
-                "clean_vocab50_macro_top1_pct": _pct(c_ref.get("vocab50_macro_top1")),
-                "shifted_mean_vocab50_macro_top1_pct": _pct(s_agg.get("mean_vocab50_macro_top1")),
-                "clean_minus_shifted_vocab50_top1_pp": _pct(s_agg.get("clean_minus_shifted_vocab50_macro_top1")),
-                "clean_full_vocab_top10_pct": _pct(c_ref.get("full_vocab_macro_top10")),
-                "shifted_mean_full_vocab_top10_pct": _pct(s_agg.get("mean_full_vocab_macro_top10")),
-                "clean_minus_shifted_full_vocab_top10_pp": _pct(s_agg.get("clean_minus_shifted_full_vocab_macro_top10")),
-                "k0_clean_vocab50_top10_pct": _pct((c_hz.get("K0") or {}).get("common_vocab50_macro_top10")),
-                "k1_clean_vocab50_top10_pct": _pct((c_hz.get("K1") or {}).get("common_vocab50_macro_top10")),
-                "k2_clean_vocab50_top10_pct": _pct((c_hz.get("K2") or {}).get("common_vocab50_macro_top10")),
-                "k2_shifted_vocab50_top10_pct": _pct((s_hz.get("K2") or {}).get("mean_common_vocab50_macro_top10")),
-            }
-        )
+        base_meta = {
+            "eta": _num(entry.get("eta", 0.0), 3),
+            "label": str(entry.get("label", f"eta={entry.get('eta', 0.0)}")),
+        }
+        row = dict(base_meta)
+        row.update(_extract_debiasing_row_metrics(c_ref, s_agg))
+        rows.append(row)
+        horizon_rows.extend(_extract_debiasing_horizon_rows(base_meta, c_ref, s_agg))
 
     if rows:
         csv_path = _write_csv_table(
@@ -2095,25 +2463,26 @@ def export_common_mode_subtraction_tables_and_markdown(
         )
         exported["common_mode_subtraction_csv"] = str(csv_path)
 
+    if horizon_rows:
+        hz_csv_path = _write_csv_table(
+            tables_dir / f"common_mode_subtraction_horizons_{split}.csv",
+            list(horizon_rows[0].keys()),
+            horizon_rows,
+        )
+        exported["common_mode_subtraction_horizons_csv"] = str(hz_csv_path)
+
     md_lines = [
         f"# Leave-One-Out Common-Mode Subtraction Report — `{dataset}` | `{stage}` (`{split.upper()}`)",
         "",
         f"- **Experiment Tag**: `{exp_tag}` | **Seed**: `{seed}`",
         "",
-        "## 1. Full-Rank LOO Common-Mode Subtraction Sweep",
-        "",
-        "| Subtraction Weight (`η`) | 50w Clean Top-10 | 50w Shifted Mean | 50w Net Gap (`Clean - Shift`) | 50w Clean Top-1 | 50w Shift Top-1 | Full-Vocab Clean Top-10 | Full-Vocab Shift Mean |",
-        "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
-    for r in rows:
-        md_lines.append(
-            f"| **`{r['label']}`** | **{r['clean_vocab50_macro_top10_pct']:.2f}%** | "
-            f"{r['shifted_mean_vocab50_macro_top10_pct']:.2f}% | "
-            f"**{r['clean_minus_shifted_vocab50_top10_pp']:+.2f} pp** | "
-            f"{r['clean_vocab50_macro_top1_pct']:.2f}% | {r['shifted_mean_vocab50_macro_top1_pct']:.2f}% | "
-            f"{r['clean_full_vocab_top10_pct']:.2f}% | {r['shifted_mean_full_vocab_top10_pct']:.2f}% |"
-        )
-    md_lines.append("")
+    _append_debiasing_markdown_tables(
+        md_lines,
+        rows,
+        section_offset=1,
+        include_subspace_meta=False,
+    )
 
     md_path = exploratory_dir / f"common_mode_subtraction_{split}.md"
     md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
@@ -2154,37 +2523,25 @@ def export_subspace_coherence_debiasing_tables_and_markdown(
 
     exported: dict[str, str] = {}
     rows: list[dict[str, Any]] = []
+    horizon_rows: list[dict[str, Any]] = []
     for entry in all_entries:
         if not isinstance(entry, Mapping) or not entry:
             continue
         c_ref = entry.get("clean_reference") or {}
         s_agg = entry.get("shifted_aggregate") or {}
-        c_hz = c_ref.get("horizons") or {}
-        s_hz = s_agg.get("horizons") or {}
         rk = entry.get("rank_k")
-        rows.append(
-            {
-                "method_id": str(entry.get("method_id", "-")),
-                "method_family": str(entry.get("method_family", "-")),
-                "label": str(entry.get("label", "-")),
-                "rank_k": "Full" if rk is None else int(rk),
-                "eta": _num(entry.get("eta", 0.0), 3),
-                "coherence_gate": "On" if entry.get("use_coherence_gate") else "Off",
-                "clean_vocab50_macro_top10_pct": _pct(c_ref.get("vocab50_macro_top10")),
-                "shifted_mean_vocab50_macro_top10_pct": _pct(s_agg.get("mean_vocab50_macro_top10")),
-                "clean_minus_shifted_vocab50_top10_pp": _pct(s_agg.get("clean_minus_shifted_vocab50_macro_top10")),
-                "clean_vocab50_macro_top1_pct": _pct(c_ref.get("vocab50_macro_top1")),
-                "shifted_mean_vocab50_macro_top1_pct": _pct(s_agg.get("mean_vocab50_macro_top1")),
-                "clean_minus_shifted_vocab50_top1_pp": _pct(s_agg.get("clean_minus_shifted_vocab50_macro_top1")),
-                "clean_full_vocab_top10_pct": _pct(c_ref.get("full_vocab_macro_top10")),
-                "shifted_mean_full_vocab_top10_pct": _pct(s_agg.get("mean_full_vocab_macro_top10")),
-                "clean_minus_shifted_full_vocab_top10_pp": _pct(s_agg.get("clean_minus_shifted_full_vocab_macro_top10")),
-                "k0_clean_vocab50_top10_pct": _pct((c_hz.get("K0") or {}).get("common_vocab50_macro_top10")),
-                "k1_clean_vocab50_top10_pct": _pct((c_hz.get("K1") or {}).get("common_vocab50_macro_top10")),
-                "k2_clean_vocab50_top10_pct": _pct((c_hz.get("K2") or {}).get("common_vocab50_macro_top10")),
-                "k2_shifted_vocab50_top10_pct": _pct((s_hz.get("K2") or {}).get("mean_common_vocab50_macro_top10")),
-            }
-        )
+        base_meta = {
+            "method_id": str(entry.get("method_id", "-")),
+            "method_family": str(entry.get("method_family", "-")),
+            "label": str(entry.get("label", "-")),
+            "rank_k": "Full" if rk is None else int(rk),
+            "eta": _num(entry.get("eta", 0.0), 3),
+            "coherence_gate": "On" if entry.get("use_coherence_gate") else "Off",
+        }
+        row = dict(base_meta)
+        row.update(_extract_debiasing_row_metrics(c_ref, s_agg))
+        rows.append(row)
+        horizon_rows.extend(_extract_debiasing_horizon_rows(base_meta, c_ref, s_agg))
 
     if rows:
         csv_path = _write_csv_table(
@@ -2193,6 +2550,14 @@ def export_subspace_coherence_debiasing_tables_and_markdown(
             rows,
         )
         exported["subspace_debiasing_sweep_csv"] = str(csv_path)
+
+    if horizon_rows:
+        hz_csv_path = _write_csv_table(
+            tables_dir / f"subspace_debiasing_horizons_{split}.csv",
+            list(horizon_rows[0].keys()),
+            horizon_rows,
+        )
+        exported["subspace_debiasing_horizons_csv"] = str(hz_csv_path)
 
     diag_map = subspace_report.get("subspace_and_coherence_diagnostics") or {}
     best_gap = subspace_report.get("best_by_net_gap_vocab50") or {}
@@ -2219,6 +2584,7 @@ def export_subspace_coherence_debiasing_tables_and_markdown(
         )
     md_lines.append("")
 
+    section_offset = 1
     if isinstance(diag_map, Mapping) and diag_map:
         md_lines.extend(
             [
@@ -2240,24 +2606,14 @@ def export_subspace_coherence_debiasing_tables_and_markdown(
                 f"`{_num(d_info.get('theoretical_random_orthogonal_norm', 0.408), 3):.3f}` |"
             )
         md_lines.append("")
+        section_offset = 2
 
-    md_lines.extend(
-        [
-            "## 2. Raw vs. Full-Rank LOO vs. Subspace LOO Comparison Table",
-            "",
-            "| Method Configuration | Rank `K` | Weight `η` | Gate | 50w Clean Top-10 | 50w Shift Top-10 | 50w Net Gap | 50w Clean Top-1 | 50w Shift Top-1 | Full-Vocab Clean Top-10 |",
-            "| :--- | :---: | ---: | :---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-        ]
+    _append_debiasing_markdown_tables(
+        md_lines,
+        rows,
+        section_offset=section_offset,
+        include_subspace_meta=True,
     )
-    for r in rows:
-        md_lines.append(
-            f"| **`{r['label']}`** | `{r['rank_k']}` | `{r['eta']:.2f}` | `{r['coherence_gate']}` | "
-            f"**{r['clean_vocab50_macro_top10_pct']:.2f}%** | {r['shifted_mean_vocab50_macro_top10_pct']:.2f}% | "
-            f"**{r['clean_minus_shifted_vocab50_top10_pp']:+.2f} pp** | "
-            f"{r['clean_vocab50_macro_top1_pct']:.2f}% | {r['shifted_mean_vocab50_macro_top1_pct']:.2f}% | "
-            f"{r['clean_full_vocab_top10_pct']:.2f}% |"
-        )
-    md_lines.append("")
 
     md_path = exploratory_dir / f"subspace_coherence_debiasing_{split}.md"
     md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")

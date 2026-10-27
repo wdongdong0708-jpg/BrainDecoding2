@@ -859,14 +859,14 @@ def format_common_mode_subtraction_report(
         f"LOO Common-Mode Subtraction | {dataset} | {stage} ({split.upper()}) | Seed: {seed}",
         f"Clean Div: 1/{m_count} historical shifts | Shifted LOO Div: 1/{loo_div} shifts",
         banner,
-        "[1] Overall Retrieval & Net Neural Gap by Weight η",
+        "[1A] 50-Word Retrieval & Net Neural Gap by Weight η",
     ]
-    hdr = (
+    hdr_50 = (
         f"{'Weight (eta)':<14} | {'50w Clean':>9} | {'50w Shift':>9} | {'50w Gap':>9} | "
-        f"{'vs eta=0':>8} | {'FullClean':>9} | {'FullShift':>9}"
+        f"{'vs eta=0':>8} | {'50w Top1':>9} | {'ShiftTop1':>9}"
     )
     lines.append(rule)
-    lines.append(hdr)
+    lines.append(hdr_50)
     lines.append(rule)
 
     has_horizons = False
@@ -889,40 +889,70 @@ def format_common_mode_subtraction_report(
             f"{_fmt_ratio_pct(agg.get('mean_vocab50_macro_top10'), 9)} | "
             f"{_fmt_signed_ratio_pct(agg.get('clean_minus_shifted_vocab50_macro_top10'), 9)} | "
             f"{d50_str} | "
+            f"{_fmt_ratio_pct(c_ref.get('vocab50_macro_top1'), 9)} | "
+            f"{_fmt_ratio_pct(agg.get('mean_vocab50_macro_top1'), 9)}"
+        )
+    lines.append(rule)
+
+    lines.append(
+        "\n[1B] Full-Vocabulary Retrieval (Macro Top-10, Macro Top-1 & MRR) by Weight η"
+    )
+    hdr_full = (
+        f"{'Weight (eta)':<14} | {'FullTop10':>9} | {'ShiftT10':>9} | {'Full Gap':>9} | "
+        f"{'FullTop1':>9} | {'ShiftTop1':>9} | {'CleanMRR':>8}"
+    )
+    lines.append(rule)
+    lines.append(hdr_full)
+    lines.append(rule)
+    for item in sweep_list:
+        eta = float(item.get("eta", 0.0))
+        c_ref = item.get("clean_reference") or {}
+        agg = item.get("shifted_aggregate") or {}
+        eta_lbl = f"eta={eta:.2f} (raw)" if abs(eta) <= 1e-9 else f"eta={eta:.2f}"
+        lines.append(
+            f"{eta_lbl:<14} | "
             f"{_fmt_ratio_pct(c_ref.get('full_vocab_macro_top10'), 9)} | "
-            f"{_fmt_ratio_pct(agg.get('mean_full_vocab_macro_top10'), 9)}"
+            f"{_fmt_ratio_pct(agg.get('mean_full_vocab_macro_top10'), 9)} | "
+            f"{_fmt_signed_ratio_pct(agg.get('clean_minus_shifted_full_vocab_macro_top10'), 9)} | "
+            f"{_fmt_ratio_pct(c_ref.get('full_vocab_macro_top1'), 9)} | "
+            f"{_fmt_ratio_pct(agg.get('mean_full_vocab_macro_top1'), 9)} | "
+            f"{float(c_ref.get('full_vocab_mrr', 0.0)):>8.4f}"
         )
     lines.append(rule)
 
     if has_horizons:
-        lines.append(
-            "\n[2] Revision Horizons (K0 / K1 / K2) 50-Word Macro Top-10 Across η"
-        )
         h_hdr = (
             f"{'Weight (eta)':<14} | {'K0 Clean/Shift (Gap)':>21} | "
             f"{'K1 Clean/Shift (Gap)':>21} | {'K2 Clean/Shift (Gap)':>21}"
         )
-        lines.append(rule)
-        lines.append(h_hdr)
-        lines.append(rule)
-        for item in sweep_list:
-            eta = float(item.get("eta", 0.0))
-            eta_lbl = f"eta={eta:.2f} (raw)" if abs(eta) <= 1e-9 else f"eta={eta:.2f}"
-            c_hz = (item.get("clean_reference") or {}).get("horizons") or {}
-            s_hz = (item.get("shifted_aggregate") or {}).get("horizons") or {}
-            cols: list[str] = []
-            for hk in ("K0", "K1", "K2"):
-                if hk in c_hz:
-                    ch_v = float(c_hz[hk].get("common_vocab50_macro_top10", 0.0)) * 100.0
-                    sh_v = float((s_hz.get(hk) or {}).get("mean_common_vocab50_macro_top10", 0.0)) * 100.0
-                    gp_v = ch_v - sh_v
-                    cols.append(f"{ch_v:5.1f}/{sh_v:4.1f}({gp_v:+5.1f}%)")
-                else:
-                    cols.append("N/A")
-            lines.append(
-                f"{eta_lbl:<14} | {cols[0]:>21} | {cols[1]:>21} | {cols[2]:>21}"
-            )
-        lines.append(rule)
+        for sec_tag, sec_title, metric_key in (
+            ("[2A]", "Revision Horizons (K0 / K1 / K2) 50-Word Macro Top-10 Across η", "common_vocab50_macro_top10"),
+            ("[2B]", "Revision Horizons (K0 / K1 / K2) 50-Word Macro Top-1 Across η", "common_vocab50_macro_top1"),
+            ("[2C]", "Revision Horizons (K0 / K1 / K2) Full-Vocab Macro Top-10 Across η", "common_full_vocab_macro_top10"),
+            ("[2D]", "Revision Horizons (K0 / K1 / K2) Full-Vocab Macro Top-1 Across η", "common_full_vocab_macro_top1"),
+        ):
+            lines.append(f"\n{sec_tag} {sec_title}")
+            lines.append(rule)
+            lines.append(h_hdr)
+            lines.append(rule)
+            for item in sweep_list:
+                eta = float(item.get("eta", 0.0))
+                eta_lbl = f"eta={eta:.2f} (raw)" if abs(eta) <= 1e-9 else f"eta={eta:.2f}"
+                c_hz = (item.get("clean_reference") or {}).get("horizons") or {}
+                s_hz = (item.get("shifted_aggregate") or {}).get("horizons") or {}
+                cols: list[str] = []
+                for hk in ("K0", "K1", "K2"):
+                    if hk in c_hz:
+                        ch_v = float(c_hz[hk].get(metric_key, 0.0)) * 100.0
+                        sh_v = float((s_hz.get(hk) or {}).get(f"mean_{metric_key}", 0.0)) * 100.0
+                        gp_v = ch_v - sh_v
+                        cols.append(f"{ch_v:5.1f}/{sh_v:4.1f}({gp_v:+5.1f}%)")
+                    else:
+                        cols.append("N/A")
+                lines.append(
+                    f"{eta_lbl:<14} | {cols[0]:>21} | {cols[1]:>21} | {cols[2]:>21}"
+                )
+            lines.append(rule)
 
     if verbose and sweep_list and sweep_list[0].get("conditions"):
         lines.append("\n[3] Per-Condition 50-Word Macro Top-10 Breakdown Across η")
@@ -1006,12 +1036,13 @@ def format_subspace_coherence_debiasing_report(
     m_count = f_info.get("num_shifted_conditions_M", 6)
     center_svd = bool(f_info.get("center_svd", True))
 
+    exp_tag_short = str(exp_tag)[:26]
     banner = "=" * REPORT_WIDTH
     rule = "-" * REPORT_WIDTH
     lines: list[str] = [
         banner,
         f"Subspace-Projected + Coherence-Gated LOO Debiasing | {dataset} | {stage} ({split.upper()})",
-        f"Seed: {seed} | ExpTag: {exp_tag} | CenteredSVD: {center_svd} | Shifts: M={m_count} (LOO={m_count - 1})",
+        f"Seed: {seed} | Tag: {exp_tag_short} | CenterSVD: {center_svd} | Shifts: M={m_count} (LOO={m_count - 1})",
         banner,
     ]
 
@@ -1101,10 +1132,10 @@ def format_subspace_coherence_debiasing_report(
         display_rows = all_rows
 
     lines.append(
-        "\n2. Feature-Space Subspace LOO Retrieval Comparison (50w Top-10 & Top-1)"
+        "\n2A. Feature-Space Subspace LOO Retrieval Comparison (50w Top-10 & Top-1)"
     )
     m_hdr = (
-        f"{'Configuration':<26} | {'50wTop10':>8} | {'ShiftT10':>8} | {'T10 Gap':>8} | "
+        f"{'Configuration':<22} | {'50wT10':>7} | {'ShftT10':>7} | {'T10Gap':>7} | "
         f"{'50w Clean Top1':>14} | {'50w Shift Top1':>14}"
     )
     lines.append(rule)
@@ -1112,16 +1143,41 @@ def format_subspace_coherence_debiasing_report(
     lines.append(rule)
 
     for item in display_rows:
-        lbl = _short_method_label(item)
+        lbl = _short_method_label(item)[:22]
         c_ref = item.get("clean_reference") or {}
         agg = item.get("shifted_aggregate") or {}
         lines.append(
-            f"{lbl:<26} | "
-            f"{_fmt_ratio_pct(c_ref.get('vocab50_macro_top10'), 8)} | "
-            f"{_fmt_ratio_pct(agg.get('mean_vocab50_macro_top10'), 8)} | "
-            f"{_fmt_signed_ratio_pct(agg.get('clean_minus_shifted_vocab50_macro_top10'), 8)} | "
+            f"{lbl:<22} | "
+            f"{_fmt_ratio_pct(c_ref.get('vocab50_macro_top10'), 7)} | "
+            f"{_fmt_ratio_pct(agg.get('mean_vocab50_macro_top10'), 7)} | "
+            f"{_fmt_signed_ratio_pct(agg.get('clean_minus_shifted_vocab50_macro_top10'), 7)} | "
             f"{_fmt_ratio_pct(c_ref.get('vocab50_macro_top1'), 14)} | "
             f"{_fmt_ratio_pct(agg.get('mean_vocab50_macro_top1'), 14)}"
+        )
+    lines.append(rule)
+
+    lines.append(
+        "\n2B. Feature-Space Subspace LOO Full-Vocabulary (Macro Top-10, Top-1 & MRR)"
+    )
+    f_hdr = (
+        f"{'Configuration':<22} | {'FullT10':>7} | {'ShftT10':>7} | {'FullGap':>8} | "
+        f"{'FullTop1':>8} | {'ShftTop1':>8} | {'CleanMRR':>8}"
+    )
+    lines.append(rule)
+    lines.append(f_hdr)
+    lines.append(rule)
+    for item in display_rows:
+        lbl = _short_method_label(item)[:22]
+        c_ref = item.get("clean_reference") or {}
+        agg = item.get("shifted_aggregate") or {}
+        lines.append(
+            f"{lbl:<22} | "
+            f"{_fmt_ratio_pct(c_ref.get('full_vocab_macro_top10'), 7)} | "
+            f"{_fmt_ratio_pct(agg.get('mean_full_vocab_macro_top10'), 7)} | "
+            f"{_fmt_signed_ratio_pct(agg.get('clean_minus_shifted_full_vocab_macro_top10'), 8)} | "
+            f"{_fmt_ratio_pct(c_ref.get('full_vocab_macro_top1'), 8)} | "
+            f"{_fmt_ratio_pct(agg.get('mean_full_vocab_macro_top1'), 8)} | "
+            f"{float(c_ref.get('full_vocab_mrr', 0.0)):>8.4f}"
         )
     lines.append(rule)
     if not verbose and len(all_rows) > len(display_rows):
@@ -1136,63 +1192,55 @@ def format_subspace_coherence_debiasing_report(
     )
     if isinstance(raw_hz, Mapping) and raw_hz:
         hz_rows = display_rows[:6] if not verbose and len(display_rows) > 6 else display_rows
-        lines.append(
-            "\n3A. Revision Horizons (K0 / K1 / K2) 50-Word Macro Top-10 Clean/Shift (Gap)"
-        )
         h_hdr = (
-            f"{'Configuration':<24} | {'K0 Clean/Shift(Gap)':>18} | "
-            f"{'K1 Clean/Shift(Gap)':>18} | {'K2 Clean/Shift(Gap)':>18}"
+            f"{'Configuration':<20} | {'K0 Cln/Shf (Gap)':>19} | "
+            f"{'K1 Cln/Shf (Gap)':>19} | {'K2 Cln/Shf (Gap)':>19}"
         )
-        lines.append(rule)
-        lines.append(h_hdr)
-        lines.append(rule)
-        for item in hz_rows:
-            lbl = _short_method_label(item)[:24]
-            c_hz = (item.get("clean_reference") or {}).get("horizons") or {}
-            s_hz = (item.get("shifted_aggregate") or {}).get("horizons") or {}
-            cols10: list[str] = []
-            for hk in ("K0", "K1", "K2"):
-                if hk in c_hz:
-                    ch_v = float(c_hz[hk].get("common_vocab50_macro_top10", 0.0)) * 100.0
-                    sh_v = float((s_hz.get(hk) or {}).get("mean_common_vocab50_macro_top10", 0.0)) * 100.0
-                    gp_v = ch_v - sh_v
-                    cols10.append(f"{ch_v:4.1f}/{sh_v:4.1f}({gp_v:+5.1f}%)")
-                else:
-                    cols10.append("N/A")
-            lines.append(
-                f"{lbl:<24} | {cols10[0]:>18} | {cols10[1]:>18} | {cols10[2]:>18}"
-            )
-        lines.append(rule)
-
-        lines.append(
-            "\n3B. Revision Horizons (K0 / K1 / K2) 50-Word Macro Top-1 Clean vs Strict-LOO Shifted"
-        )
-        lines.append(rule)
-        lines.append(h_hdr)
-        lines.append(rule)
-        for item in hz_rows:
-            lbl = _short_method_label(item)[:24]
-            c_hz = (item.get("clean_reference") or {}).get("horizons") or {}
-            s_hz = (item.get("shifted_aggregate") or {}).get("horizons") or {}
-            cols1: list[str] = []
-            for hk in ("K0", "K1", "K2"):
-                if hk in c_hz:
-                    ch_t1 = float(c_hz[hk].get("common_vocab50_macro_top1", 0.0)) * 100.0
-                    sh_t1 = float((s_hz.get(hk) or {}).get("mean_common_vocab50_macro_top1", 0.0)) * 100.0
-                    gp_t1 = ch_t1 - sh_t1
-                    cols1.append(f"{ch_t1:4.1f}/{sh_t1:4.1f}({gp_t1:+5.1f}%)")
-                else:
-                    cols1.append("N/A")
-            lines.append(
-                f"{lbl:<24} | {cols1[0]:>18} | {cols1[1]:>18} | {cols1[2]:>18}"
-            )
-        lines.append(rule)
+        for sec_title, metric_key in (
+            (
+                "3A. Revision Horizons (K0 / K1 / K2) 50-Word Macro Top-10 Clean/Shift (Gap)",
+                "common_vocab50_macro_top10",
+            ),
+            (
+                "3B. Revision Horizons (K0 / K1 / K2) 50-Word Macro Top-1 Clean vs Strict-LOO Shifted",
+                "common_vocab50_macro_top1",
+            ),
+            (
+                "3C. Revision Horizons (K0 / K1 / K2) Full-Vocab Macro Top-10 Clean/Shift (Gap)",
+                "common_full_vocab_macro_top10",
+            ),
+            (
+                "3D. Revision Horizons (K0 / K1 / K2) Full-Vocab Macro Top-1 Clean/Shift (Gap)",
+                "common_full_vocab_macro_top1",
+            ),
+        ):
+            lines.append(f"\n{sec_title}")
+            lines.append(rule)
+            lines.append(h_hdr)
+            lines.append(rule)
+            for item in hz_rows:
+                lbl = _short_method_label(item)[:20]
+                c_hz = (item.get("clean_reference") or {}).get("horizons") or {}
+                s_hz = (item.get("shifted_aggregate") or {}).get("horizons") or {}
+                cols: list[str] = []
+                for hk in ("K0", "K1", "K2"):
+                    if hk in c_hz:
+                        ch_v = float(c_hz[hk].get(metric_key, 0.0)) * 100.0
+                        sh_v = float((s_hz.get(hk) or {}).get(f"mean_{metric_key}", 0.0)) * 100.0
+                        gp_v = ch_v - sh_v
+                        cols.append(f"{ch_v:4.1f}/{sh_v:4.1f}({gp_v:+5.1f}%)")
+                    else:
+                        cols.append("N/A")
+                lines.append(
+                    f"{lbl:<20} | {cols[0]:>19} | {cols[1]:>19} | {cols[2]:>19}"
+                )
+            lines.append(rule)
 
     if isinstance(best_clean, Mapping):
         bc_c = best_clean.get("clean_reference") or {}
         bc_s = best_clean.get("shifted_aggregate") or {}
         lines.append(
-            f"[Best Clean-Preserving] {_short_method_label(best_clean)}: "
+            f"[Best Clean] {_short_method_label(best_clean)[:22]}: "
             f"Clean50={_fmt_ratio_pct(bc_c.get('vocab50_macro_top10'), 6)} | "
             f"Shift50={_fmt_ratio_pct(bc_s.get('mean_vocab50_macro_top10'), 6)} | "
             f"Gap={_fmt_signed_ratio_pct(bc_s.get('clean_minus_shifted_vocab50_macro_top10'), 6)}"
@@ -1201,7 +1249,7 @@ def format_subspace_coherence_debiasing_report(
         bg_c = best_gap.get("clean_reference") or {}
         bg_s = best_gap.get("shifted_aggregate") or {}
         lines.append(
-            f"[Best Net-Neural-Gap]   {_short_method_label(best_gap)}: "
+            f"[Best Gap]   {_short_method_label(best_gap)[:22]}: "
             f"Clean50={_fmt_ratio_pct(bg_c.get('vocab50_macro_top10'), 6)} | "
             f"Shift50={_fmt_ratio_pct(bg_s.get('mean_vocab50_macro_top10'), 6)} | "
             f"Gap={_fmt_signed_ratio_pct(bg_s.get('clean_minus_shifted_vocab50_macro_top10'), 6)}"

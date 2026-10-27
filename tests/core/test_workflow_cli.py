@@ -1006,19 +1006,92 @@ def test_leave_one_out_common_mode_subtraction_evaluation(tmp_path):
     assert eta1_top1 == pytest.approx(1.0)
     assert eta1_top1 > eta0_top1
 
-    # Check K0/K1/K2 horizons are populated in every eta sweep entry
+    # Check K0/K1/K2 horizons and Full-Vocab Macro Top-1 are populated in every eta sweep entry
     for item in report["sweep"]:
-        horizons = item["clean_reference"]["horizons"]
+        c_ref = item["clean_reference"]
+        s_agg = item["shifted_aggregate"]
+        assert "full_vocab_macro_top1" in c_ref
+        assert "full_vocab_word_macro_top10" in c_ref
+        assert "mean_full_vocab_macro_top1" in s_agg
+        assert "clean_minus_shifted_full_vocab_macro_top1" in s_agg
+        horizons = c_ref["horizons"]
+        s_horizons = s_agg["horizons"]
         for hk in ("K0", "K1", "K2"):
             assert hk in horizons
-            assert "common_full_vocab_macro_top10" in horizons[hk]
+            assert hk in s_horizons
+            for metric_name in (
+                "common_vocab50_macro_top10",
+                "common_vocab50_macro_top1",
+                "common_vocab50_micro_top10",
+                "common_vocab50_mrr",
+                "common_full_vocab_macro_top10",
+                "common_full_vocab_word_macro_top10",
+                "common_full_vocab_macro_top1",
+                "common_full_vocab_micro_top10",
+                "common_full_vocab_mrr",
+                "common_full_vocab_median_rank",
+            ):
+                assert metric_name in horizons[hk]
+                assert f"mean_{metric_name}" in s_horizons[hk]
+                assert f"clean_minus_shifted_{metric_name}" in s_horizons[hk]
 
-    # Verify decoupled exploratory JSON and figure artifacts exist in tmp_path
+    # Verify decoupled exploratory JSON, CSV, Horizon CSV, Markdown, and figure artifacts exist in tmp_path
     exp_json_path = tmp_path / "exploratory" / "common_mode_subtraction_test.json"
     assert exp_json_path.is_file()
     saved_payload = json.loads(exp_json_path.read_text(encoding="utf-8"))
     assert saved_payload["experiment_type"] == "exploratory_leave_one_out_common_mode_subtraction"
     assert (tmp_path / "figures" / "common_mode_subtraction_test.png").is_file()
+
+    cms_csv_path = tmp_path / "tables" / "common_mode_subtraction_test.csv"
+    cms_hz_csv_path = tmp_path / "tables" / "common_mode_subtraction_horizons_test.csv"
+    cms_md_path = tmp_path / "exploratory" / "common_mode_subtraction_test.md"
+    assert cms_csv_path.is_file()
+    assert cms_hz_csv_path.is_file()
+    assert cms_md_path.is_file()
+
+    cms_df = pd.read_csv(cms_csv_path)
+    for required_col in (
+        "clean_full_vocab_macro_top10_pct",
+        "shifted_mean_full_vocab_macro_top10_pct",
+        "clean_full_vocab_word_macro_top10_pct",
+        "clean_full_vocab_macro_top1_pct",
+        "shifted_mean_full_vocab_macro_top1_pct",
+        "clean_minus_shifted_full_vocab_top1_pp",
+        "clean_full_vocab_mrr",
+        "k0_clean_vocab50_macro_top1_pct",
+        "k1_clean_vocab50_macro_top1_pct",
+        "k2_clean_vocab50_macro_top1_pct",
+        "k2_shifted_vocab50_macro_top1_pct",
+        "k0_clean_full_vocab_macro_top10_pct",
+        "k1_clean_full_vocab_macro_top10_pct",
+        "k2_clean_full_vocab_macro_top10_pct",
+        "k2_shifted_full_vocab_macro_top10_pct",
+        "k0_clean_full_vocab_macro_top1_pct",
+        "k1_clean_full_vocab_macro_top1_pct",
+        "k2_clean_full_vocab_macro_top1_pct",
+        "k2_shifted_full_vocab_macro_top1_pct",
+        "k2_minus_k0_clean_full_vocab_macro_top10_pp",
+        "k2_minus_k0_clean_full_vocab_macro_top1_pp",
+    ):
+        assert required_col in cms_df.columns, f"Missing column in CMS CSV: {required_col}"
+
+    cms_hz_df = pd.read_csv(cms_hz_csv_path)
+    assert set(cms_hz_df["horizon"].unique()) == {"K0", "K1", "K2"}
+    assert len(cms_hz_df) == len(report["sweep"]) * 3
+    for hz_col in (
+        "clean_vocab50_macro_top1_pct",
+        "shifted_mean_vocab50_macro_top1_pct",
+        "clean_full_vocab_macro_top10_pct",
+        "clean_full_vocab_macro_top1_pct",
+        "shifted_mean_full_vocab_macro_top1_pct",
+        "clean_minus_shifted_full_vocab_macro_top1_pp",
+    ):
+        assert hz_col in cms_hz_df.columns, f"Missing column in CMS horizons CSV: {hz_col}"
+
+    cms_md_text = cms_md_path.read_text(encoding="utf-8")
+    assert "Full Clean Macro Top-1" in cms_md_text
+    assert "K0 Full Clean Top-1" in cms_md_text
+    assert "K2 Full Clean Top-1" in cms_md_text
 
 
 def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
@@ -1734,7 +1807,12 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
     assert "50w Clean Top1" in printed_out
     assert "50w Shift Top1" in printed_out
     assert "3B. Revision Horizons (K0 / K1 / K2) 50-Word Macro Top-1" in printed_out
+    assert "2B. Feature-Space Subspace LOO Full-Vocabulary" in printed_out
+    assert "3D. Revision Horizons (K0 / K1 / K2) Full-Vocab Macro Top-1" in printed_out
     assert "Column-Wise Null Standardization" not in printed_out
+    for line in printed_out.splitlines():
+        if line.strip() and not line.strip().startswith("* Showing"):
+            assert len(line) <= 86, f"Line exceeds 86 cols ({len(line)}): {line}"
     assert report["experiment_type"] == "exploratory_subspace_coherence_loo_debiasing"
     assert report["formula"]["center_svd"] is True
     assert len(report["subspace_sweep"]) == 2 * 2 * 2
@@ -1742,7 +1820,45 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
     assert (tmp_path / "exploratory" / "subspace_coherence_debiasing_test.json").exists()
     assert (tmp_path / "exploratory" / "subspace_coherence_debiasing_test.md").exists()
     assert (tmp_path / "tables" / "subspace_debiasing_sweep_test.csv").exists()
+    assert (tmp_path / "tables" / "subspace_debiasing_horizons_test.csv").exists()
     assert (tmp_path / "figures" / "subspace_coherence_debiasing_test.png").exists()
+
+    sub_df = pd.read_csv(tmp_path / "tables" / "subspace_debiasing_sweep_test.csv")
+    for required_col in (
+        "clean_full_vocab_macro_top10_pct",
+        "shifted_mean_full_vocab_macro_top10_pct",
+        "clean_full_vocab_word_macro_top10_pct",
+        "clean_full_vocab_macro_top1_pct",
+        "shifted_mean_full_vocab_macro_top1_pct",
+        "clean_minus_shifted_full_vocab_top1_pp",
+        "clean_full_vocab_mrr",
+        "k0_clean_vocab50_macro_top1_pct",
+        "k1_clean_vocab50_macro_top1_pct",
+        "k2_clean_vocab50_macro_top1_pct",
+        "k2_shifted_vocab50_macro_top1_pct",
+        "k0_clean_full_vocab_macro_top10_pct",
+        "k1_clean_full_vocab_macro_top10_pct",
+        "k2_clean_full_vocab_macro_top10_pct",
+        "k2_shifted_full_vocab_macro_top10_pct",
+        "k0_clean_full_vocab_macro_top1_pct",
+        "k1_clean_full_vocab_macro_top1_pct",
+        "k2_clean_full_vocab_macro_top1_pct",
+        "k2_shifted_full_vocab_macro_top1_pct",
+        "k2_minus_k0_clean_full_vocab_macro_top10_pp",
+        "k2_minus_k0_clean_full_vocab_macro_top1_pp",
+    ):
+        assert required_col in sub_df.columns, f"Missing column in subspace sweep CSV: {required_col}"
+
+    sub_hz_df = pd.read_csv(tmp_path / "tables" / "subspace_debiasing_horizons_test.csv")
+    assert set(sub_hz_df["horizon"].unique()) == {"K0", "K1", "K2"}
+    assert "clean_full_vocab_macro_top1_pct" in sub_hz_df.columns
+    assert "shifted_mean_full_vocab_macro_top1_pct" in sub_hz_df.columns
+    assert "clean_minus_shifted_full_vocab_macro_top1_pp" in sub_hz_df.columns
+
+    sub_md_text = (tmp_path / "exploratory" / "subspace_coherence_debiasing_test.md").read_text(encoding="utf-8")
+    assert "Full Clean Macro Top-1" in sub_md_text
+    assert "K0 Full Clean Top-1" in sub_md_text
+    assert "K2 Full Clean Top-1" in sub_md_text
 
     # 4. Verify save_subspace_encoded_cache and direct .pt cache evaluation via evaluate_cached_pt_subspace_loo
     from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
