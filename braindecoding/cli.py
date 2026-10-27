@@ -301,6 +301,8 @@ def _report(args) -> int:
         text = render_saved_evaluation_report(
             candidate_path,
             verbose=bool(getattr(args, "verbose", False)),
+            control_method=getattr(args, "control_method", None),
+            control_metric=getattr(args, "control_metric", None),
         )
         print(text, flush=True)
         if bool(getattr(args, "replot", False)):
@@ -702,6 +704,16 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
         help="探索性留一法共模扣除（Leave-One-Out Common-Mode Subtraction）权重列表（如 0.5,0.8,1.0），自动在 1 Clean + 6 Shifted 预测向量上扣除共模时序偏置",
     )
     parser.add_argument(
+        "--control-method",
+        default=None,
+        help="显式指定多种子负对照汇总使用的控制/去偏方法（如 auto、raw、zero_signal、cms:eta=0.8、cms:best_gap、subspace:K=8,eta=0.8,gate=off、subspace:best_gap、subspace:best_clean）",
+    )
+    parser.add_argument(
+        "--control-metric",
+        default=None,
+        help="显式指定多种子负对照汇总重点高亮与选优使用的主评估指标（如 vocab50_macro_top10、vocab50_macro_top1、full_vocab_macro_top10、full_vocab_macro_top1、k2_vocab50_macro_top10、k2_full_vocab_macro_top10）",
+    )
+    parser.add_argument(
         "--max-eval-rows",
         type=int,
         default=None,
@@ -847,6 +859,8 @@ def _workflow_eval(args) -> int:
         show_progress=not bool(getattr(args, "no_progress", False)),
         max_eval_rows=args.max_eval_rows,
         verbose=bool(getattr(args, "verbose", False)),
+        control_method=getattr(args, "control_method", None),
+        control_metric=getattr(args, "control_metric", None),
     )
     return 0
 
@@ -1055,6 +1069,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default=None,
         help="配合 --replot 时指定图表输出目录（默认输出至原 figures/ 目录）",
+    )
+    report.add_argument(
+        "--control-method",
+        default=None,
+        help="显式指定多种子负对照报表使用的控制/去偏方法（如 auto、raw、cms:eta=0.8、subspace:K=8,eta=0.8,gate=off、subspace:best_gap）",
+    )
+    report.add_argument(
+        "--control-metric",
+        default=None,
+        help="显式指定多种子负对照报表重点高亮与选优的主评估指标（如 vocab50_macro_top10、vocab50_macro_top1、full_vocab_macro_top10、k2_vocab50_macro_top10）",
     )
     report.add_argument("--write", action="store_true")
     return parser

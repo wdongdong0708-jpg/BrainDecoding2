@@ -2734,6 +2734,525 @@ def test_stage23_prefix_revision_configs_cli_and_static_tables():
     assert eval_tbl[2]["win_global_idx"].shape == (6, 4)
 
 
+def test_multi_seed_evaluation_full_reports_markdown_and_control_selection(tmp_path):
+    import csv
+    import json
+    from braindecoding.evaluation.evaluation_reporting import (
+        REPORT_WIDTH,
+        format_multi_seed_evaluation_report,
+        print_multi_seed_evaluation_report,
+        render_saved_evaluation_report,
+    )
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        summarize_multi_seed_evaluation,
+    )
+
+    def _make_horizon_block(v50_top10: float, fv_top10: float) -> dict:
+        return {
+            "common_vocab50_macro_top10": v50_top10,
+            "common_vocab50_micro_top10": v50_top10 - 0.01,
+            "common_vocab50_subject_macro_top10": v50_top10,
+            "common_vocab50_macro_top1": v50_top10 * 0.25,
+            "common_vocab50_micro_top1": v50_top10 * 0.24,
+            "common_vocab50_mrr": v50_top10 * 0.45,
+            "common_vocab50_median_rank": 15.0,
+            "common_full_vocab_macro_top10": fv_top10,
+            "common_full_vocab_word_macro_top10": fv_top10,
+            "common_full_vocab_micro_top10": fv_top10 + 0.01,
+            "common_full_vocab_subject_macro_top10": fv_top10 + 0.005,
+            "common_full_vocab_macro_top1": fv_top10 * 0.20,
+            "common_full_vocab_micro_top1": fv_top10 * 0.22,
+            "common_full_vocab_mrr": fv_top10 * 0.35,
+            "common_full_vocab_median_rank": 220.0,
+        }
+
+    def _make_shifted_agg_from_clean(clean_ref: dict, shift_offset: float) -> dict:
+        sh_v50 = max(0.05, float(clean_ref["vocab50_macro_top10"]) - shift_offset)
+        sh_fv = max(0.002, float(clean_ref["full_vocab_macro_top10"]) - shift_offset * 0.1)
+        s_agg = {
+            "shift_count": 2,
+            "shift_seconds": [-30.0, -60.0],
+            "mean_vocab50_macro_top10": sh_v50,
+            "std_vocab50_macro_top10": 0.005,
+            "clean_minus_shifted_vocab50_macro_top10": float(clean_ref["vocab50_macro_top10"]) - sh_v50,
+            "mean_vocab50_micro_top10": sh_v50 - 0.01,
+            "std_vocab50_micro_top10": 0.005,
+            "clean_minus_shifted_vocab50_micro_top10": float(clean_ref["vocab50_micro_top10"]) - (sh_v50 - 0.01),
+            "mean_vocab50_subject_macro_top10": sh_v50,
+            "std_vocab50_subject_macro_top10": 0.005,
+            "clean_minus_shifted_vocab50_subject_macro_top10": float(clean_ref["vocab50_macro_top10"]) - sh_v50,
+            "mean_vocab50_macro_top1": sh_v50 * 0.20,
+            "std_vocab50_macro_top1": 0.002,
+            "clean_minus_shifted_vocab50_macro_top1": float(clean_ref["vocab50_macro_top1"]) - sh_v50 * 0.20,
+            "mean_vocab50_micro_top1": sh_v50 * 0.20,
+            "std_vocab50_micro_top1": 0.002,
+            "clean_minus_shifted_vocab50_micro_top1": float(clean_ref["vocab50_micro_top1"]) - sh_v50 * 0.20,
+            "mean_vocab50_mrr": sh_v50 * 0.40,
+            "std_vocab50_mrr": 0.004,
+            "clean_minus_shifted_vocab50_mrr": float(clean_ref["vocab50_mrr"]) - sh_v50 * 0.40,
+            "mean_vocab50_median_rank": 24.5,
+            "std_vocab50_median_rank": 0.5,
+            "clean_minus_shifted_vocab50_median_rank": float(clean_ref["vocab50_median_rank"]) - 24.5,
+            "mean_full_vocab_macro_top10": sh_fv,
+            "std_full_vocab_macro_top10": 0.001,
+            "clean_minus_shifted_full_vocab_macro_top10": float(clean_ref["full_vocab_macro_top10"]) - sh_fv,
+            "mean_full_vocab_micro_top10": sh_fv,
+            "std_full_vocab_micro_top10": 0.001,
+            "clean_minus_shifted_full_vocab_micro_top10": float(clean_ref["full_vocab_micro_top10"]) - sh_fv,
+            "mean_full_vocab_subject_macro_top10": sh_fv,
+            "std_full_vocab_subject_macro_top10": 0.001,
+            "clean_minus_shifted_full_vocab_subject_macro_top10": float(clean_ref["full_vocab_subject_macro_top10"]) - sh_fv,
+            "mean_full_vocab_macro_top1": sh_fv * 0.15,
+            "std_full_vocab_macro_top1": 0.0005,
+            "clean_minus_shifted_full_vocab_macro_top1": float(clean_ref["full_vocab_macro_top1"]) - sh_fv * 0.15,
+            "mean_full_vocab_micro_top1": sh_fv * 0.15,
+            "std_full_vocab_micro_top1": 0.0005,
+            "clean_minus_shifted_full_vocab_micro_top1": float(clean_ref["full_vocab_micro_top1"]) - sh_fv * 0.15,
+            "mean_full_vocab_mrr": sh_fv * 0.30,
+            "std_full_vocab_mrr": 0.001,
+            "clean_minus_shifted_full_vocab_mrr": float(clean_ref["full_vocab_mrr"]) - sh_fv * 0.30,
+            "mean_full_vocab_median_rank": 980.0,
+            "std_full_vocab_median_rank": 10.0,
+            "clean_minus_shifted_full_vocab_median_rank": float(clean_ref["full_vocab_median_rank"]) - 980.0,
+            "horizons": {},
+        }
+        for hk, h_clean in (clean_ref.get("horizons") or {}).items():
+            h_sh: dict = {}
+            for mk, mv in h_clean.items():
+                sh_val = float(mv) * 0.5
+                h_sh[f"mean_{mk}"] = sh_val
+                h_sh[f"std_{mk}"] = 0.002
+                h_sh[f"clean_minus_shifted_{mk}"] = float(mv) - sh_val
+            s_agg["horizons"][hk] = h_sh
+        return s_agg
+
+    seed_results = []
+    for seed_idx, bonus in ((0, 0.0), (1, 0.02)):
+        seed_dir = tmp_path / f"seed-{seed_idx:03d}"
+        (seed_dir / "exploratory").mkdir(parents=True, exist_ok=True)
+        raw_clean = {
+            "condition": "clean_0s",
+            "label": "Clean (0s)",
+            "vocab50_macro_top10": 0.42 + bonus,
+            "vocab50_micro_top10": 0.41 + bonus,
+            "vocab50_subject_macro_top10": 0.42 + bonus,
+            "vocab50_macro_top1": 0.10 + bonus,
+            "vocab50_micro_top1": 0.09 + bonus,
+            "vocab50_mrr": 0.21 + bonus,
+            "vocab50_median_rank": 15.0 - seed_idx,
+            "full_vocab_macro_top10": 0.030 + bonus * 0.2,
+            "full_vocab_word_macro_top10": 0.030 + bonus * 0.2,
+            "full_vocab_micro_top10": 0.038 + bonus * 0.2,
+            "full_vocab_subject_macro_top10": 0.035 + bonus * 0.2,
+            "full_vocab_macro_top1": 0.008 + bonus * 0.1,
+            "full_vocab_micro_top1": 0.010 + bonus * 0.1,
+            "full_vocab_mrr": 0.018 + bonus * 0.1,
+            "full_vocab_median_rank": 220.0 - seed_idx * 5.0,
+            "horizons": {
+                "K0": _make_horizon_block(0.32 + bonus, 0.020 + bonus * 0.1),
+                "K1": _make_horizon_block(0.38 + bonus, 0.025 + bonus * 0.15),
+                "K2": _make_horizon_block(0.42 + bonus, 0.030 + bonus * 0.2),
+            },
+        }
+        raw_sh_agg = _make_shifted_agg_from_clean(raw_clean, shift_offset=0.06)
+
+        cms_08_clean = dict(raw_clean)
+        cms_08_clean["vocab50_macro_top10"] = 0.45 + bonus
+        cms_08_clean["full_vocab_macro_top1"] = 0.015 + bonus * 0.1
+        cms_08_clean["horizons"] = {
+            "K0": _make_horizon_block(0.34 + bonus, 0.022 + bonus * 0.1),
+            "K1": _make_horizon_block(0.40 + bonus, 0.028 + bonus * 0.15),
+            "K2": _make_horizon_block(0.45 + bonus, 0.034 + bonus * 0.2),
+        }
+        cms_08_sh_agg = _make_shifted_agg_from_clean(cms_08_clean, shift_offset=0.23)
+
+        sub_k8_clean = dict(raw_clean)
+        sub_k8_clean["vocab50_macro_top10"] = 0.48 + bonus
+        sub_k8_clean["full_vocab_macro_top1"] = 0.020 + bonus * 0.1
+        sub_k8_clean["horizons"] = {
+            "K0": _make_horizon_block(0.36 + bonus, 0.024 + bonus * 0.1),
+            "K1": _make_horizon_block(0.42 + bonus, 0.030 + bonus * 0.15),
+            "K2": _make_horizon_block(0.48 + bonus, 0.038 + bonus * 0.2),
+        }
+        sub_k8_sh_agg = _make_shifted_agg_from_clean(sub_k8_clean, shift_offset=0.28)
+
+        cms_payload = {
+            "experiment_type": "exploratory_leave_one_out_common_mode_subtraction",
+            "dataset": "pallier2025",
+            "stage": "revision",
+            "split": "test",
+            "seed": seed_idx,
+            "eta_grid": [0.0, 0.8],
+            "sweep": [
+                {
+                    "eta": 0.0,
+                    "label": "Raw (eta=0.00, No Subtraction)",
+                    "clean_reference": raw_clean,
+                    "shifted_conditions": [],
+                    "shifted_aggregate": raw_sh_agg,
+                },
+                {
+                    "eta": 0.8,
+                    "label": "LOO Subtracted (eta=0.80)",
+                    "clean_reference": cms_08_clean,
+                    "shifted_conditions": [],
+                    "shifted_aggregate": cms_08_sh_agg,
+                },
+            ],
+        }
+        (seed_dir / "exploratory" / "common_mode_subtraction_test.json").write_text(
+            json.dumps(cms_payload), encoding="utf-8"
+        )
+
+        sub_payload = {
+            "experiment_type": "exploratory_subspace_coherence_loo_debiasing",
+            "dataset": "pallier2025",
+            "stage": "revision",
+            "split": "test",
+            "seed": seed_idx,
+            "raw_baseline": {
+                "method_id": "raw_baseline",
+                "method_family": "raw",
+                "label": "Raw Un-Debiased (eta=0.0)",
+                "eta": 0.0,
+                "rank_k": 0,
+                "use_coherence_gate": False,
+                "clean_reference": raw_clean,
+                "shifted_conditions": [],
+                "shifted_aggregate": raw_sh_agg,
+            },
+            "full_rank_cms_sweep": [
+                {
+                    "method_id": "full_rank_loo_eta0.8",
+                    "method_family": "full_rank_loo",
+                    "label": "Full-Rank LOO CMS (eta=0.80)",
+                    "eta": 0.8,
+                    "rank_k": 1024,
+                    "use_coherence_gate": False,
+                    "clean_reference": cms_08_clean,
+                    "shifted_conditions": [],
+                    "shifted_aggregate": cms_08_sh_agg,
+                }
+            ],
+            "subspace_sweep": [
+                {
+                    "method_id": "subspace_loo_K8_eta0.8_gateFalse",
+                    "method_family": "subspace_loo",
+                    "label": "Subspace LOO (K=8, eta=0.80)",
+                    "eta": 0.8,
+                    "rank_k": 8,
+                    "use_coherence_gate": False,
+                    "clean_reference": sub_k8_clean,
+                    "shifted_conditions": [],
+                    "shifted_aggregate": sub_k8_sh_agg,
+                }
+            ],
+        }
+        (seed_dir / "exploratory" / "subspace_coherence_debiasing_test.json").write_text(
+            json.dumps(sub_payload), encoding="utf-8"
+        )
+
+        seed_res = {
+            "dataset": "pallier2025",
+            "stage": "revision",
+            "split": "test",
+            "seed": seed_idx,
+            "exp_tag": "unit_test_ms",
+            "window_seconds": 1.0,
+            "window_samples": 50,
+            "subset": {"subset_tag": "all-n10", "subject_count": 10},
+            "checkpoint": {"path": f"seed-{seed_idx:03d}/best.ckpt", "epoch": 15 + seed_idx},
+            "output_dir": str(seed_dir),
+            "vocabulary_sweep": {
+                "N20": {
+                    "label": "20-Word (N20)",
+                    "vocabulary_size": 20,
+                    "query_count": 1200,
+                    "macro_top10": 0.65 + bonus,
+                    "micro_top10": 0.64 + bonus,
+                    "subject_macro_top10": 0.65 + bonus,
+                    "macro_top5": 0.45 + bonus,
+                    "macro_top1": 0.18 + bonus,
+                    "micro_top1": 0.17 + bonus,
+                    "mrr": 0.32 + bonus,
+                    "median_rank": 6.0,
+                    "chance_top10": 0.50,
+                    "fold_over_chance_top10": (0.65 + bonus) / 0.50,
+                },
+                "N50": {
+                    "label": "50-Word (N50)",
+                    "vocabulary_size": 50,
+                    "query_count": 2000,
+                    "macro_top10": raw_clean["vocab50_macro_top10"],
+                    "micro_top10": raw_clean["vocab50_micro_top10"],
+                    "subject_macro_top10": raw_clean["vocab50_subject_macro_top10"],
+                    "macro_top5": 0.25 + bonus,
+                    "macro_top1": raw_clean["vocab50_macro_top1"],
+                    "micro_top1": raw_clean["vocab50_micro_top1"],
+                    "mrr": raw_clean["vocab50_mrr"],
+                    "median_rank": raw_clean["vocab50_median_rank"],
+                    "chance_top10": 0.20,
+                    "fold_over_chance_top10": raw_clean["vocab50_macro_top10"] / 0.20,
+                },
+                "N50_strict": {
+                    "label": "50-Word Strict (N50_strict)",
+                    "vocabulary_size": 50,
+                    "query_count": 2000,
+                    "macro_top10": raw_clean["vocab50_macro_top10"] - 0.01,
+                    "micro_top10": raw_clean["vocab50_micro_top10"],
+                    "subject_macro_top10": raw_clean["vocab50_subject_macro_top10"] - 0.01,
+                    "macro_top5": 0.24 + bonus,
+                    "macro_top1": raw_clean["vocab50_macro_top1"],
+                    "micro_top1": raw_clean["vocab50_micro_top1"],
+                    "mrr": raw_clean["vocab50_mrr"],
+                    "median_rank": raw_clean["vocab50_median_rank"],
+                    "chance_top10": 0.20,
+                    "fold_over_chance_top10": (raw_clean["vocab50_macro_top10"] - 0.01) / 0.20,
+                },
+                "full_vocab": {
+                    "label": "Full Vocab (2020)",
+                    "vocabulary_size": 2020,
+                    "query_count": 5000,
+                    "oov_queries": 120,
+                    "macro_top10": raw_clean["full_vocab_macro_top10"],
+                    "word_macro_top10": raw_clean["full_vocab_word_macro_top10"],
+                    "micro_top10": raw_clean["full_vocab_micro_top10"],
+                    "subject_macro_top10": raw_clean["full_vocab_subject_macro_top10"],
+                    "macro_top5": 0.018 + bonus * 0.1,
+                    "macro_top1": raw_clean["full_vocab_macro_top1"],
+                    "micro_top1": raw_clean["full_vocab_micro_top1"],
+                    "mrr": raw_clean["full_vocab_mrr"],
+                    "median_rank": raw_clean["full_vocab_median_rank"],
+                    "chance_top10": 10.0 / 2020.0,
+                    "fold_over_chance_top10": raw_clean["full_vocab_macro_top10"] / (10.0 / 2020.0),
+                },
+            },
+            "linguistic_breakdown": {
+                "content_words": {
+                    "label": "Content Words (>2 chars)",
+                    "query_count": 3000,
+                    "unique_targets": 800,
+                    "vocab50_macro_top10": 0.44 + bonus,
+                    "vocab50_micro_top10": 0.43 + bonus,
+                    "vocab50_macro_top1": 0.11 + bonus,
+                    "vocab50_mrr": 0.22 + bonus,
+                    "full_vocab_macro_top10": 0.032 + bonus * 0.2,
+                    "full_vocab_micro_top10": 0.040 + bonus * 0.2,
+                    "full_vocab_macro_top1": 0.009 + bonus * 0.1,
+                    "full_vocab_mrr": 0.019 + bonus * 0.1,
+                },
+                "function_words": {
+                    "label": "Function Words (<=2 chars / closed)",
+                    "query_count": 2000,
+                    "unique_targets": 80,
+                    "vocab50_macro_top10": 0.40 + bonus,
+                    "vocab50_micro_top10": 0.39 + bonus,
+                    "vocab50_macro_top1": 0.09 + bonus,
+                    "vocab50_mrr": 0.19 + bonus,
+                    "full_vocab_macro_top10": 0.025 + bonus * 0.2,
+                    "full_vocab_micro_top10": 0.035 + bonus * 0.2,
+                    "full_vocab_macro_top1": 0.006 + bonus * 0.1,
+                    "full_vocab_mrr": 0.015 + bonus * 0.1,
+                },
+            },
+            "revision_horizons": {
+                "K0": {"label": "K0 (Onset 0.0s)", "delay_steps": 0, **raw_clean["horizons"]["K0"]},
+                "K1": {"label": "K1 (+1 Word Delay)", "delay_steps": 1, **raw_clean["horizons"]["K1"]},
+                "K2": {"label": "K2 (+2 Words Delay)", "delay_steps": 2, **raw_clean["horizons"]["K2"]},
+                "K1_minus_K0": {
+                    "label": "Step-1 Gain (K1 - K0)",
+                    "common_vocab50_macro_top10": 0.06,
+                    "common_vocab50_micro_top10": 0.06,
+                    "common_vocab50_macro_top1": 0.015,
+                    "common_vocab50_micro_top1": 0.015,
+                    "common_vocab50_mrr": 0.027,
+                    "common_vocab50_median_rank": -3.0,
+                    "common_full_vocab_macro_top10": 0.005,
+                    "common_full_vocab_micro_top10": 0.005,
+                    "common_full_vocab_macro_top1": 0.001,
+                    "common_full_vocab_micro_top1": 0.001,
+                    "common_full_vocab_mrr": 0.002,
+                    "common_full_vocab_median_rank": -25.0,
+                },
+                "K2_minus_K0": {
+                    "label": "Revision Gain (K2 - K0)",
+                    "common_vocab50_macro_top10": 0.10,
+                    "common_vocab50_micro_top10": 0.10,
+                    "common_vocab50_macro_top1": 0.025,
+                    "common_vocab50_micro_top1": 0.025,
+                    "common_vocab50_mrr": 0.045,
+                    "common_vocab50_median_rank": -6.0,
+                    "common_full_vocab_macro_top10": 0.010,
+                    "common_full_vocab_micro_top10": 0.010,
+                    "common_full_vocab_macro_top1": 0.002,
+                    "common_full_vocab_micro_top1": 0.002,
+                    "common_full_vocab_mrr": 0.004,
+                    "common_full_vocab_median_rank": -50.0,
+                },
+            },
+            "revision_transitions": {
+                "K0_to_K2": {
+                    "query_count": 2000,
+                    "before_micro_top10": 0.31 + bonus,
+                    "after_micro_top10": 0.41 + bonus,
+                    "repairs_wrong_to_right": 260 + seed_idx * 10,
+                    "harms_right_to_wrong": 60 + seed_idx * 5,
+                    "net_event_gain": 200 + seed_idx * 5,
+                    "repair_to_harm_ratio": (260 + seed_idx * 10) / float(60 + seed_idx * 5),
+                    "retained_right_to_right": 560,
+                    "unresolved_wrong_to_wrong": 1120 - seed_idx * 15,
+                }
+            },
+            "per_subject": [
+                {
+                    "subject_id": "sub-01",
+                    "total_events": 500,
+                    "vocab50_queries": 200,
+                    "macro_top10": 0.44 + bonus,
+                    "micro_top10": 0.43 + bonus,
+                    "macro_top1": 0.11 + bonus,
+                    "micro_top1": 0.10 + bonus,
+                    "mrr": 0.22 + bonus,
+                    "median_rank": 14.0,
+                    "full_vocab_macro_top10": 0.032 + bonus * 0.2,
+                    "full_vocab_micro_top10": 0.040 + bonus * 0.2,
+                    "full_vocab_macro_top1": 0.009 + bonus * 0.1,
+                    "full_vocab_mrr": 0.019 + bonus * 0.1,
+                    "full_vocab_median_rank": 210.0,
+                }
+            ],
+            "negative_controls": {
+                "enabled": True,
+                "control_type": "subspace_coherence_debiasing",
+                "clean_reference": raw_clean,
+                "shifted_conditions": [
+                    {
+                        "condition": "shift_-30s",
+                        "label": "Shift -30s",
+                        "shift_seconds": -30.0,
+                        "vocab50_macro_top10": 0.36 + bonus,
+                        "vocab50_micro_top10": 0.35 + bonus,
+                        "vocab50_subject_macro_top10": 0.36 + bonus,
+                        "vocab50_macro_top1": 0.08 + bonus,
+                        "vocab50_micro_top1": 0.08 + bonus,
+                        "vocab50_mrr": 0.17 + bonus,
+                        "vocab50_median_rank": 24.0,
+                        "full_vocab_macro_top10": 0.024 + bonus * 0.1,
+                        "full_vocab_micro_top10": 0.025 + bonus * 0.1,
+                        "full_vocab_subject_macro_top10": 0.024 + bonus * 0.1,
+                        "full_vocab_macro_top1": 0.004 + bonus * 0.05,
+                        "full_vocab_micro_top1": 0.004 + bonus * 0.05,
+                        "full_vocab_mrr": 0.010 + bonus * 0.05,
+                        "full_vocab_median_rank": 980.0,
+                    }
+                ],
+                "shifted_aggregate": raw_sh_agg,
+            },
+        }
+        (seed_dir / "evaluation_test.json").write_text(
+            json.dumps(seed_res), encoding="utf-8"
+        )
+        seed_results.append(seed_res)
+
+    # 1. Default ('auto') control selection -> picks Subspace LOO best net gap (K=8, eta=0.8)
+    ms_auto = summarize_multi_seed_evaluation(seed_results)
+    ms_auto["output_dir"] = str(tmp_path)
+    nc_auto = ms_auto["negative_controls_aggregate"]
+    assert nc_auto["enabled"] is True
+    assert nc_auto["active_control_method"] == "subspace:K=8,eta=0.8,gate=off"
+    assert nc_auto["primary_control_metric"] == "vocab50_macro_top10"
+    assert nc_auto["mean_clean_vocab50_macro_top10"] == pytest.approx(0.49)
+    assert nc_auto["mean_gap_vocab50_macro_top10"] == pytest.approx(0.28)
+    assert "K0" in nc_auto["horizons_aggregate"]
+    assert "K2" in nc_auto["horizons_aggregate"]
+    assert "K2_minus_K0" in nc_auto["horizons_aggregate"]
+
+    # 2. Explicit control_method='raw' and control_metric='full_vocab_macro_top1'
+    ms_raw = summarize_multi_seed_evaluation(
+        seed_results,
+        control_method="raw",
+        control_metric="full_vocab_macro_top1",
+    )
+    nc_raw = ms_raw["negative_controls_aggregate"]
+    assert nc_raw["active_control_method"] == "raw"
+    assert nc_raw["primary_control_metric"] == "full_vocab_macro_top1"
+    assert nc_raw["mean_clean_vocab50_macro_top10"] == pytest.approx(0.43)
+    assert nc_raw["primary_metric_clean_mean"] == pytest.approx(0.009)
+
+    # 3. Explicit control_method='cms:eta=0.8' and control_metric='k2_vocab50_macro_top10'
+    ms_cms = summarize_multi_seed_evaluation(
+        seed_results,
+        control_method="cms:eta=0.8",
+        control_metric="k2_vocab50_macro_top10",
+    )
+    nc_cms = ms_cms["negative_controls_aggregate"]
+    assert nc_cms["active_control_method"] == "cms:eta=0.8"
+    assert nc_cms["primary_control_metric"] == "k2_vocab50_macro_top10"
+    assert nc_cms["mean_clean_vocab50_macro_top10"] == pytest.approx(0.46)
+    assert nc_cms["primary_metric_clean_mean"] == pytest.approx(0.46)
+
+    # 4. Print & export .txt, .md, and CSV tables to tmp_path
+    compact_out = print_multi_seed_evaluation_report(
+        ms_auto, verbose=False, output_dir=tmp_path, print_to_stdout=False
+    )
+    assert max(len(line) for line in compact_out.splitlines()) <= REPORT_WIDTH
+    assert "Method : [subspace:K=8,eta=0.8,gate=off]" in compact_out
+    assert "Metric : [vocab50_macro_top10]" in compact_out
+
+    txt_path = tmp_path / "multi_seed_evaluation_report_test.txt"
+    md_path = tmp_path / "multi_seed_evaluation_report_test.md"
+    assert txt_path.is_file()
+    assert md_path.is_file()
+    assert (tmp_path / "tables" / "multi_seed_summary_test.csv").is_file()
+    assert (tmp_path / "tables" / "multi_seed_per_seed_test.csv").is_file()
+    assert (tmp_path / "tables" / "multi_seed_horizons_test.csv").is_file()
+    assert (tmp_path / "tables" / "multi_seed_negative_controls_test.csv").is_file()
+
+    txt_content = txt_path.read_text(encoding="utf-8")
+    for required_section in (
+        "[1A] Per-Seed & Multi-Seed Aggregate — 50-Word Frozen Bank",
+        "[1B] Per-Seed & Multi-Seed Aggregate — Full Training Vocabulary",
+        "[2A] Multi-Scale Vocabulary Sweep Across Seeds",
+        "[2B] Linguistic Category Breakdown Across Seeds",
+        "[3A] Rolling Revision Horizons Across Seeds",
+        "[3B] Rolling Revision Event Top-10 Transitions Across Seeds",
+        "[4A] Negative Control Multi-Seed Summary",
+        "Active Control Method  (--control-method): [subspace:K=8,eta=0.8,gate=off]",
+        "Primary Control Metric (--control-metric): [vocab50_macro_top10]",
+        "[4B] Exploratory Leave-One-Out Common-Mode Subtraction (CMS) Multi-Seed Sweep",
+        "[4C] Exploratory Subspace Coherence LOO Debiasing Multi-Seed Sweep",
+        "[5] Per-Subject Multi-Seed Summary",
+    ):
+        assert required_section in txt_content
+
+    md_content = md_path.read_text(encoding="utf-8")
+    assert len(md_content.splitlines()) > 50
+    for required_md in (
+        "## 1. Per-Seed & Multi-Seed Aggregate Summary",
+        "### 1A. 50-Word Frozen Bank (`N50`)",
+        "### 1B. Full Training Vocabulary",
+        "## 2. Multi-Scale Vocabulary Sweep & Linguistic Breakdown",
+        "## 3. Rolling Revision Horizons (`K0 / K1 / K2`) & Event Transitions",
+        "## 4. Negative Control & Debiasing Multi-Seed Summary",
+        "### 4B. Leave-One-Out Common-Mode Subtraction (CMS) Multi-Seed Sweep",
+        "### 4C. Subspace Coherence LOO Debiasing Multi-Seed Sweep",
+        "## 5. Per-Subject Multi-Seed Summary",
+    ):
+        assert required_md in md_content
+
+    # 5. Zero-second report rendering with on-the-fly control_method & control_metric override
+    saved_ms_json = tmp_path / "multi_seed_evaluation_test.json"
+    saved_ms_json.write_text(json.dumps(ms_auto), encoding="utf-8")
+    rendered_override = render_saved_evaluation_report(
+        saved_ms_json,
+        verbose=True,
+        control_method="cms:eta=0.8",
+        control_metric="full_vocab_macro_top1",
+    )
+    assert "Active Control Method  (--control-method): [cms:eta=0.8]" in rendered_override
+    assert "Primary Control Metric (--control-metric): [full_vocab_macro_top1]" in rendered_override
+
+
 
 
 
