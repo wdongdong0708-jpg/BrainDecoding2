@@ -653,10 +653,13 @@ def _build_fast_summary_evaluator(
                         s50_all.get("macro_recall_at_10", 0.0)
                     ),
                     "common_full_vocab_macro_top10": float(
-                        fv_common.get("subject_equal_macro_recall_at_10", 0.0)
+                        fv_common.get("word_macro_recall_at_10", 0.0)
                     ),
                     "common_full_vocab_word_macro_top10": float(
                         fv_common.get("word_macro_recall_at_10", 0.0)
+                    ),
+                    "common_full_vocab_subject_macro_top10": float(
+                        fv_common.get("subject_equal_macro_recall_at_10", 0.0)
                     ),
                     "common_full_vocab_micro_top10": float(
                         fv_common.get("micro_recall_at_10", 0.0)
@@ -683,12 +686,15 @@ def _build_fast_summary_evaluator(
                 full_block_for_primary.get("word_macro_recall_at_5", 0.0)
             ),
             "macro_top10": float(
-                full_block_for_primary.get(
-                    "subject_equal_macro_recall_at_10", 0.0
-                )
+                full_block_for_primary.get("word_macro_recall_at_10", 0.0)
             ),
             "word_macro_top10": float(
                 full_block_for_primary.get("word_macro_recall_at_10", 0.0)
+            ),
+            "subject_macro_top10": float(
+                full_block_for_primary.get(
+                    "subject_equal_macro_recall_at_10", 0.0
+                )
             ),
             "micro_top1": float(
                 full_block_for_primary.get("micro_recall_at_1", 0.0)
@@ -1316,6 +1322,80 @@ def _compact_encoded_dict(encoded: dict) -> dict:
     return compact
 
 
+def evaluate_cached_pt_common_mode_subtraction(
+    cache_pt_path: str | Path,
+    *,
+    eta_values: str | Iterable[float | int | str] | None = (0.5, 0.8, 1.0),
+    output_dir: str | Path | None = None,
+    plot: bool = False,
+    print_report: bool = False,
+    verbose: bool = False,
+) -> dict:
+    """直接基于 subspace_encoded_cache_{split}.pt 在 1 秒内重算并更新留一法共模扣除（Common-Mode Subtraction）JSON 与 CSV 表格。"""
+    from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+        run_common_mode_subtraction_sweep,
+    )
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        _summarize_shifted_conditions,
+    )
+
+    pt_path = Path(cache_pt_path)
+    if not pt_path.is_file():
+        raise FileNotFoundError(f"未找到特征缓存文件：{pt_path}")
+
+    cached_bundle = torch.load(pt_path, map_location="cpu", weights_only=False)
+    dataset = str(cached_bundle.get("dataset", "pallier2025"))
+    stage = str(cached_bundle.get("stage", "revision"))
+    split = str(cached_bundle.get("split", "test"))
+    seed = int(cached_bundle.get("seed", 0))
+    proxy_ds = _CachedEvalDatasetProxy(
+        cached_bundle["eval_table"],
+        cached_bundle["embedding_map"],
+        window_seconds=float(cached_bundle.get("window_seconds", 1.0)),
+        window_samples=int(cached_bundle.get("window_samples", 50)),
+    )
+    resolved_out = (
+        Path(output_dir)
+        if output_dir is not None
+        else (
+            pt_path.parent.parent
+            if pt_path.parent.name == "exploratory"
+            else pt_path.parent
+        )
+    )
+    fast_eval = _build_fast_summary_evaluator(
+        proxy_ds,
+        cached_bundle["vocabulary"],
+        cached_bundle["vocab50"],
+        stage=stage,
+    )
+    return run_common_mode_subtraction_sweep(
+        dataset=dataset,
+        stage=stage,
+        split=split,
+        seed=seed,
+        exp_tag=str(cached_bundle.get("exp_tag", "")),
+        word_exp_tag=str(cached_bundle.get("word_exp_tag", "")),
+        clean_encoded=cached_bundle["clean_encoded"],
+        shifted_encoded_by_shift=cached_bundle["shifted_encoded_by_shift"],
+        eval_ds=proxy_ds,
+        shifted_ds_by_shift={},
+        vocabulary=cached_bundle["vocabulary"],
+        vocab50=cached_bundle["vocab50"],
+        cfg={},
+        eta_values=eta_values if eta_values is not None else (0.5, 0.8, 1.0),
+        compute_metrics_fn=lambda enc, *_args, **_kw: enc,
+        extract_summary_row_fn=lambda key, label, sec, enc, *, clean_summary=None: fast_eval(
+            enc, key, label, sec, clean_summary=clean_summary
+        ),
+        summarize_shifted_fn=_summarize_shifted_conditions,
+        output_dir=resolved_out,
+        plot=plot,
+        print_report=print_report,
+        verbose=verbose,
+    )
+
+
 def evaluate_cached_pt_subspace_loo(
     cache_pt_path: str | Path,
     *,
@@ -1331,6 +1411,7 @@ def evaluate_cached_pt_subspace_loo(
     plot: bool = True,
     print_report: bool = True,
     verbose: bool = False,
+    update_common_mode_subtraction: bool = True,
 ) -> dict:
     """直接加载已保存的 subspace_encoded_cache_{split}.pt 文件并在 3~5 秒内完成中心化 SVD + 严格留一法基底 Subspace LOO 全量扫描。"""
     pt_path = Path(cache_pt_path)
@@ -1365,6 +1446,48 @@ def evaluate_cached_pt_subspace_loo(
             else pt_path.parent
         )
     )
+    if update_common_mode_subtraction:
+        try:
+            from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+                run_common_mode_subtraction_sweep,
+            )
+            from braindecoding.evaluation.word_retrieval_evaluation import (
+                _summarize_shifted_conditions,
+            )
+
+            fast_eval = _build_fast_summary_evaluator(
+                proxy_ds,
+                cached_bundle["vocabulary"],
+                cached_bundle["vocab50"],
+                stage=stage,
+            )
+            run_common_mode_subtraction_sweep(
+                dataset=dataset,
+                stage=stage,
+                split=split,
+                seed=seed,
+                exp_tag=str(cached_bundle.get("exp_tag", "")),
+                word_exp_tag=str(cached_bundle.get("word_exp_tag", "")),
+                clean_encoded=cached_bundle["clean_encoded"],
+                shifted_encoded_by_shift=cached_bundle["shifted_encoded_by_shift"],
+                eval_ds=proxy_ds,
+                shifted_ds_by_shift={},
+                vocabulary=cached_bundle["vocabulary"],
+                vocab50=cached_bundle["vocab50"],
+                cfg={},
+                eta_values=(0.5, 0.8, 1.0),
+                compute_metrics_fn=lambda enc, *_args, **_kw: enc,
+                extract_summary_row_fn=lambda key, label, sec, enc, *, clean_summary=None: fast_eval(
+                    enc, key, label, sec, clean_summary=clean_summary
+                ),
+                summarize_shifted_fn=_summarize_shifted_conditions,
+                output_dir=resolved_out,
+                plot=plot,
+                print_report=False,
+                verbose=verbose,
+            )
+        except Exception:
+            pass
     return run_subspace_coherence_debiasing_sweep(
         dataset=dataset,
         stage=stage,

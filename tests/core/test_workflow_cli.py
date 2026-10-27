@@ -1053,7 +1053,7 @@ def test_leave_one_out_common_mode_subtraction_evaluation(tmp_path):
     for required_col in (
         "clean_full_vocab_macro_top10_pct",
         "shifted_mean_full_vocab_macro_top10_pct",
-        "clean_full_vocab_word_macro_top10_pct",
+        "clean_minus_shifted_full_vocab_top10_pp",
         "clean_full_vocab_macro_top1_pct",
         "shifted_mean_full_vocab_macro_top1_pct",
         "clean_minus_shifted_full_vocab_top1_pp",
@@ -1074,6 +1074,14 @@ def test_leave_one_out_common_mode_subtraction_evaluation(tmp_path):
         "k2_minus_k0_clean_full_vocab_macro_top1_pp",
     ):
         assert required_col in cms_df.columns, f"Missing column in CMS CSV: {required_col}"
+    for redundant_col in (
+        "clean_full_vocab_top10_pct",
+        "clean_full_vocab_word_macro_top10_pct",
+        "clean_minus_shifted_full_vocab_macro_top1_pp",
+        "k0_clean_vocab50_top10_pct",
+        "k0_clean_full_vocab_word_macro_top10_pct",
+    ):
+        assert redundant_col not in cms_df.columns, f"Redundant column still in CMS CSV: {redundant_col}"
 
     cms_hz_df = pd.read_csv(cms_hz_csv_path)
     assert set(cms_hz_df["horizon"].unique()) == {"K0", "K1", "K2"}
@@ -1827,7 +1835,7 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
     for required_col in (
         "clean_full_vocab_macro_top10_pct",
         "shifted_mean_full_vocab_macro_top10_pct",
-        "clean_full_vocab_word_macro_top10_pct",
+        "clean_minus_shifted_full_vocab_top10_pp",
         "clean_full_vocab_macro_top1_pct",
         "shifted_mean_full_vocab_macro_top1_pct",
         "clean_minus_shifted_full_vocab_top1_pp",
@@ -1848,12 +1856,21 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
         "k2_minus_k0_clean_full_vocab_macro_top1_pp",
     ):
         assert required_col in sub_df.columns, f"Missing column in subspace sweep CSV: {required_col}"
+    for redundant_col in (
+        "clean_full_vocab_top10_pct",
+        "clean_full_vocab_word_macro_top10_pct",
+        "clean_minus_shifted_full_vocab_macro_top1_pp",
+        "k0_clean_vocab50_top10_pct",
+        "k0_clean_full_vocab_word_macro_top10_pct",
+    ):
+        assert redundant_col not in sub_df.columns, f"Redundant column still in subspace CSV: {redundant_col}"
 
     sub_hz_df = pd.read_csv(tmp_path / "tables" / "subspace_debiasing_horizons_test.csv")
     assert set(sub_hz_df["horizon"].unique()) == {"K0", "K1", "K2"}
     assert "clean_full_vocab_macro_top1_pct" in sub_hz_df.columns
     assert "shifted_mean_full_vocab_macro_top1_pct" in sub_hz_df.columns
     assert "clean_minus_shifted_full_vocab_macro_top1_pp" in sub_hz_df.columns
+    assert "clean_full_vocab_word_macro_top10_pct" not in sub_hz_df.columns
 
     sub_md_text = (tmp_path / "exploratory" / "subspace_coherence_debiasing_test.md").read_text(encoding="utf-8")
     assert "Full Clean Macro Top-1" in sub_md_text
@@ -1898,6 +1915,11 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
         print_report=False,
     )
     assert len(cached_report["subspace_sweep"]) == 4
+    raw_c_ref = cached_report["raw_baseline"]["clean_reference"]
+    assert raw_c_ref["full_vocab_macro_top10"] == raw_c_ref["full_vocab_word_macro_top10"]
+    assert "common_vocab50_macro_top1" in raw_c_ref["horizons"]["K0"]
+    assert (tmp_path / "tables" / "common_mode_subtraction_test.csv").is_file()
+    assert (tmp_path / "tables" / "common_mode_subtraction_horizons_test.csv").is_file()
 
     subspace_ctrl_spec = _resolve_control_specification(
         {"evaluation": {}},

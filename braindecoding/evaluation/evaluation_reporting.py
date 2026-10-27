@@ -103,8 +103,21 @@ def _extract_sweep_and_horizons(
     """Normalize workflow `eval_result['metrics']`, flat metrics, and canonical `vocabularies` schemas."""
     metrics = eval_result.get("metrics")
     if isinstance(metrics, Mapping) and "vocabulary_sweep" in metrics:
-        sweep = dict(metrics.get("vocabulary_sweep") or {})
-        horizons = dict(metrics.get("revision_horizons") or {})
+        sweep = {
+            k: dict(v) if isinstance(v, Mapping) else v
+            for k, v in (metrics.get("vocabulary_sweep") or {}).items()
+        }
+        if isinstance(sweep.get("full_vocab"), dict):
+            fv_b = sweep["full_vocab"]
+            if fv_b.get("word_macro_top10") is not None:
+                fv_b["macro_top10"] = float(fv_b["word_macro_top10"])
+        horizons = {
+            hk: dict(hv) if isinstance(hv, Mapping) else hv
+            for hk, hv in (metrics.get("revision_horizons") or {}).items()
+        }
+        for hk, hv in horizons.items():
+            if isinstance(hv, dict) and hv.get("common_full_vocab_word_macro_top10") is not None:
+                hv["common_full_vocab_macro_top10"] = float(hv["common_full_vocab_word_macro_top10"])
         per_subj = list(metrics.get("per_subject") or [])
         return sweep, horizons, per_subj
 
@@ -470,12 +483,13 @@ def format_word_evaluation_report(
         lines.append(rule)
         lines.append(c_hdr)
         lines.append(rule)
+        c_fv_m10 = clean_row.get("full_vocab_word_macro_top10", clean_row.get("full_vocab_macro_top10"))
         lines.append(
             f"{str(clean_row.get('label', 'Clean (0s)'))[:20]:<20} | "
             f"{_fmt_ratio_pct(clean_row.get('vocab50_macro_top10'), 12)} | "
             f"{'(Ref)':>9} | "
             f"{_fmt_ratio_pct(clean_row.get('vocab50_macro_top1'), 11)} | "
-            f"{_fmt_ratio_pct(clean_row.get('full_vocab_macro_top10'), 10)} | "
+            f"{_fmt_ratio_pct(c_fv_m10, 10)} | "
             f"{_fmt_float(clean_row.get('vocab50_median_rank', clean_row.get('vocab50_median_rank_macro')), 7, 1)}"
         )
         if verbose or shift_cnt <= 1:
@@ -484,12 +498,13 @@ def format_word_evaluation_report(
                 d_50 = (s_row.get("delta_vs_clean") or {}).get("vocab50_macro_top10")
                 if d_50 is None and clean_row.get("vocab50_macro_top10") is not None and s_row.get("vocab50_macro_top10") is not None:
                     d_50 = float(s_row["vocab50_macro_top10"]) - float(clean_row["vocab50_macro_top10"])
+                s_fv_m10 = s_row.get("full_vocab_word_macro_top10", s_row.get("full_vocab_macro_top10"))
                 lines.append(
                     f"{str(s_row.get('label', cond.get('key', '-')))[:20]:<20} | "
                     f"{_fmt_ratio_pct(s_row.get('vocab50_macro_top10'), 12)} | "
                     f"{_fmt_signed_ratio_pct(d_50, 9)} | "
                     f"{_fmt_ratio_pct(s_row.get('vocab50_macro_top1'), 11)} | "
-                    f"{_fmt_ratio_pct(s_row.get('full_vocab_macro_top10'), 10)} | "
+                    f"{_fmt_ratio_pct(s_fv_m10, 10)} | "
                     f"{_fmt_float(s_row.get('vocab50_median_rank', s_row.get('vocab50_median_rank_macro')), 7, 1)}"
                 )
         if shift_cnt > 1:
@@ -497,13 +512,17 @@ def format_word_evaluation_report(
             sd50 = float(shifted_agg.get("std_vocab50_macro_top10", 0.0)) * 100.0
             d50 = shifted_agg.get("delta_vocab50_macro_top10_vs_clean")
             gap50 = shifted_agg.get("clean_minus_shifted_vocab50_macro_top10")
-            gap_fv = shifted_agg.get("clean_minus_shifted_full_vocab_macro_top10")
+            s_agg_fv = shifted_agg.get("mean_full_vocab_word_macro_top10", shifted_agg.get("mean_full_vocab_macro_top10"))
+            gap_fv = shifted_agg.get(
+                "clean_minus_shifted_full_vocab_word_macro_top10",
+                shifted_agg.get("clean_minus_shifted_full_vocab_macro_top10"),
+            )
             lines.append(
                 f"{'Shifted Mean ± SD':<20} | "
                 f"{f'{m50:.2f}±{sd50:.2f}%':>12} | "
                 f"{_fmt_signed_ratio_pct(d50, 9)} | "
                 f"{_fmt_ratio_pct(shifted_agg.get('mean_vocab50_macro_top1'), 11)} | "
-                f"{_fmt_ratio_pct(shifted_agg.get('mean_full_vocab_macro_top10'), 10)} | "
+                f"{_fmt_ratio_pct(s_agg_fv, 10)} | "
                 f"{_fmt_float(shifted_agg.get('mean_vocab50_median_rank', shifted_agg.get('mean_vocab50_median_rank_macro')), 7, 1)}"
             )
             lines.append(
@@ -701,19 +720,31 @@ def format_stage_comparison_report(
                     f"{_fmt_ratio_pct(hb.get('common_vocab50_macro_top10'), 9)} | "
                     f"{_fmt_ratio_pct(hb.get('common_vocab50_macro_top1'), 8)} | "
                     f"{_fmt_ratio_pct(hb.get('common_full_vocab_macro_top10'), 9)} | "
-                    f"{'-':>8} | {'-':>8}"
+                    f"{_fmt_ratio_pct(hb.get('common_full_vocab_macro_top1'), 8)} | "
+                    f"{_fmt_ratio_pct(hb.get('common_full_vocab_mrr'), 8)}"
                 )
             if "K0" in horizons and "K2" in horizons:
                 k0, k2 = horizons["K0"], horizons["K2"]
                 g50_10 = float(k2.get("common_vocab50_macro_top10", 0.0)) - float(k0.get("common_vocab50_macro_top10", 0.0))
                 g50_1 = float(k2.get("common_vocab50_macro_top1", 0.0)) - float(k0.get("common_vocab50_macro_top1", 0.0))
                 gfv_10 = float(k2.get("common_full_vocab_macro_top10", 0.0)) - float(k0.get("common_full_vocab_macro_top10", 0.0))
+                gfv_1 = (
+                    float(k2["common_full_vocab_macro_top1"]) - float(k0["common_full_vocab_macro_top1"])
+                    if k2.get("common_full_vocab_macro_top1") is not None and k0.get("common_full_vocab_macro_top1") is not None
+                    else None
+                )
+                gfv_mrr = (
+                    float(k2["common_full_vocab_mrr"]) - float(k0["common_full_vocab_mrr"])
+                    if k2.get("common_full_vocab_mrr") is not None and k0.get("common_full_vocab_mrr") is not None
+                    else None
+                )
                 lines.append(
                     f"{'  Δ Horizon Gain (K2 - K0)':<26} | "
                     f"{_fmt_signed_ratio_pct(g50_10, 9)} | "
                     f"{_fmt_signed_ratio_pct(g50_1, 8)} | "
                     f"{_fmt_signed_ratio_pct(gfv_10, 9)} | "
-                    f"{'-':>8} | {'-':>8}"
+                    f"{_fmt_signed_ratio_pct(gfv_1, 8)} | "
+                    f"{_fmt_signed_ratio_pct(gfv_mrr, 8)}"
                 )
 
     if (
@@ -769,14 +800,20 @@ def format_stage_comparison_report(
             c_ref = neg_ctrl.get("clean_reference") or {}
             s_agg = neg_ctrl.get("shifted_aggregate") or {}
             short_lbl = STAGE_SHORT_LABELS.get(st_key, st_key).replace("\n", " ")[:18]
+            c_fv_m10 = c_ref.get("full_vocab_word_macro_top10", c_ref.get("full_vocab_macro_top10"))
+            s_fv_m10 = s_agg.get("mean_full_vocab_word_macro_top10", s_agg.get("mean_full_vocab_macro_top10"))
+            g_fv_m10 = s_agg.get(
+                "clean_minus_shifted_full_vocab_word_macro_top10",
+                s_agg.get("clean_minus_shifted_full_vocab_macro_top10"),
+            )
             lines.append(
                 f"{short_lbl:<18} | "
                 f"{_fmt_ratio_pct(c_ref.get('vocab50_macro_top10'), 8)} | "
                 f"{_fmt_ratio_pct(s_agg.get('mean_vocab50_macro_top10'), 8)} | "
                 f"{_fmt_signed_ratio_pct(s_agg.get('clean_minus_shifted_vocab50_macro_top10'), 8)} | "
-                f"{_fmt_ratio_pct(c_ref.get('full_vocab_macro_top10'), 8)} | "
-                f"{_fmt_ratio_pct(s_agg.get('mean_full_vocab_macro_top10'), 8)} | "
-                f"{_fmt_signed_ratio_pct(s_agg.get('clean_minus_shifted_full_vocab_macro_top10'), 8)}"
+                f"{_fmt_ratio_pct(c_fv_m10, 8)} | "
+                f"{_fmt_ratio_pct(s_fv_m10, 8)} | "
+                f"{_fmt_signed_ratio_pct(g_fv_m10, 8)}"
             )
         lines.append(rule)
 
@@ -912,11 +949,18 @@ def format_common_mode_subtraction_report(
         c_ref = item.get("clean_reference") or {}
         agg = item.get("shifted_aggregate") or {}
         eta_lbl = f"eta={eta:.2f} (raw)" if abs(eta) <= 1e-9 else f"eta={eta:.2f}"
+        c_fv_m10 = c_ref.get("full_vocab_word_macro_top10", c_ref.get("full_vocab_macro_top10"))
+        s_fv_m10 = agg.get("mean_full_vocab_word_macro_top10", agg.get("mean_full_vocab_macro_top10"))
+        g_fv_m10 = (
+            float(c_fv_m10) - float(s_fv_m10)
+            if c_fv_m10 is not None and s_fv_m10 is not None
+            else agg.get("clean_minus_shifted_full_vocab_macro_top10")
+        )
         lines.append(
             f"{eta_lbl:<14} | "
-            f"{_fmt_ratio_pct(c_ref.get('full_vocab_macro_top10'), 9)} | "
-            f"{_fmt_ratio_pct(agg.get('mean_full_vocab_macro_top10'), 9)} | "
-            f"{_fmt_signed_ratio_pct(agg.get('clean_minus_shifted_full_vocab_macro_top10'), 9)} | "
+            f"{_fmt_ratio_pct(c_fv_m10, 9)} | "
+            f"{_fmt_ratio_pct(s_fv_m10, 9)} | "
+            f"{_fmt_signed_ratio_pct(g_fv_m10, 9)} | "
             f"{_fmt_ratio_pct(c_ref.get('full_vocab_macro_top1'), 9)} | "
             f"{_fmt_ratio_pct(agg.get('mean_full_vocab_macro_top1'), 9)} | "
             f"{float(c_ref.get('full_vocab_mrr', 0.0)):>8.4f}"
@@ -946,10 +990,23 @@ def format_common_mode_subtraction_report(
                 cols: list[str] = []
                 for hk in ("K0", "K1", "K2"):
                     if hk in c_hz:
-                        ch_v = float(c_hz[hk].get(metric_key, 0.0)) * 100.0
-                        sh_v = float((s_hz.get(hk) or {}).get(f"mean_{metric_key}", 0.0)) * 100.0
-                        gp_v = ch_v - sh_v
-                        cols.append(f"{ch_v:5.1f}/{sh_v:4.1f}({gp_v:+5.1f}%)")
+                        raw_ch = (
+                            c_hz[hk].get("common_full_vocab_word_macro_top10", c_hz[hk].get(metric_key))
+                            if metric_key == "common_full_vocab_macro_top10"
+                            else c_hz[hk].get(metric_key)
+                        )
+                        raw_sh = (
+                            (s_hz.get(hk) or {}).get("mean_common_full_vocab_word_macro_top10", (s_hz.get(hk) or {}).get(f"mean_{metric_key}"))
+                            if metric_key == "common_full_vocab_macro_top10"
+                            else (s_hz.get(hk) or {}).get(f"mean_{metric_key}")
+                        )
+                        if raw_ch is not None and raw_sh is not None:
+                            ch_v = float(raw_ch) * 100.0
+                            sh_v = float(raw_sh) * 100.0
+                            gp_v = ch_v - sh_v
+                            cols.append(f"{ch_v:5.1f}/{sh_v:4.1f}({gp_v:+5.1f}%)")
+                        else:
+                            cols.append("N/A")
                     else:
                         cols.append("N/A")
                 lines.append(
@@ -1173,11 +1230,18 @@ def format_subspace_coherence_debiasing_report(
         lbl = _short_method_label(item)[:22]
         c_ref = item.get("clean_reference") or {}
         agg = item.get("shifted_aggregate") or {}
+        c_fv_m10 = c_ref.get("full_vocab_word_macro_top10", c_ref.get("full_vocab_macro_top10"))
+        s_fv_m10 = agg.get("mean_full_vocab_word_macro_top10", agg.get("mean_full_vocab_macro_top10"))
+        g_fv_m10 = (
+            float(c_fv_m10) - float(s_fv_m10)
+            if c_fv_m10 is not None and s_fv_m10 is not None
+            else agg.get("clean_minus_shifted_full_vocab_macro_top10")
+        )
         lines.append(
             f"{lbl:<22} | "
-            f"{_fmt_ratio_pct(c_ref.get('full_vocab_macro_top10'), 7)} | "
-            f"{_fmt_ratio_pct(agg.get('mean_full_vocab_macro_top10'), 7)} | "
-            f"{_fmt_signed_ratio_pct(agg.get('clean_minus_shifted_full_vocab_macro_top10'), 8)} | "
+            f"{_fmt_ratio_pct(c_fv_m10, 7)} | "
+            f"{_fmt_ratio_pct(s_fv_m10, 7)} | "
+            f"{_fmt_signed_ratio_pct(g_fv_m10, 8)} | "
             f"{_fmt_ratio_pct(c_ref.get('full_vocab_macro_top1'), 8)} | "
             f"{_fmt_ratio_pct(agg.get('mean_full_vocab_macro_top1'), 8)} | "
             f"{float(c_ref.get('full_vocab_mrr', 0.0)):>8.4f}"
@@ -1228,10 +1292,23 @@ def format_subspace_coherence_debiasing_report(
                 cols: list[str] = []
                 for hk in ("K0", "K1", "K2"):
                     if hk in c_hz:
-                        ch_v = float(c_hz[hk].get(metric_key, 0.0)) * 100.0
-                        sh_v = float((s_hz.get(hk) or {}).get(f"mean_{metric_key}", 0.0)) * 100.0
-                        gp_v = ch_v - sh_v
-                        cols.append(f"{ch_v:4.1f}/{sh_v:4.1f}({gp_v:+5.1f}%)")
+                        raw_ch = (
+                            c_hz[hk].get("common_full_vocab_word_macro_top10", c_hz[hk].get(metric_key))
+                            if metric_key == "common_full_vocab_macro_top10"
+                            else c_hz[hk].get(metric_key)
+                        )
+                        raw_sh = (
+                            (s_hz.get(hk) or {}).get("mean_common_full_vocab_word_macro_top10", (s_hz.get(hk) or {}).get(f"mean_{metric_key}"))
+                            if metric_key == "common_full_vocab_macro_top10"
+                            else (s_hz.get(hk) or {}).get(f"mean_{metric_key}")
+                        )
+                        if raw_ch is not None and raw_sh is not None:
+                            ch_v = float(raw_ch) * 100.0
+                            sh_v = float(raw_sh) * 100.0
+                            gp_v = ch_v - sh_v
+                            cols.append(f"{ch_v:4.1f}/{sh_v:4.1f}({gp_v:+5.1f}%)")
+                        else:
+                            cols.append("N/A")
                     else:
                         cols.append("N/A")
                 lines.append(
@@ -2094,6 +2171,30 @@ def render_saved_evaluation_report(
         "subspace_and_coherence_diagnostics" in payload and "subspace_sweep" in payload
     ):
         base_out = src.parent.parent if src.parent.name == "exploratory" else src.parent
+        split_s = str(payload.get("split", "test"))
+        raw_k0 = (
+            ((payload.get("raw_baseline") or {}).get("clean_reference") or {})
+            .get("horizons", {})
+            .get("K0", {})
+        )
+        pt_candidate = (base_out / "exploratory" / f"subspace_encoded_cache_{split_s}.pt")
+        if not pt_candidate.exists():
+            pt_candidate = src.parent / f"subspace_encoded_cache_{split_s}.pt"
+        if isinstance(raw_k0, Mapping) and raw_k0 and "common_vocab50_macro_top1" not in raw_k0 and pt_candidate.exists():
+            try:
+                from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+                    evaluate_cached_pt_subspace_loo,
+                )
+
+                payload = evaluate_cached_pt_subspace_loo(
+                    pt_candidate,
+                    output_dir=base_out,
+                    plot_figures=False,
+                    verbose=verbose,
+                )
+                return format_subspace_coherence_debiasing_report(payload, verbose=verbose)
+            except Exception:
+                pass
         return print_subspace_coherence_debiasing_report(
             payload, verbose=verbose, output_dir=base_out
         )
@@ -2102,6 +2203,30 @@ def render_saved_evaluation_report(
         "eta_grid" in payload and "sweep" in payload
     ):
         base_out = src.parent.parent if src.parent.name == "exploratory" else src.parent
+        split_s = str(payload.get("split", "test"))
+        raw_k0 = (
+            ((payload.get("baseline_raw_eta0") or {}).get("clean_reference") or {})
+            .get("horizons", {})
+            .get("K0", {})
+        )
+        pt_candidate = (base_out / "exploratory" / f"subspace_encoded_cache_{split_s}.pt")
+        if not pt_candidate.exists():
+            pt_candidate = src.parent / f"subspace_encoded_cache_{split_s}.pt"
+        if isinstance(raw_k0, Mapping) and raw_k0 and "common_vocab50_macro_top1" not in raw_k0 and pt_candidate.exists():
+            try:
+                from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+                    evaluate_cached_pt_common_mode_subtraction,
+                )
+
+                payload = evaluate_cached_pt_common_mode_subtraction(
+                    pt_candidate,
+                    output_dir=base_out,
+                    plot_figures=False,
+                    verbose=verbose,
+                )
+                return format_common_mode_subtraction_report(payload, verbose=verbose)
+            except Exception:
+                pass
         return print_common_mode_subtraction_report(
             payload, verbose=verbose, output_dir=base_out
         )

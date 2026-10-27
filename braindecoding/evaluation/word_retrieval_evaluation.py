@@ -39,6 +39,7 @@ from braindecoding.evaluation.evaluation_reporting import (
     print_word_evaluation_report,
 )
 from braindecoding.evaluation.retrieval_metrics import (
+    fixed_vocabulary_retrieval,
     fixed_vocabulary_retrieval_metrics,
     mean_by_target,
     retrieval_ranks,
@@ -581,9 +582,11 @@ def _compute_encoded_evaluation_metrics(
     eval_blocks = block_col_all[avail_np]
 
     vocab_sweep: dict[str, dict] = {}
+    eval_words_arr_all = np.asarray(eval_words, dtype=object)
+    unique_eval_subjs = sorted(set(eval_subjects.tolist()))
     for size in (20, 50, 100, 150):
         cand_words = list(manifests[size]["vocabulary"])
-        m = fixed_vocabulary_retrieval_metrics(
+        m, m_ranks, m_selected = fixed_vocabulary_retrieval(
             eval_preds,
             eval_targets,
             eval_words,
@@ -597,6 +600,43 @@ def _compute_encoded_evaluation_metrics(
         mi_top1 = float(m.get("micro_recall_at_1", 0.0))
         mi_top5 = float(m.get("micro_recall_at_5", 0.0))
         mi_top10 = float(m.get("micro_recall_at_10", 0.0))
+        sel_idx = np.asarray(m_selected, dtype=np.int64)
+        if len(sel_idx) > 0 and unique_eval_subjs:
+            sel_subjs = eval_subjects[sel_idx]
+            sel_words = eval_words_arr_all[sel_idx]
+            s_top1_list: list[float] = []
+            s_top5_list: list[float] = []
+            s_top10_list: list[float] = []
+            for s_id in unique_eval_subjs:
+                sm = sel_subjs == s_id
+                if not np.any(sm):
+                    continue
+                sr = m_ranks[sm]
+                sw = sel_words[sm]
+                s_top1_list.append(
+                    float(mean_by_target((sr <= 1.0).astype(np.float64), sw))
+                )
+                s_top5_list.append(
+                    float(mean_by_target((sr <= 5.0).astype(np.float64), sw))
+                )
+                s_top10_list.append(
+                    float(mean_by_target((sr <= 10.0).astype(np.float64), sw))
+                )
+            subj_top1 = float(np.mean(s_top1_list)) if s_top1_list else w_top1
+            subj_top5 = float(np.mean(s_top5_list)) if s_top5_list else w_top5
+            subj_top10 = (
+                float(np.mean(s_top10_list)) if s_top10_list else w_top10
+            )
+            subj_std10 = (
+                float(np.std(s_top10_list, ddof=0)) if s_top10_list else 0.0
+            )
+        else:
+            subj_top1, subj_top5, subj_top10, subj_std10 = (
+                w_top1,
+                w_top5,
+                w_top10,
+                0.0,
+            )
         c_top1 = float(1.0 / size)
         c_top5 = float(min(5.0, float(size)) / size)
         c_top10 = float(min(10.0, float(size)) / size)
@@ -616,10 +656,10 @@ def _compute_encoded_evaluation_metrics(
             "word_macro_top1": w_top1,
             "word_macro_top5": w_top5,
             "word_macro_top10": w_top10,
-            "subject_macro_top1": mi_top1,
-            "subject_macro_top5": mi_top5,
-            "subject_macro_top10": w_top10,
-            "subject_std_top10": 0.0,
+            "subject_macro_top1": subj_top1,
+            "subject_macro_top5": subj_top5,
+            "subject_macro_top10": subj_top10,
+            "subject_std_top10": subj_std10,
             "micro_top1": mi_top1,
             "micro_top5": mi_top5,
             "micro_top10": mi_top10,
@@ -684,7 +724,7 @@ def _compute_encoded_evaluation_metrics(
             "word_macro_top10": s50_w10,
             "subject_macro_top1": s50_m1,
             "subject_macro_top5": s50_m5,
-            "subject_macro_top10": s50_w10,
+            "subject_macro_top10": s50_m10,
             "subject_std_top10": 0.0,
             "micro_top1": s50_m1,
             "micro_top5": s50_m5,
@@ -738,7 +778,7 @@ def _compute_encoded_evaluation_metrics(
         "in_vocabulary_coverage_pct": round(fv_cov_pct, 2),
         "macro_top1": fv_word_top1,
         "macro_top5": fv_word_top5,
-        "macro_top10": fv_subj_top10,
+        "macro_top10": fv_word_top10,
         "word_macro_top1": fv_word_top1,
         "word_macro_top5": fv_word_top5,
         "word_macro_top10": fv_word_top10,
@@ -758,9 +798,9 @@ def _compute_encoded_evaluation_metrics(
         "chance_top5": fv_chance_5,
         "chance_top10": fv_chance_10,
         "fold_over_chance_top10": round(
-            fv_subj_top10 / max(fv_chance_10, 1e-12), 4
+            fv_word_top10 / max(fv_chance_10, 1e-12), 4
         ),
-        "delta_vs_chance_top10": round(fv_subj_top10 - fv_chance_10, 6),
+        "delta_vs_chance_top10": round(fv_word_top10 - fv_chance_10, 6),
     }
 
     # 计算各延迟下每个事件的精确排名（用于状态转移矩阵、实虚词拆解、分受试者与配对显著性）
@@ -859,6 +899,13 @@ def _compute_encoded_evaluation_metrics(
             vocabulary_name=f"{subj}_N50",
         )
         subj_rfv = primary_ranks_full[subj_mask_np]
+        subj_words_arr = np.asarray(subj_words, dtype=object)
+        subj_fv_hits10 = (subj_rfv <= 10.0).astype(np.float64)
+        subj_fv_hits1 = (subj_rfv <= 1.0).astype(np.float64)
+        subj_fv_w10 = float(mean_by_target(subj_fv_hits10, subj_words_arr))
+        subj_fv_m10 = float(np.mean(subj_fv_hits10))
+        subj_fv_w1 = float(mean_by_target(subj_fv_hits1, subj_words_arr))
+        subj_fv_m1 = float(np.mean(subj_fv_hits1))
         subj_recip_fv = np.where(
             np.isfinite(subj_rfv) & (subj_rfv > 0.0), 1.0 / subj_rfv, 0.0
         )
@@ -879,8 +926,12 @@ def _compute_encoded_evaluation_metrics(
             "micro_top1": float(m50.get("micro_recall_at_1", 0.0)),
             "mrr": float(m50.get("mean_reciprocal_rank", 0.0)),
             "median_rank": float(m50.get("median_rank", 25.0)),
-            "full_vocab_top10": float(np.mean(subj_rfv <= 10.0)),
-            "full_vocab_top1": float(np.mean(subj_rfv <= 1.0)),
+            "full_vocab_macro_top10": subj_fv_w10,
+            "full_vocab_micro_top10": subj_fv_m10,
+            "full_vocab_macro_top1": subj_fv_w1,
+            "full_vocab_micro_top1": subj_fv_m1,
+            "full_vocab_top10": subj_fv_m10,
+            "full_vocab_top1": subj_fv_m1,
             "full_vocab_mrr": float(np.mean(subj_recip_fv)),
             "full_vocab_median_rank": subj_med_fv,
         }
@@ -909,11 +960,36 @@ def _compute_encoded_evaluation_metrics(
                 else:
                     k0_s50 = float(np.mean(ranks_50_by_delay[0][s_com] <= 10.0))
                     k2_s50 = float(np.mean(ranks_50_by_delay[2][s_com] <= 10.0))
+                w_sfv = all_words_arr[s_com]
+                k0_fv_macro = float(
+                    mean_by_target(
+                        (ranks_full_by_delay[0][s_com] <= 10.0).astype(
+                            np.float64
+                        ),
+                        w_sfv,
+                    )
+                )
+                k2_fv_macro = float(
+                    mean_by_target(
+                        (ranks_full_by_delay[2][s_com] <= 10.0).astype(
+                            np.float64
+                        ),
+                        w_sfv,
+                    )
+                )
                 k0_fv = float(np.mean(ranks_full_by_delay[0][s_com] <= 10.0))
                 k2_fv = float(np.mean(ranks_full_by_delay[2][s_com] <= 10.0))
                 s_entry["k0_vocab50_top10"] = k0_s50
                 s_entry["k2_vocab50_top10"] = k2_s50
                 s_entry["k2_minus_k0_vocab50_top10"] = k2_s50 - k0_s50
+                s_entry["k0_full_vocab_macro_top10"] = k0_fv_macro
+                s_entry["k2_full_vocab_macro_top10"] = k2_fv_macro
+                s_entry["k2_minus_k0_full_vocab_macro_top10"] = (
+                    k2_fv_macro - k0_fv_macro
+                )
+                s_entry["k0_full_vocab_micro_top10"] = k0_fv
+                s_entry["k2_full_vocab_micro_top10"] = k2_fv
+                s_entry["k2_minus_k0_full_vocab_micro_top10"] = k2_fv - k0_fv
                 s_entry["k0_full_vocab_top10"] = k0_fv
                 s_entry["k2_full_vocab_top10"] = k2_fv
                 s_entry["k2_minus_k0_full_vocab_top10"] = k2_fv - k0_fv
@@ -926,6 +1002,10 @@ def _compute_encoded_evaluation_metrics(
         )
         subj_fv_10 = np.asarray(
             [float(s["full_vocab_top10"]) for s in per_subject], dtype=np.float64
+        )
+        subj_fv_macro_10 = np.asarray(
+            [float(s.get("full_vocab_macro_top10", s["full_vocab_top10"])) for s in per_subject],
+            dtype=np.float64,
         )
         if "N50" in vocab_sweep:
             vocab_sweep["N50"]["subject_macro_top10"] = float(
@@ -957,9 +1037,52 @@ def _compute_encoded_evaluation_metrics(
             "std_macro_top1": float(
                 np.std([float(s["macro_top1"]) for s in per_subject], ddof=0)
             ),
+            "mean_micro_top1": float(
+                np.mean([float(s["micro_top1"]) for s in per_subject])
+            ),
+            "std_micro_top1": float(
+                np.std([float(s["micro_top1"]) for s in per_subject], ddof=0)
+            ),
             "mean_mrr": float(np.mean([float(s["mrr"]) for s in per_subject])),
             "std_mrr": float(
                 np.std([float(s["mrr"]) for s in per_subject], ddof=0)
+            ),
+            "mean_full_vocab_macro_top10": float(np.mean(subj_fv_macro_10)),
+            "std_full_vocab_macro_top10": float(
+                np.std(subj_fv_macro_10, ddof=0)
+            ),
+            "mean_full_vocab_micro_top10": float(np.mean(subj_fv_10)),
+            "std_full_vocab_micro_top10": float(np.std(subj_fv_10, ddof=0)),
+            "mean_full_vocab_macro_top1": float(
+                np.mean(
+                    [float(s.get("full_vocab_macro_top1", 0.0)) for s in per_subject]
+                )
+            ),
+            "std_full_vocab_macro_top1": float(
+                np.std(
+                    [float(s.get("full_vocab_macro_top1", 0.0)) for s in per_subject],
+                    ddof=0,
+                )
+            ),
+            "mean_full_vocab_micro_top1": float(
+                np.mean(
+                    [float(s.get("full_vocab_micro_top1", s.get("full_vocab_top1", 0.0))) for s in per_subject]
+                )
+            ),
+            "std_full_vocab_micro_top1": float(
+                np.std(
+                    [float(s.get("full_vocab_micro_top1", s.get("full_vocab_top1", 0.0))) for s in per_subject],
+                    ddof=0,
+                )
+            ),
+            "mean_full_vocab_mrr": float(
+                np.mean([float(s.get("full_vocab_mrr", 0.0)) for s in per_subject])
+            ),
+            "std_full_vocab_mrr": float(
+                np.std(
+                    [float(s.get("full_vocab_mrr", 0.0)) for s in per_subject],
+                    ddof=0,
+                )
             ),
             "mean_full_vocab_top10": float(np.mean(subj_fv_10)),
             "std_full_vocab_top10": float(np.std(subj_fv_10, ddof=0)),
@@ -983,6 +1106,32 @@ def _compute_encoded_evaluation_metrics(
             per_subject_summary["improved_subjects_count"] = imp_cnt
             per_subject_summary["improved_subjects_pct"] = round(
                 imp_cnt / len(k2_arr) * 100.0, 2
+            )
+        k2_k0_fv_macro_vals = [
+            float(s["k2_minus_k0_full_vocab_macro_top10"])
+            for s in per_subject
+            if "k2_minus_k0_full_vocab_macro_top10" in s
+        ]
+        if k2_k0_fv_macro_vals:
+            k2_fv_m_arr = np.asarray(k2_k0_fv_macro_vals, dtype=np.float64)
+            per_subject_summary["mean_k2_minus_k0_full_vocab_macro_top10"] = float(
+                np.mean(k2_fv_m_arr)
+            )
+            per_subject_summary["std_k2_minus_k0_full_vocab_macro_top10"] = float(
+                np.std(k2_fv_m_arr, ddof=0)
+            )
+        k2_k0_fv_vals = [
+            float(s["k2_minus_k0_full_vocab_top10"])
+            for s in per_subject
+            if "k2_minus_k0_full_vocab_top10" in s
+        ]
+        if k2_k0_fv_vals:
+            k2_fv_arr = np.asarray(k2_k0_fv_vals, dtype=np.float64)
+            per_subject_summary["mean_k2_minus_k0_full_vocab_top10"] = float(
+                np.mean(k2_fv_arr)
+            )
+            per_subject_summary["std_k2_minus_k0_full_vocab_top10"] = float(
+                np.std(k2_fv_arr, ddof=0)
             )
 
     # 词级实词（Content Words）vs. 虚词（Function Words）检索拆解
@@ -1101,6 +1250,8 @@ def _compute_encoded_evaluation_metrics(
         "event_share_pct": round(
             cw_d["event_share_pct"] - fw_d["event_share_pct"], 2
         ),
+        "vocab50_query_count": cw_d["vocab50_query_count"]
+        - fw_d["vocab50_query_count"],
         "vocab50_word_macro_top10": float(
             cw_d["vocab50_word_macro_top10"] - fw_d["vocab50_word_macro_top10"]
         ),
@@ -1109,6 +1260,9 @@ def _compute_encoded_evaluation_metrics(
         ),
         "vocab50_word_macro_top1": float(
             cw_d["vocab50_word_macro_top1"] - fw_d["vocab50_word_macro_top1"]
+        ),
+        "vocab50_micro_top1": float(
+            cw_d["vocab50_micro_top1"] - fw_d["vocab50_micro_top1"]
         ),
         "vocab50_mrr": float(cw_d["vocab50_mrr"] - fw_d["vocab50_mrr"]),
         "full_vocab_word_macro_top10": float(
@@ -1125,6 +1279,9 @@ def _compute_encoded_evaluation_metrics(
         "full_vocab_word_macro_top1": float(
             cw_d["full_vocab_word_macro_top1"]
             - fw_d["full_vocab_word_macro_top1"]
+        ),
+        "full_vocab_micro_top1": float(
+            cw_d["full_vocab_micro_top1"] - fw_d["full_vocab_micro_top1"]
         ),
         "full_vocab_mrr": float(
             cw_d["full_vocab_mrr"] - fw_d["full_vocab_mrr"]
@@ -1194,14 +1351,20 @@ def _compute_encoded_evaluation_metrics(
                 "all_vocab50_macro_top10": float(
                     s50_all.get("macro_recall_at_10", 0.0)
                 ),
+                "all_vocab50_micro_top10": float(
+                    s50_all.get("micro_recall_at_10", 0.0)
+                ),
                 "common_full_vocab_macro_top10": float(
+                    fv_common.get("word_macro_recall_at_10", 0.0)
+                ),
+                "common_full_vocab_word_macro_top10": float(
+                    fv_common.get("word_macro_recall_at_10", 0.0)
+                ),
+                "common_full_vocab_subject_macro_top10": float(
                     fv_common.get(
                         "subject_equal_macro_recall_at_10",
                         fv_horizon.get("subject_macro_top10", 0.0),
                     )
-                ),
-                "common_full_vocab_word_macro_top10": float(
-                    fv_common.get("word_macro_recall_at_10", 0.0)
                 ),
                 "common_full_vocab_micro_top10": float(
                     fv_common.get("micro_recall_at_10", 0.0)
@@ -1219,7 +1382,13 @@ def _compute_encoded_evaluation_metrics(
                     fv_common.get("median_rank", full_cand_count / 2.0)
                 ),
                 "all_full_vocab_macro_top10": float(
+                    fv_all.get("word_macro_recall_at_10", 0.0)
+                ),
+                "all_full_vocab_subject_macro_top10": float(
                     fv_all.get("subject_equal_macro_recall_at_10", 0.0)
+                ),
+                "all_full_vocab_micro_top10": float(
+                    fv_all.get("micro_recall_at_10", 0.0)
                 ),
             }
 
@@ -1583,6 +1752,12 @@ def _extract_control_summary_row(
     fv = sweep.get("full_vocab", {})
     horizons = metrics.get("revision_horizons") or {}
 
+    fv_word_macro_top10 = float(
+        fv.get("word_macro_top10", fv.get("macro_top10", 0.0))
+    )
+    fv_subj_macro_top10 = float(
+        fv.get("subject_macro_top10", fv.get("micro_top10", 0.0))
+    )
     row = {
         "key": key,
         "label": label,
@@ -1595,10 +1770,9 @@ def _extract_control_summary_row(
         "vocab50_mrr": float(n50.get("mrr", 0.0)),
         "vocab50_median_rank": float(n50.get("median_rank", 0.0)),
         "vocab50_chance_top10": float(n50.get("chance_top10", 0.2)),
-        "full_vocab_macro_top10": float(fv.get("macro_top10", 0.0)),
-        "full_vocab_word_macro_top10": float(
-            fv.get("word_macro_top10", fv.get("macro_top10", 0.0))
-        ),
+        "full_vocab_macro_top10": fv_word_macro_top10,
+        "full_vocab_word_macro_top10": fv_word_macro_top10,
+        "full_vocab_subject_macro_top10": fv_subj_macro_top10,
         "full_vocab_micro_top10": float(fv.get("micro_top10", 0.0)),
         "full_vocab_macro_top1": float(fv.get("macro_top1", 0.0)),
         "full_vocab_micro_top1": float(fv.get("micro_top1", 0.0)),
@@ -1627,12 +1801,21 @@ def _extract_control_summary_row(
                     horizons[h_key].get("common_vocab50_median_rank", 25.0)
                 ),
                 "common_full_vocab_macro_top10": float(
-                    horizons[h_key].get("common_full_vocab_macro_top10", 0.0)
+                    horizons[h_key].get(
+                        "common_full_vocab_word_macro_top10",
+                        horizons[h_key].get("common_full_vocab_macro_top10", 0.0),
+                    )
                 ),
                 "common_full_vocab_word_macro_top10": float(
                     horizons[h_key].get(
                         "common_full_vocab_word_macro_top10",
                         horizons[h_key].get("common_full_vocab_macro_top10", 0.0),
+                    )
+                ),
+                "common_full_vocab_subject_macro_top10": float(
+                    horizons[h_key].get(
+                        "common_full_vocab_subject_macro_top10",
+                        horizons[h_key].get("common_full_vocab_micro_top10", 0.0),
                     )
                 ),
                 "common_full_vocab_micro_top10": float(
@@ -1655,6 +1838,18 @@ def _extract_control_summary_row(
             if h_key in horizons
         }
     if clean_summary is not None:
+        c_fv_macro_10 = float(
+            clean_summary.get(
+                "full_vocab_word_macro_top10",
+                clean_summary.get("full_vocab_macro_top10", 0.0),
+            )
+        )
+        c_fv_subj_10 = float(
+            clean_summary.get(
+                "full_vocab_subject_macro_top10",
+                clean_summary.get("full_vocab_micro_top10", 0.0),
+            )
+        )
         delta = {
             "vocab50_macro_top10": float(
                 row["vocab50_macro_top10"] - clean_summary["vocab50_macro_top10"]
@@ -1673,15 +1868,13 @@ def _extract_control_summary_row(
                 row["vocab50_mrr"] - clean_summary["vocab50_mrr"]
             ),
             "full_vocab_macro_top10": float(
-                row["full_vocab_macro_top10"]
-                - clean_summary["full_vocab_macro_top10"]
+                row["full_vocab_macro_top10"] - c_fv_macro_10
             ),
             "full_vocab_word_macro_top10": float(
-                row["full_vocab_word_macro_top10"]
-                - clean_summary.get(
-                    "full_vocab_word_macro_top10",
-                    clean_summary["full_vocab_macro_top10"],
-                )
+                row["full_vocab_word_macro_top10"] - c_fv_macro_10
+            ),
+            "full_vocab_subject_macro_top10": float(
+                row["full_vocab_subject_macro_top10"] - c_fv_subj_10
             ),
             "full_vocab_micro_top10": float(
                 row["full_vocab_micro_top10"]
@@ -1701,16 +1894,30 @@ def _extract_control_summary_row(
             "clean_minus_control_vocab50_macro_top10": float(
                 clean_summary["vocab50_macro_top10"] - row["vocab50_macro_top10"]
             ),
+            "clean_minus_control_vocab50_micro_top10": float(
+                clean_summary["vocab50_micro_top10"] - row["vocab50_micro_top10"]
+            ),
             "clean_minus_control_vocab50_macro_top1": float(
                 clean_summary["vocab50_macro_top1"] - row["vocab50_macro_top1"]
             ),
+            "clean_minus_control_vocab50_micro_top1": float(
+                clean_summary.get("vocab50_micro_top1", 0.0)
+                - row["vocab50_micro_top1"]
+            ),
             "clean_minus_control_full_vocab_macro_top10": float(
-                clean_summary["full_vocab_macro_top10"]
-                - row["full_vocab_macro_top10"]
+                c_fv_macro_10 - row["full_vocab_macro_top10"]
+            ),
+            "clean_minus_control_full_vocab_micro_top10": float(
+                clean_summary.get("full_vocab_micro_top10", 0.0)
+                - row["full_vocab_micro_top10"]
             ),
             "clean_minus_control_full_vocab_macro_top1": float(
                 clean_summary.get("full_vocab_macro_top1", 0.0)
                 - row["full_vocab_macro_top1"]
+            ),
+            "clean_minus_control_full_vocab_micro_top1": float(
+                clean_summary.get("full_vocab_micro_top1", 0.0)
+                - row["full_vocab_micro_top1"]
             ),
         }
         if "horizons" in row and "horizons" in clean_summary:
@@ -1722,22 +1929,49 @@ def _extract_control_summary_row(
                             "common_vocab50_macro_top10"
                         ]
                     ),
+                    "common_vocab50_micro_top10": float(
+                        row["horizons"][h_key]["common_vocab50_micro_top10"]
+                        - clean_summary["horizons"][h_key].get(
+                            "common_vocab50_micro_top10", 0.0
+                        )
+                    ),
                     "common_vocab50_macro_top1": float(
                         row["horizons"][h_key]["common_vocab50_macro_top1"]
                         - clean_summary["horizons"][h_key].get(
                             "common_vocab50_macro_top1", 0.0
                         )
                     ),
+                    "common_vocab50_micro_top1": float(
+                        row["horizons"][h_key]["common_vocab50_micro_top1"]
+                        - clean_summary["horizons"][h_key].get(
+                            "common_vocab50_micro_top1", 0.0
+                        )
+                    ),
                     "common_full_vocab_macro_top10": float(
                         row["horizons"][h_key]["common_full_vocab_macro_top10"]
-                        - clean_summary["horizons"][h_key][
-                            "common_full_vocab_macro_top10"
-                        ]
+                        - clean_summary["horizons"][h_key].get(
+                            "common_full_vocab_word_macro_top10",
+                            clean_summary["horizons"][h_key].get(
+                                "common_full_vocab_macro_top10", 0.0
+                            ),
+                        )
+                    ),
+                    "common_full_vocab_micro_top10": float(
+                        row["horizons"][h_key]["common_full_vocab_micro_top10"]
+                        - clean_summary["horizons"][h_key].get(
+                            "common_full_vocab_micro_top10", 0.0
+                        )
                     ),
                     "common_full_vocab_macro_top1": float(
                         row["horizons"][h_key]["common_full_vocab_macro_top1"]
                         - clean_summary["horizons"][h_key].get(
                             "common_full_vocab_macro_top1", 0.0
+                        )
+                    ),
+                    "common_full_vocab_micro_top1": float(
+                        row["horizons"][h_key]["common_full_vocab_micro_top1"]
+                        - clean_summary["horizons"][h_key].get(
+                            "common_full_vocab_micro_top1", 0.0
                         )
                     ),
                 }
@@ -1768,6 +2002,7 @@ def _summarize_shifted_conditions(
         "vocab50_median_rank",
         "full_vocab_macro_top10",
         "full_vocab_word_macro_top10",
+        "full_vocab_subject_macro_top10",
         "full_vocab_micro_top10",
         "full_vocab_macro_top1",
         "full_vocab_micro_top1",
@@ -1803,6 +2038,7 @@ def _summarize_shifted_conditions(
             "common_vocab50_median_rank",
             "common_full_vocab_macro_top10",
             "common_full_vocab_word_macro_top10",
+            "common_full_vocab_subject_macro_top10",
             "common_full_vocab_micro_top10",
             "common_full_vocab_macro_top1",
             "common_full_vocab_micro_top1",
@@ -2574,11 +2810,15 @@ def _aggregate_single_stage_multi_seed(
             "vocab50_micro_top10": float(n50.get("micro_top10", 0.0)),
             "vocab50_macro_top5": float(n50.get("macro_top5", 0.0)),
             "vocab50_macro_top1": float(n50.get("macro_top1", 0.0)),
+            "vocab50_micro_top1": float(n50.get("micro_top1", 0.0)),
             "vocab50_mrr": float(n50.get("mrr", 0.0)),
             "vocab50_median_rank": float(n50.get("median_rank", 25.0)),
-            "full_vocab_macro_top10": float(fv.get("macro_top10", 0.0)),
+            "full_vocab_macro_top10": float(
+                fv.get("word_macro_top10", fv.get("macro_top10", 0.0))
+            ),
             "full_vocab_micro_top10": float(fv.get("micro_top10", 0.0)),
             "full_vocab_macro_top1": float(fv.get("macro_top1", 0.0)),
+            "full_vocab_micro_top1": float(fv.get("micro_top1", 0.0)),
             "full_vocab_mrr": float(fv.get("mrr", 0.0)),
             "full_vocab_median_rank": float(fv.get("median_rank", 1010.0)),
         }
@@ -2617,11 +2857,19 @@ def _aggregate_single_stage_multi_seed(
             "micro_top10",
             "macro_top5",
             "macro_top1",
+            "micro_top1",
             "mrr",
             "median_rank",
         ):
             vals = np.asarray(
-                [float(sr.get(m_key, 0.0)) for sr in scale_rows],
+                [
+                    float(
+                        sr.get("word_macro_top10", sr.get("macro_top10", 0.0))
+                        if (scale_key == "full_vocab" and m_key == "macro_top10")
+                        else sr.get(m_key, 0.0)
+                    )
+                    for sr in scale_rows
+                ],
                 dtype=np.float64,
             )
             agg_entry[f"mean_{m_key}"] = float(np.mean(vals))
@@ -2645,13 +2893,29 @@ def _aggregate_single_stage_multi_seed(
             "common_vocab50_macro_top10",
             "common_vocab50_micro_top10",
             "common_vocab50_macro_top1",
+            "common_vocab50_micro_top1",
+            "common_vocab50_mrr",
+            "common_vocab50_median_rank",
             "common_full_vocab_macro_top10",
             "common_full_vocab_micro_top10",
             "common_full_vocab_macro_top1",
+            "common_full_vocab_micro_top1",
             "common_full_vocab_mrr",
+            "common_full_vocab_median_rank",
         ):
             vals = np.asarray(
-                [float(hr.get(hm_key, 0.0)) for hr in h_rows], dtype=np.float64
+                [
+                    float(
+                        hr.get(
+                            "common_full_vocab_word_macro_top10",
+                            hr.get("common_full_vocab_macro_top10", 0.0),
+                        )
+                        if hm_key == "common_full_vocab_macro_top10"
+                        else hr.get(hm_key, 0.0)
+                    )
+                    for hr in h_rows
+                ],
+                dtype=np.float64,
             )
             h_entry[f"mean_{hm_key}"] = float(np.mean(vals))
             h_entry[f"std_{hm_key}"] = float(np.std(vals, ddof=0))
@@ -2663,16 +2927,35 @@ def _aggregate_single_stage_multi_seed(
             "common_vocab50_macro_top10",
             "common_vocab50_micro_top10",
             "common_vocab50_macro_top1",
+            "common_vocab50_micro_top1",
+            "common_vocab50_mrr",
             "common_full_vocab_macro_top10",
+            "common_full_vocab_micro_top10",
+            "common_full_vocab_macro_top1",
+            "common_full_vocab_micro_top1",
+            "common_full_vocab_mrr",
         ):
             diffs = []
             for r in seed_results:
                 rh = (r.get("metrics") or {}).get("revision_horizons") or {}
                 if "K0" in rh and "K2" in rh:
-                    diffs.append(
-                        float(rh["K2"].get(hm_key, 0.0))
-                        - float(rh["K0"].get(hm_key, 0.0))
-                    )
+                    if hm_key == "common_full_vocab_macro_top10":
+                        v_k2 = float(
+                            rh["K2"].get(
+                                "common_full_vocab_word_macro_top10",
+                                rh["K2"].get("common_full_vocab_macro_top10", 0.0),
+                            )
+                        )
+                        v_k0 = float(
+                            rh["K0"].get(
+                                "common_full_vocab_word_macro_top10",
+                                rh["K0"].get("common_full_vocab_macro_top10", 0.0),
+                            )
+                        )
+                    else:
+                        v_k2 = float(rh["K2"].get(hm_key, 0.0))
+                        v_k0 = float(rh["K0"].get(hm_key, 0.0))
+                    diffs.append(v_k2 - v_k0)
             if diffs:
                 arr = np.asarray(diffs, dtype=np.float64)
                 gain_entry[f"mean_{hm_key}"] = float(np.mean(arr))
@@ -2693,12 +2976,23 @@ def _aggregate_single_stage_multi_seed(
             "vocab50_macro_top10",
             "vocab50_micro_top10",
             "vocab50_macro_top1",
+            "vocab50_micro_top1",
             "full_vocab_macro_top10",
+            "full_vocab_micro_top10",
+            "full_vocab_macro_top1",
+            "full_vocab_micro_top1",
         ):
             clean_vals = np.asarray(
                 [
                     float(
-                        (nc.get("clean_reference") or {}).get(m_key, 0.0)
+                        (nc.get("clean_reference") or {}).get(
+                            "full_vocab_word_macro_top10",
+                            (nc.get("clean_reference") or {}).get(
+                                "full_vocab_macro_top10", 0.0
+                            ),
+                        )
+                        if m_key == "full_vocab_macro_top10"
+                        else (nc.get("clean_reference") or {}).get(m_key, 0.0)
                     )
                     for nc in nc_valid
                 ],
@@ -2708,6 +3002,13 @@ def _aggregate_single_stage_multi_seed(
                 [
                     float(
                         (nc.get("shifted_aggregate") or {}).get(
+                            "mean_full_vocab_word_macro_top10",
+                            (nc.get("shifted_aggregate") or {}).get(
+                                "mean_full_vocab_macro_top10", 0.0
+                            ),
+                        )
+                        if m_key == "full_vocab_macro_top10"
+                        else (nc.get("shifted_aggregate") or {}).get(
                             f"mean_{m_key}", 0.0
                         )
                     )
@@ -3246,9 +3547,15 @@ def run_evaluation_workflow(
 
     stage_significance: dict[str, dict] = {}
     if "word" in stage_results:
-        w_subs = stage_results["word"].get("per_subject") or []
+        w_subs = (
+            (stage_results["word"].get("metrics") or {}).get("per_subject")
+            or stage_results["word"].get("per_subject")
+            or []
+        )
         w_map = {
-            int(s.get("subject_id", -1)): float(s.get("n50_macro_top10", 0.0))
+            str(s.get("subject_id")): float(
+                s.get("macro_top10", s.get("n50_macro_top10", 0.0))
+            )
             for s in w_subs
             if s.get("subject_id") is not None
         }
@@ -3258,10 +3565,16 @@ def run_evaluation_workflow(
             ("prefix_revision", "prefix_revision_vs_word_n50_top10"),
         ):
             if st_comp in stage_results:
-                c_subs = stage_results[st_comp].get("per_subject") or []
+                c_subs = (
+                    (stage_results[st_comp].get("metrics") or {}).get(
+                        "per_subject"
+                    )
+                    or stage_results[st_comp].get("per_subject")
+                    or []
+                )
                 c_map = {
-                    int(s.get("subject_id", -1)): float(
-                        s.get("n50_macro_top10", 0.0)
+                    str(s.get("subject_id")): float(
+                        s.get("macro_top10", s.get("n50_macro_top10", 0.0))
                     )
                     for s in c_subs
                     if s.get("subject_id") is not None
@@ -3274,14 +3587,18 @@ def run_evaluation_workflow(
                     b_arr = np.asarray(
                         [w_map[sid] for sid in common_sids], dtype=np.float64
                     )
-                    stage_significance[comp_key] = (
-                        _compute_paired_block_significance(
-                            a_arr,
-                            b_arr,
-                            [f"sub-{sid:02d}" for sid in common_sids],
-                            seed=20261029,
-                        )
+                    sig_res = _compute_paired_block_significance(
+                        a_arr,
+                        b_arr,
+                        [str(sid) for sid in common_sids],
+                        label=f"{st_comp} vs word (N50 Macro Top-10)",
+                        metric="vocab50_macro_top10",
+                        seed=20261029,
                     )
+                    stage_significance[comp_key] = sig_res
+                    stage_significance[
+                        f"{st_comp}_minus_word_vocab50_top10"
+                    ] = sig_res
 
     multi_summary = {
         "status": "multi_stage_evaluation_completed",
