@@ -1286,9 +1286,9 @@ def _build_single_stage_multi_seed_markdown_lines(
     subj_agg = list(summary.get("per_subject_summary_aggregate") or [])
 
     md: list[str] = [
-        f"{section_prefix} 1. Per-Seed & Multi-Seed Aggregate Summary — `{stage}` ({stage_disp})",
+        f"{section_prefix} 1. Per-Seed & Multi-Seed Retrieval Summary — `{stage}` ({stage_disp})",
         "",
-        f"{sub_prefix} 1A. 50-Word Frozen Bank (`N50`) (Per-Seed & Mean ± SD)",
+        f"{sub_prefix} 1A. 50-Word Frozen Candidate Bank (Per-Seed & Mean ± SD)",
         "",
         "| Seed / Summary | Best Epoch | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-5 | 50w Macro Top-1 | 50w Micro Top-1 | 50w MRR | 50w MedRank | Strict-50 Macro Top-10 | Control 50w Top-10 | Net Gap 50w Top-10 |",
         "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -1418,18 +1418,11 @@ def _build_single_stage_multi_seed_markdown_lines(
             f"**{sh_fv_m}** | **{gap_fv_m}** |"
         )
 
-    if vs_agg or (isinstance(ling_agg, Mapping) and ling_agg):
-        md.extend(
-            [
-                "",
-                f"{section_prefix} 2. Multi-Scale Vocabulary Sweep & Linguistic Breakdown (Mean ± SD)",
-            ]
-        )
     if vs_agg:
         md.extend(
             [
                 "",
-                f"{sub_prefix} 2A. Multi-Scale Vocabulary Sweep Across Seeds",
+                f"{section_prefix} 2. Multi-Scale Vocabulary Sweep Across Seeds (Mean ± SD)",
                 "",
                 "| Scale | Candidates | Queries | In-Vocab Cov. | Word-Macro Top-10 | Event-Micro Top-10 | Subject-Macro Top-10 | Word-Macro Top-5 | Word-Macro Top-1 | Event-Micro Top-1 | MRR | Median Rank | Fold / Chance |",
                 "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -1464,7 +1457,7 @@ def _build_single_stage_multi_seed_markdown_lines(
         md.extend(
             [
                 "",
-                f"{sub_prefix} 2B. Linguistic Word-Class Breakdown Across Seeds (Mean ± SD)",
+                f"{section_prefix} 3. Linguistic Word-Class Breakdown Across Seeds (Mean ± SD)",
                 "",
                 "| Word Class | Queries | Unique Words | Event Share | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-1 | FullVoc Word-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Word-Macro Top-1 | FullVoc MRR | FullVoc MedRank |",
                 "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -1495,9 +1488,9 @@ def _build_single_stage_multi_seed_markdown_lines(
         md.extend(
             [
                 "",
-                f"{section_prefix} 3. Rolling Revision Horizons (`K0 / K1 / K2`) & Event Transitions (Mean ± SD)",
+                f"{section_prefix} 4. Rolling Revision Horizons (`K0`, `K1`, `K2`) Across Seeds (Mean ± SD)",
                 "",
-                f"{sub_prefix} 3A. 50-Word & Full-Vocabulary Horizon Trajectory",
+                f"{sub_prefix} 4A. 50-Word & Full-Vocabulary Horizon Trajectory",
                 "",
                 "| Horizon | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-1 | 50w Micro Top-1 | 50w MRR | 50w MedRank | FullVoc Word-Macro Top-10 | FullVoc Subject-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Word-Macro Top-1 | FullVoc Micro Top-1 | FullVoc MRR | FullVoc MedRank |",
                 "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -1537,7 +1530,7 @@ def _build_single_stage_multi_seed_markdown_lines(
         md.extend(
             [
                 "",
-                f"{sub_prefix} 3B. Revision Hit/Miss Transition Matrix Across Seeds (Mean ± SD)",
+                f"{sub_prefix} 4B. Revision Hit/Miss Transition Matrix Across Seeds (Mean ± SD)",
                 "",
                 "| Transition | Metric Scope | Common Events | Beneficial Repairs (Miss->Hit) | Harmful Overwrites (Hit->Miss) | Net Hit Gain | Retained Hits | Persistent Misses | Repair / Harm Ratio |",
                 "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -1590,7 +1583,7 @@ def _build_single_stage_multi_seed_markdown_lines(
         md.extend(
             [
                 "",
-                f"{section_prefix} 4. Negative Control & Debiasing Multi-Seed Summary (Mean ± SD)",
+                f"{section_prefix} 5. Negative Control Multi-Seed Summary (Mean ± SD)",
                 "",
                 f"- **Active Control / Debiasing Method**: `{active_m_id}` — **{active_m_lbl}**",
                 f"- **Explicit Primary Control Metric**: `{prim_m_key}` — **{prim_m_lbl}**",
@@ -1656,7 +1649,7 @@ def _build_single_stage_multi_seed_markdown_lines(
         md.extend(
             [
                 "",
-                f"{sub_prefix} 4A. Overall Clean vs. Control vs. Net Gap Across All Retrieval Metrics",
+                f"{sub_prefix} 5A. Overall Clean vs. Control vs. Net Gap Across All Retrieval Metrics",
                 "",
                 "| Condition | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-1 | 50w Micro Top-1 | 50w MRR | 50w MedRank | FullVoc Word-Macro Top-10 | FullVoc Subject-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Word-Macro Top-1 | FullVoc Micro Top-1 | FullVoc MRR | FullVoc MedRank |",
                 "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -1729,7 +1722,7 @@ def _build_single_stage_multi_seed_markdown_lines(
             md.extend(
                 [
                     "",
-                    f"{sub_prefix} 4A-Horizons. Rolling Revision Horizons (`K0`, `K1`, `K2`) Under Negative Control (`{active_m_id}`, Mean ± SD)",
+                    f"{sub_prefix} 5B. Rolling Revision Horizons (`K0`, `K1`, `K2`) Under Negative Control (`{active_m_id}`, Mean ± SD)",
                     "",
                     "| Horizon | Condition | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-1 | 50w MRR | FullVoc Word-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Word-Macro Top-1 | FullVoc MRR |",
                     "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -1765,7 +1758,9 @@ def _build_single_stage_multi_seed_markdown_lines(
             md.extend(
                 [
                     "",
-                    f"{sub_prefix} 4B. Leave-One-Out Common-Mode Subtraction (CMS) Multi-Seed Sweep (Mean ± SD)",
+                    f"{section_prefix} 6. Leave-One-Out Common-Mode Subtraction (`CMS`) Multi-Seed Sweep (Mean ± SD)",
+                    "",
+                    f"{sub_prefix} 6A. Overall Multi-Seed `eta` Sweep",
                     "",
                     "| Method | `eta` | Clean 50w Macro Top-10 | Shifted 50w Macro Top-10 | Net Gap 50w Top-10 | Clean 50w Macro Top-1 | Net Gap 50w Top-1 | Clean FullVoc Word-Macro Top-10 | Shifted FullVoc Word-Macro Top-10 | Net Gap FullVoc Top-10 | Clean FullVoc Word-Macro Top-1 | Net Gap FullVoc Top-1 | Clean FullVoc MRR |",
                     "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -1800,7 +1795,7 @@ def _build_single_stage_multi_seed_markdown_lines(
                 md.extend(
                     [
                         "",
-                        f"{sub_prefix} 4B-Horizons. Rolling Revision Horizons (`K0`, `K1`, `K2`) Across `CMS` `eta` Values",
+                        f"{sub_prefix} 6B. Rolling Revision Horizons (`K0`, `K1`, `K2`) Across `CMS` `eta` Values",
                         "",
                         "| Method | `eta` | Horizon | Clean 50w Macro Top-10 | Shifted 50w Macro Top-10 | Gap 50w Top-10 | Clean 50w Macro Top-1 | Gap 50w Top-1 | Clean FullVoc Word-Macro Top-10 | Shifted FullVoc Word-Macro Top-10 | Gap FullVoc Top-10 | Clean FullVoc Word-Macro Top-1 | Gap FullVoc Top-1 |",
                         "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -1834,7 +1829,9 @@ def _build_single_stage_multi_seed_markdown_lines(
             md.extend(
                 [
                     "",
-                    f"{sub_prefix} 4C. Subspace Coherence LOO Debiasing Multi-Seed Sweep (Mean ± SD)",
+                    f"{section_prefix} 7. Subspace Coherence LOO Debiasing Multi-Seed Sweep (Mean ± SD)",
+                    "",
+                    f"{sub_prefix} 7A. Overall `(Rank K, eta, Coherence Gate)` Multi-Seed Sweep",
                     "",
                     "| Selector ID | Rank `K` | `eta` | Gate | Clean 50w Macro Top-10 | Shifted 50w Macro Top-10 | Net Gap 50w Top-10 | Clean 50w Macro Top-1 | Net Gap 50w Top-1 | Clean FullVoc Word-Macro Top-10 | Shifted FullVoc Word-Macro Top-10 | Net Gap FullVoc Top-10 | Clean FullVoc Word-Macro Top-1 | Net Gap FullVoc Top-1 | Clean FullVoc MRR |",
                     "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -1871,7 +1868,7 @@ def _build_single_stage_multi_seed_markdown_lines(
                 md.extend(
                     [
                         "",
-                        f"{sub_prefix} 4C-Horizons. Rolling Revision Horizons (`K0`, `K1`, `K2`) Across Subspace LOO Configurations",
+                        f"{sub_prefix} 7B. Rolling Revision Horizons (`K0`, `K1`, `K2`) Across Subspace LOO Configurations",
                         "",
                         "| Selector ID | Horizon | Clean 50w Macro Top-10 | Shifted 50w Macro Top-10 | Gap 50w Top-10 | Clean 50w Macro Top-1 | Gap 50w Top-1 | Clean FullVoc Word-Macro Top-10 | Shifted FullVoc Word-Macro Top-10 | Gap FullVoc Top-10 | Clean FullVoc Word-Macro Top-1 | Gap FullVoc Top-1 |",
                         "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -1903,7 +1900,7 @@ def _build_single_stage_multi_seed_markdown_lines(
         md.extend(
             [
                 "",
-                f"{section_prefix} 5. Per-Subject Multi-Seed Summary (Mean ± SD)",
+                f"{section_prefix} 8. Per-Subject Multi-Seed Summary (Mean ± SD)",
                 "",
                 "| Subject | Events | 50w Events | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-1 | 50w MRR | FullVoc Word-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Word-Macro Top-1 | FullVoc MRR | K2-K0 50w Top-10 | K2-K0 FullVoc Top-10 |",
                 "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -3889,13 +3886,7 @@ def export_subspace_coherence_debiasing_tables_and_markdown(
     raw_entry = subspace_report.get("raw_baseline") or {}
     full_entries = list(subspace_report.get("full_rank_loo_baselines") or [])
     sub_entries = list(subspace_report.get("subspace_sweep") or [])
-    rolling_entries = list(subspace_report.get("rolling_delta_sweep") or [])
-    all_entries = (
-        ([raw_entry] if raw_entry else [])
-        + full_entries
-        + sub_entries
-        + rolling_entries
-    )
+    all_entries = ([raw_entry] if raw_entry else []) + full_entries + sub_entries
 
     exported: dict[str, str] = {}
     rows: list[dict[str, Any]] = []
@@ -3911,7 +3902,7 @@ def export_subspace_coherence_debiasing_tables_and_markdown(
             "method_family": str(entry.get("method_family", "-")),
             "label": str(entry.get("label", "-")),
             "rank_k": "Full" if rk is None else int(rk),
-            "eta": _num(entry.get("eta", entry.get("eta_0", 0.0)), 3),
+            "eta": _num(entry.get("eta", 0.0), 3),
             "coherence_gate": "On" if entry.get("use_coherence_gate") else "Off",
         }
         row = dict(base_meta)
@@ -3936,10 +3927,8 @@ def export_subspace_coherence_debiasing_tables_and_markdown(
         exported["subspace_debiasing_horizons_csv"] = str(hz_csv_path)
 
     diag_map = subspace_report.get("subspace_and_coherence_diagnostics") or {}
-    cross_hz_diags = subspace_report.get("cross_horizon_revision_diagnostics") or {}
     best_gap = subspace_report.get("best_by_net_gap_vocab50") or {}
     best_clean = subspace_report.get("best_by_clean_preservation_vocab50") or {}
-    best_delta_gap = subspace_report.get("best_rolling_delta_by_net_gap_vocab50") or {}
 
     md_lines = [
         f"# Subspace-Projected & Coherence-Gated LOO Debiasing Report — `{dataset}` | `{stage}` (`{split.upper()}`)",
@@ -3959,13 +3948,6 @@ def export_subspace_coherence_debiasing_tables_and_markdown(
         bc_d = _pct((best_clean.get("shifted_aggregate") or {}).get("clean_minus_shifted_vocab50_macro_top10"))
         md_lines.append(
             f"- **Best Clean-Preserving**: **`{best_clean['label']}`** (`Clean={bc_c:.2f}%`, `Shifted={bc_s:.2f}%`, `Gap={bc_d:+.2f} pp`)"
-        )
-    if isinstance(best_delta_gap, Mapping) and best_delta_gap.get("label"):
-        bd_c = _pct((best_delta_gap.get("clean_reference") or {}).get("vocab50_macro_top10"))
-        bd_s = _pct((best_delta_gap.get("shifted_aggregate") or {}).get("mean_vocab50_macro_top10"))
-        bd_d = _pct((best_delta_gap.get("shifted_aggregate") or {}).get("clean_minus_shifted_vocab50_macro_top10"))
-        md_lines.append(
-            f"- **Best Rolling-Delta Debiasing (`K0->K1/K2`)**: **`{best_delta_gap['label']}`** (`Clean={bd_c:.2f}%`, `Shifted={bd_s:.2f}%`, `Gap={bd_d:+.2f} pp`)"
         )
     md_lines.append("")
 
@@ -3991,34 +3973,6 @@ def export_subspace_coherence_debiasing_tables_and_markdown(
                 f"`{_num(d_info.get('theoretical_random_orthogonal_norm', 0.408), 3):.3f}` |"
             )
         md_lines.append("")
-        if isinstance(cross_hz_diags, Mapping) and cross_hz_diags.get("cross_horizon_transitions"):
-            md_lines.extend(
-                [
-                    "### 1B. Cross-Horizon Revision Shortcut Diagnostics (`Δy_shift = y_shift^(r) - y_shift^(0)`)",
-                    "",
-                    "| Transition | `||y_shift^(0)||` | `||y_shift^(r)||` | `||Δy_shift||` Mean | Jump / K0 Ratio | `Cos(y^(r), y^(0))` | Principal Angle Min / Mean | `Δy` Top-8 SVD Energy |",
-                    "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-                ]
-            )
-            tr_map = cross_hz_diags.get("cross_horizon_transitions") or {}
-            if isinstance(tr_map, Mapping):
-                for tk, t_item in tr_map.items():
-                    if not isinstance(t_item, Mapping):
-                        continue
-                    step_lbl = f"{t_item.get('from_horizon', 'K0')} -> {t_item.get('to_horizon', tk)}"
-                    y0_norm = float(t_item.get("k0_shift_norm_mean", 0.0))
-                    yr_norm = float(t_item.get("kr_shift_norm_mean", 0.0))
-                    d_norm = float(t_item.get("delta_shift_norm_mean", 0.0))
-                    j_ratio = float(t_item.get("delta_to_k0_norm_ratio_mean", 0.0))
-                    cos_k0 = float(t_item.get("cosine_k0_vs_kr_mean", 1.0))
-                    ang_blk = t_item.get("subspace_k0_vs_kr") or {}
-                    d_svd = t_item.get("delta_svd_cumulative_energy") or {}
-                    md_lines.append(
-                        f"| **`{step_lbl}`** | `{y0_norm:.4f}` | `{yr_norm:.4f}` | **`{d_norm:.4f}`** | `{j_ratio:.3f}` | "
-                        f"`{cos_k0:.4f}` | `{float(ang_blk.get('min_principal_angle_deg', 0.0)):.1f}° / {float(ang_blk.get('mean_principal_angle_deg', 0.0)):.1f}°` | "
-                        f"`{_pct(d_svd.get('top_8', 0.0)):.2f}%` |"
-                    )
-            md_lines.append("")
         section_offset = 2
 
     _append_debiasing_markdown_tables(

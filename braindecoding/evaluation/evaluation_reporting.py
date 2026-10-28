@@ -76,7 +76,7 @@ def _fmt_float(val: object, width: int = 7, decimals: int = 2) -> str:
 
 
 def _short_method_label(item: Mapping[str, Any]) -> str:
-    """Produce a compact <= 26 char label for a Subspace / Full-Rank / Rolling-Delta LOO entry."""
+    """Produce a compact <= 26 char label for a Subspace / Full-Rank LOO entry."""
     fam = str(item.get("method_family", ""))
     eta = item.get("eta")
     rank_k = item.get("rank_k")
@@ -85,34 +85,6 @@ def _short_method_label(item: Mapping[str, Any]) -> str:
         return "Raw Baseline (eta=0)"
     if fam == "full_rank_loo":
         return f"Full-Rank LOO (eta={float(eta or 0):g})"
-    if fam == "rolling_delta_cms":
-        eta0 = float(item.get("eta_0", 0.0) or 0.0)
-        etad = item.get("eta_delta")
-        if isinstance(etad, Mapping):
-            k1_v = float(etad.get("K1", etad.get(1, 0.0)) or 0.0)
-            k2_v = float(etad.get("K2", etad.get(2, k1_v)) or 0.0)
-            ed_str = f"{k1_v:g}" if abs(k1_v - k2_v) < 1e-6 else f"{k1_v:g}/{k2_v:g}"
-        else:
-            ed_str = f"{float(etad or 0.0):g}"
-        return f"ΔCMS η0={eta0:g} ηd={ed_str}"[:26]
-    if fam == "asymmetric_cms":
-        eh = item.get("eta_by_horizon") or {}
-        if isinstance(eh, Mapping):
-            k0_v = float(eh.get("K0", eh.get(0, 0.0)) or 0.0)
-            k1_v = float(eh.get("K1", eh.get(1, 0.0)) or 0.0)
-            k2_v = float(eh.get("K2", eh.get(2, 0.0)) or 0.0)
-            return f"AsymCMS {k0_v:g}/{k1_v:g}/{k2_v:g}"[:26]
-    if fam == "rolling_delta_subspace":
-        rk0 = item.get("rank_k_0", rank_k)
-        eta0 = float(item.get("eta_0", 0.0) or 0.0)
-        etad = item.get("eta_delta")
-        if isinstance(etad, Mapping):
-            k1_v = float(etad.get("K1", etad.get(1, 0.0)) or 0.0)
-            k2_v = float(etad.get("K2", etad.get(2, k1_v)) or 0.0)
-            ed_str = f"{k1_v:g}" if abs(k1_v - k2_v) < 1e-6 else f"{k1_v:g}/{k2_v:g}"
-        else:
-            ed_str = f"{float(etad or 0.0):g}"
-        return f"ΔSub K={rk0} η0={eta0:g} ηd={ed_str}"[:26]
     if rank_k is not None:
         g_str = "On" if gate else "Off"
         return f"Subspace K={rank_k} η={float(eta or 0):g} G={g_str}"
@@ -1164,36 +1136,6 @@ def format_subspace_coherence_debiasing_report(
             )
         lines.append(rule)
 
-    cross_hz_diags = report.get("cross_horizon_revision_diagnostics") or {}
-    if isinstance(cross_hz_diags, Mapping) and cross_hz_diags.get("cross_horizon_transitions"):
-        lines.append("1B. Cross-Horizon Revision Shortcut Diagnostics (Δy_sh = y_sh^(r) - y_sh^(0))")
-        ch_hdr = (
-            f"{'Step':<7} | {'||y_sh||':>8} | {'||Δy_sh||':>9} | {'Jump/K0':>7} | "
-            f"{'Cos(r,K0)':>9} | {'AngleMin/Mean':>14} | {'ΔTop8%':>7}"
-        )
-        lines.append(rule)
-        lines.append(ch_hdr)
-        lines.append(rule)
-        tr_map = cross_hz_diags.get("cross_horizon_transitions") or {}
-        if isinstance(tr_map, Mapping):
-            for tk, t_item in tr_map.items():
-                if not isinstance(t_item, Mapping):
-                    continue
-                step_lbl = f"{t_item.get('from_horizon', 'K0')}->{t_item.get('to_horizon', tk)}"[:7]
-                y_norm = float(t_item.get("kr_shift_norm_mean", 0.0))
-                d_norm = float(t_item.get("delta_shift_norm_mean", 0.0))
-                j_ratio = float(t_item.get("delta_to_k0_norm_ratio_mean", 0.0))
-                cos_k0 = float(t_item.get("cosine_k0_vs_kr_mean", 1.0))
-                ang_blk = t_item.get("subspace_k0_vs_kr") or {}
-                ang_str = f"{float(ang_blk.get('min_principal_angle_deg', 0.0)):4.1f}°/{float(ang_blk.get('mean_principal_angle_deg', 0.0)):4.1f}°"
-                d_svd = t_item.get("delta_svd_cumulative_energy") or {}
-                d_top8 = _fmt_ratio_pct(d_svd.get("top_8"), 7) if d_svd else "   0.0%"
-                lines.append(
-                    f"{step_lbl:<7} | {y_norm:>8.4f} | {d_norm:>9.4f} | {j_ratio:>7.3f} | "
-                    f"{cos_k0:>9.4f} | {ang_str:>14} | {d_top8}"
-                )
-        lines.append(rule)
-
     ctx_ref = report.get("context_stage_reference")
     if isinstance(ctx_ref, Mapping) and ctx_ref.get("vocab50_macro_top10") is not None:
         lines.append(
@@ -1213,9 +1155,6 @@ def format_subspace_coherence_debiasing_report(
     for r in report.get("subspace_sweep") or ():
         if isinstance(r, Mapping):
             all_rows.append(r)
-    for r in report.get("rolling_delta_sweep") or ():
-        if isinstance(r, Mapping):
-            all_rows.append(r)
 
     if not all_rows:
         lines.append(banner)
@@ -1223,8 +1162,6 @@ def format_subspace_coherence_debiasing_report(
 
     best_gap = report.get("best_by_net_gap_vocab50")
     best_clean = report.get("best_by_clean_preservation_vocab50")
-    best_delta_gap = report.get("best_rolling_delta_by_net_gap_vocab50")
-    best_delta_clean = report.get("best_rolling_delta_by_clean_preservation_vocab50")
 
     if not verbose and len(all_rows) > 10:
         selected_ids: set[str] = set()
@@ -1233,9 +1170,10 @@ def format_subspace_coherence_debiasing_report(
         for r in (report.get("full_rank_loo_baselines") or ())[:2]:
             if isinstance(r, Mapping):
                 selected_ids.add(str(r.get("method_id", "")))
-        for b_cand in (best_clean, best_gap, best_delta_clean, best_delta_gap):
-            if isinstance(b_cand, Mapping):
-                selected_ids.add(str(b_cand.get("method_id", "")))
+        if isinstance(best_clean, Mapping):
+            selected_ids.add(str(best_clean.get("method_id", "")))
+        if isinstance(best_gap, Mapping):
+            selected_ids.add(str(best_gap.get("method_id", "")))
         sub_sorted = sorted(
             [r for r in (report.get("subspace_sweep") or ()) if isinstance(r, Mapping)],
             key=lambda it: float(
@@ -1245,18 +1183,7 @@ def format_subspace_coherence_debiasing_report(
             ),
             reverse=True,
         )
-        for r in sub_sorted[:4]:
-            selected_ids.add(str(r.get("method_id", "")))
-        delta_sorted = sorted(
-            [r for r in (report.get("rolling_delta_sweep") or ()) if isinstance(r, Mapping)],
-            key=lambda it: float(
-                (it.get("shifted_aggregate") or {}).get(
-                    "clean_minus_shifted_vocab50_macro_top10", 0.0
-                )
-            ),
-            reverse=True,
-        )
-        for r in delta_sorted[:3]:
+        for r in sub_sorted[:5]:
             selected_ids.add(str(r.get("method_id", "")))
         display_rows = [
             r for r in all_rows if str(r.get("method_id", "")) in selected_ids
@@ -1406,15 +1333,6 @@ def format_subspace_coherence_debiasing_report(
             f"Clean50={_fmt_ratio_pct(bg_c.get('vocab50_macro_top10'), 6)} | "
             f"Shift50={_fmt_ratio_pct(bg_s.get('mean_vocab50_macro_top10'), 6)} | "
             f"Gap={_fmt_signed_ratio_pct(bg_s.get('clean_minus_shifted_vocab50_macro_top10'), 6)}"
-        )
-    if isinstance(best_delta_gap, Mapping):
-        bd_c = best_delta_gap.get("clean_reference") or {}
-        bd_s = best_delta_gap.get("shifted_aggregate") or {}
-        lines.append(
-            f"[Best Δ-Gap] {_short_method_label(best_delta_gap)[:22]}: "
-            f"Clean50={_fmt_ratio_pct(bd_c.get('vocab50_macro_top10'), 6)} | "
-            f"Shift50={_fmt_ratio_pct(bd_s.get('mean_vocab50_macro_top10'), 6)} | "
-            f"Gap={_fmt_signed_ratio_pct(bd_s.get('clean_minus_shifted_vocab50_macro_top10'), 6)}"
         )
     lines.append(banner)
     return "\n".join(lines)
@@ -2188,10 +2106,7 @@ def _ensure_enriched_multi_seed_summary(
     needs_reaggregation = False
     if not is_multi_stage:
         if (
-            (
-                "negative_control_methods_aggregate" not in payload
-                and "negative_controls_by_method" not in payload
-            )
+            "negative_control_methods_aggregate" not in payload
             or "linguistic_breakdown_aggregate" not in payload
             or "per_subject_summary_aggregate" not in payload
         ):
@@ -2200,11 +2115,7 @@ def _ensure_enriched_multi_seed_summary(
         stages_agg = payload.get("stages_aggregate") or {}
         if isinstance(stages_agg, Mapping):
             for st_blk in stages_agg.values():
-                if (
-                    isinstance(st_blk, Mapping)
-                    and "negative_control_methods_aggregate" not in st_blk
-                    and "negative_controls_by_method" not in st_blk
-                ):
+                if isinstance(st_blk, Mapping) and "negative_control_methods_aggregate" not in st_blk:
                     needs_reaggregation = True
                     break
 
@@ -2241,7 +2152,6 @@ def _ensure_enriched_multi_seed_summary(
             try:
                 re_agg = summarize_multi_seed_evaluation(
                     seed_results,
-                    print_report=False,
                     control_method=control_method,
                     control_metric=control_metric,
                 )

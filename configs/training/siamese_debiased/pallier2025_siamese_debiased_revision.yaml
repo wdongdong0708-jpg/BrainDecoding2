@@ -1,16 +1,17 @@
-# Pallier2025 法语 MEG 阶段 2.2：孪生共模抵消 + 错位零化正则 + 冻结 CNN 预提取极速训练配置
-# （Siamese Common-Mode Rejection + Shift-Null Regularization + Pre-Extracted Frozen CNN 8x Speedup）
+# Pallier2025 法语 MEG 阶段 2.2：孪生共模抵消 + 跨状态错位跳变零化正则 + 冻结 CNN 预提取极速训练配置
+# （Prefix-Decoupled Differential CMS + Cross-Horizon Shift-Jump Nullification + Pre-Extracted Frozen CNN 8x Speedup）
 #
 # 核心机制：
 #   1. 冻结 CNN 特征预提取（Pre-Extraction Cache）：
 #      在 Epoch 1 开始前一次性提取 Clean (0s) 与 6 个纯历史因果时间错位 (-15s, -30s, -45s, -60s, -90s, -120s)
 #      的 Stage-1 CNN 归一化向量并缓存在显存/磁盘，每轮训练从 ~372s 降至 <25s。
-#   2. 机制 1 — 雅可比模长阻尼重缩放的孪生共模扣除（Norm-Damped Detach Common-Mode Subtraction）：
-#      u = y_clean - eta_train * y_shift_mean.detach(),  y_tilde = u / ||u||_2
-#      y_tilde = y_tilde.detach() + ||u||_2.detach() * (y_tilde - y_tilde.detach())
-#   3. 机制 2 — 错位零化正则（Shift-Null Regularization）：
-#      L_null^(r) = (1/B) * sum_i || (E_V - e_bar) * y_bar_i^(r, shift) ||_2^2
-#      L_total = (1/|D_b|) * sum_{r in D_b} ( L_SigLIP(y_tilde^(r), E_target) + lambda_null * L_null^(r) )
+#   2. 机制 1 — 前缀解耦的差分共模扣除 + 雅可比模长阻尼重缩放（Norm-Damped Detach）：
+#      u_i^(r) = y_i^(r, clean) - eta_0 * sg(y_bar_i^(0, shift)) - eta_delta * sg(y_bar_i^(r, shift) - y_bar_i^(0, shift))
+#      y_tilde = u / ||u||_2,  y_tilde = y_tilde.detach() + ||u||_2.detach() * (y_tilde - y_tilde.detach())
+#   3. 机制 2 — 静态错位零化正则（L_null）+ 跨状态错位跳变零化正则（L_delta_null，仅作用于错位分支）：
+#      L_null^(r) = (1/B) * sum_i || E_bar_V * y_bar_i^(r, shift) ||_2^2
+#      L_delta_null^(r) = (1/M) * sum_m L_null(y_i^(r, delta_m) - sg(y_i^(0, delta_m))) + beta_delta_cm * || y_bar_i^(r, shift) - sg(y_bar_i^(0, shift)) ||_2^2
+#      L_total = (1/|D_b|) * sum_{r in D_b} ( L_SigLIP(y_tilde^(r), E_target) + lambda_null * L_null^(r) + lambda_delta_null * L_delta_null^(r) )
 #
 # 启动命令：
 #   python -u -m braindecoding train --config configs/training/siamese_debiased/pallier2025_siamese_debiased_revision.yaml --require-cache --resume auto
@@ -21,7 +22,7 @@ workflow:
   stage: revision
   subject: all
   precision: bf16-mixed
-  # 继承 ../pallier2025_rolling_revision.yaml 的 window_seconds（当前 0.5s，也可改为 1.0s）
+  # 继承 ../pallier2025_rolling_revision.yaml 的 window_seconds（当前 1.0s）
   window_seconds: 1
   window_start_offset_seconds: 0.0
 
@@ -38,10 +39,17 @@ training:
 
 siamese_debiased:
   enabled: true
-  # 前向孪生共模扣除权重 eta_train（计算 y_tilde 时对 y_shift_mean 施加 .detach()，阻断主损失向错位分支回传负梯度）
-  eta_train: 0.8
-  # 错位零化正则权重 lambda_null（惩罚错位分支在中心化训练词表上的非均匀打分）
+  # K0 前缀基线共模扣除权重 eta_0 / eta_train（温和扣除静态背景脑噪，仅 +4.17% 方差膨胀，保护初判信噪比）
+  eta_0: 0.50
+  eta_train: 0.50
+  # K1/K2 相对 K0 跨状态时长跳变的差分共模扣除权重 eta_delta（强力抑制新暴露的词长间隔偏置）
+  eta_delta: 0.80
+  # 静态错位零化正则权重 lambda_null（惩罚错位分支在中心化训练词表上的非均匀打分）
   lambda_null: 10.0
+  # 跨状态错位跳变零化正则权重 lambda_delta_null（专门锁死 K0 -> K1/K2 打开右边界引入的错位旋转跳变）
+  lambda_delta_null: 15.0
+  # 跨状态错位跳变零化中全维共模漂移范数的权重 beta_delta_cm
+  beta_delta_cm: 0.50
   # 同受试者、同连续录音内的纯历史因果圆周时间错位候选池（秒）
   shift_seconds: [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
   # 每个训练 step 从 6 个平移量中随机抽取的分支数 M（预提取 CNN 后可设为 2 或 6）

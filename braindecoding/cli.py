@@ -548,37 +548,39 @@ def _add_training_workflow_args(
     )
     parser.add_argument(
         "--eta-train",
+        "--eta-0",
+        dest="eta_train",
         type=float,
         default=None,
-        help="孪生共模扣除权重 eta_train（如 0.8 或 0.5；传入时自动启用孪生去偏训练）",
+        help="孪生共模扣除基线权重 eta_0 / eta_train（如 0.50 或 0.80；传入时自动启用孪生去偏训练）",
+    )
+    parser.add_argument(
+        "--eta-delta",
+        "--eta-delta-train",
+        dest="eta_delta",
+        type=float,
+        default=None,
+        help="前缀解耦的跨状态差分共模扣除权重 eta_delta（如 0.80；专门抑制 K1/K2 相对 K0 暴露的时长偏置）",
     )
     parser.add_argument(
         "--lambda-null",
         type=float,
         default=None,
-        help="错位零化正则系数 lambda_null（如 10.0；传入时自动启用孪生去偏训练）",
+        help="静态错位零化正则系数 lambda_null（如 10.0；传入时自动启用孪生去偏训练）",
     )
     parser.add_argument(
         "--lambda-delta-null",
         type=float,
         default=None,
-        help="跨状态回修增量零化正则系数 lambda_delta_null（如 20.0；专门锁死 K0->K1/K2 接入未来窗口引入的错位跳变）",
+        help="跨状态错位跳变零化正则系数 lambda_delta_null（如 15.0；专门锁死 K0->K1/K2 接入未来窗口引入的错位跳变）",
     )
     parser.add_argument(
-        "--eta-delta-train",
+        "--beta-delta-cm",
+        "--beta-delta",
+        dest="beta_delta_cm",
         type=float,
         default=None,
-        help="前向跨状态增量共模额外扣除权重 eta_delta_train（如 0.50；专门加大对 K1/K2 相对 K0 错位增量的扣除）",
-    )
-    parser.add_argument(
-        "--eta-train-horizons",
-        default=None,
-        help="按状态 K0,K1,K2 非对称配置的孪生共模扣除梯度（如 '0.3,0.8,0.8'）",
-    )
-    parser.add_argument(
-        "--lambda-null-horizons",
-        default=None,
-        help="按状态 K0,K1,K2 非对称配置的错位零化正则系数（如 '5.0,20.0,20.0'）",
+        help="跨状态错位跳变零化中全维共模漂移范数的权重 beta_delta_cm（默认 0.50）",
     )
     parser.add_argument(
         "--shifts-per-step",
@@ -728,7 +730,7 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--control-method",
         default=None,
-        help="显式指定多种子负对照汇总使用的控制/去偏方法（如 auto、raw、zero_signal、cms:eta=0.8、cms:best_gap、delta_cms:eta0=0.5,eta_d=1.0、asymmetric_cms:0.3,0.8,0.8、subspace:K=8,eta=0.8,gate=off、delta_subspace:K=8,eta0=0.5,eta_d=1.0、subspace:best_gap、subspace:best_clean）",
+        help="显式指定多种子负对照汇总使用的控制/去偏方法（如 auto、raw、zero_signal、cms:eta=0.8、cms:best_gap、subspace:K=8,eta=0.8,gate=off、subspace:best_gap、subspace:best_clean）",
     )
     parser.add_argument(
         "--control-metric",
@@ -824,11 +826,10 @@ def _workflow_train(args, *, mode: str) -> int:
             config_path=args.config,
             siamese_debiased=getattr(args, "siamese_debiased", None),
             eta_train=getattr(args, "eta_train", None),
+            eta_delta=getattr(args, "eta_delta", None),
             lambda_null=getattr(args, "lambda_null", None),
             lambda_delta_null=getattr(args, "lambda_delta_null", None),
-            eta_delta_train=getattr(args, "eta_delta_train", None),
-            eta_train_by_horizon=getattr(args, "eta_train_horizons", None),
-            lambda_null_by_horizon=getattr(args, "lambda_null_horizons", None),
+            beta_delta_cm=getattr(args, "beta_delta_cm", None),
             shifts_per_step=getattr(args, "shifts_per_step", None),
             preextract_frozen_cnn=getattr(args, "preextract_frozen_cnn", None),
         )
