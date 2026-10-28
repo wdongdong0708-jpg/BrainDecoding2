@@ -1860,6 +1860,19 @@ def run_training_workflow(
     win_samp = int(getattr(train_ds, "window_samples", round(win_sec * 50.0)))
     sr_hz = float(getattr(train_ds, "sampling_rate_hz", cfg["dataset"].get("target_sampling_rate_hz", 50.0)))
     win_off = float(cfg["dataset"].get("window_start_offset_seconds", 0.0))
+    siamese_spec = dict(cfg["workflow"].get("siamese_debiased") or {})
+    siamese_enabled = bool(siamese_spec.get("enabled", False))
+    raw_early_stop_metric = str(
+        tc.get(
+            "early_stop_metric",
+            "full_vocab" if siamese_enabled else "legacy50",
+        )
+    ).strip().lower()
+    early_stop_target = (
+        "full_vocab"
+        if raw_early_stop_metric in {"full_vocab", "full_vocabulary", "full"}
+        else "legacy50"
+    )
     print(
         f"\n{sep}\n"
         f" BrainDecoding Training  |  dataset={dataset}  |  stage={stage} ({stage_label})  |  mode={mode}\n"
@@ -1871,7 +1884,7 @@ def run_training_workflow(
         f" DataLoader  : train={len(train_ds):,} rows ({len(train_loader)} batches @ bs={tc['batch_size']})"
         f"  |  val={len(val_ds):,} rows (eval_bs={tc.get('eval_batch_size', tc['batch_size'])}, workers={tc.get('num_workers', 0)})\n"
         f" Optimizer   : AdamW (lr={float(tc['learning_rate']):.2e}, wd={float(tc.get('weight_decay', 1e-4)):.1e})"
-        f"  |  epochs={max_epochs} (patience={patience})\n"
+        f"  |  epochs={max_epochs} (patience={patience}, early_stop={early_stop_target})\n"
         f" Output Dir  : {out}",
         flush=True,
     )
@@ -1886,8 +1899,6 @@ def run_training_workflow(
             flush=True,
         )
 
-    siamese_spec = dict(cfg["workflow"].get("siamese_debiased") or {})
-    siamese_enabled = bool(siamese_spec.get("enabled", False))
     all_epochs_frozen = (
         warm_start_stage
         and int(tc.get("freeze_brain_encoder_epochs", 0)) >= max_epochs
@@ -1903,10 +1914,10 @@ def run_training_workflow(
         siam_eta_d = float(siamese_spec.get("eta_delta", 0.0))
         siam_lam = float(siamese_spec.get("lambda_null", 10.0))
         siam_lam_d = float(siamese_spec.get("lambda_delta_null", 0.0))
-        siam_beta_d = float(siamese_spec.get("beta_delta_cm", 0.50))
+        siam_beta_d = float(siamese_spec.get("beta_delta_cm", 6.0))
         delta_msg = (
             f"eta_delta={siam_eta_d:.2f}, lambda_delta_null={siam_lam_d:.2f}, beta_delta_cm={siam_beta_d:.2f}, "
-            if (siam_eta_d > 0.0 or siam_lam_d > 0.0)
+            if (siam_eta_d > 0.0 or siam_lam_d > 0.0 or siam_beta_d > 0.0)
             else ""
         )
         print(
@@ -1964,6 +1975,7 @@ def run_training_workflow(
         if siamese_enabled and (
             float(siamese_spec.get("lambda_null", 0.0)) > 0.0
             or float(siamese_spec.get("lambda_delta_null", 0.0)) > 0.0
+            or float(siamese_spec.get("beta_delta_cm", 0.0)) > 0.0
         ):
             centered_vocab_bank = build_centered_vocabulary_bank(
                 train_ds, vocabulary, device
@@ -2086,8 +2098,9 @@ def run_training_workflow(
             if score > best[selection]:
                 best[selection] = score
                 best_rows[selection] = row
-                if selection == "legacy50":
+                if selection == early_stop_target:
                     stale_epochs = 0
+                if selection == "legacy50":
                     improved_tags.append("50")
                 else:
                     improved_tags.append("full")
@@ -2119,9 +2132,11 @@ def run_training_workflow(
                     "initialization": initialization,
                     "test_evaluated": False,
                 }
-                if selection == "legacy50":
+                if selection == early_stop_target:
                     save_checkpoint(out / "best.ckpt", best_payload)
                     save_checkpoint(out / "best.pt", best_payload)
+                if selection == "legacy50":
+                    save_checkpoint(out / "best_legacy50.pt", best_payload)
                 else:
                     save_checkpoint(out / "best_full_vocab.pt", best_payload)
 
@@ -2164,7 +2179,11 @@ def run_training_workflow(
             status_str += " [frozen]"
         if siamese_enabled and isinstance(diagnostics, dict) and "shift_null_loss" in diagnostics:
             dn_val = float(diagnostics.get("delta_shift_null_loss", 0.0))
-            if dn_val > 0.0 or float(siamese_spec.get("lambda_delta_null", 0.0)) > 0.0:
+            if (
+                dn_val > 0.0
+                or float(siamese_spec.get("lambda_delta_null", 0.0)) > 0.0
+                or float(siamese_spec.get("beta_delta_cm", 0.0)) > 0.0
+            ):
                 status_str += (
                     f" [sig={float(diagnostics.get('siglip_loss', train_loss)):.3f},"
                     f"null={float(diagnostics.get('shift_null_loss', 0.0)):.4f},"
@@ -2199,11 +2218,17 @@ def run_training_workflow(
     )
     best50_epoch = best_rows.get("legacy50", {}).get("epoch", "-")
     best_full_epoch = best_rows.get("full_vocab", {}).get("epoch", "-")
+    best50_path = out / (
+        "best.ckpt" if early_stop_target == "legacy50" else "best_legacy50.pt"
+    )
+    best_full_path = out / (
+        "best.ckpt" if early_stop_target == "full_vocab" else "best_full_vocab.pt"
+    )
     print(
         f"{thin_sep}\n"
-        f" Completed ({stop_reason}, epochs={len(history)}/{max_epochs})\n"
-        f" Best Val Top10 (50-word)   : {best['legacy50'] * 100.0:6.2f}% (epoch {best50_epoch}) -> {out / 'best.ckpt'}\n"
-        f" Best Val Top10 (Full-Vocab): {best['full_vocab'] * 100.0:6.2f}% (epoch {best_full_epoch}) -> {out / 'best_full_vocab.pt'}\n"
+        f" Completed ({stop_reason}, epochs={len(history)}/{max_epochs}, early_stop={early_stop_target})\n"
+        f" Best Val Top10 (50-word)   : {best['legacy50'] * 100.0:6.2f}% (epoch {best50_epoch}) -> {best50_path}\n"
+        f" Best Val Top10 (Full-Vocab): {best['full_vocab'] * 100.0:6.2f}% (epoch {best_full_epoch}) -> {best_full_path}\n"
         f" Peak GPU Memory            : {peak_alloc_mb:.1f} MB allocated / {peak_reserved_mb:.1f} MB reserved\n"
         f"{sep}\n",
         flush=True,

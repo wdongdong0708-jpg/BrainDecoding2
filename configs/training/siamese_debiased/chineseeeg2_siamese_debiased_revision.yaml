@@ -18,18 +18,19 @@ training:
   learning_rate: 1.0e-4
   weight_decay: 0.01
   patience: 6
+  early_stop_metric: full_vocab
   freeze_brain_encoder_epochs: 30
   preserve_complete_groups: true
   revision_cutoff_policy: all
 
 siamese_debiased:
   enabled: true
-  eta_0: 0.50
-  eta_train: 0.50
-  eta_delta: 0.80
-  lambda_null: 10.0
-  lambda_delta_null: 15.0
-  beta_delta_cm: 0.50
+  eta_0: 0.40
+  eta_train: 0.40
+  eta_delta: 0.40
+  lambda_null: 15.0
+  lambda_delta_null: 80.0
+  beta_delta_cm: 6.0
   shift_seconds: [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
   shifts_per_step: 6 # M越大越好
   synchronize_dropout_rng: true

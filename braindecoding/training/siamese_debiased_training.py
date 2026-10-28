@@ -181,7 +181,7 @@ def resolve_siamese_debiased_config(
     yaml_beta_delta_default = (
         raw_block["beta_delta_cm"]
         if "beta_delta_cm" in raw_block and raw_block["beta_delta_cm"] is not None
-        else raw_block.get("beta_delta", 0.50)
+        else raw_block.get("beta_delta", 6.0)
     )
     resolved_beta_delta_cm = float(
         beta_delta_cm
@@ -303,60 +303,96 @@ def compute_delta_shift_null_loss(
     y_shift_k0_mean: torch.Tensor,
     centered_vocab_bank: torch.Tensor,
     *,
-    beta_delta_cm: float = 0.50,
+    beta_delta_cm: float = 6.0,
     y_shift_r_branches: torch.Tensor | None = None,
     y_shift_k0_branches: torch.Tensor | None = None,
-) -> torch.Tensor:
+    return_components: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """计算跨状态错位跳变零化正则项 L_delta_null^(r)（严格仅作用于错位分支，保护 BGE-M3 语义锥心）。
 
     数学定义（r in {1, 2}）：
-        L_delta_null^(r) = (1 / M) * sum_{m=1..M} L_null(y_i^(r, delta_m) - sg(y_i^(0, delta_m)), E_tilde_V)
-                           + beta_delta_cm * || y_bar_i^(r, shift) - sg(y_bar_i^(0, shift)) ||_2^2
+        1) 逐分支跨状态余弦跳变锁死（量纲 O(1)，不被 1/1024 稀释）：
+           cos_sim_r = F.cosine_similarity(y_sh_r, sg(y_sh_k0), dim=-1)      # [M, B]
+           loss_delta_cm = (1.0 - cos_sim_r).mean()
+        2) 跨状态词库投影跳变零化：
+           delta_y_sh_r = y_sh_r - sg(y_sh_k0)                              # [M, B, D]
+           delta_logits_r = torch.matmul(delta_y_sh_r, vocab_embeds_centered.t())
+           loss_delta_vocab = (delta_logits_r ** 2).mean()
     其中对初判态 K0 (r=0) 施加 stop-gradient (detach)，专门阻断共享 Transformer 在打开右边界引入
     i+1, i+2 词窗时利用新暴露的词长间隔 Delta_tau_i 产生跨状态旋转跳变。
     """
     if y_shift_r_mean.numel() == 0 or y_shift_k0_mean.numel() == 0:
-        return y_shift_r_mean.new_zeros(())
+        zero = y_shift_r_mean.new_zeros(())
+        if return_components:
+            return zero, zero
+        return zero
 
+    vocab_embeds_centered = centered_vocab_bank.to(
+        device=y_shift_r_mean.device, dtype=torch.float32
+    )
     if (
         y_shift_r_branches is not None
         and y_shift_k0_branches is not None
         and y_shift_r_branches.numel() > 0
         and y_shift_r_branches.shape == y_shift_k0_branches.shape
     ):
-        delta_branches = y_shift_r_branches - y_shift_k0_branches.detach()
-        num_branches = int(delta_branches.shape[0])
-        dim = int(delta_branches.shape[-1])
+        y_sh_r = y_shift_r_branches.float()
+        y_sh_k0_detach = y_shift_k0_branches.detach().float()
+        num_branches = int(y_sh_r.shape[0])
         if (
             num_branches > 1
-            and delta_branches[0].requires_grad
-            and not delta_branches[1].requires_grad
+            and y_sh_r.requires_grad
+            and not y_shift_r_branches.is_leaf
         ):
-            # 直通均值估计（Straight-Through Mean）：前向精确等于全部 M 分支均值，反向使用随机激活分支 0 的无偏梯度
-            loss_vocab_detached = compute_shift_null_loss(
-                delta_branches.detach().reshape(-1, dim), centered_vocab_bank
-            ).detach()
-            loss_vocab_grad0 = compute_shift_null_loss(
-                delta_branches[0], centered_vocab_bank
+            # 直通均值估计（Straight-Through Mean）：前向精确等于全部 M 分支均值，反向使用随机激活分支 0 的无偏满幅梯度（消除 1/M 稀释）
+            y_sh_r_det = y_sh_r.detach()
+            cos_sim_det = F.cosine_similarity(
+                y_sh_r_det, y_sh_k0_detach, dim=-1
             )
-            loss_vocab = loss_vocab_detached + (
-                loss_vocab_grad0 - loss_vocab_grad0.detach()
+            loss_delta_cm_det = (1.0 - cos_sim_det).mean()
+            cos_sim_0 = F.cosine_similarity(
+                y_sh_r[0], y_sh_k0_detach[0], dim=-1
+            )
+            loss_delta_cm_0 = (1.0 - cos_sim_0).mean()
+            loss_delta_cm = loss_delta_cm_det + (
+                loss_delta_cm_0 - loss_delta_cm_0.detach()
+            )
+
+            delta_y_sh_det = y_sh_r_det - y_sh_k0_detach
+            delta_logits_det = torch.matmul(
+                delta_y_sh_det, vocab_embeds_centered.t()
+            )
+            loss_delta_vocab_det = (delta_logits_det**2).mean()
+            delta_y_sh_0 = y_sh_r[0] - y_sh_k0_detach[0]
+            delta_logits_0 = torch.matmul(
+                delta_y_sh_0, vocab_embeds_centered.t()
+            )
+            loss_delta_vocab_0 = (delta_logits_0**2).mean()
+            loss_delta_vocab = loss_delta_vocab_det + (
+                loss_delta_vocab_0 - loss_delta_vocab_0.detach()
             )
         else:
-            loss_vocab = compute_shift_null_loss(
-                delta_branches.reshape(-1, dim), centered_vocab_bank
+            cos_sim_r = F.cosine_similarity(y_sh_r, y_sh_k0_detach, dim=-1)
+            loss_delta_cm = (1.0 - cos_sim_r).mean()
+            delta_y_sh_r = y_sh_r - y_sh_k0_detach
+            delta_logits_r = torch.matmul(
+                delta_y_sh_r, vocab_embeds_centered.t()
             )
+            loss_delta_vocab = (delta_logits_r**2).mean()
     else:
-        delta_mean_for_vocab = y_shift_r_mean - y_shift_k0_mean.detach()
-        loss_vocab = compute_shift_null_loss(
-            delta_mean_for_vocab, centered_vocab_bank
-        )
+        y_sh_r = y_shift_r_mean.float()
+        y_sh_k0_detach = y_shift_k0_mean.detach().float()
+        cos_sim_r = F.cosine_similarity(y_sh_r, y_sh_k0_detach, dim=-1)
+        loss_delta_cm = (1.0 - cos_sim_r).mean()
+        delta_y_sh_r = y_sh_r - y_sh_k0_detach
+        delta_logits_r = torch.matmul(delta_y_sh_r, vocab_embeds_centered.t())
+        loss_delta_vocab = (delta_logits_r**2).mean()
 
-    delta_cm = (y_shift_r_mean - y_shift_k0_mean.detach()).float()
-    loss_cm = (delta_cm * delta_cm).sum(dim=-1).mean()
+    if return_components:
+        return loss_delta_vocab, loss_delta_cm
     if float(beta_delta_cm) > 0.0:
-        return loss_vocab + float(beta_delta_cm) * loss_cm
-    return loss_vocab
+        return loss_delta_vocab + float(beta_delta_cm) * loss_delta_cm
+    return loss_delta_vocab
 
 
 def compute_norm_damped_debiased_embedding(
@@ -2401,7 +2437,11 @@ def train_one_epoch_siamese_debiased(
     max_horizon = max(horizons, default=0)
     compute_null_grad = bool(
         siamese_enabled
-        and (lambda_null > 0.0 or lambda_delta_null > 0.0)
+        and (
+            lambda_null > 0.0
+            or lambda_delta_null > 0.0
+            or beta_delta_cm > 0.0
+        )
         and centered_vocab_bank is not None
     )
 
@@ -2607,7 +2647,9 @@ def train_one_epoch_siamese_debiased(
                             compute_null_grad
                             and y_shift_mean is not None
                             and int(delay) > 0
-                            and lambda_delta_null > 0.0
+                            and (
+                                lambda_delta_null > 0.0 or beta_delta_cm > 0.0
+                            )
                             and k0_has_row is not None
                             and k0_shift_mean_by_row is not None
                             and bool(k0_has_row[rows_r].any())
@@ -2631,20 +2673,29 @@ def train_one_epoch_siamese_debiased(
                                 if k0_shift_branches_by_row is not None
                                 else None
                             )
-                            d_delta_null = compute_delta_shift_null_loss(
-                                y_shift_r_m,
-                                y_shift_k0_m,
-                                centered_vocab_bank,
-                                beta_delta_cm=beta_delta_cm,
-                                y_shift_r_branches=y_shift_r_br,
-                                y_shift_k0_branches=y_shift_k0_br,
+                            d_delta_vocab, d_delta_cm = (
+                                compute_delta_shift_null_loss(
+                                    y_shift_r_m,
+                                    y_shift_k0_m,
+                                    centered_vocab_bank,
+                                    beta_delta_cm=beta_delta_cm,
+                                    y_shift_r_branches=y_shift_r_br,
+                                    y_shift_k0_branches=y_shift_k0_br,
+                                    return_components=True,
+                                )
+                            )
+                            d_delta_null = d_delta_cm + d_delta_vocab
+                            d_delta_weighted = (
+                                lambda_delta_null * d_delta_vocab
+                                + beta_delta_cm * d_delta_cm
                             )
                         else:
                             d_delta_null = d_siglip * 0.0
+                            d_delta_weighted = d_siglip * 0.0
                         d_total = (
                             d_siglip
                             + lambda_null * d_null
-                            + lambda_delta_null * d_delta_null
+                            + d_delta_weighted
                         )
                         horizon_total_losses.append(d_total)
                         horizon_siglip_losses.append(d_siglip.detach())
