@@ -728,6 +728,7 @@ def _build_static_revision_eval_table(
         win_idx_np = np.full((n_rows, max_w_len), n_rows, dtype=np.int64)
         mask_np = np.zeros((n_rows, max_w_len), dtype=np.bool_)
         target_col_np = np.zeros(n_rows, dtype=np.int64)
+        step_offset_np = np.zeros(n_rows, dtype=np.int64)
 
         for indices in groups:
             g_len = len(indices)
@@ -740,6 +741,7 @@ def _build_static_revision_eval_table(
                 win_idx_np[global_row, :w_len] = w
                 mask_np[global_row, :w_len] = True
                 target_col_np[global_row] = int(target_offset)
+                step_offset_np[global_row] = int(stop - 1 - position)
 
         table_by_delay[int(delay)] = {
             "win_global_idx": torch.from_numpy(win_idx_np).to(
@@ -749,6 +751,9 @@ def _build_static_revision_eval_table(
                 device=device, dtype=torch.bool
             ),
             "target_col": torch.from_numpy(target_col_np).to(
+                device=device, dtype=torch.long
+            ),
+            "step_offset": torch.from_numpy(step_offset_np).to(
                 device=device, dtype=torch.long
             ),
             "avail_mask": avail_masks[int(delay)].to(
@@ -2982,20 +2987,61 @@ def encode_from_preextracted_cnn(
                     if use_static_eval_table:
                         delayed: dict[int, torch.Tensor] = {}
                         masks: dict[int, torch.Tensor] = {}
-                        for d in horizons:
-                            d_tbl = static_eval_table[int(d)]
-                            win_idx_2d = d_tbl["win_global_idx"][idx_tensor]
-                            mask_2d = d_tbl["win_mask"][idx_tensor]
-                            target_col_t = d_tbl["target_col"][idx_tensor]
-                            masks[int(d)] = d_tbl["avail_mask"][idx_tensor]
-                            revised = _run_fast_padded_transformer(
+                        if (
+                            getattr(model, "prefix_revision_protocol", "")
+                            == "full_prefix"
+                            and 0 in static_eval_table
+                        ):
+                            # Stage 2.3 共享到达前缀去重：每个句段仅运行 L 个唯一前缀 [0..c] 一次（省去 2/3 前向），
+                            # 词 i 在视野 r 下的输出直接从唯一前缀 c = min(L-1, i+r) 的恒定下标 target_offset = i 读取！
+                            d0_tbl = static_eval_table[0]
+                            win_idx_2d = d0_tbl["win_global_idx"][idx_tensor]
+                            mask_2d = d0_tbl["win_mask"][idx_tensor]
+                            bs_eval = int(len(idx_tensor))
+                            b_arange = torch.arange(
+                                bs_eval, device=device, dtype=torch.long
+                            )
+                            group_idx_list = []
+                            col_idx_list = []
+                            for d in horizons:
+                                d_tbl = static_eval_table[int(d)]
+                                masks[int(d)] = d_tbl["avail_mask"][idx_tensor]
+                                group_idx_list.append(
+                                    b_arange + d_tbl["step_offset"][idx_tensor]
+                                )
+                                col_idx_list.append(
+                                    d_tbl["target_col"][idx_tensor]
+                                )
+                            all_group_idx = torch.cat(group_idx_list, dim=0)
+                            all_col_idx = torch.cat(col_idx_list, dim=0)
+                            revised_all = _run_fast_padded_transformer(
                                 model.context_transformer,
                                 clean_z_pad[win_idx_2d],
                                 mask_2d,
                                 causal_override=False,
-                                target_col_idx=target_col_t,
+                                target_col_idx=all_col_idx,
+                                target_group_idx=all_group_idx,
                             )
-                            delayed[int(d)] = F.normalize(revised, dim=-1)
+                            norm_all = F.normalize(revised_all, dim=-1).view(
+                                len(horizons), bs_eval, -1
+                            )
+                            for h_i, d in enumerate(horizons):
+                                delayed[int(d)] = norm_all[h_i]
+                        else:
+                            for d in horizons:
+                                d_tbl = static_eval_table[int(d)]
+                                win_idx_2d = d_tbl["win_global_idx"][idx_tensor]
+                                mask_2d = d_tbl["win_mask"][idx_tensor]
+                                target_col_t = d_tbl["target_col"][idx_tensor]
+                                masks[int(d)] = d_tbl["avail_mask"][idx_tensor]
+                                revised = _run_fast_padded_transformer(
+                                    model.context_transformer,
+                                    clean_z_pad[win_idx_2d],
+                                    mask_2d,
+                                    causal_override=False,
+                                    target_col_idx=target_col_t,
+                                )
+                                delayed[int(d)] = F.normalize(revised, dim=-1)
                     else:
                         z_batch = clean_z_all[idx_tensor]
                         delayed = _forward_prefix_revisions_from_z(

@@ -18,14 +18,21 @@ training:
   learning_rate: 1.0e-4
   weight_decay: 0.01
   patience: 6
+  early_stop_metric: full_vocab
   freeze_brain_encoder_epochs: 30
   preserve_complete_groups: true
   revision_cutoff_policy: all
 
 siamese_debiased:
   enabled: true
-  eta_train: 0.8
+  # 黄金均衡配方（Stage 2.3 长前缀注意力天然稀释局部重叠 + 目标词绝对位置下标 i 恒定不变）
+  eta_0: 0.50
+  eta_train: 0.50
+  eta_delta: 0.50
   lambda_null: 10.0
+  # 极轻量跨状态差分约束（锁死句首短前缀 i=0,1 从 K0 -> K1,K2 的微小跳变，避免压制未来词注意力）
+  lambda_delta_null: 8.0
+  beta_delta_cm: 0.50
   shift_seconds: [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
   shifts_per_step: 6
   synchronize_dropout_rng: true
