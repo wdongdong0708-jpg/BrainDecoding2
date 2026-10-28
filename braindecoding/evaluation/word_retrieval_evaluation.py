@@ -2935,39 +2935,162 @@ _CONTROL_METRIC_ALIASES: dict[str, str] = {
 
 
 def _resolve_control_metric_spec(
-    control_metric: str | None = None,
+    control_metric: str | Sequence[str] | None = None,
 ) -> dict[str, object]:
-    """解析用户显式指定的负对照核心评估指标（支持 K0/K1/K2 视界前缀与常用别名）。"""
-    raw = str(control_metric or "vocab50_macro_top10").strip().lower()
-    raw = raw.replace("-", "_").replace(" ", "_")
-    if not raw or raw == "auto":
-        raw = "vocab50_macro_top10"
+    """解析用户显式指定的单个负对照核心评估指标（若传入多个指标则返回首个主指标）。"""
+    specs = _resolve_control_metric_specs(control_metric)
+    return specs[0]
 
-    horizon: str | None = None
-    for h_prefix, h_name in (("k0_", "K0"), ("k1_", "K1"), ("k2_", "K2")):
-        if raw.startswith(h_prefix):
-            horizon = h_name
-            raw = raw[len(h_prefix) :]
-            break
-    if raw.startswith("common_"):
-        raw = raw[len("common_") :]
 
-    canonical = _CONTROL_METRIC_ALIASES.get(raw, raw)
-    if canonical not in _CONTROL_METRIC_REGISTRY:
-        valid_keys = ", ".join(sorted(_CONTROL_METRIC_REGISTRY.keys()))
-        raise ValueError(
-            f"不支持的负对照指标 control_metric={control_metric!r}。"
-            f"可选指标（亦支持加 k0_/k1_/k2_ 前缀）：{valid_keys}"
-        )
-    spec = dict(_CONTROL_METRIC_REGISTRY[canonical])
-    spec["horizon"] = horizon
-    if horizon is not None:
-        spec["requested_key"] = f"{horizon.lower()}_{canonical}"
-        spec["label"] = f"{horizon} {spec['label']}"
-        spec["short_label"] = f"{horizon} {spec['short_label']}"
+def _resolve_control_metric_specs(
+    control_metric: str | Sequence[str] | None = None,
+) -> list[dict[str, object]]:
+    """解析用户显式指定的一个或多个负对照核心评估指标（支持逗号/分号分隔、列表、'all' 及 k0_/k1_/k2_ 视界前缀）。"""
+    if control_metric is None:
+        raw_tokens = ["vocab50_macro_top10"]
+    elif isinstance(control_metric, str):
+        cleaned = control_metric.strip()
+        if not cleaned or cleaned.lower() == "auto":
+            raw_tokens = ["vocab50_macro_top10"]
+        else:
+            raw_tokens = [
+                t.strip()
+                for t in cleaned.replace(";", ",").replace("|", ",").split(",")
+                if t.strip()
+            ]
+    elif isinstance(control_metric, Sequence):
+        raw_tokens = []
+        for item in control_metric:
+            if isinstance(item, str):
+                raw_tokens.extend(
+                    t.strip()
+                    for t in item.replace(";", ",").replace("|", ",").split(",")
+                    if t.strip()
+                )
+            elif item is not None:
+                raw_tokens.append(str(item).strip())
     else:
-        spec["requested_key"] = canonical
-    return spec
+        raw_tokens = [str(control_metric).strip()]
+
+    if not raw_tokens:
+        raw_tokens = ["vocab50_macro_top10"]
+
+    expanded_tokens: list[str] = []
+    for tok in raw_tokens:
+        low = tok.lower().replace("-", "_").replace(" ", "_")
+        if low in ("all", "all_metrics", "*"):
+            expanded_tokens.extend(
+                [
+                    "vocab50_macro_top10",
+                    "vocab50_micro_top10",
+                    "vocab50_macro_top1",
+                    "vocab50_mrr",
+                    "full_vocab_macro_top10",
+                    "full_vocab_subject_macro_top10",
+                    "full_vocab_micro_top10",
+                    "full_vocab_macro_top1",
+                    "full_vocab_mrr",
+                    "k0_vocab50_macro_top10",
+                    "k1_vocab50_macro_top10",
+                    "k2_vocab50_macro_top10",
+                    "k0_full_vocab_macro_top10",
+                    "k1_full_vocab_macro_top10",
+                    "k2_full_vocab_macro_top10",
+                ]
+            )
+        elif low in ("auto", "default", ""):
+            expanded_tokens.append("vocab50_macro_top10")
+        else:
+            expanded_tokens.append(low)
+
+    specs: list[dict[str, object]] = []
+    seen_keys: set[str] = set()
+    for raw in expanded_tokens:
+        horizon: str | None = None
+        base_raw = raw
+        for h_prefix, h_name in (("k0_", "K0"), ("k1_", "K1"), ("k2_", "K2")):
+            if base_raw.startswith(h_prefix):
+                horizon = h_name
+                base_raw = base_raw[len(h_prefix) :]
+                break
+        if base_raw.startswith("common_"):
+            base_raw = base_raw[len("common_") :]
+
+        canonical = _CONTROL_METRIC_ALIASES.get(base_raw, base_raw)
+        if canonical not in _CONTROL_METRIC_REGISTRY:
+            valid_keys = ", ".join(sorted(_CONTROL_METRIC_REGISTRY.keys()))
+            raise ValueError(
+                f"不支持的负对照指标 control_metric={raw!r}。"
+                f"可选指标（亦支持加 k0_/k1_/k2_ 前缀或传 'all'）：{valid_keys}"
+            )
+        spec = dict(_CONTROL_METRIC_REGISTRY[canonical])
+        spec["horizon"] = horizon
+        if horizon is not None:
+            spec["requested_key"] = f"{horizon.lower()}_{canonical}"
+            spec["label"] = f"{horizon} {spec['label']}"
+            spec["short_label"] = f"{horizon} {spec['short_label']}"
+        else:
+            spec["requested_key"] = canonical
+        req_k = str(spec["requested_key"])
+        if req_k not in seen_keys:
+            seen_keys.add(req_k)
+            specs.append(spec)
+
+    return specs or [_resolve_control_metric_specs("vocab50_macro_top10")[0]]
+
+
+def _parse_control_methods_list(
+    control_method: str | Sequence[str] | None = None,
+) -> list[str]:
+    """解析用户显式指定的一个或多个负对照/去偏方法（支持分号/竖线/逗号分隔与列表，且自动保留 subspace:K=8,eta=0.8,gate=off 内部逗号）。"""
+    import re as _re
+
+    if control_method is None:
+        return ["auto"]
+    raw_segments: list[str] = []
+    if isinstance(control_method, str):
+        raw_segments = [control_method]
+    elif isinstance(control_method, Sequence):
+        for item in control_method:
+            if item is not None and str(item).strip():
+                raw_segments.append(str(item).strip())
+    else:
+        raw_segments = [str(control_method).strip()]
+
+    methods: list[str] = []
+    for seg in raw_segments:
+        for semi_part in _re.split(r"[;|]+", seg):
+            semi_part = semi_part.strip()
+            if not semi_part:
+                continue
+            comma_parts = [p.strip() for p in semi_part.split(",") if p.strip()]
+            merged: list[str] = []
+            for part in comma_parts:
+                low_p = part.lower().replace(" ", "")
+                is_subspace_Continuation = bool(
+                    _re.match(
+                        r"^(?:eta[=_:]|gate[=_:]|nogate|gated|k[=_:]?\d+|rank_k[=_:]?\d+)",
+                        low_p,
+                    )
+                )
+                if (
+                    merged
+                    and is_subspace_Continuation
+                    and (
+                        "subspace" in merged[-1].lower()
+                        or _re.search(r"\bk[=_:]?\d+", merged[-1].lower())
+                    )
+                    and not low_p.startswith("subspace")
+                    and not low_p.startswith("cms")
+                ):
+                    merged[-1] = f"{merged[-1]},{part}"
+                else:
+                    merged.append(part)
+            for m_item in merged:
+                if m_item and m_item not in methods:
+                    methods.append(m_item)
+
+    return methods or ["auto"]
 
 
 def _extract_clean_and_shifted_metric(
@@ -3002,6 +3125,19 @@ def _extract_clean_and_shifted_metric(
                 sh_agg.get("mean_full_vocab_micro_top10", 0.0),
             )
         )
+    elif m_key == "vocab50_subject_macro_top10":
+        c_val = float(
+            clean_ref.get(
+                "vocab50_subject_macro_top10",
+                clean_ref.get("vocab50_macro_top10", 0.0),
+            )
+        )
+        s_val = float(
+            sh_agg.get(
+                "mean_vocab50_subject_macro_top10",
+                sh_agg.get("mean_vocab50_macro_top10", 0.0),
+            )
+        )
     else:
         c_val = float(clean_ref.get(m_key, 0.0))
         s_val = float(sh_agg.get(f"mean_{m_key}", 0.0))
@@ -3019,7 +3155,7 @@ def _aggregate_control_entries_across_seeds(
     use_coherence_gate: bool | None = None,
     baseline_raw_agg: dict | None = None,
 ) -> dict:
-    """跨多个随机种子聚合任意负对照或去偏配置（含全量 14 项指标、逐移位条件与 K0/K1/K2 视界）。"""
+    """跨多个随机种子聚合任意负对照或去偏配置（含全量检索指标、逐移位条件与 K0/K1/K2 视界）。"""
     valid = [
         (int(sd), ent)
         for sd, ent in entries_with_seeds
@@ -3040,8 +3176,10 @@ def _aggregate_control_entries_across_seeds(
         "enabled": True,
         "method_id": method_id,
         "active_method_id": method_id,
+        "active_control_method": method_id,
         "label": method_label,
         "active_method_label": method_label,
+        "active_control_method_label": method_label,
         "control_type": control_type,
         "eta": float(eta) if eta is not None else None,
         "rank_k": int(rank_k) if rank_k is not None else None,
@@ -3057,6 +3195,7 @@ def _aggregate_control_entries_across_seeds(
     metric_keys = (
         "vocab50_macro_top10",
         "vocab50_micro_top10",
+        "vocab50_subject_macro_top10",
         "vocab50_macro_top5",
         "vocab50_macro_top1",
         "vocab50_micro_top1",
@@ -3103,27 +3242,41 @@ def _aggregate_control_entries_across_seeds(
     agg["per_seed_metrics"] = per_seed_by_metric
 
     # Per-condition (individual shifts / zero_signal) multi-seed aggregation
-    conds_first = first_ent.get("conditions") or []
+    conds_first = (
+        first_ent.get("conditions")
+        or first_ent.get("shifted_conditions")
+        or []
+    )
     conditions_agg: list[dict[str, object]] = []
     for cond_template in conds_first:
         if not isinstance(cond_template, dict):
             continue
-        c_key = str(cond_template.get("key", ""))
+        c_key = str(
+            cond_template.get("key") or cond_template.get("condition") or ""
+        )
         if not c_key:
             continue
         matched_summaries: list[tuple[dict, dict]] = []
         for _, ent in valid:
             c_ref = ent.get("clean_reference") or {}
-            for c_item in ent.get("conditions") or ():
-                if isinstance(c_item, dict) and str(c_item.get("key", "")) == c_key:
+            ent_conds = (
+                ent.get("conditions") or ent.get("shifted_conditions") or ()
+            )
+            for c_item in ent_conds:
+                if not isinstance(c_item, dict):
+                    continue
+                item_k = str(c_item.get("key") or c_item.get("condition") or "")
+                if item_k == c_key:
                     c_sum = c_item.get("summary")
-                    if isinstance(c_sum, dict):
-                        matched_summaries.append((c_ref, c_sum))
+                    if not isinstance(c_sum, dict):
+                        c_sum = c_item
+                    matched_summaries.append((c_ref, c_sum))
                     break
         if not matched_summaries:
             continue
         cond_entry: dict[str, object] = {
             "key": c_key,
+            "condition": c_key,
             "label": str(cond_template.get("label", c_key)),
             "control_type": str(
                 cond_template.get("control_type", control_type)
@@ -3140,7 +3293,14 @@ def _aggregate_control_entries_across_seeds(
                             cs.get("full_vocab_macro_top10", 0.0),
                         )
                         if m_key == "full_vocab_macro_top10"
-                        else cs.get(m_key, 0.0)
+                        else (
+                            cs.get(
+                                "vocab50_subject_macro_top10",
+                                cs.get("vocab50_macro_top10", 0.0),
+                            )
+                            if m_key == "vocab50_subject_macro_top10"
+                            else cs.get(m_key, 0.0)
+                        )
                     )
                     for _, cs in matched_summaries
                 ],
@@ -3154,7 +3314,14 @@ def _aggregate_control_entries_across_seeds(
                             cr.get("full_vocab_macro_top10", 0.0),
                         )
                         if m_key == "full_vocab_macro_top10"
-                        else cr.get(m_key, 0.0)
+                        else (
+                            cr.get(
+                                "vocab50_subject_macro_top10",
+                                cr.get("vocab50_macro_top10", 0.0),
+                            )
+                            if m_key == "vocab50_subject_macro_top10"
+                            else cr.get(m_key, 0.0)
+                        )
                     )
                     for cr, _ in matched_summaries
                 ],
@@ -3174,6 +3341,7 @@ def _aggregate_control_entries_across_seeds(
             cond_entry[f"std_gap_{m_key}"] = float(np.std(gap_arr, ddof=0))
         conditions_agg.append(cond_entry)
     agg["conditions_aggregate"] = conditions_agg
+    agg["per_shift_aggregate"] = conditions_agg
 
     # Per-horizon (K0, K1, K2, K1-K0, K2-K0) multi-seed aggregation under control
     horizon_metric_keys = (
@@ -3206,10 +3374,16 @@ def _aggregate_control_entries_across_seeds(
                 h_pairs.append((sd, c_hz, s_hz))
         if not h_pairs:
             continue
+        clean_nested: dict[str, float] = {}
+        shifted_nested: dict[str, float] = {}
+        gap_nested: dict[str, float] = {}
         h_item: dict[str, object] = {
             "horizon": h_key,
             "seed_count": len(h_pairs),
             "per_seed_metrics": {},
+            "clean": clean_nested,
+            "shifted_mean": shifted_nested,
+            "net_gap": gap_nested,
         }
         for hm_key in horizon_metric_keys:
             c_vals_list: list[float] = []
@@ -3248,12 +3422,21 @@ def _aggregate_control_entries_across_seeds(
             c_arr = np.asarray(c_vals_list, dtype=np.float64)
             s_arr = np.asarray(s_vals_list, dtype=np.float64)
             g_arr = c_arr - s_arr
-            h_item[f"mean_clean_{hm_key}"] = float(np.mean(c_arr))
-            h_item[f"std_clean_{hm_key}"] = float(np.std(c_arr, ddof=0))
-            h_item[f"mean_shifted_{hm_key}"] = float(np.mean(s_arr))
-            h_item[f"std_shifted_{hm_key}"] = float(np.std(s_arr, ddof=0))
-            h_item[f"mean_gap_{hm_key}"] = float(np.mean(g_arr))
-            h_item[f"std_gap_{hm_key}"] = float(np.std(g_arr, ddof=0))
+            mc, sc = float(np.mean(c_arr)), float(np.std(c_arr, ddof=0))
+            ms, ss = float(np.mean(s_arr)), float(np.std(s_arr, ddof=0))
+            mg, sg = float(np.mean(g_arr)), float(np.std(g_arr, ddof=0))
+            h_item[f"mean_clean_{hm_key}"] = mc
+            h_item[f"std_clean_{hm_key}"] = sc
+            h_item[f"mean_shifted_{hm_key}"] = ms
+            h_item[f"std_shifted_{hm_key}"] = ss
+            h_item[f"mean_gap_{hm_key}"] = mg
+            h_item[f"std_gap_{hm_key}"] = sg
+            clean_nested[f"mean_{hm_key}"] = mc
+            clean_nested[f"std_{hm_key}"] = sc
+            shifted_nested[f"mean_{hm_key}"] = ms
+            shifted_nested[f"std_{hm_key}"] = ss
+            gap_nested[f"mean_{hm_key}"] = mg
+            gap_nested[f"std_{hm_key}"] = sg
             h_item["per_seed_metrics"][hm_key] = hm_seed_rows
         horizons_agg[h_key] = h_item
 
@@ -3264,7 +3447,15 @@ def _aggregate_control_entries_across_seeds(
     ):
         if h_from not in horizons_agg or h_to not in horizons_agg:
             continue
-        diff_item: dict[str, object] = {"horizon": diff_key}
+        clean_diff_nested: dict[str, float] = {}
+        shifted_diff_nested: dict[str, float] = {}
+        gap_diff_nested: dict[str, float] = {}
+        diff_item: dict[str, object] = {
+            "horizon": diff_key,
+            "clean": clean_diff_nested,
+            "shifted_mean": shifted_diff_nested,
+            "net_gap": gap_diff_nested,
+        }
         for hm_key in horizon_metric_keys:
             c_diffs: list[float] = []
             s_diffs: list[float] = []
@@ -3328,13 +3519,22 @@ def _aggregate_control_entries_across_seeds(
                 ca = np.asarray(c_diffs, dtype=np.float64)
                 sa = np.asarray(s_diffs, dtype=np.float64)
                 ga = np.asarray(g_diffs, dtype=np.float64)
-                diff_item[f"mean_clean_{hm_key}"] = float(np.mean(ca))
-                diff_item[f"std_clean_{hm_key}"] = float(np.std(ca, ddof=0))
-                diff_item[f"mean_shifted_{hm_key}"] = float(np.mean(sa))
-                diff_item[f"std_shifted_{hm_key}"] = float(np.std(sa, ddof=0))
-                diff_item[f"mean_gap_{hm_key}"] = float(np.mean(ga))
-                diff_item[f"std_gap_{hm_key}"] = float(np.std(ga, ddof=0))
-        if len(diff_item) > 1:
+                mc, sc = float(np.mean(ca)), float(np.std(ca, ddof=0))
+                ms, ss = float(np.mean(sa)), float(np.std(sa, ddof=0))
+                mg, sg = float(np.mean(ga)), float(np.std(ga, ddof=0))
+                diff_item[f"mean_clean_{hm_key}"] = mc
+                diff_item[f"std_clean_{hm_key}"] = sc
+                diff_item[f"mean_shifted_{hm_key}"] = ms
+                diff_item[f"std_shifted_{hm_key}"] = ss
+                diff_item[f"mean_gap_{hm_key}"] = mg
+                diff_item[f"std_gap_{hm_key}"] = sg
+                clean_diff_nested[f"mean_{hm_key}"] = mc
+                clean_diff_nested[f"std_{hm_key}"] = sc
+                shifted_diff_nested[f"mean_{hm_key}"] = ms
+                shifted_diff_nested[f"std_{hm_key}"] = ss
+                gap_diff_nested[f"mean_{hm_key}"] = mg
+                gap_diff_nested[f"std_{hm_key}"] = sg
+        if len(clean_diff_nested) > 0:
             horizons_agg[diff_key] = diff_item
     agg["horizons_aggregate"] = horizons_agg
 
@@ -3410,14 +3610,41 @@ def _select_active_control_method(
     control_method: str | None = None,
     metric_spec: dict[str, object],
 ) -> dict:
-    """根据用户传入的 control_method 选择用于主表 [4] 展示的负对照/去偏聚合结果。"""
+    """根据用户传入的单个 control_method 选择对应的负对照/去偏聚合结果。"""
     if not methods_map:
         return {"enabled": False}
 
     raw_sel = str(control_method or "auto").strip()
     norm_sel = raw_sel.lower().replace(" ", "")
 
+    cms_candidates = [
+        v
+        for k, v in methods_map.items()
+        if k.startswith("cms:") and float(v.get("eta") or 0.0) > 1e-9
+    ]
+    sub_candidates = [
+        v
+        for k, v in methods_map.items()
+        if k.startswith("subspace:") and v.get("rank_k") is not None
+    ]
+
     if not norm_sel or norm_sel in ("auto", "default"):
+        if sub_candidates:
+            best = max(
+                sub_candidates,
+                key=lambda x: float(
+                    _extract_metric_from_control_agg(x, metric_spec)["mean_gap"]
+                ),
+            )
+            return dict(best)
+        if cms_candidates:
+            best = max(
+                cms_candidates,
+                key=lambda x: float(
+                    _extract_metric_from_control_agg(x, metric_spec)["mean_gap"]
+                ),
+            )
+            return dict(best)
         for default_id in ("raw", "zero_signal"):
             if default_id in methods_map:
                 return dict(methods_map[default_id])
@@ -3434,12 +3661,10 @@ def _select_active_control_method(
     if norm_sel in methods_map:
         return dict(methods_map[norm_sel])
 
-    # Handle cms:best_gap / cms:best_clean / cms
-    cms_candidates = [
-        v
-        for k, v in methods_map.items()
-        if k.startswith("cms:") and float(v.get("eta") or 0.0) > 1e-9
-    ]
+    for k, v in methods_map.items():
+        if k.lower().replace(" ", "") == norm_sel:
+            return dict(v)
+
     if norm_sel in ("cms", "cms:best_gap", "cms_best_gap") and cms_candidates:
         best = max(
             cms_candidates,
@@ -3457,12 +3682,6 @@ def _select_active_control_method(
         )
         return dict(best)
 
-    # Handle subspace:best_gap / subspace:best_clean / subspace
-    sub_candidates = [
-        v
-        for k, v in methods_map.items()
-        if k.startswith("subspace:") and v.get("rank_k") is not None
-    ]
     if (
         norm_sel in ("subspace", "subspace:best_gap", "subspace_best_gap", "best_gap")
         and sub_candidates
@@ -3549,13 +3768,120 @@ def _select_active_control_method(
     )
 
 
+def _select_control_methods_list(
+    methods_map: dict[str, dict],
+    *,
+    control_method: str | Sequence[str] | None = None,
+    metric_spec: dict[str, object],
+) -> list[dict]:
+    """根据用户传入的一个或多个 control_method（含 'all'）返回去重后的负对照/去偏聚合字典列表。"""
+    if not methods_map:
+        return []
+    tokens = _parse_control_methods_list(control_method)
+    selected_list: list[dict] = []
+    seen_ids: set[str] = set()
+    for tok in tokens:
+        low_tok = tok.strip().lower()
+        if low_tok in ("all", "all_methods", "*"):
+            for m_key, m_val in methods_map.items():
+                if not isinstance(m_val, dict) or not m_val.get("enabled"):
+                    continue
+                m_id = str(m_val.get("method_id", m_key))
+                if m_id not in seen_ids:
+                    seen_ids.add(m_id)
+                    selected_list.append(dict(m_val))
+        else:
+            chosen = _select_active_control_method(
+                methods_map, control_method=tok, metric_spec=metric_spec
+            )
+            if chosen.get("enabled"):
+                m_id = str(chosen.get("method_id", tok))
+                if m_id not in seen_ids:
+                    seen_ids.add(m_id)
+                    selected_list.append(dict(chosen))
+    return selected_list
+
+
+def _enrich_method_with_selected_metrics(
+    method_agg: dict,
+    metric_specs_list: Sequence[dict[str, object]],
+    *,
+    avail_methods: Sequence[str],
+    requested_control_method: str,
+) -> dict:
+    """将用户选定的一个或多个评估指标挂载到单个负对照/去偏方法聚合字典上，并填充全部兼容别名字段。"""
+    enriched = dict(method_agg)
+    m_id = str(
+        enriched.get(
+            "method_id",
+            enriched.get(
+                "active_method_id",
+                enriched.get("active_control_method", "raw"),
+            ),
+        )
+    )
+    m_lbl = str(
+        enriched.get(
+            "label",
+            enriched.get(
+                "active_method_label",
+                enriched.get(
+                    "active_control_method_label",
+                    "Raw Temporal Shift (eta=0.0)",
+                ),
+            ),
+        )
+    )
+    enriched["method_id"] = m_id
+    enriched["active_method_id"] = m_id
+    enriched["active_control_method"] = m_id
+    enriched["label"] = m_lbl
+    enriched["active_method_label"] = m_lbl
+    enriched["active_control_method_label"] = m_lbl
+    enriched["requested_control_method"] = requested_control_method
+    enriched["available_control_methods"] = list(avail_methods)
+
+    metrics_summaries: list[dict[str, object]] = [
+        _extract_metric_from_control_agg(enriched, ms)
+        for ms in metric_specs_list
+    ]
+    enriched["selected_metrics_summaries"] = metrics_summaries
+    enriched["selected_control_metrics"] = [
+        str(ms["metric_key"]) for ms in metrics_summaries
+    ]
+    enriched["selected_control_metric_labels"] = [
+        str(ms["metric_label"]) for ms in metrics_summaries
+    ]
+
+    prim_sum = metrics_summaries[0]
+    enriched["primary_control_metric"] = str(prim_sum["metric_key"])
+    enriched["primary_control_metric_label"] = str(prim_sum["metric_label"])
+    enriched["primary_control_metric_short_label"] = str(
+        prim_sum["short_label"]
+    )
+    enriched["primary_metric_summary"] = prim_sum
+    enriched["primary_metric_is_percentage"] = bool(
+        prim_sum.get("is_ratio", True)
+    )
+    enriched["primary_metric_clean_mean"] = float(prim_sum["mean_clean"])
+    enriched["primary_metric_clean_std"] = float(prim_sum["std_clean"])
+    enriched["primary_metric_shifted_mean"] = float(prim_sum["mean_shifted"])
+    enriched["primary_metric_shifted_std"] = float(prim_sum["std_shifted"])
+    enriched["primary_metric_gap_mean"] = float(prim_sum["mean_gap"])
+    enriched["primary_metric_gap_std"] = float(prim_sum["std_gap"])
+    enriched["primary_metric_per_seed"] = list(prim_sum.get("per_seed") or [])
+    if "conditions_aggregate" in enriched and "per_shift_aggregate" not in enriched:
+        enriched["per_shift_aggregate"] = enriched["conditions_aggregate"]
+    return enriched
+
+
 def apply_multi_seed_control_selection(
     summary: dict,
     *,
-    control_method: str | None = None,
-    control_metric: str | None = None,
+    control_method: str | Sequence[str] | None = None,
+    control_metric: str | Sequence[str] | None = None,
 ) -> dict:
-    """在已聚合的多种子字典上动态切换或更新负对照方法 (control_method) 与核心评估指标 (control_metric)。"""
+    """在已聚合的多种子字典上动态切换或更新一个或多个负对照方法 (control_method) 与一个或多个核心评估指标 (control_metric)。"""
     if not isinstance(summary, dict):
         return summary
 
@@ -3569,9 +3895,20 @@ def apply_multi_seed_control_selection(
                     control_method=control_method,
                     control_metric=control_metric,
                 )
-        summary["requested_control_method"] = str(control_method or "auto")
-        summary["requested_control_metric"] = str(
-            control_metric or "vocab50_macro_top10"
+        summary["requested_control_method"] = (
+            ";".join(_parse_control_methods_list(control_method))
+            if control_method is not None
+            else str(summary.get("requested_control_method", "auto"))
+        )
+        summary["requested_control_metric"] = (
+            ",".join(
+                str(s["requested_key"])
+                for s in _resolve_control_metric_specs(control_metric)
+            )
+            if control_metric is not None
+            else str(
+                summary.get("requested_control_metric", "vocab50_macro_top10")
+            )
         )
         return summary
 
@@ -3585,31 +3922,95 @@ def apply_multi_seed_control_selection(
         if control_metric is not None
         else summary.get("requested_control_metric", "vocab50_macro_top10")
     )
-    metric_spec = _resolve_control_metric_spec(str(eff_metric))
-    methods_map = summary.get("negative_controls_by_method") or {}
-    if isinstance(methods_map, dict) and methods_map:
-        selected = _select_active_control_method(
-            methods_map,
-            control_method=str(eff_method) if eff_method is not None else None,
-            metric_spec=metric_spec,
-        )
-    else:
-        selected = dict(summary.get("negative_controls_aggregate") or {"enabled": False})
+    metric_specs_list = _resolve_control_metric_specs(eff_metric)
+    primary_metric_spec = metric_specs_list[0]
+    req_method_str = ";".join(_parse_control_methods_list(eff_method))
+    req_metric_str = ",".join(
+        str(ms["requested_key"]) for ms in metric_specs_list
+    )
 
-    if selected.get("enabled"):
-        selected["requested_control_method"] = str(eff_method or "auto")
-        selected["primary_control_metric"] = str(metric_spec["requested_key"])
-        selected["primary_control_metric_label"] = str(metric_spec["label"])
-        selected["primary_control_metric_short_label"] = str(
-            metric_spec["short_label"]
+    methods_map = (
+        summary.get("negative_controls_by_method")
+        or summary.get("negative_control_methods_aggregate")
+        or {}
+    )
+    avail_methods = (
+        list(methods_map.keys()) if isinstance(methods_map, dict) else []
+    )
+
+    selected_methods_list: list[dict] = []
+    if isinstance(methods_map, dict) and methods_map:
+        raw_selected_list = _select_control_methods_list(
+            methods_map,
+            control_method=eff_method,
+            metric_spec=primary_metric_spec,
         )
-        selected["primary_metric_summary"] = _extract_metric_from_control_agg(
-            selected, metric_spec
+        selected_methods_list = [
+            _enrich_method_with_selected_metrics(
+                m_agg,
+                metric_specs_list,
+                avail_methods=avail_methods,
+                requested_control_method=req_method_str,
+            )
+            for m_agg in raw_selected_list
+        ]
+    else:
+        existing_nc = dict(
+            summary.get("negative_controls_aggregate") or {"enabled": False}
         )
-        selected["available_control_methods"] = (
-            list(methods_map.keys()) if isinstance(methods_map, dict) else []
-        )
-        # Update per_seed shifted/gap columns to reflect the selected method
+        if existing_nc.get("enabled"):
+            selected_methods_list = [
+                _enrich_method_with_selected_metrics(
+                    existing_nc,
+                    metric_specs_list,
+                    avail_methods=avail_methods or [str(existing_nc.get("method_id", "raw"))],
+                    requested_control_method=req_method_str,
+                )
+            ]
+
+    if selected_methods_list:
+        selected = dict(selected_methods_list[0])
+        selected["selected_control_methods"] = [
+            str(m["method_id"]) for m in selected_methods_list
+        ]
+        selected["selected_control_method_labels"] = [
+            str(m["label"]) for m in selected_methods_list
+        ]
+        selected["selected_methods_aggregates"] = selected_methods_list
+
+        multi_comparison: list[dict[str, object]] = []
+        for m_agg in selected_methods_list:
+            for m_sum in m_agg.get("selected_metrics_summaries") or ():
+                if not isinstance(m_sum, dict):
+                    continue
+                multi_comparison.append(
+                    {
+                        "method_id": str(m_agg["method_id"]),
+                        "method_label": str(m_agg["label"]),
+                        "control_type": str(
+                            m_agg.get("control_type", "temporal_shift")
+                        ),
+                        "eta": m_agg.get("eta"),
+                        "rank_k": m_agg.get("rank_k"),
+                        "use_coherence_gate": m_agg.get("use_coherence_gate"),
+                        "metric_key": str(m_sum["metric_key"]),
+                        "base_metric_key": str(m_sum["base_metric_key"]),
+                        "horizon": m_sum.get("horizon"),
+                        "metric_label": str(m_sum["metric_label"]),
+                        "short_label": str(m_sum["short_label"]),
+                        "is_ratio": bool(m_sum.get("is_ratio", True)),
+                        "mean_clean": float(m_sum["mean_clean"]),
+                        "std_clean": float(m_sum["std_clean"]),
+                        "mean_shifted": float(m_sum["mean_shifted"]),
+                        "std_shifted": float(m_sum["std_shifted"]),
+                        "mean_gap": float(m_sum["mean_gap"]),
+                        "std_gap": float(m_sum["std_gap"]),
+                        "per_seed": list(m_sum.get("per_seed") or []),
+                    }
+                )
+        selected["multi_method_metric_comparison"] = multi_comparison
+
+        # Update per_seed shifted/gap columns to reflect the primary selected method
         ps_metrics = selected.get("per_seed_metrics") or {}
         v50_10_by_sd = {
             int(r["seed"]): r
@@ -3673,9 +4074,21 @@ def apply_multi_seed_control_selection(
                 row["primary_control_clean"] = float(prim_by_sd[sd]["clean"])
                 row["primary_control_shifted"] = float(prim_by_sd[sd]["shifted"])
                 row["primary_control_gap"] = float(prim_by_sd[sd]["gap"])
+    else:
+        selected = {"enabled": False}
 
-    summary["requested_control_method"] = str(eff_method or "auto")
-    summary["requested_control_metric"] = str(metric_spec["requested_key"])
+    summary["requested_control_method"] = req_method_str
+    summary["requested_control_metric"] = req_metric_str
+    summary["selected_control_methods"] = (
+        selected.get("selected_control_methods", [])
+        if selected.get("enabled")
+        else []
+    )
+    summary["selected_control_metrics"] = (
+        selected.get("selected_control_metrics", [])
+        if selected.get("enabled")
+        else [str(ms["requested_key"]) for ms in metric_specs_list]
+    )
     summary["negative_controls_aggregate"] = selected
     return summary
 
@@ -3719,8 +4132,8 @@ def _aggregate_single_stage_multi_seed(
     seed_results: Sequence[dict],
     *,
     split: str = "val",
-    control_method: str | None = None,
-    control_metric: str | None = None,
+    control_method: str | Iterable[str] | None = None,
+    control_metric: str | Iterable[str] | None = None,
 ) -> dict:
     """聚合同一阶段在多个随机种子上的词级检索、词表扫描、实虚词拆解、滚动修订视界/转移矩阵、被试分布及全部负对照与去偏指标（Mean ± SD）。"""
     if not seed_results:
@@ -3741,11 +4154,19 @@ def _aggregate_single_stage_multi_seed(
         ckpt_info = res.get("checkpoint") or {}
         ep = int(ckpt_info.get("epoch", 0)) if isinstance(ckpt_info, dict) else 0
         metrics = res.get("metrics") or {}
-        sweep = metrics.get("vocabulary_sweep") or {}
+        sweep = (
+            metrics.get("vocabulary_sweep")
+            or res.get("vocabulary_sweep")
+            or {}
+        )
         n50 = sweep.get("N50") or {}
         n50_strict = sweep.get("N50_strict") or {}
         fv = sweep.get("full_vocab") or {}
-        rh = metrics.get("revision_horizons") or {}
+        rh = (
+            metrics.get("revision_horizons")
+            or res.get("revision_horizons")
+            or {}
+        )
         nc = res.get("negative_controls") or {}
         sh_agg = nc.get("shifted_aggregate") or {}
         row: dict[str, object] = {
@@ -3855,25 +4276,36 @@ def _aggregate_single_stage_multi_seed(
     vocab_sweep_agg: dict[str, dict] = {}
     for scale_key in ("N20", "N50", "N50_strict", "N100", "N150", "full_vocab"):
         scale_rows = [
-            (r.get("metrics") or {}).get("vocabulary_sweep", {}).get(scale_key)
+            (
+                (r.get("metrics") or {}).get("vocabulary_sweep")
+                or r.get("vocabulary_sweep")
+                or {}
+            ).get(scale_key)
             for r in seed_results
         ]
         scale_rows = [sr for sr in scale_rows if isinstance(sr, dict)]
         if not scale_rows:
             continue
+        cand_cnt = int(
+            scale_rows[0].get(
+                "candidate_count",
+                scale_rows[0].get("vocabulary_size", 0),
+            )
+        )
         agg_entry: dict[str, object] = {
             "label": str(scale_rows[0].get("label", scale_key)),
             "oov_policy": str(
                 scale_rows[0].get("oov_policy", "filter_in_vocabulary")
             ),
-            "candidate_count": int(scale_rows[0].get("candidate_count", 0)),
+            "candidate_count": cand_cnt,
+            "vocabulary_size": int(
+                scale_rows[0].get("vocabulary_size", cand_cnt)
+            ),
             "supported_candidates": int(
-                scale_rows[0].get(
-                    "supported_candidates",
-                    scale_rows[0].get("candidate_count", 0),
-                )
+                scale_rows[0].get("supported_candidates", cand_cnt)
             ),
             "query_count": int(scale_rows[0].get("query_count", 0)),
+            "oov_queries": int(scale_rows[0].get("oov_queries", 0)),
             "in_vocabulary_coverage_pct": float(
                 scale_rows[0].get("in_vocabulary_coverage_pct", 100.0)
             ),
@@ -3917,41 +4349,65 @@ def _aggregate_single_stage_multi_seed(
     ling_agg: dict[str, dict] = {}
     for l_key in ("content_words", "function_words", "content_minus_function"):
         l_rows = [
-            ((r.get("metrics") or {}).get("linguistic_breakdown") or {}).get(
-                l_key
-            )
+            (
+                (r.get("metrics") or {}).get("linguistic_breakdown")
+                or r.get("linguistic_breakdown")
+                or {}
+            ).get(l_key)
             for r in seed_results
         ]
         l_rows = [lr for lr in l_rows if isinstance(lr, dict)]
         if not l_rows:
             continue
+        uniq_cnt = int(
+            l_rows[0].get(
+                "unique_word_count", l_rows[0].get("unique_targets", 0)
+            )
+        )
         l_entry: dict[str, object] = {
             "label": str(l_rows[0].get("label", l_key)),
             "query_count": int(l_rows[0].get("query_count", 0)),
-            "unique_word_count": int(l_rows[0].get("unique_word_count", 0)),
+            "unique_word_count": uniq_cnt,
+            "unique_targets": uniq_cnt,
             "event_share_pct": float(l_rows[0].get("event_share_pct", 0.0)),
-            "vocab50_query_count": int(l_rows[0].get("vocab50_query_count", 0)),
+            "vocab50_query_count": int(
+                l_rows[0].get(
+                    "vocab50_query_count", l_rows[0].get("query_count", 0)
+                )
+            ),
             "seed_count": len(l_rows),
         }
-        for lm_key in (
-            "vocab50_word_macro_top10",
-            "vocab50_micro_top10",
-            "vocab50_word_macro_top1",
-            "vocab50_micro_top1",
-            "vocab50_mrr",
-            "full_vocab_word_macro_top10",
-            "full_vocab_subject_macro_top10",
-            "full_vocab_micro_top10",
-            "full_vocab_word_macro_top1",
-            "full_vocab_micro_top1",
-            "full_vocab_mrr",
-            "full_vocab_median_rank",
+        for lm_key, alt_keys in (
+            ("vocab50_word_macro_top10", ("vocab50_macro_top10",)),
+            ("vocab50_micro_top10", ()),
+            ("vocab50_word_macro_top1", ("vocab50_macro_top1",)),
+            ("vocab50_micro_top1", ()),
+            ("vocab50_mrr", ()),
+            ("full_vocab_word_macro_top10", ("full_vocab_macro_top10",)),
+            ("full_vocab_subject_macro_top10", ()),
+            ("full_vocab_micro_top10", ()),
+            ("full_vocab_word_macro_top1", ("full_vocab_macro_top1",)),
+            ("full_vocab_micro_top1", ()),
+            ("full_vocab_mrr", ()),
+            ("full_vocab_median_rank", ()),
         ):
-            vals = np.asarray(
-                [float(lr.get(lm_key, 0.0)) for lr in l_rows], dtype=np.float64
-            )
-            l_entry[f"mean_{lm_key}"] = float(np.mean(vals))
-            l_entry[f"std_{lm_key}"] = float(np.std(vals, ddof=0))
+            vals_list: list[float] = []
+            for lr in l_rows:
+                val = lr.get(lm_key)
+                if val is None:
+                    for ak in alt_keys:
+                        if lr.get(ak) is not None:
+                            val = lr.get(ak)
+                            break
+                vals_list.append(float(val if val is not None else 0.0))
+            vals = np.asarray(vals_list, dtype=np.float64)
+            mean_v = float(np.mean(vals))
+            std_v = float(np.std(vals, ddof=0))
+            l_entry[f"mean_{lm_key}"] = mean_v
+            l_entry[f"std_{lm_key}"] = std_v
+            for ak in alt_keys:
+                l_entry[f"mean_{ak}"] = mean_v
+                l_entry[f"std_{ak}"] = std_v
         ling_agg[l_key] = l_entry
 
     horizons_agg: dict[str, dict] = {}
@@ -3975,7 +4431,11 @@ def _aggregate_single_stage_multi_seed(
     )
     for h_key in ("K0", "K1", "K2"):
         h_rows = [
-            (r.get("metrics") or {}).get("revision_horizons", {}).get(h_key)
+            (
+                (r.get("metrics") or {}).get("revision_horizons")
+                or r.get("revision_horizons")
+                or {}
+            ).get(h_key)
             for r in seed_results
         ]
         h_rows = [hr for hr in h_rows if isinstance(hr, dict)]
@@ -4019,7 +4479,11 @@ def _aggregate_single_stage_multi_seed(
             for hm_key in horizon_metric_keys:
                 diffs = []
                 for r in seed_results:
-                    rh = (r.get("metrics") or {}).get("revision_horizons") or {}
+                    rh = (
+                        (r.get("metrics") or {}).get("revision_horizons")
+                        or r.get("revision_horizons")
+                        or {}
+                    )
                     if h_from in rh and h_to in rh:
                         if hm_key in (
                             "common_full_vocab_macro_top10",
@@ -4056,19 +4520,26 @@ def _aggregate_single_stage_multi_seed(
     transitions_agg: dict[str, dict] = {}
     for t_key in ("K0_to_K1", "K0_to_K2", "K1_to_K2"):
         t_rows = [
-            ((r.get("metrics") or {}).get("revision_transitions") or {}).get(
-                t_key
-            )
+            (
+                (r.get("metrics") or {}).get("revision_transitions")
+                or r.get("revision_transitions")
+                or {}
+            ).get(t_key)
             for r in seed_results
         ]
         t_rows = [tr for tr in t_rows if isinstance(tr, dict)]
         if not t_rows:
             continue
         t_entry: dict[str, object] = {
-            "from_horizon": str(t_rows[0].get("from_horizon", "")),
-            "to_horizon": str(t_rows[0].get("to_horizon", "")),
+            "from_horizon": str(
+                t_rows[0].get("from_horizon", t_key.split("_to_")[0])
+            ),
+            "to_horizon": str(
+                t_rows[0].get("to_horizon", t_key.split("_to_")[-1])
+            ),
             "seed_count": len(t_rows),
         }
+        has_scoped = False
         for scope_k in (
             "vocab50_top10",
             "vocab50_top1",
@@ -4082,9 +4553,12 @@ def _aggregate_single_stage_multi_seed(
             ]
             if not sub_rows:
                 continue
+            has_scoped = True
             scope_agg: dict[str, float | int] = {
                 "total_common_events": int(
-                    sub_rows[0].get("total_common_events", 0)
+                    sub_rows[0].get(
+                        "total_common_events", sub_rows[0].get("query_count", 0)
+                    )
                 )
             }
             for tm_key in (
@@ -4107,12 +4581,164 @@ def _aggregate_single_stage_multi_seed(
                 scope_agg[f"mean_{tm_key}"] = float(np.mean(vals))
                 scope_agg[f"std_{tm_key}"] = float(np.std(vals, ddof=0))
             t_entry[scope_k] = scope_agg
+        if not has_scoped:
+            # Flat transition dictionary fallback (e.g. legacy or compact test dictionaries)
+            q_cnt = int(
+                t_rows[0].get(
+                    "query_count", t_rows[0].get("total_common_events", 0)
+                )
+            )
+            t_entry["query_count"] = q_cnt
+            for flat_k, (sc_k, scale_mult) in (
+                ("before_micro_top10", ("before_hit_rate_pct", 100.0)),
+                ("after_micro_top10", ("after_hit_rate_pct", 100.0)),
+                ("repairs_wrong_to_right", ("beneficial_repairs", 1.0)),
+                ("harms_right_to_wrong", ("harmful_overwrites", 1.0)),
+                ("net_event_gain", ("net_gain_events", 1.0)),
+                ("repair_to_harm_ratio", ("repair_to_harm_ratio", 1.0)),
+                ("still_correct", ("retained_hits", 1.0)),
+                ("still_wrong", ("persistent_misses", 1.0)),
+            ):
+                vals = np.asarray(
+                    [float(tr.get(flat_k, 0.0)) for tr in t_rows],
+                    dtype=np.float64,
+                )
+                t_entry[f"mean_{flat_k}"] = float(np.mean(vals))
+                t_entry[f"std_{flat_k}"] = float(np.std(vals, ddof=0))
+            t_entry["vocab50_top10"] = {
+                "total_common_events": q_cnt,
+                "mean_beneficial_repairs": float(
+                    t_entry.get("mean_repairs_wrong_to_right", 0.0)
+                ),
+                "std_beneficial_repairs": float(
+                    t_entry.get("std_repairs_wrong_to_right", 0.0)
+                ),
+                "mean_harmful_overwrites": float(
+                    t_entry.get("mean_harms_right_to_wrong", 0.0)
+                ),
+                "std_harmful_overwrites": float(
+                    t_entry.get("std_harms_right_to_wrong", 0.0)
+                ),
+                "mean_retained_hits": float(
+                    t_entry.get("mean_still_correct", 0.0)
+                ),
+                "std_retained_hits": float(
+                    t_entry.get("std_still_correct", 0.0)
+                ),
+                "mean_persistent_misses": float(
+                    t_entry.get("mean_still_wrong", 0.0)
+                ),
+                "std_persistent_misses": float(
+                    t_entry.get("std_still_wrong", 0.0)
+                ),
+                "mean_net_gain_events": float(
+                    t_entry.get("mean_net_event_gain", 0.0)
+                ),
+                "std_net_gain_events": float(
+                    t_entry.get("std_net_event_gain", 0.0)
+                ),
+                "mean_before_hit_rate_pct": float(
+                    t_entry.get("mean_before_micro_top10", 0.0)
+                )
+                * 100.0,
+                "std_before_hit_rate_pct": float(
+                    t_entry.get("std_before_micro_top10", 0.0)
+                )
+                * 100.0,
+                "mean_after_hit_rate_pct": float(
+                    t_entry.get("mean_after_micro_top10", 0.0)
+                )
+                * 100.0,
+                "std_after_hit_rate_pct": float(
+                    t_entry.get("std_after_micro_top10", 0.0)
+                ),
+                "mean_beneficial_repair_rate_pct": (
+                    float(t_entry.get("mean_repairs_wrong_to_right", 0.0))
+                    / max(q_cnt, 1)
+                    * 100.0
+                ),
+                "std_beneficial_repair_rate_pct": (
+                    float(t_entry.get("std_repairs_wrong_to_right", 0.0))
+                    / max(q_cnt, 1)
+                    * 100.0
+                ),
+                "mean_harmful_overwrite_rate_pct": (
+                    float(t_entry.get("mean_harms_right_to_wrong", 0.0))
+                    / max(q_cnt, 1)
+                    * 100.0
+                ),
+                "std_harmful_overwrite_rate_pct": (
+                    float(t_entry.get("std_harms_right_to_wrong", 0.0))
+                    / max(q_cnt, 1)
+                    * 100.0
+                ),
+                "mean_net_gain_pct": (
+                    float(t_entry.get("mean_net_event_gain", 0.0))
+                    / max(q_cnt, 1)
+                    * 100.0
+                ),
+                "std_net_gain_pct": (
+                    float(t_entry.get("std_net_event_gain", 0.0))
+                    / max(q_cnt, 1)
+                    * 100.0
+                ),
+                "mean_repair_to_harm_ratio": float(
+                    t_entry.get("mean_repair_to_harm_ratio", 0.0)
+                ),
+                "std_repair_to_harm_ratio": float(
+                    t_entry.get("std_repair_to_harm_ratio", 0.0)
+                ),
+            }
+        else:
+            v50_s = t_entry.get("vocab50_top10") or {}
+            if isinstance(v50_s, dict):
+                t_entry["query_count"] = int(v50_s.get("total_common_events", 0))
+                t_entry["mean_before_micro_top10"] = (
+                    float(v50_s.get("mean_before_hit_rate_pct", 0.0)) / 100.0
+                )
+                t_entry["std_before_micro_top10"] = (
+                    float(v50_s.get("std_before_hit_rate_pct", 0.0)) / 100.0
+                )
+                t_entry["mean_after_micro_top10"] = (
+                    float(v50_s.get("mean_after_hit_rate_pct", 0.0)) / 100.0
+                )
+                t_entry["std_after_micro_top10"] = (
+                    float(v50_s.get("std_after_hit_rate_pct", 0.0)) / 100.0
+                )
+                t_entry["mean_repairs_wrong_to_right"] = float(
+                    v50_s.get("mean_beneficial_repairs", 0.0)
+                )
+                t_entry["std_repairs_wrong_to_right"] = float(
+                    v50_s.get("std_beneficial_repairs", 0.0)
+                )
+                t_entry["mean_harms_right_to_wrong"] = float(
+                    v50_s.get("mean_harmful_overwrites", 0.0)
+                )
+                t_entry["std_harms_right_to_wrong"] = float(
+                    v50_s.get("std_harmful_overwrites", 0.0)
+                )
+                t_entry["mean_net_event_gain"] = float(
+                    v50_s.get("mean_net_gain_events", 0.0)
+                )
+                t_entry["std_net_event_gain"] = float(
+                    v50_s.get("std_net_gain_events", 0.0)
+                )
+                t_entry["mean_repair_to_harm_ratio"] = float(
+                    v50_s.get("mean_repair_to_harm_ratio", 0.0)
+                )
+                t_entry["std_repair_to_harm_ratio"] = float(
+                    v50_s.get("std_repair_to_harm_ratio", 0.0)
+                )
         transitions_agg[t_key] = t_entry
 
     # Per-subject summary across seeds
     subj_map_rows: dict[str, list[dict]] = {}
     for r in seed_results:
-        p_subjs = (r.get("metrics") or {}).get("per_subject") or []
+        p_subjs = (
+            (r.get("metrics") or {}).get("per_subject")
+            or r.get("per_subject")
+            or []
+        )
         for s_item in p_subjs:
             if isinstance(s_item, dict) and s_item.get("subject_id"):
                 sid = str(s_item["subject_id"])
@@ -4120,10 +4746,22 @@ def _aggregate_single_stage_multi_seed(
     per_subject_agg: list[dict] = []
     for sid in sorted(subj_map_rows.keys()):
         s_rows = subj_map_rows[sid]
+        ev_cnt = int(
+            s_rows[0].get(
+                "evaluated_events", s_rows[0].get("total_events", 0)
+            )
+        )
+        v50_cnt = int(
+            s_rows[0].get(
+                "vocab50_events", s_rows[0].get("vocab50_queries", 0)
+            )
+        )
         s_agg_row: dict[str, object] = {
             "subject_id": sid,
-            "evaluated_events": int(s_rows[0].get("evaluated_events", 0)),
-            "vocab50_events": int(s_rows[0].get("vocab50_events", 0)),
+            "evaluated_events": ev_cnt,
+            "total_events": ev_cnt,
+            "vocab50_events": v50_cnt,
+            "vocab50_queries": v50_cnt,
             "seed_count": len(s_rows),
         }
         for sm_key in (
@@ -4250,6 +4888,60 @@ def _aggregate_single_stage_multi_seed(
         if zero_agg.get("enabled"):
             methods_map["zero_signal"] = zero_agg
 
+    def _normalize_cms_sweep_dict(sweep_obj: object) -> dict[str, dict]:
+        if isinstance(sweep_obj, dict):
+            return {
+                str(k): v for k, v in sweep_obj.items() if isinstance(v, dict)
+            }
+        if isinstance(sweep_obj, list):
+            out_d: dict[str, dict] = {}
+            for item in sweep_obj:
+                if isinstance(item, dict):
+                    eta_v = float(item.get("eta", 0.0))
+                    k_str = (
+                        "eta_0"
+                        if abs(eta_v) <= 1e-9
+                        else f"eta_{eta_v:g}".replace(".", "_")
+                    )
+                    out_d[k_str] = item
+            return out_d
+        return {}
+
+    def _normalize_sub_sweep_dict(sweep_obj: object) -> dict[str, dict]:
+        if isinstance(sweep_obj, dict):
+            return {
+                str(k): v for k, v in sweep_obj.items() if isinstance(v, dict)
+            }
+        if isinstance(sweep_obj, list):
+            out_d: dict[str, dict] = {}
+            for idx_item, item in enumerate(sweep_obj):
+                if isinstance(item, dict):
+                    rk = int(
+                        item.get("rank_k")
+                        if item.get("rank_k") is not None
+                        else (item.get("k") or 0)
+                    )
+                    eta_v = float(item.get("eta") or 0.0)
+                    gate_b = bool(
+                        item.get(
+                            "use_coherence_gate",
+                            str(item.get("gate", "off")).lower()
+                            in {"on", "true", "1"},
+                        )
+                    )
+                    gate_tag = "on" if gate_b else "off"
+                    k_str = str(
+                        item.get("key")
+                        or f"subspace_k{rk}_eta{eta_v:g}_gate_{gate_tag}"
+                    )
+                    norm_item = dict(item)
+                    norm_item.setdefault("rank_k", rk)
+                    norm_item.setdefault("eta", eta_v)
+                    norm_item.setdefault("use_coherence_gate", gate_b)
+                    out_d[k_str] = norm_item
+            return out_d
+        return {}
+
     # Aggregate Leave-One-Out Common-Mode Subtraction (CMS) across seeds if available
     cms_reports_by_seed: list[tuple[int, dict]] = []
     for r in seed_results:
@@ -4260,16 +4952,16 @@ def _aggregate_single_stage_multi_seed(
             json_key="exploratory_common_mode_subtraction_json",
             filename_prefix="common_mode_subtraction",
         )
-        if isinstance(cms_rep, dict) and isinstance(cms_rep.get("sweep"), dict):
+        if isinstance(cms_rep, dict) and cms_rep.get("sweep") is not None:
             cms_reports_by_seed.append((sd, cms_rep))
 
     cms_aggregate: dict[str, object] = {"enabled": False}
     if cms_reports_by_seed:
-        first_sweep = cms_reports_by_seed[0][1]["sweep"]
+        first_sweep = _normalize_cms_sweep_dict(
+            cms_reports_by_seed[0][1].get("sweep")
+        )
         cms_methods: dict[str, dict] = {}
         for eta_key, first_eta_ent in first_sweep.items():
-            if not isinstance(first_eta_ent, dict):
-                continue
             eta_val = float(first_eta_ent.get("eta", 0.0))
             m_id = "raw" if abs(eta_val) <= 1e-9 else f"cms:eta={eta_val:g}"
             m_lbl = (
@@ -4279,7 +4971,8 @@ def _aggregate_single_stage_multi_seed(
             )
             eta_seed_entries: list[tuple[int, dict]] = []
             for sd, c_rep in cms_reports_by_seed:
-                ent_i = (c_rep.get("sweep") or {}).get(eta_key)
+                sw_i = _normalize_cms_sweep_dict(c_rep.get("sweep"))
+                ent_i = sw_i.get(eta_key)
                 if isinstance(ent_i, dict):
                     eta_seed_entries.append((sd, ent_i))
             if not eta_seed_entries:
@@ -4303,8 +4996,12 @@ def _aggregate_single_stage_multi_seed(
             cms_aggregate = {
                 "enabled": True,
                 "seed_count": len(cms_reports_by_seed),
-                "eta_grid": list(cms_reports_by_seed[0][1].get("eta_grid") or []),
+                "eta_grid": list(
+                    cms_reports_by_seed[0][1].get("eta_grid")
+                    or [float(m.get("eta", 0.0)) for m in cms_methods.values()]
+                ),
                 "methods": cms_methods,
+                "sweep": list(cms_methods.values()),
             }
 
     # Aggregate Subspace Coherence LOO Debiasing across seeds if available
@@ -4317,19 +5014,23 @@ def _aggregate_single_stage_multi_seed(
             json_key="exploratory_subspace_coherence_debiasing_json",
             filename_prefix="subspace_coherence_debiasing",
         )
-        if isinstance(sub_rep, dict) and isinstance(
-            sub_rep.get("subspace_sweep"), dict
+        if (
+            isinstance(sub_rep, dict)
+            and sub_rep.get("subspace_sweep") is not None
         ):
             sub_reports_by_seed.append((sd, sub_rep))
 
     subspace_aggregate: dict[str, object] = {"enabled": False}
     if sub_reports_by_seed:
-        # Also aggregate full_loo_cms from subspace report if cms_aggregate wasn't already loaded
         first_sub = sub_reports_by_seed[0][1]
-        if not cms_aggregate.get("enabled") and isinstance(
-            first_sub.get("full_loo_cms"), dict
-        ):
-            cms_methods_fallback: dict[str, dict] = {}
+        full_cms_raw = (
+            first_sub.get("full_loo_cms")
+            or first_sub.get("full_rank_cms_sweep")
+            or first_sub.get("full_rank_loo_baselines")
+        )
+        full_cms_methods_dict: dict[str, dict] = {}
+        if full_cms_raw is not None:
+            norm_fc = _normalize_cms_sweep_dict(full_cms_raw)
             if isinstance(first_sub.get("raw_baseline"), dict):
                 raw_seed_ents = [
                     (sd, sr["raw_baseline"])
@@ -4345,23 +5046,23 @@ def _aggregate_single_stage_multi_seed(
                         eta=0.0,
                     )
                     if agg_r0.get("enabled"):
-                        cms_methods_fallback["eta_0"] = agg_r0
+                        full_cms_methods_dict["eta_0"] = agg_r0
                         if "raw" not in methods_map:
                             methods_map["raw"] = agg_r0
                             raw_nc_agg = agg_r0
-            for f_key, f_ent in first_sub["full_loo_cms"].items():
-                if not isinstance(f_ent, dict):
-                    continue
+            for f_key, f_ent in norm_fc.items():
                 eta_v = float(f_ent.get("eta", 0.0))
                 m_id = f"cms:eta={eta_v:g}"
                 m_lbl = f"LOO Common-Mode Subtraction (eta={eta_v:g})"
-                f_seed_ents = [
-                    (sd, (sr.get("full_loo_cms") or {}).get(f_key))
-                    for sd, sr in sub_reports_by_seed
-                    if isinstance(
-                        (sr.get("full_loo_cms") or {}).get(f_key), dict
+                f_seed_ents = []
+                for sd, sr in sub_reports_by_seed:
+                    sr_fc = _normalize_cms_sweep_dict(
+                        sr.get("full_loo_cms")
+                        or sr.get("full_rank_cms_sweep")
+                        or sr.get("full_rank_loo_baselines")
                     )
-                ]
+                    if isinstance(sr_fc.get(f_key), dict):
+                        f_seed_ents.append((sd, sr_fc[f_key]))
                 agg_f = _aggregate_control_entries_across_seeds(
                     f_seed_ents,
                     method_id=m_id,
@@ -4371,23 +5072,35 @@ def _aggregate_single_stage_multi_seed(
                     baseline_raw_agg=raw_nc_agg,
                 )
                 if agg_f.get("enabled"):
-                    cms_methods_fallback[f_key] = agg_f
-                    methods_map[m_id] = agg_f
-            if cms_methods_fallback:
+                    full_cms_methods_dict[f_key] = agg_f
+                    if m_id not in methods_map:
+                        methods_map[m_id] = agg_f
+            if not cms_aggregate.get("enabled") and full_cms_methods_dict:
                 cms_aggregate = {
                     "enabled": True,
                     "seed_count": len(sub_reports_by_seed),
-                    "methods": cms_methods_fallback,
+                    "methods": full_cms_methods_dict,
+                    "sweep": list(full_cms_methods_dict.values()),
                 }
 
         sub_methods: dict[str, dict] = {}
-        first_sub_sweep = first_sub.get("subspace_sweep") or {}
+        first_sub_sweep = _normalize_sub_sweep_dict(
+            first_sub.get("subspace_sweep")
+        )
         for sub_key, first_sub_ent in first_sub_sweep.items():
-            if not isinstance(first_sub_ent, dict):
-                continue
-            rk = int(first_sub_ent.get("rank_k") or 0)
+            rk = int(
+                first_sub_ent.get("rank_k")
+                if first_sub_ent.get("rank_k") is not None
+                else (first_sub_ent.get("k") or 0)
+            )
             eta_v = float(first_sub_ent.get("eta") or 0.0)
-            gate_b = bool(first_sub_ent.get("use_coherence_gate", False))
+            gate_b = bool(
+                first_sub_ent.get(
+                    "use_coherence_gate",
+                    str(first_sub_ent.get("gate", "off")).lower()
+                    in {"on", "true", "1"},
+                )
+            )
             gate_tag = "on" if gate_b else "off"
             m_id = f"subspace:K={rk},eta={eta_v:g},gate={gate_tag}"
             m_lbl = str(
@@ -4396,13 +5109,11 @@ def _aggregate_single_stage_multi_seed(
                     f"Subspace LOO (K={rk}, eta={eta_v:g}, Gate={'On' if gate_b else 'Off'})",
                 )
             )
-            sub_seed_ents = [
-                (sd, (sr.get("subspace_sweep") or {}).get(sub_key))
-                for sd, sr in sub_reports_by_seed
-                if isinstance(
-                    (sr.get("subspace_sweep") or {}).get(sub_key), dict
-                )
-            ]
+            sub_seed_ents = []
+            for sd, sr in sub_reports_by_seed:
+                sr_sw = _normalize_sub_sweep_dict(sr.get("subspace_sweep"))
+                if isinstance(sr_sw.get(sub_key), dict):
+                    sub_seed_ents.append((sd, sr_sw[sub_key]))
             if not sub_seed_ents:
                 continue
             agg_sub = _aggregate_control_entries_across_seeds(
@@ -4457,6 +5168,10 @@ def _aggregate_single_stage_multi_seed(
                 "grid": first_sub.get("grid") or {},
                 "diagnostics_aggregate": diag_agg,
                 "methods": sub_methods,
+                "subspace_sweep": list(sub_methods.values()),
+                "full_rank_cms_sweep": list(full_cms_methods_dict.values())
+                if full_cms_methods_dict
+                else list((cms_aggregate.get("methods") or {}).values()),
             }
 
     # Expose canonical unique method keys in negative_controls_by_method
@@ -4487,6 +5202,7 @@ def _aggregate_single_stage_multi_seed(
         "revision_transitions_aggregate": transitions_agg,
         "per_subject_summary_aggregate": per_subject_agg,
         "negative_controls_by_method": canonical_methods_map,
+        "negative_control_methods_aggregate": canonical_methods_map,
         "common_mode_subtraction_aggregate": cms_aggregate,
         "subspace_debiasing_aggregate": subspace_aggregate,
         "negative_controls_aggregate": {"enabled": False},
@@ -4505,11 +5221,11 @@ def summarize_multi_seed_evaluation(
     output_dir: str | Path | None = None,
     verbose: bool = False,
     print_report: bool = True,
-    control_method: str | None = None,
-    control_metric: str | None = None,
+    control_method: str | Iterable[str] | None = None,
+    control_metric: str | Iterable[str] | None = None,
     **_extra_kwargs,
 ) -> dict:
-    """将多个随机种子的评估结果汇总为 Multi-Seed Summary JSON 与报表并落盘。"""
+    """将多个随机种子（或单种子 n=1）的评估结果汇总为 Multi-Seed Summary JSON 与报表并落盘。"""
     if isinstance(seed_results, dict):
         seed_results = list(seed_results.values())
     if not seed_results:
@@ -4539,6 +5255,7 @@ def summarize_multi_seed_evaluation(
             else Path(str(first.get("output_dir", "."))).resolve().parent
         )
         target_dir.mkdir(parents=True, exist_ok=True)
+        first_st_agg = next(iter(stages_agg.values()), {})
         summary = {
             "status": "multi_seed_stage_comparison_completed",
             "dataset": str(first.get("dataset", "-")),
@@ -4554,9 +5271,22 @@ def summarize_multi_seed_evaluation(
             ),
             "subset": first.get("subset", {}),
             "evaluated_stages": list(stages_agg.keys()),
-            "requested_control_method": str(control_method or "auto"),
+            "requested_control_method": str(
+                first_st_agg.get(
+                    "requested_control_method", control_method or "auto"
+                )
+            ),
             "requested_control_metric": str(
-                control_metric or "vocab50_macro_top10"
+                first_st_agg.get(
+                    "requested_control_metric",
+                    control_metric or "vocab50_macro_top10",
+                )
+            ),
+            "selected_control_methods": list(
+                first_st_agg.get("selected_control_methods") or []
+            ),
+            "selected_control_metrics": list(
+                first_st_agg.get("selected_control_metrics") or []
             ),
             "stages_aggregate": stages_agg,
             "seed_results": list(seed_results),
@@ -4633,13 +5363,14 @@ def run_evaluation_workflow(
     shift_seconds: str | Iterable[float | int | str] | None = None,
     zero_signal_control: bool = False,
     subtraction_etas: str | Iterable[float | int | str] | None = None,
-    control_method: str | None = None,
-    control_metric: str | None = None,
+    control_method: str | Iterable[str] | None = None,
+    control_metric: str | Iterable[str] | None = None,
     all_stages: bool = False,
     plot: bool = True,
     show_progress: bool = True,
     max_eval_rows: int | None = None,
     verbose: bool = False,
+    _export_outer_multi_seed: bool = True,
 ) -> dict:
     """运行验证集 (val) 或测试集 (test) 评估与可视化工作流（支持单阶段、全阶段对比、多种子聚合、负对照及探索性留一法共模扣除）。"""
     from braindecoding.training.workflow_runner import (
@@ -4693,6 +5424,7 @@ def run_evaluation_workflow(
                 show_progress=show_progress,
                 max_eval_rows=max_eval_rows,
                 verbose=verbose,
+                _export_outer_multi_seed=False,
             )
             seed_results.append(res_i)
         return summarize_multi_seed_evaluation(
@@ -4832,6 +5564,27 @@ def run_evaluation_workflow(
                 )
                 single_res["figures"].update(comp_figs)
                 save_json(Path(single_res["evaluation_json"]), single_res)
+        if _export_outer_multi_seed:
+            outer_dir = (
+                Path(str(single_res["output_dir"])).resolve().parent
+                if output_dir is None
+                else Path(output_dir).resolve().parent
+            )
+            outer_summary = summarize_multi_seed_evaluation(
+                [single_res],
+                split=split,
+                output_dir=outer_dir,
+                verbose=verbose,
+                print_report=True,
+                control_method=control_method,
+                control_metric=control_metric,
+            )
+            single_res["outer_multi_seed_evaluation_json"] = str(
+                outer_summary.get("evaluation_json", "")
+            )
+            single_res["outer_multi_seed_exports"] = outer_summary.get(
+                "exports", {}
+            )
         return single_res
 
     base_cfg, subset_spec = build_workflow_config(
@@ -5108,6 +5861,34 @@ def run_evaluation_workflow(
     print_stage_comparison_report(
         multi_summary, split=split, verbose=verbose, output_dir=comp_dir
     )
+    if _export_outer_multi_seed:
+        for st_res in stage_results.values():
+            st_outer_dir = Path(str(st_res["output_dir"])).resolve().parent
+            summarize_multi_seed_evaluation(
+                [st_res],
+                split=split,
+                output_dir=st_outer_dir,
+                verbose=verbose,
+                print_report=False,
+                control_method=control_method,
+                control_metric=control_metric,
+            )
+        outer_comp_dir = comp_dir.parent
+        outer_comp_summary = summarize_multi_seed_evaluation(
+            [multi_summary],
+            split=split,
+            output_dir=outer_comp_dir,
+            verbose=verbose,
+            print_report=True,
+            control_method=control_method,
+            control_metric=control_metric,
+        )
+        multi_summary["outer_multi_seed_evaluation_json"] = str(
+            outer_comp_summary.get("evaluation_json", "")
+        )
+        multi_summary["outer_multi_seed_exports"] = outer_comp_summary.get(
+            "exports", {}
+        )
     return multi_summary
 
 
@@ -5123,11 +5904,14 @@ __all__ = [
     "_evaluate_single_stage",
     "_extract_control_summary_row",
     "_format_shift_label",
+    "_parse_control_methods_list",
     "_parse_seed_list",
     "_parse_shift_seconds_list",
     "_resolve_control_metric_spec",
+    "_resolve_control_metric_specs",
     "_resolve_control_specification",
     "_score_full_vocabulary_population",
+    "_select_control_methods_list",
     "_significance_stars",
     "_summarize_shifted_conditions",
     "apply_multi_seed_control_selection",

@@ -2089,8 +2089,8 @@ def _ensure_enriched_multi_seed_summary(
     summary: Mapping[str, Any],
     *,
     base_dir: Path | str | None = None,
-    control_method: str | None = None,
-    control_metric: str | None = None,
+    control_method: str | Sequence[str] | None = None,
+    control_metric: str | Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Ensure a multi-seed summary has full aggregates and apply explicit control method/metric selection."""
     payload = dict(summary)
@@ -2104,59 +2104,124 @@ def _ensure_enriched_multi_seed_summary(
 
     is_multi_stage = bool(payload.get("stages_aggregate"))
     needs_reaggregation = False
+    bdir = Path(str(base_dir)) if base_dir is not None else None
+    split_l = str(payload.get("split", "test")).lower()
+
     if not is_multi_stage:
         if (
-            "negative_control_methods_aggregate" not in payload
+            "negative_controls_by_method" not in payload
+            or "negative_control_methods_aggregate" not in payload
+            or "common_mode_subtraction_aggregate" not in payload
+            or "subspace_debiasing_aggregate" not in payload
             or "linguistic_breakdown_aggregate" not in payload
             or "per_subject_summary_aggregate" not in payload
         ):
             needs_reaggregation = True
+        elif bdir is not None and bdir.is_dir():
+            cms_enabled = bool((payload.get("common_mode_subtraction_aggregate") or {}).get("enabled"))
+            sub_enabled = bool((payload.get("subspace_debiasing_aggregate") or {}).get("enabled"))
+            if not cms_enabled and list(bdir.glob(f"seed-*/exploratory/common_mode_subtraction_{split_l}.json")):
+                needs_reaggregation = True
+            if not sub_enabled and (
+                list(bdir.glob(f"seed-*/exploratory/subspace_coherence_debiasing_{split_l}.json"))
+                or list(bdir.glob(f"seed-*/exploratory/subspace_encoded_cache_{split_l}.pt"))
+            ):
+                needs_reaggregation = True
     else:
         stages_agg = payload.get("stages_aggregate") or {}
         if isinstance(stages_agg, Mapping):
             for st_blk in stages_agg.values():
-                if isinstance(st_blk, Mapping) and "negative_control_methods_aggregate" not in st_blk:
+                if isinstance(st_blk, Mapping) and (
+                    "negative_controls_by_method" not in st_blk
+                    or "negative_control_methods_aggregate" not in st_blk
+                ):
                     needs_reaggregation = True
                     break
 
     if needs_reaggregation:
         seed_results = list(payload.get("seed_results") or [])
-        if not seed_results and base_dir is not None:
-            bdir = Path(str(base_dir))
-            split_l = str(payload.get("split", "test")).lower()
+        if not seed_results and bdir is not None and bdir.is_dir():
             seeds_l = list(payload.get("seeds") or [])
             fname = (
                 f"multi_stage_evaluation_{split_l}.json"
                 if is_multi_stage
                 else f"evaluation_{split_l}.json"
             )
-            loaded_seeds: list[dict[str, Any]] = []
+            candidate_seed_dirs: list[tuple[int, Path]] = []
+            seen_dirs: set[Path] = set()
             for sd in seeds_l:
-                cand_dirs = [bdir / f"seed-{int(sd):03d}", bdir / f"seed-{int(sd)}"]
-                for cdir in cand_dirs:
-                    f_cand = cdir / fname
-                    if f_cand.is_file():
+                for cdir in (bdir / f"seed-{int(sd):03d}", bdir / f"seed-{int(sd)}"):
+                    if cdir.is_dir() and cdir.resolve() not in seen_dirs:
+                        seen_dirs.add(cdir.resolve())
+                        candidate_seed_dirs.append((int(sd), cdir))
+            for cdir in sorted(bdir.glob("seed-*")):
+                if cdir.is_dir() and cdir.resolve() not in seen_dirs:
+                    tail = cdir.name.split("seed-", 1)[-1]
+                    if tail.isdigit():
+                        seen_dirs.add(cdir.resolve())
+                        candidate_seed_dirs.append((int(tail), cdir))
+
+            loaded_seeds: list[dict[str, Any]] = []
+            for sd_num, cdir in candidate_seed_dirs:
+                # Auto-upgrade legacy per-seed exploratory JSONs from .pt cache if present
+                pt_cand = cdir / "exploratory" / f"subspace_encoded_cache_{split_l}.pt"
+                sub_json_cand = cdir / "exploratory" / f"subspace_coherence_debiasing_{split_l}.json"
+                if pt_cand.is_file():
+                    need_pt_upgrade = not sub_json_cand.is_file()
+                    if not need_pt_upgrade:
                         try:
-                            s_obj = json.loads(f_cand.read_text(encoding="utf-8"))
-                            if isinstance(s_obj, Mapping):
-                                s_dict = dict(s_obj)
-                                s_dict.setdefault("output_dir", str(cdir))
-                                s_dict.setdefault("seed", int(sd))
-                                loaded_seeds.append(s_dict)
-                                break
+                            sub_raw = json.loads(sub_json_cand.read_text(encoding="utf-8"))
+                            k0_blk = (
+                                ((sub_raw.get("raw_baseline") or {}).get("clean_reference") or {})
+                                .get("horizons", {})
+                                .get("K0", {})
+                            )
+                            if isinstance(k0_blk, Mapping) and k0_blk and "common_vocab50_macro_top1" not in k0_blk:
+                                need_pt_upgrade = True
+                        except Exception:
+                            need_pt_upgrade = True
+                    if need_pt_upgrade:
+                        try:
+                            from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+                                evaluate_cached_pt_subspace_loo,
+                            )
+
+                            evaluate_cached_pt_subspace_loo(
+                                pt_cand,
+                                output_dir=cdir,
+                                plot_figures=False,
+                                verbose=False,
+                            )
                         except Exception:
                             pass
+
+                f_cand = cdir / fname
+                if f_cand.is_file():
+                    try:
+                        s_obj = json.loads(f_cand.read_text(encoding="utf-8"))
+                        if isinstance(s_obj, Mapping):
+                            s_dict = dict(s_obj)
+                            s_dict.setdefault("output_dir", str(cdir))
+                            s_dict.setdefault("seed", int(sd_num))
+                            loaded_seeds.append(s_dict)
+                    except Exception:
+                        pass
             if loaded_seeds:
                 seed_results = loaded_seeds
         if seed_results:
             try:
                 re_agg = summarize_multi_seed_evaluation(
                     seed_results,
+                    output_dir=None,
+                    print_report=False,
                     control_method=control_method,
                     control_metric=control_metric,
                 )
                 if payload.get("output_dir") and not re_agg.get("output_dir"):
                     re_agg["output_dir"] = payload["output_dir"]
+                elif bdir is not None and not re_agg.get("output_dir"):
+                    re_agg["output_dir"] = str(bdir)
+                re_agg["_was_reaggregated"] = True
                 payload = re_agg
             except Exception:
                 pass
@@ -2173,16 +2238,30 @@ def _ensure_enriched_multi_seed_summary(
                 )
                 stages_agg[st_k] = st_copy
         payload["stages_aggregate"] = stages_agg
-        if control_method:
-            payload["control_method"] = str(control_method)
-        if control_metric:
-            payload["control_metric"] = str(control_metric)
+        if control_method is not None:
+            payload["control_method"] = (
+                ",".join(str(x) for x in control_method)
+                if isinstance(control_method, (list, tuple))
+                else str(control_method)
+            )
+        if control_metric is not None:
+            payload["control_metric"] = (
+                ",".join(str(x) for x in control_metric)
+                if isinstance(control_metric, (list, tuple))
+                else str(control_metric)
+            )
     else:
         nc_agg = payload.get("negative_controls_aggregate") or {}
         if (
             control_method is not None
             or control_metric is not None
-            or (isinstance(nc_agg, Mapping) and "active_control_method" not in nc_agg)
+            or (
+                isinstance(nc_agg, Mapping)
+                and (
+                    "active_control_method" not in nc_agg
+                    or "multi_method_metric_comparison" not in nc_agg
+                )
+            )
         ):
             apply_multi_seed_control_selection(
                 payload,
@@ -2191,6 +2270,163 @@ def _ensure_enriched_multi_seed_summary(
             )
 
     return payload
+
+
+def upgrade_and_refresh_saved_multi_seed_reports(
+    target_path: Path | str,
+    *,
+    split: str = "test",
+    control_method: str | Sequence[str] | None = None,
+    control_metric: str | Sequence[str] | None = None,
+    verbose: bool = False,
+    print_to_stdout: bool = True,
+) -> list[dict[str, Any]]:
+    """Zero-cost upgrade of legacy/saved multi-seed (or single-seed) evaluation JSONs from seed-*/evaluation_{split}.json & exploratory/*.json, refreshing .json, .txt, .md, and .csv."""
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        summarize_multi_seed_evaluation,
+    )
+
+    src = Path(str(target_path))
+    if not src.exists():
+        raise FileNotFoundError(f"Target path for multi-seed report upgrade not found: {src}")
+
+    split_l = str(split or "test").strip().lower()
+    stage_dirs: list[Path] = []
+    direct_json_files: list[Path] = []
+
+    if src.is_file():
+        if src.name.startswith("multi_seed_"):
+            direct_json_files.append(src)
+        elif src.name.startswith("evaluation_") and src.parent.name.startswith("seed-"):
+            stage_dirs.append(src.parent.parent)
+        else:
+            direct_json_files.append(src)
+    else:
+        # Check if src itself is a stage/subset directory containing multi_seed_*.json or seed-*/
+        if list(src.glob(f"multi_seed_*_{split_l}.json")) or list(src.glob(f"seed-*/evaluation_{split_l}.json")):
+            stage_dirs.append(src)
+        else:
+            found_dirs: set[Path] = set()
+            for ms_f in sorted(src.rglob(f"multi_seed_*_{split_l}.json")):
+                if ms_f.parent.resolve() not in found_dirs:
+                    found_dirs.add(ms_f.parent.resolve())
+                    stage_dirs.append(ms_f.parent)
+            for sd_f in sorted(src.rglob(f"seed-*/evaluation_{split_l}.json")):
+                st_dir = sd_f.parent.parent
+                if st_dir.resolve() not in found_dirs:
+                    found_dirs.add(st_dir.resolve())
+                    stage_dirs.append(st_dir)
+
+    upgraded_summaries: list[dict[str, Any]] = []
+
+    for jf in direct_json_files:
+        raw_obj = json.loads(jf.read_text(encoding="utf-8"))
+        if not isinstance(raw_obj, Mapping):
+            continue
+        enriched = _ensure_enriched_multi_seed_summary(
+            raw_obj,
+            base_dir=jf.parent,
+            control_method=control_method,
+            control_metric=control_metric,
+        )
+        enriched.pop("_was_reaggregated", None)
+        jf.write_text(json.dumps(enriched, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print_multi_seed_evaluation_report(
+            enriched,
+            verbose=verbose,
+            output_dir=jf.parent,
+            print_to_stdout=print_to_stdout,
+            control_method=control_method,
+            control_metric=control_metric,
+        )
+        upgraded_summaries.append(enriched)
+
+    for st_dir in stage_dirs:
+        ms_stage_file = st_dir / f"multi_seed_stage_comparison_{split_l}.json"
+        ms_eval_file = st_dir / f"multi_seed_evaluation_{split_l}.json"
+        if ms_stage_file.is_file():
+            raw_obj = json.loads(ms_stage_file.read_text(encoding="utf-8"))
+            enriched = _ensure_enriched_multi_seed_summary(
+                raw_obj,
+                base_dir=st_dir,
+                control_method=control_method,
+                control_metric=control_metric,
+            )
+            enriched.pop("_was_reaggregated", None)
+            ms_stage_file.write_text(
+                json.dumps(enriched, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            print_multi_seed_evaluation_report(
+                enriched,
+                verbose=verbose,
+                output_dir=st_dir,
+                print_to_stdout=print_to_stdout,
+                control_method=control_method,
+                control_metric=control_metric,
+            )
+            upgraded_summaries.append(enriched)
+            continue
+
+        if ms_eval_file.is_file():
+            raw_obj = json.loads(ms_eval_file.read_text(encoding="utf-8"))
+            enriched = _ensure_enriched_multi_seed_summary(
+                raw_obj,
+                base_dir=st_dir,
+                control_method=control_method,
+                control_metric=control_metric,
+            )
+            enriched.pop("_was_reaggregated", None)
+            ms_eval_file.write_text(
+                json.dumps(enriched, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            print_multi_seed_evaluation_report(
+                enriched,
+                verbose=verbose,
+                output_dir=st_dir,
+                print_to_stdout=print_to_stdout,
+                control_method=control_method,
+                control_metric=control_metric,
+            )
+            upgraded_summaries.append(enriched)
+            continue
+
+        # Fallback: build outer multi_seed_evaluation_{split}.json directly from seed-*/evaluation_{split}.json
+        seed_Payloads: list[dict[str, Any]] = []
+        for cdir in sorted(st_dir.glob("seed-*")):
+            f_cand = cdir / f"evaluation_{split_l}.json"
+            if f_cand.is_file():
+                try:
+                    s_obj = json.loads(f_cand.read_text(encoding="utf-8"))
+                    if isinstance(s_obj, Mapping):
+                        s_dict = dict(s_obj)
+                        s_dict.setdefault("output_dir", str(cdir))
+                        tail = cdir.name.split("seed-", 1)[-1]
+                        if tail.isdigit():
+                            s_dict.setdefault("seed", int(tail))
+                        seed_Payloads.append(s_dict)
+                except Exception:
+                    pass
+        if seed_Payloads:
+            built = summarize_multi_seed_evaluation(
+                seed_Payloads,
+                output_dir=st_dir,
+                print_report=False,
+                control_method=control_method,
+                control_metric=control_metric,
+            )
+            print_multi_seed_evaluation_report(
+                built,
+                verbose=verbose,
+                output_dir=st_dir,
+                print_to_stdout=print_to_stdout,
+                control_method=control_method,
+                control_metric=control_metric,
+            )
+            upgraded_summaries.append(built)
+
+    return upgraded_summaries
 
 
 def render_saved_evaluation_report(
@@ -2632,6 +2868,12 @@ def format_multi_seed_evaluation_report(
             act_method_lbl = str(nc_agg.get("active_control_method_label", "Raw Un-Debiased Temporal Shift (eta=0.0)"))
             prim_metric_key = str(nc_agg.get("primary_control_metric", "vocab50_macro_top10"))
             prim_metric_lbl = str(nc_agg.get("primary_control_metric_label", "50-Word Macro Top-10 (%)"))
+            sel_methods = list(nc_agg.get("selected_control_methods") or [act_method_key])
+            sel_metrics_info = list(nc_agg.get("selected_control_metrics") or [])
+            sel_metric_ids = [
+                str(m.get("metric_id")) for m in sel_metrics_info if isinstance(m, Mapping) and m.get("metric_id")
+            ] or [prim_metric_key]
+            mm_comp = list(nc_agg.get("multi_method_metric_comparison") or [])
             is_pct = bool(nc_agg.get("primary_metric_is_percentage", True))
             p_c = (
                 _fmt_mean_sd_pct(nc_agg.get("primary_metric_clean_mean"), nc_agg.get("primary_metric_clean_std"), 1)
@@ -2650,10 +2892,41 @@ def format_multi_seed_evaluation_report(
             ).strip()
 
             lines.append(f"\n[4] Negative Control Multi-Seed Summary ({split}, Mean ± SD)")
+            if len(sel_methods) > 1 or len(sel_metric_ids) > 1:
+                lines.append(f"Methods: {', '.join(sel_methods)}"[:REPORT_WIDTH])
+                lines.append(f"Metrics: {', '.join(sel_metric_ids)}"[:REPORT_WIDTH])
             lines.append(f"Method : [{act_method_key}] {act_method_lbl}"[:REPORT_WIDTH])
             lines.append(
                 f"Metric : [{prim_metric_key}] Clean {p_c} | Shft {p_s} | Gap {p_g}"[:REPORT_WIDTH]
             )
+            if len(mm_comp) > 1:
+                lines.append(rule)
+                lines.append(
+                    f"{'Method':<22} | {'Metric':<18} | {'Clean (0s)':>12} | {'Shft Mean':>12} | {'Net Gap':>12}"
+                )
+                lines.append(rule)
+                for mm_r in mm_comp:
+                    if not isinstance(mm_r, Mapping):
+                        continue
+                    m_id_s = str(mm_r.get("method_id", "-"))[:22]
+                    mt_id_s = str(mm_r.get("metric_id", "-"))[:18]
+                    m_is_pct = bool(mm_r.get("is_percentage", True))
+                    mc_s = (
+                        _fmt_mean_sd_pct(mm_r.get("clean_mean"), mm_r.get("clean_std"), 12)
+                        if m_is_pct
+                        else _fmt_mean_sd_num(mm_r.get("clean_mean"), mm_r.get("clean_std"), 12)
+                    )
+                    ms_s = (
+                        _fmt_mean_sd_pct(mm_r.get("shifted_mean"), mm_r.get("shifted_std"), 12)
+                        if m_is_pct
+                        else _fmt_mean_sd_num(mm_r.get("shifted_mean"), mm_r.get("shifted_std"), 12)
+                    )
+                    mg_s = (
+                        _fmt_signed_mean_sd_pct(mm_r.get("gap_mean"), mm_r.get("gap_std"), 12)
+                        if m_is_pct
+                        else _fmt_mean_sd_num(mm_r.get("gap_mean"), mm_r.get("gap_std"), 12, signed=True)
+                    )
+                    lines.append(f"{m_id_s:<22} | {mt_id_s:<18} | {mc_s} | {ms_s} | {mg_s}")
             lines.append(rule)
             lines.append(
                 f"{'Condition':<22} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
@@ -2969,7 +3242,7 @@ def format_multi_seed_evaluation_report(
             )
         lines.append(wide_rule)
 
-    # [4A] Negative Control Multi-Seed Summary (Active Method & Explicit Metric Spotlight)
+    # [4A] Negative Control Multi-Seed Summary (Active Method & Multi-Method × Multi-Metric Spotlight)
     if isinstance(nc_agg, Mapping) and nc_agg.get("enabled"):
         act_method_key = str(nc_agg.get("active_control_method", "raw"))
         act_method_lbl = str(
@@ -2979,6 +3252,13 @@ def format_multi_seed_evaluation_report(
         prim_metric_lbl = str(
             nc_agg.get("primary_control_metric_label", "50-Word Macro Top-10 (%)")
         )
+        sel_methods = list(nc_agg.get("selected_control_methods") or [act_method_key])
+        sel_metrics_info = list(nc_agg.get("selected_control_metrics") or [])
+        sel_metric_ids = [
+            str(m.get("metric_id")) for m in sel_metrics_info if isinstance(m, Mapping) and m.get("metric_id")
+        ] or [prim_metric_key]
+        mm_comp = list(nc_agg.get("multi_method_metric_comparison") or [])
+        sel_methods_agg = nc_agg.get("selected_methods_aggregates") or {}
         avail_methods = list(nc_agg.get("available_control_methods") or [])
         avail_str = ", ".join(avail_methods) if avail_methods else "raw"
         is_pct = bool(nc_agg.get("primary_metric_is_percentage", True))
@@ -3003,6 +3283,8 @@ def format_multi_seed_evaluation_report(
                 "",
                 f"[4A] Negative Control Multi-Seed Summary ({split}, Mean ± SD)",
                 wide_rule,
+                f"Selected Control Methods (--control-method): {', '.join(sel_methods)}",
+                f"Selected Control Metrics (--control-metric): {', '.join(sel_metric_ids)}",
                 f"Active Control Method  (--control-method): [{act_method_key}] {act_method_lbl}",
                 f"Primary Control Metric (--control-metric): [{prim_metric_key}] {prim_metric_lbl}",
                 f"Primary Metric Spotlight                 : Clean (0s) = {p_c} | Shifted Mean = {p_s} | Net Gap (Clean-Shifted) = {p_g}",
@@ -3010,6 +3292,41 @@ def format_multi_seed_evaluation_report(
                 wide_rule,
             ]
         )
+
+        if mm_comp:
+            lines.extend(
+                [
+                    "[4A-0] Multi-Method × Multi-Metric Negative Control Comparison (Mean ± SD Across Seeds):",
+                    (
+                        f"{'Control Method':<28} | {'Control Metric':<26} | {'Clean (0s)':>16} | "
+                        f"{'Shifted Mean':>16} | {'Net Gap (Clean-Shft)':>20}"
+                    ),
+                    wide_rule,
+                ]
+            )
+            for mm_r in mm_comp:
+                if not isinstance(mm_r, Mapping):
+                    continue
+                m_id_s = str(mm_r.get("method_id", "-"))[:28]
+                mt_id_s = str(mm_r.get("metric_id", "-"))[:26]
+                m_is_pct = bool(mm_r.get("is_percentage", True))
+                mc_s = (
+                    _fmt_mean_sd_pct(mm_r.get("clean_mean"), mm_r.get("clean_std"), 16)
+                    if m_is_pct
+                    else _fmt_mean_sd_num(mm_r.get("clean_mean"), mm_r.get("clean_std"), 16)
+                )
+                ms_s = (
+                    _fmt_mean_sd_pct(mm_r.get("shifted_mean"), mm_r.get("shifted_std"), 16)
+                    if m_is_pct
+                    else _fmt_mean_sd_num(mm_r.get("shifted_mean"), mm_r.get("shifted_std"), 16)
+                )
+                mg_s = (
+                    _fmt_signed_mean_sd_pct(mm_r.get("gap_mean"), mm_r.get("gap_std"), 20)
+                    if m_is_pct
+                    else _fmt_mean_sd_num(mm_r.get("gap_mean"), mm_r.get("gap_std"), 20, signed=True)
+                )
+                lines.append(f"{m_id_s:<28} | {mt_id_s:<26} | {mc_s} | {ms_s} | {mg_s}")
+            lines.append(wide_rule)
 
         prim_per_seed = list(nc_agg.get("primary_metric_per_seed") or [])
         if prim_per_seed:
@@ -3044,118 +3361,133 @@ def format_multi_seed_evaluation_report(
             )
             lines.append(wide_rule)
 
-        lines.extend(
-            [
-                "All 50-Word & Full-Vocabulary Retrieval Metrics Under Active Control Method:",
-                (
-                    f"{'Condition':<22} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
-                    f"{'50w SubjTop10':>13} | {'50w MacTop1':>12} | {'50w MicTop1':>12} | "
-                    f"{'50w MRR':>11} | {'Full MacTop10':>13} | {'Full MicTop10':>13} | {'Full MacTop1':>12}"
-                ),
-                wide_rule,
-                (
-                    f"{'Clean (0s)':<22} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_vocab50_macro_top10'), nc_agg.get('std_clean_vocab50_macro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_vocab50_micro_top10'), nc_agg.get('std_clean_vocab50_micro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_vocab50_subject_macro_top10'), nc_agg.get('std_clean_vocab50_subject_macro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_vocab50_macro_top1'), nc_agg.get('std_clean_vocab50_macro_top1'), 12)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_vocab50_micro_top1'), nc_agg.get('std_clean_vocab50_micro_top1'), 12)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_vocab50_mrr'), nc_agg.get('std_clean_vocab50_mrr'), 11)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_full_vocab_macro_top10'), nc_agg.get('std_clean_full_vocab_macro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_full_vocab_micro_top10'), nc_agg.get('std_clean_full_vocab_micro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_clean_full_vocab_macro_top1'), nc_agg.get('std_clean_full_vocab_macro_top1'), 12)}"
-                ),
-                (
-                    f"{'Shifted Mean':<22} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_vocab50_macro_top10'), nc_agg.get('std_shifted_vocab50_macro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_vocab50_micro_top10'), nc_agg.get('std_shifted_vocab50_micro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_vocab50_subject_macro_top10'), nc_agg.get('std_shifted_vocab50_subject_macro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_vocab50_macro_top1'), nc_agg.get('std_shifted_vocab50_macro_top1'), 12)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_vocab50_micro_top1'), nc_agg.get('std_shifted_vocab50_micro_top1'), 12)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_vocab50_mrr'), nc_agg.get('std_shifted_vocab50_mrr'), 11)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_full_vocab_macro_top10'), nc_agg.get('std_shifted_full_vocab_macro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_full_vocab_micro_top10'), nc_agg.get('std_shifted_full_vocab_micro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(nc_agg.get('mean_shifted_full_vocab_macro_top1'), nc_agg.get('std_shifted_full_vocab_macro_top1'), 12)}"
-                ),
-                (
-                    f"{'Net Gap (Clean-Shft)':<22} | "
-                    f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_vocab50_macro_top10'), nc_agg.get('std_gap_vocab50_macro_top10'), 13)} | "
-                    f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_vocab50_micro_top10'), nc_agg.get('std_gap_vocab50_micro_top10'), 13)} | "
-                    f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_vocab50_subject_macro_top10'), nc_agg.get('std_gap_vocab50_subject_macro_top10'), 13)} | "
-                    f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_vocab50_macro_top1'), nc_agg.get('std_gap_vocab50_macro_top1'), 12)} | "
-                    f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_vocab50_micro_top1'), nc_agg.get('std_gap_vocab50_micro_top1'), 12)} | "
-                    f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_vocab50_mrr'), nc_agg.get('std_gap_vocab50_mrr'), 11)} | "
-                    f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_full_vocab_macro_top10'), nc_agg.get('std_gap_full_vocab_macro_top10'), 13)} | "
-                    f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_full_vocab_micro_top10'), nc_agg.get('std_gap_full_vocab_micro_top10'), 13)} | "
-                    f"{_fmt_signed_mean_sd_pct(nc_agg.get('mean_gap_full_vocab_macro_top1'), nc_agg.get('std_gap_full_vocab_macro_top1'), 12)}"
-                ),
-                wide_rule,
-            ]
-        )
+        methods_to_render: list[tuple[str, Mapping[str, Any]]] = []
+        if isinstance(sel_methods_agg, Mapping) and sel_methods_agg:
+            for m_id in sel_methods:
+                if m_id in sel_methods_agg and isinstance(sel_methods_agg[m_id], Mapping):
+                    methods_to_render.append((m_id, sel_methods_agg[m_id]))
+        if not methods_to_render:
+            methods_to_render.append((act_method_key, nc_agg))
 
-        # Per-Shift Conditions under Active Control Method
-        per_shifts = list(nc_agg.get("per_shift_aggregate") or [])
-        if per_shifts:
-            lines.append("Per-Shift Conditions Across Seeds (Mean ± SD):")
-            for sh_row in per_shifts:
-                sh_lbl = f"  {sh_row.get('condition', 'shift')} ({sh_row.get('shift_seconds', 0):.0f}s)"[:22]
-                lines.append(
-                    f"{sh_lbl:<22} | "
-                    f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_macro_top10'), sh_row.get('std_vocab50_macro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_micro_top10'), sh_row.get('std_vocab50_micro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_subject_macro_top10'), sh_row.get('std_vocab50_subject_macro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_macro_top1'), sh_row.get('std_vocab50_macro_top1'), 12)} | "
-                    f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_micro_top1'), sh_row.get('std_vocab50_micro_top1'), 12)} | "
-                    f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_mrr'), sh_row.get('std_vocab50_mrr'), 11)} | "
-                    f"{_fmt_mean_sd_pct(sh_row.get('mean_full_vocab_macro_top10'), sh_row.get('std_full_vocab_macro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(sh_row.get('mean_full_vocab_micro_top10'), sh_row.get('std_full_vocab_micro_top10'), 13)} | "
-                    f"{_fmt_mean_sd_pct(sh_row.get('mean_full_vocab_macro_top1'), sh_row.get('std_full_vocab_macro_top1'), 12)}"
-                )
-            lines.append(wide_rule)
-
-        # Rolling Revision Horizons under Active Control Method
-        nc_hz = nc_agg.get("horizons_aggregate") or {}
-        if isinstance(nc_hz, Mapping) and nc_hz:
+        for m_idx, (m_id, m_agg) in enumerate(methods_to_render, start=1):
+            m_lbl = str(m_agg.get("active_control_method_label", m_agg.get("label", m_id)))
+            hdr_prefix = (
+                f"[4A-{m_idx}] Selected Control Method [{m_id}] ({m_lbl}) — "
+                if len(methods_to_render) > 1
+                else ""
+            )
             lines.extend(
                 [
-                    "Rolling Revision Horizons Under Active Negative Control (K0 / K1 / K2 Clean vs Shifted vs Net Gap):",
+                    f"{hdr_prefix}All 50-Word & Full-Vocabulary Retrieval Metrics Under Control Method [{m_id}]:",
                     (
-                        f"{'Horizon':<10} | {'Condition':<12} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
-                        f"{'50w MacTop1':>12} | {'50w MRR':>11} | {'Full MacTop10':>13} | {'Full MicTop10':>13} | {'Full MacTop1':>12}"
+                        f"{'Condition':<22} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
+                        f"{'50w SubjTop10':>13} | {'50w MacTop1':>12} | {'50w MicTop1':>12} | "
+                        f"{'50w MRR':>11} | {'Full MacTop10':>13} | {'Full MicTop10':>13} | {'Full MacTop1':>12}"
+                    ),
+                    wide_rule,
+                    (
+                        f"{'Clean (0s)':<22} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_macro_top10'), m_agg.get('std_clean_vocab50_macro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_micro_top10'), m_agg.get('std_clean_vocab50_micro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_subject_macro_top10'), m_agg.get('std_clean_vocab50_subject_macro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_macro_top1'), m_agg.get('std_clean_vocab50_macro_top1'), 12)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_micro_top1'), m_agg.get('std_clean_vocab50_micro_top1'), 12)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_mrr'), m_agg.get('std_clean_vocab50_mrr'), 11)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_full_vocab_macro_top10'), m_agg.get('std_clean_full_vocab_macro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_full_vocab_micro_top10'), m_agg.get('std_clean_full_vocab_micro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_full_vocab_macro_top1'), m_agg.get('std_clean_full_vocab_macro_top1'), 12)}"
+                    ),
+                    (
+                        f"{'Shifted Mean':<22} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_macro_top10'), m_agg.get('std_shifted_vocab50_macro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_micro_top10'), m_agg.get('std_shifted_vocab50_micro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_subject_macro_top10'), m_agg.get('std_shifted_vocab50_subject_macro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_macro_top1'), m_agg.get('std_shifted_vocab50_macro_top1'), 12)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_micro_top1'), m_agg.get('std_shifted_vocab50_micro_top1'), 12)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_mrr'), m_agg.get('std_shifted_vocab50_mrr'), 11)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_full_vocab_macro_top10'), m_agg.get('std_shifted_full_vocab_macro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_full_vocab_micro_top10'), m_agg.get('std_shifted_full_vocab_micro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_full_vocab_macro_top1'), m_agg.get('std_shifted_full_vocab_macro_top1'), 12)}"
+                    ),
+                    (
+                        f"{'Net Gap (Clean-Shft)':<22} | "
+                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_macro_top10'), m_agg.get('std_gap_vocab50_macro_top10'), 13)} | "
+                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_micro_top10'), m_agg.get('std_gap_vocab50_micro_top10'), 13)} | "
+                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_subject_macro_top10'), m_agg.get('std_gap_vocab50_subject_macro_top10'), 13)} | "
+                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_macro_top1'), m_agg.get('std_gap_vocab50_macro_top1'), 12)} | "
+                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_micro_top1'), m_agg.get('std_gap_vocab50_micro_top1'), 12)} | "
+                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_mrr'), m_agg.get('std_gap_vocab50_mrr'), 11)} | "
+                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_full_vocab_macro_top10'), m_agg.get('std_gap_full_vocab_macro_top10'), 13)} | "
+                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_full_vocab_micro_top10'), m_agg.get('std_gap_full_vocab_micro_top10'), 13)} | "
+                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_full_vocab_macro_top1'), m_agg.get('std_gap_full_vocab_macro_top1'), 12)}"
                     ),
                     wide_rule,
                 ]
             )
-            for hk in ("K0", "K1", "K2", "K1_minus_K0", "K2_minus_K0"):
-                if hk not in nc_hz:
-                    continue
-                h_entry = nc_hz[hk]
-                is_delta_h = "minus" in hk
-                h_disp = hk.replace("_minus_", "-")
-                for cond_k, cond_lbl in (
-                    ("clean", "Clean (0s)"),
-                    ("shifted_mean", "Shifted Mean"),
-                    ("net_gap", "Net Gap"),
-                ):
-                    cb = h_entry.get(cond_k) or {}
-                    if not isinstance(cb, Mapping) or not cb:
-                        continue
-                    fmt_fn = (
-                        _fmt_signed_mean_sd_pct
-                        if (is_delta_h or cond_k == "net_gap")
-                        else _fmt_mean_sd_pct
-                    )
+
+            # Per-Shift Conditions under this Control Method
+            per_shifts = list(m_agg.get("per_shift_aggregate") or m_agg.get("shifted_per_condition") or [])
+            if per_shifts:
+                lines.append(f"Per-Shift Conditions Across Seeds Under [{m_id}] (Mean ± SD):")
+                for sh_row in per_shifts:
+                    sh_lbl = f"  {sh_row.get('condition', 'shift')} ({sh_row.get('shift_seconds', 0):.0f}s)"[:22]
                     lines.append(
-                        f"{h_disp:<10} | {cond_lbl:<12} | "
-                        f"{fmt_fn(cb.get('mean_common_vocab50_macro_top10'), cb.get('std_common_vocab50_macro_top10'), 13)} | "
-                        f"{fmt_fn(cb.get('mean_common_vocab50_micro_top10'), cb.get('std_common_vocab50_micro_top10'), 13)} | "
-                        f"{fmt_fn(cb.get('mean_common_vocab50_macro_top1'), cb.get('std_common_vocab50_macro_top1'), 12)} | "
-                        f"{fmt_fn(cb.get('mean_common_vocab50_mrr'), cb.get('std_common_vocab50_mrr'), 11)} | "
-                        f"{fmt_fn(cb.get('mean_common_full_vocab_macro_top10'), cb.get('std_common_full_vocab_macro_top10'), 13)} | "
-                        f"{fmt_fn(cb.get('mean_common_full_vocab_micro_top10'), cb.get('std_common_full_vocab_micro_top10'), 13)} | "
-                        f"{fmt_fn(cb.get('mean_common_full_vocab_macro_top1'), cb.get('std_common_full_vocab_macro_top1'), 12)}"
+                        f"{sh_lbl:<22} | "
+                        f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_macro_top10'), sh_row.get('std_vocab50_macro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_micro_top10'), sh_row.get('std_vocab50_micro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_subject_macro_top10'), sh_row.get('std_vocab50_subject_macro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_macro_top1'), sh_row.get('std_vocab50_macro_top1'), 12)} | "
+                        f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_micro_top1'), sh_row.get('std_vocab50_micro_top1'), 12)} | "
+                        f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_mrr'), sh_row.get('std_vocab50_mrr'), 11)} | "
+                        f"{_fmt_mean_sd_pct(sh_row.get('mean_full_vocab_macro_top10'), sh_row.get('std_full_vocab_macro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(sh_row.get('mean_full_vocab_micro_top10'), sh_row.get('std_full_vocab_micro_top10'), 13)} | "
+                        f"{_fmt_mean_sd_pct(sh_row.get('mean_full_vocab_macro_top1'), sh_row.get('std_full_vocab_macro_top1'), 12)}"
                     )
-            lines.append(wide_rule)
+                lines.append(wide_rule)
+
+            # Rolling Revision Horizons under this Control Method
+            nc_hz = m_agg.get("horizons_aggregate") or {}
+            if isinstance(nc_hz, Mapping) and nc_hz:
+                lines.extend(
+                    [
+                        f"Rolling Revision Horizons Under [{m_id}] (K0 / K1 / K2 Clean vs Shifted vs Net Gap):",
+                        (
+                            f"{'Horizon':<10} | {'Condition':<12} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
+                            f"{'50w MacTop1':>12} | {'50w MRR':>11} | {'Full MacTop10':>13} | {'Full MicTop10':>13} | {'Full MacTop1':>12}"
+                        ),
+                        wide_rule,
+                    ]
+                )
+                for hk in ("K0", "K1", "K2", "K1_minus_K0", "K2_minus_K0"):
+                    if hk not in nc_hz:
+                        continue
+                    h_entry = nc_hz[hk]
+                    is_delta_h = "minus" in hk
+                    h_disp = hk.replace("_minus_", "-")
+                    for cond_k, cond_lbl in (
+                        ("clean", "Clean (0s)"),
+                        ("shifted_mean", "Shifted Mean"),
+                        ("net_gap", "Net Gap"),
+                    ):
+                        cb = h_entry.get(cond_k) or {}
+                        if not isinstance(cb, Mapping) or not cb:
+                            continue
+                        fmt_fn = (
+                            _fmt_signed_mean_sd_pct
+                            if (is_delta_h or cond_k == "net_gap")
+                            else _fmt_mean_sd_pct
+                        )
+                        lines.append(
+                            f"{h_disp:<10} | {cond_lbl:<12} | "
+                            f"{fmt_fn(cb.get('mean_common_vocab50_macro_top10'), cb.get('std_common_vocab50_macro_top10'), 13)} | "
+                            f"{fmt_fn(cb.get('mean_common_vocab50_micro_top10'), cb.get('std_common_vocab50_micro_top10'), 13)} | "
+                            f"{fmt_fn(cb.get('mean_common_vocab50_macro_top1'), cb.get('std_common_vocab50_macro_top1'), 12)} | "
+                            f"{fmt_fn(cb.get('mean_common_vocab50_mrr'), cb.get('std_common_vocab50_mrr'), 11)} | "
+                            f"{fmt_fn(cb.get('mean_common_full_vocab_macro_top10'), cb.get('std_common_full_vocab_macro_top10'), 13)} | "
+                            f"{fmt_fn(cb.get('mean_common_full_vocab_micro_top10'), cb.get('std_common_full_vocab_micro_top10'), 13)} | "
+                            f"{fmt_fn(cb.get('mean_common_full_vocab_macro_top1'), cb.get('std_common_full_vocab_macro_top1'), 12)}"
+                        )
+                lines.append(wide_rule)
 
     # [4B] Exploratory LOO Common-Mode Subtraction (CMS) Multi-Seed Sweep
     cms_agg = summary.get("common_mode_subtraction_aggregate") or {}
@@ -3311,8 +3643,8 @@ def print_multi_seed_evaluation_report(
     verbose: bool = False,
     output_dir: Path | str | None = None,
     print_to_stdout: bool = True,
-    control_method: str | None = None,
-    control_metric: str | None = None,
+    control_method: str | Sequence[str] | None = None,
+    control_metric: str | Sequence[str] | None = None,
 ) -> str:
     """Save full multi-seed .txt/.md/.csv reports to output_dir and print compact/verbose report."""
     target_dir = output_dir or summary.get("output_dir")
@@ -3322,6 +3654,7 @@ def print_multi_seed_evaluation_report(
         control_method=control_method,
         control_metric=control_metric,
     )
+    was_reaggregated = bool(enriched.pop("_was_reaggregated", False))
     split = str(enriched.get("split", "val")).lower()
     is_multi_stage = bool(enriched.get("stages_aggregate"))
     report_filename = (
@@ -3329,11 +3662,25 @@ def print_multi_seed_evaluation_report(
         if is_multi_stage
         else f"multi_seed_evaluation_report_{split}.txt"
     )
+    json_filename = (
+        f"multi_seed_stage_comparison_{split}.json"
+        if is_multi_stage
+        else f"multi_seed_evaluation_{split}.json"
+    )
     if target_dir:
         out_dir_path = Path(str(target_dir))
         out_path = out_dir_path / report_filename
+        json_path = out_dir_path / json_filename
         try:
             out_dir_path.mkdir(parents=True, exist_ok=True)
+            if (
+                json_path.is_file()
+                and (was_reaggregated or control_method is not None or control_metric is not None)
+            ):
+                json_path.write_text(
+                    json.dumps(enriched, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
             full_txt = format_multi_seed_evaluation_report(
                 enriched,
                 verbose=True,
@@ -3372,4 +3719,5 @@ __all__ = [
     "print_subspace_coherence_debiasing_report",
     "print_word_evaluation_report",
     "render_saved_evaluation_report",
+    "upgrade_and_refresh_saved_multi_seed_reports",
 ]

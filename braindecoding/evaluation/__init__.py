@@ -43,6 +43,7 @@ _LAZY_SYMBOL_MODULES: dict[str, str] = {
     "replot_from_saved_json": "evaluation_figures",
     "run_evaluation_workflow": "word_retrieval_evaluation",
     "summarize_multi_seed_evaluation": "word_retrieval_evaluation",
+    "upgrade_and_refresh_saved_multi_seed_reports": "evaluation_reporting",
 }
 
 

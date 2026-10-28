@@ -730,12 +730,12 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--control-method",
         default=None,
-        help="显式指定多种子负对照汇总使用的控制/去偏方法（如 auto、raw、zero_signal、cms:eta=0.8、cms:best_gap、subspace:K=8,eta=0.8,gate=off、subspace:best_gap、subspace:best_clean）",
+        help="显式指定多种子负对照汇总使用的一个或多个控制/去偏方法（支持逗号或分号分隔多方法及 all，如 raw,cms:eta=0.8,subspace:K=8,eta=0.8,gate=off,subspace:best_clean）",
     )
     parser.add_argument(
         "--control-metric",
         default=None,
-        help="显式指定多种子负对照汇总重点高亮与选优使用的主评估指标（如 vocab50_macro_top10、vocab50_macro_top1、full_vocab_macro_top10、full_vocab_macro_top1、k2_vocab50_macro_top10、k2_full_vocab_macro_top10）",
+        help="显式指定多种子负对照汇总同时输出与选优的一个或多个主评估指标（支持逗号分隔多指标及 all，如 vocab50_macro_top10,vocab50_macro_top1,full_vocab_macro_top10,k2_vocab50_macro_top10）",
     )
     parser.add_argument(
         "--max-eval-rows",
@@ -1100,12 +1100,12 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument(
         "--control-method",
         default=None,
-        help="显式指定多种子负对照报表使用的控制/去偏方法（如 auto、raw、cms:eta=0.8、subspace:K=8,eta=0.8,gate=off、subspace:best_gap）",
+        help="显式指定多种子负对照报表使用的一个或多个控制/去偏方法（支持逗号或分号分隔多方法及 all，如 raw,cms:eta=0.8,subspace:K=8,eta=0.8,gate=off,subspace:best_gap）",
     )
     report.add_argument(
         "--control-metric",
         default=None,
-        help="显式指定多种子负对照报表重点高亮与选优的主评估指标（如 vocab50_macro_top10、vocab50_macro_top1、full_vocab_macro_top10、k2_vocab50_macro_top10）",
+        help="显式指定多种子负对照报表同时输出与选优的一个或多个主评估指标（支持逗号分隔多指标及 all，如 vocab50_macro_top10,vocab50_macro_top1,full_vocab_macro_top10,k2_vocab50_macro_top10）",
     )
     report.add_argument("--write", action="store_true")
     return parser
