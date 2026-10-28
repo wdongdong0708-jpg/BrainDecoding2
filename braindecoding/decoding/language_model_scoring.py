@@ -348,7 +348,7 @@ class CachedVocabularyLanguageScorer:
         }
         self.max_batch_size = int(self.settings.get("score_batch_size", 256))
         self.max_prefix_cache_states = int(
-            self.settings.get("max_prefix_cache_states", 512)
+            self.settings.get("max_prefix_cache_states", 1024)
         )
         self.max_transition_cache_prefixes = int(
             self.settings.get("max_transition_cache_prefixes", 200000)
@@ -358,6 +358,9 @@ class CachedVocabularyLanguageScorer:
         self._prefix_state_cache: OrderedDict[tuple[str, ...], PrefixCacheState] = (
             OrderedDict()
         )
+        self._prefix_first_token_lps_cache: OrderedDict[
+            tuple[str, ...], np.ndarray
+        ] = OrderedDict()
         self._transition_score_cache: OrderedDict[
             tuple[str, ...], dict[int, float]
         ] = OrderedDict()
@@ -369,6 +372,34 @@ class CachedVocabularyLanguageScorer:
             "transition_cache_hits": 0,
             "prefix_cache_hits": 0,
         }
+
+    def _cache_first_token_lps(
+        self, words: tuple[str, ...], first_lps: np.ndarray
+    ) -> None:
+        self._prefix_first_token_lps_cache[words] = first_lps
+        self._prefix_first_token_lps_cache.move_to_end(words)
+        while (
+            len(self._prefix_first_token_lps_cache)
+            > self.max_transition_cache_prefixes
+        ):
+            self._prefix_first_token_lps_cache.popitem(last=False)
+
+    def _extract_and_cache_first_token_lps(
+        self, state: PrefixCacheState
+    ) -> np.ndarray:
+        cached = self._prefix_first_token_lps_cache.get(state.words)
+        if cached is not None:
+            self._prefix_first_token_lps_cache.move_to_end(state.words)
+            return cached
+        first_tok_ids = self.first_token_device_map[state.context_kind]
+        first_lps = (
+            state.last_log_probs.index_select(0, first_tok_ids)
+            .detach()
+            .cpu()
+            .numpy()
+        )
+        self._cache_first_token_lps(state.words, first_lps)
+        return first_lps
 
     def _cache_prefix_state(self, state: PrefixCacheState) -> None:
         if state.past_key_values is None or state.last_log_probs is None:
@@ -417,6 +448,7 @@ class CachedVocabularyLanguageScorer:
             token_length=len(self.prompt_ids),
             context_kind=init_ctx,
         )
+        self._extract_and_cache_first_token_lps(self._prompt_cache_state)
         self._cache_prefix_state(self._prompt_cache_state)
         return self._prompt_cache_state
 
@@ -549,10 +581,22 @@ class CachedVocabularyLanguageScorer:
             batch_rows = torch.arange(bsz, dtype=torch.long, device=self.device)
             last_logits = outputs.logits[batch_rows, last_indices, :].float()
             last_lps = F_nn.log_softmax(last_logits, dim=-1)
+            first_lps_gpu = torch.stack(
+                [
+                    last_lps[row_i].index_select(
+                        0,
+                        self.first_token_device_map[st_group[0].context_kind],
+                    )
+                    for row_i, (_, _, _, st_group) in enumerate(batch)
+                ],
+                dim=0,
+            )
+            first_lps_batch_np = first_lps_gpu.detach().cpu().numpy()
 
-            for row_i, (_, _, _, st_group) in enumerate(batch):
+            for row_i, (words_key, _, _, st_group) in enumerate(batch):
                 kv_i = unstacked_kvs[row_i]
                 lp_i = last_lps[row_i]
+                self._cache_first_token_lps(words_key, first_lps_batch_np[row_i])
                 for target_st in st_group:
                     target_st.past_key_values = kv_i
                     target_st.last_log_probs = lp_i
@@ -569,8 +613,8 @@ class CachedVocabularyLanguageScorer:
         """利用前缀 KV-Cache 与转移概率缓存批量增量计算每个前缀束下各候选词的精确对数概率 log P_LM(w | u)。
 
         - 已缓存转移 `(u, w)`：直接从 `_transition_score_cache` O(1) 命中返回，0 次 GPU 调用；
-        - 单 Token 候选词：直接从 `prefix_state.last_log_probs[t_0]` O(1) 索引取值，0 次 Forward；
-        - 多 Token 候选词：首 Token 从 `last_log_probs[t_0]` 取值，剩余 1~3 个后缀 Token
+        - 单 Token 候选词：优先从 CPU `_prefix_first_token_lps_cache` O(1) 索引取值，即使 GPU KV-Cache 已被淘汰也无需重跑 Forward，且消除逐词 `.item()` 同步；
+        - 多 Token 候选词：首 Token 从 `_prefix_first_token_lps_cache` 取值，剩余 1~3 个后缀 Token
           按唯一 `(u, tok_ids[:-1])` 前缀去重合并后通过左填充 KV-Cache 组装为单次 Batch 增量 Forward。
         """
         if len(prefix_states) != len(candidate_word_indices):
@@ -591,8 +635,16 @@ class CachedVocabularyLanguageScorer:
             if not cand_indices:
                 continue
             cached_bucket = self._transition_score_cache.get(state.words)
+            first_lps_np = self._prefix_first_token_lps_cache.get(state.words)
+            if first_lps_np is not None:
+                self._prefix_first_token_lps_cache.move_to_end(state.words)
+            is_single_arr = self.vocab_table.is_single_token_by_context[
+                state.context_kind
+            ]
             out_row = results[beam_idx]
             beam_misses: list[tuple[int, int]] = []
+            needs_kv_on_gpu = first_lps_np is None
+
             if cached_bucket is not None:
                 self._transition_score_cache.move_to_end(state.words)
                 for pos, word_idx in enumerate(cand_indices):
@@ -600,22 +652,45 @@ class CachedVocabularyLanguageScorer:
                     if w_id in cached_bucket:
                         out_row[pos] = cached_bucket[w_id]
                         self.stats["transition_cache_hits"] += 1
+                    elif first_lps_np is not None and is_single_arr[w_id]:
+                        lp = float(first_lps_np[w_id])
+                        out_row[pos] = lp
+                        cached_bucket[w_id] = lp
+                        self.stats["single_token_lookups"] += 1
                     else:
                         beam_misses.append((pos, w_id))
+                        if not is_single_arr[w_id]:
+                            needs_kv_on_gpu = True
+            elif first_lps_np is not None:
+                bucket = self._get_transition_bucket(state.words)
+                for pos, word_idx in enumerate(cand_indices):
+                    w_id = int(word_idx)
+                    if w_id in bucket:
+                        out_row[pos] = bucket[w_id]
+                        self.stats["transition_cache_hits"] += 1
+                    elif is_single_arr[w_id]:
+                        lp = float(first_lps_np[w_id])
+                        out_row[pos] = lp
+                        bucket[w_id] = lp
+                        self.stats["single_token_lookups"] += 1
+                    else:
+                        beam_misses.append((pos, w_id))
+                        needs_kv_on_gpu = True
             else:
-                beam_misses = [
-                    (pos, int(word_idx))
-                    for pos, word_idx in enumerate(cand_indices)
-                ]
+                for pos, word_idx in enumerate(cand_indices):
+                    w_id = int(word_idx)
+                    beam_misses.append((pos, w_id))
 
             if beam_misses:
                 missing_by_beam[beam_idx] = beam_misses
-                states_to_materialize.append(state)
+                if needs_kv_on_gpu:
+                    states_to_materialize.append(state)
 
         if not missing_by_beam:
             return results
 
-        self._ensure_states_materialized(states_to_materialize)
+        if states_to_materialize:
+            self._ensure_states_materialized(states_to_materialize)
 
         # 按 (state.words, step_tokens=tok_ids[:-1]) 合并多 Token 候选请求：
         # 共享相同首/中间子词（如法语省音 ' 或相同词干）的多个候选词只需跑 1 次 Forward！
@@ -632,7 +707,7 @@ class CachedVocabularyLanguageScorer:
         for beam_idx, beam_misses in missing_by_beam.items():
             state = prefix_states[beam_idx]
             ctx = state.context_kind
-            log_probs_0 = state.last_log_probs
+            first_lps_np = self._extract_and_cache_first_token_lps(state)
             tokens_list = self.vocab_table.tokens_by_context[ctx]
             out_row = results[beam_idx]
             bucket = self._get_transition_bucket(state.words)
@@ -643,7 +718,7 @@ class CachedVocabularyLanguageScorer:
                     self.stats["transition_cache_hits"] += 1
                     continue
                 token_ids = tokens_list[word_idx]
-                first_lp = float(log_probs_0[token_ids[0]].item())
+                first_lp = float(first_lps_np[word_idx])
                 out_row[pos] = first_lp
                 if len(token_ids) == 1:
                     bucket[word_idx] = first_lp

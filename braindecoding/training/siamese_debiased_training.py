@@ -79,12 +79,90 @@ def _parse_bool_env(name: str) -> bool | None:
     raise ValueError(f"环境变量 {name}={raw!r} 不是合法布尔值。")
 
 
+def parse_horizon_schedule(
+    raw_schedule: str | Iterable[float | int | str] | dict | None,
+    *,
+    horizons: Iterable[int] = (0, 1, 2),
+) -> dict[int, float] | None:
+    """将按视野状态 (K0, K1, K2) 的梯度配置解析为 `{0: v0, 1: v1, 2: v2}` 字典。
+
+    支持格式：
+    - `None` 或空字符串 -> `None`
+    - 序列 `[0.3, 0.8, 0.8]` 或逗号字符串 `"0.3,0.8,0.8"`
+    - 键值字符串 `"K0=0.3,K1=0.8,K2=0.8"` 或 `"0:0.3,1:0.8,2:0.8"`
+    - 字典 `{0: 0.3, 1: 0.8, 2: 0.8}` 或 `{"K0": 0.3, "K1": 0.8, "K2": 0.8}`
+    """
+    if raw_schedule is None:
+        return None
+    sorted_h = [int(h) for h in horizons]
+    if not sorted_h:
+        sorted_h = [0, 1, 2]
+
+    if isinstance(raw_schedule, dict):
+        if not raw_schedule:
+            return None
+        parsed_map: dict[int, float] = {}
+        for k, v in raw_schedule.items():
+            if v is None:
+                continue
+            k_str = str(k).strip().upper()
+            if k_str.startswith("K"):
+                k_str = k_str[1:]
+            parsed_map[int(k_str)] = float(v)
+        if not parsed_map:
+            return None
+        fallback = next(iter(parsed_map.values()))
+        return {h: float(parsed_map.get(h, fallback)) for h in sorted_h}
+
+    if isinstance(raw_schedule, (int, float)):
+        val = float(raw_schedule)
+        return {h: val for h in sorted_h}
+
+    if isinstance(raw_schedule, str):
+        s = raw_schedule.strip()
+        if not s:
+            return None
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+    else:
+        parts = [str(p).strip() for p in raw_schedule if str(p).strip()]
+
+    if not parts:
+        return None
+
+    if any("=" in p or ":" in p for p in parts):
+        kv_map: dict[int, float] = {}
+        for p in parts:
+            sep = "=" if "=" in p else ":"
+            k_raw, v_raw = p.split(sep, 1)
+            k_clean = k_raw.strip().upper()
+            if k_clean.startswith("K"):
+                k_clean = k_clean[1:]
+            kv_map[int(k_clean)] = float(v_raw.strip())
+        fallback = next(iter(kv_map.values()))
+        return {h: float(kv_map.get(h, fallback)) for h in sorted_h}
+
+    vals = [float(p) for p in parts]
+    out: dict[int, float] = {}
+    for idx, h in enumerate(sorted_h):
+        if idx < len(vals):
+            out[h] = vals[idx]
+        elif h < len(vals):
+            out[h] = vals[h]
+        else:
+            out[h] = vals[-1]
+    return out
+
+
 def resolve_siamese_debiased_config(
     cfg: dict,
     *,
     siamese_debiased: bool | None = None,
     eta_train: float | None = None,
     lambda_null: float | None = None,
+    lambda_delta_null: float | None = None,
+    eta_delta_train: float | None = None,
+    eta_train_by_horizon: str | Iterable[float | int | str] | dict | None = None,
+    lambda_null_by_horizon: str | Iterable[float | int | str] | dict | None = None,
     shifts_per_step: int | None = None,
     shift_seconds: str | Iterable[float | int | str] | None = None,
     preextract_frozen_cnn: bool | None = None,
@@ -101,6 +179,10 @@ def resolve_siamese_debiased_config(
     env_preextract = _parse_bool_env("BRAINDECODING_PREEXTRACT_FROZEN_CNN")
     env_eta = os.environ.get("BRAINDECODING_ETA_TRAIN", "").strip()
     env_lambda = os.environ.get("BRAINDECODING_LAMBDA_NULL", "").strip()
+    env_lambda_delta = os.environ.get("BRAINDECODING_LAMBDA_DELTA_NULL", "").strip()
+    env_eta_delta = os.environ.get("BRAINDECODING_ETA_DELTA_TRAIN", "").strip()
+    env_eta_hz = os.environ.get("BRAINDECODING_ETA_TRAIN_BY_HORIZON", "").strip()
+    env_lambda_hz = os.environ.get("BRAINDECODING_LAMBDA_NULL_BY_HORIZON", "").strip()
     env_m = os.environ.get("BRAINDECODING_SHIFTS_PER_STEP", "").strip()
     env_shifts = os.environ.get("BRAINDECODING_TRAIN_SHIFT_SECONDS", "").strip()
 
@@ -113,8 +195,21 @@ def resolve_siamese_debiased_config(
             else bool(raw_block.get("enabled", False))
         )
     )
-    if eta_train is not None or env_eta or lambda_null is not None or env_lambda:
-        # 显式传入了 eta_train 或 lambda_null 时自动启用孪生去偏
+    if (
+        eta_train is not None
+        or env_eta
+        or lambda_null is not None
+        or env_lambda
+        or lambda_delta_null is not None
+        or env_lambda_delta
+        or eta_delta_train is not None
+        or env_eta_delta
+        or eta_train_by_horizon is not None
+        or env_eta_hz
+        or lambda_null_by_horizon is not None
+        or env_lambda_hz
+    ):
+        # 显式传入了孪生去偏超参时自动启用孪生去偏
         if siamese_debiased is not False and env_enabled is not False:
             enabled = True
 
@@ -130,6 +225,42 @@ def resolve_siamese_debiased_config(
             float(env_lambda)
             if env_lambda
             else raw_block.get("lambda_null", 10.0)
+        )
+    )
+    resolved_lambda_delta = float(
+        lambda_delta_null
+        if lambda_delta_null is not None
+        else (
+            float(env_lambda_delta)
+            if env_lambda_delta
+            else raw_block.get("lambda_delta_null", 0.0)
+        )
+    )
+    resolved_eta_delta = float(
+        eta_delta_train
+        if eta_delta_train is not None
+        else (
+            float(env_eta_delta)
+            if env_eta_delta
+            else raw_block.get("eta_delta_train", 0.0)
+        )
+    )
+    resolved_eta_by_horizon = parse_horizon_schedule(
+        eta_train_by_horizon
+        if eta_train_by_horizon is not None
+        else (
+            env_eta_hz
+            if env_eta_hz
+            else raw_block.get("eta_train_by_horizon")
+        )
+    )
+    resolved_lambda_by_horizon = parse_horizon_schedule(
+        lambda_null_by_horizon
+        if lambda_null_by_horizon is not None
+        else (
+            env_lambda_hz
+            if env_lambda_hz
+            else raw_block.get("lambda_null_by_horizon")
         )
     )
     resolved_shifts = _parse_shift_list(
@@ -178,6 +309,10 @@ def resolve_siamese_debiased_config(
         "enabled": bool(enabled),
         "eta_train": resolved_eta,
         "lambda_null": resolved_lambda,
+        "lambda_delta_null": resolved_lambda_delta,
+        "eta_delta_train": resolved_eta_delta,
+        "eta_train_by_horizon": resolved_eta_by_horizon,
+        "lambda_null_by_horizon": resolved_lambda_by_horizon,
         "shift_seconds": resolved_shifts,
         "shifts_per_step": int(resolved_m),
         "synchronize_dropout_rng": sync_rng,
@@ -258,6 +393,64 @@ def compute_norm_damped_debiased_embedding(
 
     # 3. 【核心修复】直通梯度阻尼：前向数值 100% 不变，反向梯度乘回 u_norm.detach()
     # 精确抵消 L2 归一化分母产生的 1 / ||u||_2 梯度爆炸，将等效学习率死死锁在设定值！
+    y_tilde = y_tilde.detach() + u_norm.detach() * (y_tilde - y_tilde.detach())
+    return y_tilde
+
+
+def compute_norm_damped_rolling_debiased_embedding(
+    y_clean: torch.Tensor,
+    y_shift_mean: torch.Tensor,
+    revision_delays: torch.Tensor,
+    *,
+    eta_train: float = 0.8,
+    eta_train_by_horizon: dict[int, float] | None = None,
+    eta_delta_train: float = 0.0,
+    y_shift_k0_aligned: torch.Tensor | None = None,
+    has_k0_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """针对 Revision 多状态滚动更新 (K0 -> K1 -> K2) 的雅可比模长阻尼重缩放去偏表征：
+
+    支持：
+    1. 状态非对称去偏梯度 (Mechanism 2): 按视野 r in {0, 1, 2} 施加独立扣除权重 eta_train^(r)
+    2. 跨状态回修增量共模扣除 (Mechanism 1): 对 r in {1, 2} 额外扣除未来词窗引入的错位跳变
+       eta_delta_train * sg(y_bar^(r, shift) - y_bar^(0, shift))
+    3. 保持 1:1 雅可比模长阻尼直通缩放 (Norm-Damped Detach)。
+    """
+    if eta_train_by_horizon is None and abs(float(eta_delta_train)) <= 1e-12:
+        return compute_norm_damped_debiased_embedding(
+            y_clean, y_shift_mean, eta_train
+        )
+
+    y_shift_det = y_shift_mean.detach()
+    if eta_train_by_horizon is not None:
+        eta_vec = torch.full(
+            (y_clean.shape[0], 1),
+            float(eta_train),
+            device=y_clean.device,
+            dtype=y_clean.dtype,
+        )
+        for h_k, h_eta in eta_train_by_horizon.items():
+            eta_vec[revision_delays == int(h_k)] = float(h_eta)
+        u = y_clean - eta_vec * y_shift_det
+    else:
+        u = y_clean - float(eta_train) * y_shift_det
+
+    if (
+        abs(float(eta_delta_train)) > 1e-12
+        and y_shift_k0_aligned is not None
+    ):
+        delta_shift = y_shift_det - y_shift_k0_aligned.detach()
+        future_mask = revision_delays > 0
+        if has_k0_mask is not None:
+            future_mask = future_mask & has_k0_mask
+        u = u - (
+            float(eta_delta_train)
+            * future_mask.to(dtype=u.dtype).unsqueeze(-1)
+            * delta_shift
+        )
+
+    u_norm = u.norm(p=2, dim=-1, keepdim=True).clamp(min=1e-6)
+    y_tilde = u / u_norm
     y_tilde = y_tilde.detach() + u_norm.detach() * (y_tilde - y_tilde.detach())
     return y_tilde
 
@@ -2096,6 +2289,8 @@ def train_one_epoch_siamese_debiased(
     siamese_enabled = bool(siamese_config.get("enabled", False))
     eta_train = float(siamese_config.get("eta_train", 0.8))
     lambda_null = float(siamese_config.get("lambda_null", 10.0))
+    lambda_delta_null = float(siamese_config.get("lambda_delta_null", 0.0))
+    eta_delta_train = float(siamese_config.get("eta_delta_train", 0.0))
     shifts_per_step = int(siamese_config.get("shifts_per_step", 2))
     sync_rng = bool(siamese_config.get("synchronize_dropout_rng", True))
 
@@ -2113,10 +2308,6 @@ def train_one_epoch_siamese_debiased(
     if siamese_enabled and not shift_keys:
         raise ValueError(
             "启用 siamese_debiased 时 preextracted_cache 缺少 train_shifted_z。"
-        )
-    if siamese_enabled and lambda_null > 0.0 and centered_vocab_bank is None:
-        raise ValueError(
-            "启用错位零化正则 (lambda_null > 0) 时必须提供 centered_vocab_bank。"
         )
 
     train_meta = preextracted_cache["train_meta"]
@@ -2141,6 +2332,26 @@ def train_one_epoch_siamese_debiased(
         if prefix_revision_enabled
         else ()
     )
+    eta_train_by_horizon = parse_horizon_schedule(
+        siamese_config.get("eta_train_by_horizon"),
+        horizons=horizons or (0, 1, 2),
+    )
+    lambda_null_by_horizon = parse_horizon_schedule(
+        siamese_config.get("lambda_null_by_horizon"),
+        horizons=horizons or (0, 1, 2),
+    )
+    has_positive_lambda_null = (lambda_null > 0.0) or (
+        lambda_null_by_horizon is not None
+        and any(v > 0.0 for v in lambda_null_by_horizon.values())
+    )
+    if (
+        siamese_enabled
+        and (has_positive_lambda_null or lambda_delta_null > 0.0)
+        and centered_vocab_bank is None
+    ):
+        raise ValueError(
+            "启用错位零化正则 (lambda_null > 0 或 lambda_delta_null > 0) 时必须提供 centered_vocab_bank。"
+        )
     use_static_rev_table = (
         prefix_revision_enabled
         and static_rev_table is not None
@@ -2156,6 +2367,7 @@ def train_one_epoch_siamese_debiased(
     total_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
     siglip_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
     null_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
+    delta_null_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
     sample_count = 0
     optimizer_updates = 0
     batches_seen = 0
@@ -2169,12 +2381,23 @@ def train_one_epoch_siamese_debiased(
     delay_null_sums_gpu = {
         d: torch.zeros((), device=device, dtype=torch.float64) for d in horizons
     }
+    delay_delta_null_sums_gpu = {
+        d: torch.zeros((), device=device, dtype=torch.float64) for d in horizons
+    }
     delay_batches_gpu = {
         d: torch.zeros((), device=device, dtype=torch.long) for d in horizons
     }
     max_horizon = max(horizons, default=0)
     compute_null_grad = bool(
-        siamese_enabled and lambda_null > 0.0 and centered_vocab_bank is not None
+        siamese_enabled
+        and (has_positive_lambda_null or lambda_delta_null > 0.0)
+        and centered_vocab_bank is not None
+    )
+    need_k0_anchor = bool(
+        siamese_enabled
+        and prefix_revision_enabled
+        and (lambda_delta_null > 0.0 or abs(eta_delta_train) > 1e-12)
+        and 0 in horizons
     )
 
     current_lr = (
@@ -2293,19 +2516,65 @@ def train_one_epoch_siamese_debiased(
                         padded_plan=padded_plan,
                         compute_null_grad=compute_null_grad,
                     )
+                    y_shift_k0_by_row: torch.Tensor | None = None
+                    has_k0_by_row: torch.Tensor | None = None
+                    if (
+                        need_k0_anchor
+                        and y_shift_mean is not None
+                        and y_shift_mean.numel() > 0
+                    ):
+                        k0_mask = revision_delays == 0
+                        y_shift_k0_by_row = y_shift_mean.new_zeros(
+                            (bs_len, y_shift_mean.shape[-1])
+                        )
+                        has_k0_by_row = torch.zeros(
+                            bs_len, device=device, dtype=torch.bool
+                        )
+                        if int(k0_mask.sum()) > 0:
+                            k0_rows = revision_rows[k0_mask]
+                            y_shift_k0_by_row[k0_rows] = y_shift_mean[
+                                k0_mask
+                            ].detach()
+                            has_k0_by_row[k0_rows] = True
+
                     if siamese_enabled and y_shift_mean is not None:
                         # 雅可比模长阻尼重缩放（Norm-Damped Detach）：
                         # 1) 对 y_shift_mean 施加 .detach() 阻断主损失向错位分支回传 -eta_train 反向梯度；
-                        # 2) 用 u_norm.detach() 1:1 约分抵消 L2 归一化分母 1 / ||u||_2 造成的等效学习率放大。
-                        y_tilde = compute_norm_damped_debiased_embedding(
-                            y_clean, y_shift_mean, eta_train
-                        )
+                        # 2) 用 u_norm.detach() 1:1 约分抵消 L2 归一化分母 1 / ||u||_2 造成的等效学习率放大；
+                        # 3) 可选支持状态非对称去偏梯度 (eta_train_by_horizon) 与跨状态回修增量共模扣除 (eta_delta_train)。
+                        if (
+                            eta_train_by_horizon is not None
+                            or abs(eta_delta_train) > 1e-12
+                        ):
+                            y_tilde = compute_norm_damped_rolling_debiased_embedding(
+                                y_clean,
+                                y_shift_mean,
+                                revision_delays,
+                                eta_train=eta_train,
+                                eta_train_by_horizon=eta_train_by_horizon,
+                                eta_delta_train=eta_delta_train,
+                                y_shift_k0_aligned=(
+                                    y_shift_k0_by_row[revision_rows]
+                                    if y_shift_k0_by_row is not None
+                                    else None
+                                ),
+                                has_k0_mask=(
+                                    has_k0_by_row[revision_rows]
+                                    if has_k0_by_row is not None
+                                    else None
+                                ),
+                            )
+                        else:
+                            y_tilde = compute_norm_damped_debiased_embedding(
+                                y_clean, y_shift_mean, eta_train
+                            )
                     else:
                         y_tilde = y_clean
 
                     horizon_total_losses = []
                     horizon_siglip_losses = []
                     horizon_null_losses = []
+                    horizon_delta_null_losses = []
                     skip_empty_check = (
                         use_static_rev_table and bs_len > max_horizon * 2
                     )
@@ -2314,21 +2583,59 @@ def train_one_epoch_siamese_debiased(
                         d_count_t = delay_mask.sum()
                         if not skip_empty_check and int(d_count_t) == 0:
                             continue
+                        d_rows = revision_rows[delay_mask]
                         d_siglip = loss_module.forward_rectangular(
                             y_tilde[delay_mask],
                             batch_targets,
-                            revision_rows[delay_mask],
+                            d_rows,
                         )
-                        if compute_null_grad and y_shift_mean is not None:
+                        lam_null_d = (
+                            float(lambda_null_by_horizon.get(delay, lambda_null))
+                            if lambda_null_by_horizon is not None
+                            else lambda_null
+                        )
+                        if (
+                            compute_null_grad
+                            and y_shift_mean is not None
+                            and lam_null_d > 0.0
+                        ):
                             d_null = compute_shift_null_loss(
                                 y_shift_mean[delay_mask], centered_vocab_bank
                             )
                         else:
                             d_null = d_siglip * 0.0
-                        d_total = d_siglip + lambda_null * d_null
+
+                        if (
+                            compute_null_grad
+                            and y_shift_mean is not None
+                            and delay > 0
+                            and lambda_delta_null > 0.0
+                            and y_shift_k0_by_row is not None
+                            and has_k0_by_row is not None
+                        ):
+                            valid_k0 = has_k0_by_row[d_rows]
+                            if int(valid_k0.sum()) > 0:
+                                delta_shift_r = (
+                                    y_shift_mean[delay_mask][valid_k0]
+                                    - y_shift_k0_by_row[d_rows][valid_k0]
+                                )
+                                d_delta_null = compute_shift_null_loss(
+                                    delta_shift_r, centered_vocab_bank
+                                )
+                            else:
+                                d_delta_null = d_siglip * 0.0
+                        else:
+                            d_delta_null = d_siglip * 0.0
+
+                        d_total = (
+                            d_siglip
+                            + lam_null_d * d_null
+                            + lambda_delta_null * d_delta_null
+                        )
                         horizon_total_losses.append(d_total)
                         horizon_siglip_losses.append(d_siglip.detach())
                         horizon_null_losses.append(d_null.detach())
+                        horizon_delta_null_losses.append(d_delta_null.detach())
 
                         delay_counts_gpu[delay] += d_count_t
                         delay_siglip_sums_gpu[delay] += d_siglip.detach().to(
@@ -2337,6 +2644,9 @@ def train_one_epoch_siamese_debiased(
                         delay_null_sums_gpu[delay] += d_null.detach().to(
                             dtype=torch.float64
                         )
+                        delay_delta_null_sums_gpu[
+                            delay
+                        ] += d_delta_null.detach().to(dtype=torch.float64)
                         delay_batches_gpu[delay] += 1
 
                     if not horizon_total_losses:
@@ -2344,6 +2654,9 @@ def train_one_epoch_siamese_debiased(
                     loss = torch.stack(horizon_total_losses).mean()
                     batch_siglip_t = torch.stack(horizon_siglip_losses).mean()
                     batch_null_t = torch.stack(horizon_null_losses).mean()
+                    batch_delta_null_t = torch.stack(
+                        horizon_delta_null_losses
+                    ).mean()
                     revision_supervision_count += int(y_tilde.shape[0])
                 else:
                     y_clean, y_shift_mean = forward_context_from_preextracted(
@@ -2371,6 +2684,7 @@ def train_one_epoch_siamese_debiased(
                     loss = d_siglip + lambda_null * d_null
                     batch_siglip_t = d_siglip.detach()
                     batch_null_t = d_null.detach()
+                    batch_delta_null_t = d_siglip.detach() * 0.0
 
             scaler.scale(loss).backward()
             max_grad_norm = float(training_config.get("max_grad_norm", 0.0))
@@ -2395,6 +2709,9 @@ def train_one_epoch_siamese_debiased(
             total_loss_gpu += loss.detach().to(dtype=torch.float64) * bs_len
             siglip_loss_gpu += batch_siglip_t.to(dtype=torch.float64) * bs_len
             null_loss_gpu += batch_null_t.to(dtype=torch.float64) * bs_len
+            delta_null_loss_gpu += (
+                batch_delta_null_t.to(dtype=torch.float64) * bs_len
+            )
             sample_count += bs_len
 
             if pbar is not None and (
@@ -2421,6 +2738,7 @@ def train_one_epoch_siamese_debiased(
     total_loss_sum = float(total_loss_gpu.item())
     siglip_loss_sum = float(siglip_loss_gpu.item())
     null_loss_sum = float(null_loss_gpu.item())
+    delta_null_loss_sum = float(delta_null_loss_gpu.item())
     revision_delay_counts = {
         d: int(delay_counts_gpu[d].item()) for d in horizons
     }
@@ -2430,6 +2748,9 @@ def train_one_epoch_siamese_debiased(
     revision_delay_null_sums = {
         d: float(delay_null_sums_gpu[d].item()) for d in horizons
     }
+    revision_delay_delta_null_sums = {
+        d: float(delay_delta_null_sums_gpu[d].item()) for d in horizons
+    }
     revision_delay_batches = {
         d: int(delay_batches_gpu[d].item()) for d in horizons
     }
@@ -2438,11 +2759,21 @@ def train_one_epoch_siamese_debiased(
         "siamese_debiased_enabled": siamese_enabled,
         "eta_train": eta_train if siamese_enabled else 0.0,
         "lambda_null": lambda_null if siamese_enabled else 0.0,
+        "lambda_delta_null": lambda_delta_null if siamese_enabled else 0.0,
+        "eta_delta_train": eta_delta_train if siamese_enabled else 0.0,
+        "eta_train_by_horizon": eta_train_by_horizon if siamese_enabled else None,
+        "lambda_null_by_horizon": lambda_null_by_horizon if siamese_enabled else None,
         "shifts_per_step": shifts_per_step if siamese_enabled else 0,
         "word_loss": float(siglip_loss_sum / denom),
         "siglip_loss": float(siglip_loss_sum / denom),
         "shift_null_loss": float(null_loss_sum / denom),
+        "shift_delta_null_loss": float(delta_null_loss_sum / denom),
         "weighted_shift_null_loss": float((lambda_null * null_loss_sum) / denom)
+        if siamese_enabled
+        else 0.0,
+        "weighted_shift_delta_null_loss": float(
+            (lambda_delta_null * delta_null_loss_sum) / denom
+        )
         if siamese_enabled
         else 0.0,
         "total_loss": float(total_loss_sum / denom),
@@ -2465,6 +2796,14 @@ def train_one_epoch_siamese_debiased(
                     else None
                 )
                 for d in revision_delay_null_sums
+            },
+            "delay_mean_delta_null_losses": {
+                d: (
+                    revision_delay_delta_null_sums[d] / revision_delay_batches[d]
+                    if revision_delay_batches[d]
+                    else None
+                )
+                for d in revision_delay_delta_null_sums
             },
         },
     }

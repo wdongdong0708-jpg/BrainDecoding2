@@ -830,6 +830,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 encoding="utf-8",
             )
 
+        any_main_decoded = False
         for baseline_mode in ("LM-Only", "S0", "K0", "K1"):
             if baseline_mode != "LM-Only" and baseline_mode not in available_clean:
                 continue
@@ -848,7 +849,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 show_progress=show_progress,
                 progress_desc=f"S3 Decode [{baseline_mode} | {args.split}]",
             )
-            _persist_decoding_bundle()
+            any_main_decoded = True
 
         if "S3_clean" not in decoded_bundles:
             decoded_bundles["S3_clean"] = decode_dataset_segments(
@@ -864,7 +865,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 show_progress=show_progress,
                 progress_desc=f"S3 Decode [Rolling-K2 | {args.split}]",
             )
-            _persist_decoding_bundle()
+            any_main_decoded = True
 
         if has_real_context and "F" in available_clean and "F" not in decoded_bundles:
             decoded_bundles["F"] = decode_dataset_segments(
@@ -880,7 +881,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 show_progress=show_progress,
                 progress_desc=f"S3 Decode [Full-Context | {args.split}]",
             )
-            _persist_decoding_bundle()
+            any_main_decoded = True
 
         if "K0" in available_shifted and "K0_shifted_neg75s" not in decoded_bundles:
             decoded_bundles["K0_shifted_neg75s"] = decode_dataset_segments(
@@ -896,7 +897,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 show_progress=show_progress,
                 progress_desc=f"S3 Decode [K0_shifted_-75s | {args.split}]",
             )
-            _persist_decoding_bundle()
+            any_main_decoded = True
 
         if "S3_shifted_neg75s" not in decoded_bundles:
             decoded_bundles["S3_shifted_neg75s"] = decode_dataset_segments(
@@ -909,9 +910,13 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 candidate_top_k=top_k,
                 segment_batch_size=segment_batch_size,
                 max_segments=args.max_segments,
+                include_screen_history=False,
                 show_progress=show_progress,
                 progress_desc=f"S3 Decode [K2_shifted_-75s | {args.split}]",
             )
+            any_main_decoded = True
+
+        if any_main_decoded:
             _persist_decoding_bundle()
 
         if len(vocab_sizes) > 0:
@@ -946,7 +951,6 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 scale_key: str, scale_bundle: dict[str, Any]
             ) -> None:
                 vocabulary_scaling_bundles[scale_key] = scale_bundle
-                _persist_decoding_bundle()
 
             vocabulary_scaling_bundles = run_vocabulary_scaling_sweep(
                 split_payload,
@@ -963,6 +967,8 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 show_progress=show_progress,
                 on_scale_completed=_on_scale_completed,
             )
+            if needs_truncated_decode:
+                _persist_decoding_bundle()
 
         unique_subjects = {
             str(seg.get("subject_id", "default"))
@@ -1001,7 +1007,6 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 max_segments=args.max_segments,
                 show_progress=show_progress,
             )
-            _persist_decoding_bundle()
 
         _persist_decoding_bundle()
         results_summary["decoding_path"] = str(decoding_path)
@@ -1013,35 +1018,54 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             format_sequence_decoding_report,
         )
 
-        bundle = json.loads(decoding_path.read_text(encoding="utf-8"))
-        language = str(
-            bundle.get("language", "fr" if args.dataset == "pallier2025" else "zh")
-        )
-        if "state_hyperparameters" not in results_summary and bundle.get(
-            "state_hyperparameters"
-        ):
-            results_summary["state_hyperparameters"] = bundle[
+        if args.step == "all" and "decoded_bundles" in locals():
+            language = "fr" if args.dataset == "pallier2025" else "zh"
+            decoded_bundles_map = dict(decoded_bundles)
+            if f_mode != "F_full_context":
+                decoded_bundles_map.pop("F", None)
+                decoded_bundles_map.pop("F_clean", None)
+                decoded_bundles_map.pop("F_local", None)
+            multi_subject_bundles_map = dict(multi_subject_bundles)
+            vocabulary_scaling_bundles_map = dict(vocabulary_scaling_bundles)
+            if "state_hyperparameters" not in results_summary:
+                results_summary["state_hyperparameters"] = target_states_hp
+        else:
+            bundle = json.loads(decoding_path.read_text(encoding="utf-8"))
+            language = str(
+                bundle.get(
+                    "language", "fr" if args.dataset == "pallier2025" else "zh"
+                )
+            )
+            if "state_hyperparameters" not in results_summary and bundle.get(
                 "state_hyperparameters"
-            ]
-        if "f_condition_mode" not in results_summary and bundle.get(
-            "f_condition_mode"
-        ):
-            results_summary["f_condition_mode"] = bundle["f_condition_mode"]
-        if "decoding_path" not in results_summary:
-            results_summary["decoding_path"] = str(decoding_path)
-        decoded_bundles_map = dict(bundle.get("decoded_bundles") or {})
-        if bundle.get("f_condition_mode") != "F_full_context":
-            decoded_bundles_map.pop("F", None)
-            decoded_bundles_map.pop("F_clean", None)
-            decoded_bundles_map.pop("F_local", None)
-        multi_subject_bundles_map = dict(bundle.get("multi_subject_bundles") or {})
-        vocabulary_scaling_bundles_map = dict(
-            bundle.get("vocabulary_scaling_bundles") or {}
-        )
+            ):
+                results_summary["state_hyperparameters"] = bundle[
+                    "state_hyperparameters"
+                ]
+            if "f_condition_mode" not in results_summary and bundle.get(
+                "f_condition_mode"
+            ):
+                results_summary["f_condition_mode"] = bundle["f_condition_mode"]
+            if "decoding_path" not in results_summary:
+                results_summary["decoding_path"] = str(decoding_path)
+            decoded_bundles_map = dict(bundle.get("decoded_bundles") or {})
+            if bundle.get("f_condition_mode") != "F_full_context":
+                decoded_bundles_map.pop("F", None)
+                decoded_bundles_map.pop("F_clean", None)
+                decoded_bundles_map.pop("F_local", None)
+            multi_subject_bundles_map = dict(
+                bundle.get("multi_subject_bundles") or {}
+            )
+            vocabulary_scaling_bundles_map = dict(
+                bundle.get("vocabulary_scaling_bundles") or {}
+            )
 
         word_embedding_map = None
-        if not bool(args.no_bertscore) and export_path.is_file():
-            split_payload = load_neural_vocabulary_scores(export_path)
+        if not bool(args.no_bertscore) and (
+            "split_payload" in locals() or export_path.is_file()
+        ):
+            if "split_payload" not in locals():
+                split_payload = load_neural_vocabulary_scores(export_path)
             vocab_list = list(split_payload.get("vocabulary") or [])
             vocab_embs = split_payload.get("vocabulary_embeddings")
             if vocab_embs is not None and len(vocab_list) == len(vocab_embs):

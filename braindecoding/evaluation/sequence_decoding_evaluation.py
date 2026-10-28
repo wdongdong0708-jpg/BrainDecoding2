@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -125,6 +125,63 @@ def _character_ngram_vector(word: str, dim: int = 256) -> np.ndarray:
     return vec / max(norm, 1e-8)
 
 
+_EDIT_DISTANCE_PAIR_CACHE: dict[
+    tuple[bool, tuple[str, ...], tuple[str, ...]], tuple[int, int, int, int]
+] = {}
+_BERTSCORE_PAIR_CACHE: dict[
+    tuple[int, tuple[str, ...], tuple[str, ...]], tuple[float, float, float]
+] = {}
+_MAX_EVAL_PAIR_CACHE_ENTRIES = 250000
+
+
+def _cached_edit_distance_pair(
+    ref_tuple: tuple[str, ...],
+    pred_tuple: tuple[str, ...],
+    *,
+    chinese: bool,
+) -> tuple[int, int, int, int]:
+    """计算并缓存单句段 (ref_tuple, pred_tuple) 的词级与字符级 Levenshtein 编辑距离。"""
+    key = (chinese, ref_tuple, pred_tuple)
+    cached = _EDIT_DISTANCE_PAIR_CACHE.get(key)
+    if cached is not None:
+        return cached
+    if ref_tuple == pred_tuple:
+        ref_text = "".join(ref_tuple) if chinese else " ".join(ref_tuple)
+        res = (0, len(ref_tuple), 0, len(ref_text))
+    else:
+        word_err = int(edit_distance(ref_tuple, pred_tuple))
+        ref_text = "".join(ref_tuple) if chinese else " ".join(ref_tuple)
+        pred_text = "".join(pred_tuple) if chinese else " ".join(pred_tuple)
+        char_err = int(edit_distance(ref_text, pred_text))
+        res = (word_err, len(ref_tuple), char_err, len(ref_text))
+    if len(_EDIT_DISTANCE_PAIR_CACHE) >= _MAX_EVAL_PAIR_CACHE_ENTRIES:
+        _EDIT_DISTANCE_PAIR_CACHE.clear()
+    _EDIT_DISTANCE_PAIR_CACHE[key] = res
+    return res
+
+
+def _unigram_overlap_and_bleu1(
+    ref_counts: Counter[str],
+    ref_len: int,
+    pred_seq: Sequence[str],
+) -> tuple[int, float]:
+    """零编辑距离开销计算单句段 unigram 截断重合数与 sentence BLEU-1。"""
+    pred_len = len(pred_seq)
+    if pred_len == 0:
+        return 0, 0.0
+    pred_counts = Counter(pred_seq)
+    overlap = sum(
+        min(count, pred_counts[word]) for word, count in ref_counts.items()
+    )
+    precision = overlap / pred_len
+    brevity = (
+        1.0
+        if pred_len >= ref_len
+        else float(min(1.0, np.exp(1.0 - ref_len / pred_len)))
+    )
+    return int(overlap), float(precision * brevity)
+
+
 def compute_bertscore_percentage(
     references: Sequence[Sequence[str]],
     predictions: Sequence[Sequence[str]],
@@ -145,6 +202,7 @@ def compute_bertscore_percentage(
 
     norm_cache: dict[str, np.ndarray] = {}
     fallback_dim = 256
+    map_id = id(word_embedding_map) if word_embedding_map is not None else 0
     if word_embedding_map:
         first_val = next(iter(word_embedding_map.values()))
         if isinstance(first_val, torch.Tensor):
@@ -175,16 +233,25 @@ def compute_bertscore_percentage(
     f1_list: list[float] = []
 
     for ref_seq, pred_seq in zip(references, predictions):
-        ref_words = [str(w) for w in ref_seq]
-        pred_words = [str(w) for w in pred_seq]
-        if not ref_words or not pred_words:
+        ref_tuple = tuple(str(w) for w in ref_seq)
+        pred_tuple = tuple(str(w) for w in pred_seq)
+        if not ref_tuple or not pred_tuple:
             p_list.append(0.0)
             r_list.append(0.0)
             f1_list.append(0.0)
             continue
 
-        ref_mat = np.stack([_get_vec(w) for w in ref_words], axis=0)
-        pred_mat = np.stack([_get_vec(w) for w in pred_words], axis=0)
+        pair_key = (map_id, ref_tuple, pred_tuple)
+        cached_bs = _BERTSCORE_PAIR_CACHE.get(pair_key)
+        if cached_bs is not None:
+            p_pct, r_pct, f1_pct = cached_bs
+            p_list.append(p_pct)
+            r_list.append(r_pct)
+            f1_list.append(f1_pct)
+            continue
+
+        ref_mat = np.stack([_get_vec(w) for w in ref_tuple], axis=0)
+        pred_mat = np.stack([_get_vec(w) for w in pred_tuple], axis=0)
         sim_matrix = np.clip(ref_mat @ pred_mat.T, -1.0, 1.0)
 
         recall = float(np.mean(np.max(sim_matrix, axis=1)))
@@ -194,9 +261,15 @@ def compute_bertscore_percentage(
         else:
             f1 = 0.0
 
-        p_list.append(precision * 100.0)
-        r_list.append(recall * 100.0)
-        f1_list.append(f1 * 100.0)
+        p_pct = precision * 100.0
+        r_pct = recall * 100.0
+        f1_pct = f1 * 100.0
+        if len(_BERTSCORE_PAIR_CACHE) >= _MAX_EVAL_PAIR_CACHE_ENTRIES:
+            _BERTSCORE_PAIR_CACHE.clear()
+        _BERTSCORE_PAIR_CACHE[pair_key] = (p_pct, r_pct, f1_pct)
+        p_list.append(p_pct)
+        r_list.append(r_pct)
+        f1_list.append(f1_pct)
 
     return {
         "bertscore_precision_pct": float(np.mean(p_list)),
@@ -231,8 +304,6 @@ def evaluate_six_dimensional_metrics(
         [str(w) for w in rec["predicted_words"]] for rec in segment_records
     ]
 
-    base = sentence_metrics(references, predictions, chinese=chinese)
-
     total_words = 0
     total_correct = 0
     total_top5_correct = 0
@@ -246,24 +317,47 @@ def evaluate_six_dimensional_metrics(
     oracle_correct = 0
     oracle_in_vocab_correct = 0
 
-    oracle_predictions: list[list[str]] = []
+    word_errors_sum = 0
+    char_errors_sum = 0
+    char_total_sum = 0
+    corpus_clipped_sum = 0
+    oracle_clipped_sum = 0
+    sentence_bleu1_all: list[float] = []
+    oracle_sentence_bleu1_all: list[float] = []
+
     per_subject_rows: dict[str, list[dict]] = defaultdict(list)
 
     for rec, ref_seq, pred_seq in zip(segment_records, references, predictions):
-        if len(ref_seq) != len(pred_seq):
+        seg_len = len(ref_seq)
+        if seg_len != len(pred_seq):
             raise ValueError(
-                f"参考词序列长度 ({len(ref_seq)}) 与预测词序列长度 ({len(pred_seq)}) 不一致。"
+                f"参考词序列长度 ({seg_len}) 与预测词序列长度 ({len(pred_seq)}) 不一致。"
             )
-        seg_m = sentence_metrics([ref_seq], [pred_seq], chinese=chinese)
-        in_vocab_mask = rec.get("in_vocabulary_mask") or [True] * len(ref_seq)
+        ref_tuple = tuple(ref_seq)
+        pred_tuple = tuple(pred_seq)
+        w_err, _, c_err, c_len = _cached_edit_distance_pair(
+            ref_tuple, pred_tuple, chinese=chinese
+        )
+        word_errors_sum += w_err
+        char_errors_sum += c_err
+        char_total_sum += c_len
+
+        ref_counts = Counter(ref_tuple)
+        seg_overlap, seg_bleu1 = _unigram_overlap_and_bleu1(
+            ref_counts, seg_len, pred_tuple
+        )
+        corpus_clipped_sum += seg_overlap
+        sentence_bleu1_all.append(seg_bleu1)
+
+        in_vocab_mask = rec.get("in_vocabulary_mask") or [True] * seg_len
         top5_per_pos = rec.get("top5_words_per_pos") or []
         beam_cands_raw = rec.get("beam_candidates") or []
 
-        # 确定 Top-B (Beam=5) Oracle 句段预测
+        # 确定 Top-B (Beam=5) Oracle 句段预测（直接用 O(L) unigram 重合度计算，零编辑距离开销）
         valid_beam_cands = [
             [str(w) for w in cand]
             for cand in beam_cands_raw
-            if isinstance(cand, (list, tuple)) and len(cand) == len(ref_seq)
+            if isinstance(cand, (list, tuple)) and len(cand) == seg_len
         ]
         if not valid_beam_cands:
             valid_beam_cands = [pred_seq]
@@ -272,31 +366,34 @@ def evaluate_six_dimensional_metrics(
 
         best_oracle_seq = pred_seq
         best_oracle_key = (-1.0, -1)
+        best_oracle_overlap = seg_overlap
+        best_oracle_bleu1 = seg_bleu1
         for cand_seq in valid_beam_cands:
             c_hits = sum(int(a == b) for a, b in zip(ref_seq, cand_seq))
-            c_bleu = (
-                float(
-                    sentence_metrics([ref_seq], [cand_seq], chinese=chinese)[
-                        "sentence_bleu1_mean"
-                    ]
+            if cand_seq == pred_seq:
+                c_overlap, c_bleu = seg_overlap, seg_bleu1
+            else:
+                c_overlap, c_bleu = _unigram_overlap_and_bleu1(
+                    ref_counts, seg_len, cand_seq
                 )
-                if len(valid_beam_cands) > 1
-                else float(seg_m["sentence_bleu1_mean"])
+            cand_key = (
+                round(0.5 * c_bleu + 0.5 * (c_hits / max(1, seg_len)), 8),
+                c_hits,
             )
-            cand_key = (round(0.5 * c_bleu + 0.5 * (c_hits / max(1, len(ref_seq))), 8), c_hits)
             if cand_key > best_oracle_key:
                 best_oracle_key = cand_key
                 best_oracle_seq = cand_seq
-        oracle_predictions.append(best_oracle_seq)
-        oracle_seg_m = (
-            sentence_metrics([ref_seq], [best_oracle_seq], chinese=chinese)
-            if best_oracle_seq != pred_seq
-            else seg_m
-        )
+                best_oracle_overlap = c_overlap
+                best_oracle_bleu1 = c_bleu
 
+        oracle_clipped_sum += best_oracle_overlap
+        oracle_sentence_bleu1_all.append(best_oracle_bleu1)
+
+        seg_hits = 0
         seg_c_tot = seg_c_hit = seg_f_tot = seg_f_hit = 0
         for pos, (r_w, p_w) in enumerate(zip(ref_seq, pred_seq)):
             hit = int(r_w == p_w)
+            seg_hits += hit
             ora_w = best_oracle_seq[pos] if pos < len(best_oracle_seq) else p_w
             ora_hit = int(r_w == ora_w)
             pos_cands: set[str] = {p_w, ora_w}
@@ -333,14 +430,12 @@ def evaluate_six_dimensional_metrics(
         subj = str(rec.get("subject_id", "default"))
         per_subject_rows[subj].append(
             {
-                "words": len(ref_seq),
-                "sentence_bleu1": float(seg_m["sentence_bleu1_mean"]),
-                "oracle_sentence_bleu1": float(
-                    oracle_seg_m["sentence_bleu1_mean"]
-                ),
-                "wer": float(seg_m["wer"]),
-                "cer": float(seg_m["cer"]),
-                "word_acc": float(seg_m["exact_word_accuracy"]),
+                "words": seg_len,
+                "sentence_bleu1": float(seg_bleu1),
+                "oracle_sentence_bleu1": float(best_oracle_bleu1),
+                "wer": float(w_err / seg_len) if seg_len > 0 else 0.0,
+                "cer": float(c_err / c_len) if c_len > 0 else 0.0,
+                "word_acc": float(seg_hits / seg_len) if seg_len > 0 else 0.0,
                 "content_total": seg_c_tot,
                 "content_correct": seg_c_hit,
                 "function_total": seg_f_tot,
@@ -348,9 +443,32 @@ def evaluate_six_dimensional_metrics(
             }
         )
 
-    oracle_base = sentence_metrics(
-        references, oracle_predictions, chinese=chinese
-    )
+    base = {
+        "sentence_bleu1_mean": (
+            float(np.mean(sentence_bleu1_all)) if sentence_bleu1_all else 0.0
+        ),
+        "bleu1": (
+            float(corpus_clipped_sum / total_words) if total_words > 0 else 0.0
+        ),
+        "wer": (
+            float(word_errors_sum / total_words) if total_words > 0 else 0.0
+        ),
+        "cer": (
+            float(char_errors_sum / char_total_sum)
+            if char_total_sum > 0
+            else 0.0
+        ),
+    }
+    oracle_base = {
+        "sentence_bleu1_mean": (
+            float(np.mean(oracle_sentence_bleu1_all))
+            if oracle_sentence_bleu1_all
+            else 0.0
+        ),
+        "bleu1": (
+            float(oracle_clipped_sum / total_words) if total_words > 0 else 0.0
+        ),
+    }
     bert_scores = compute_bertscore_percentage(
         references, predictions, word_embedding_map=word_embedding_map
     )
@@ -1099,6 +1217,31 @@ def evaluate_vocabulary_scaling_summary(
 
         all_conds = all_seg_block.get("conditions", {})
         s3_m = all_conds.get("S3_clean", {})
+        c80_s3 = (core80_block.get("conditions") or {}).get("S3_clean", {})
+        c100_s3 = (core100_block.get("conditions") or {}).get("S3_clean", {})
+        top_metric_keys = (
+            "bleu1_pct",
+            "corpus_bleu1_pct",
+            "beam_oracle_bleu1_pct",
+            "word_acc_pct",
+            "in_vocabulary_word_acc_pct",
+            "word_acc_top5_pct",
+            "content_word_acc_pct",
+            "function_word_acc_pct",
+            "wer_pct",
+            "cer_pct",
+            "bertscore_f1_pct",
+        )
+        if core80_block and c80_s3:
+            core80_block = {
+                **{mk: c80_s3[mk] for mk in top_metric_keys if mk in c80_s3},
+                **core80_block,
+            }
+        if core100_block and c100_s3:
+            core100_block = {
+                **{mk: c100_s3[mk] for mk in top_metric_keys if mk in c100_s3},
+                **core100_block,
+            }
         tok_cov = float(
             entry.get(
                 "test_token_coverage_pct",
@@ -1128,8 +1271,10 @@ def evaluate_vocabulary_scaling_summary(
                     core80_block.get("segment_count", 0),
                 )
             ),
+            **{mk: s3_m[mk] for mk in top_metric_keys if mk in s3_m},
             "conditions": all_conds,
             "revision_gains": all_seg_block.get("revision_gains", {}),
+            "subsets": subsets_map,
             "core_subset_80pct": core80_block,
             "core_subset_100pct": core100_block,
         }
@@ -1267,9 +1412,12 @@ def _compute_s3_paired_significance(
             pred = [str(w) for w in rec.get("predicted_words") or ()]
             if not ref or len(ref) != len(pred):
                 continue
-            sm = sentence_metrics([ref], [pred], chinese=chinese)
-            bleu_list.append(float(sm["sentence_bleu1_mean"]) * 100.0)
-            acc_list.append(float(sm["exact_word_accuracy"]) * 100.0)
+            _, seg_bleu1 = _unigram_overlap_and_bleu1(
+                Counter(ref), len(ref), pred
+            )
+            seg_acc = sum(int(a == b) for a, b in zip(ref, pred)) / len(ref)
+            bleu_list.append(float(seg_bleu1) * 100.0)
+            acc_list.append(float(seg_acc) * 100.0)
             gid = str(rec.get("group_id") or "")
             sid = str(rec.get("subject_id") or "0")
             blk = gid.split(":")[0] if ":" in gid and gid.split(":")[0] else (gid or f"seg_{idx // 5}")
@@ -1598,12 +1746,21 @@ def evaluate_and_export_sequence_decoding(
             v_key = f"V={v_sz}"
             if v_key in vocabulary_scaling_bundles:
                 v_entry = vocabulary_scaling_bundles[v_key]
-                v_bench = evaluate_high_coverage_core_subsets(
-                    v_entry.get("conditions") or {},
-                    language=language,
-                    word_embedding_map=word_embedding_map,
-                    vocabulary_size=int(v_sz),
-                )
+                scaled_sum = vocabulary_scaling_summaries.get(v_key)
+                if isinstance(scaled_sum, Mapping) and isinstance(
+                    scaled_sum.get("subsets"), Mapping
+                ):
+                    v_bench = {
+                        "vocabulary_size": int(v_sz),
+                        "subsets": scaled_sum["subsets"],
+                    }
+                else:
+                    v_bench = evaluate_high_coverage_core_subsets(
+                        v_entry.get("conditions") or {},
+                        language=language,
+                        word_embedding_map=word_embedding_map,
+                        vocabulary_size=int(v_sz),
+                    )
                 v_bench["test_token_coverage_pct"] = v_entry.get(
                     "test_token_coverage_pct"
                 )

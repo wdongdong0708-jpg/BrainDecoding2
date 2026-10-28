@@ -53,6 +53,22 @@ DEFAULT_HISTORICAL_SHIFTS: tuple[float, ...] = (
     -90.0,
     -120.0,
 )
+DEFAULT_ROLLING_DELTA_CMS_CONFIGS: tuple[tuple[float, float, float], ...] = (
+    (0.3, 0.8, 0.8),
+    (0.5, 0.8, 0.8),
+    (0.5, 1.0, 1.0),
+)
+DEFAULT_ASYMMETRIC_CMS_CONFIGS: tuple[tuple[float, float, float], ...] = (
+    (0.3, 0.8, 0.8),
+    (0.5, 0.8, 1.0),
+)
+DEFAULT_ROLLING_DELTA_SUBSPACE_CONFIGS: tuple[
+    tuple[int, float, float, float], ...
+] = (
+    (8, 0.5, 1.0, 1.0),
+    (12, 0.5, 1.0, 1.0),
+    (8, 0.8, 1.2, 1.2),
+)
 
 
 def parse_rank_k_values(
@@ -446,6 +462,686 @@ def apply_subspace_coherence_debiasing_to_encoded(
     new_clean["predictions"] = deb_clean_main
     for idx_k, k in enumerate(shift_keys):
         new_shifted[k]["predictions"] = deb_shifts_main[:, idx_k, :]
+    return new_clean, new_shifted
+
+
+def _resolve_horizon_weight_map(
+    horizons: Iterable[int],
+    *,
+    eta_base: float = 0.5,
+    eta_delta: float = 1.0,
+    eta_by_horizon: dict[int, float] | Iterable[float] | None = None,
+) -> dict[int, float]:
+    """解析按视野 r in {0, 1, 2} 的权重映射。"""
+    sorted_h = sorted(int(h) for h in horizons)
+    if eta_by_horizon is None:
+        return {
+            h: (float(eta_base) if h == 0 else float(eta_delta))
+            for h in sorted_h
+        }
+    if isinstance(eta_by_horizon, dict):
+        return {
+            h: float(
+                eta_by_horizon.get(
+                    h,
+                    eta_by_horizon.get(
+                        str(h),  # type: ignore[arg-type]
+                        eta_base if h == 0 else eta_delta,
+                    ),
+                )
+            )
+            for h in sorted_h
+        }
+    seq = [float(x) for x in eta_by_horizon]
+    if not seq:
+        return {
+            h: (float(eta_base) if h == 0 else float(eta_delta))
+            for h in sorted_h
+        }
+    out: dict[int, float] = {}
+    for idx, h in enumerate(sorted_h):
+        if h < len(seq):
+            out[h] = float(seq[h])
+        elif idx < len(seq):
+            out[h] = float(seq[idx])
+        else:
+            out[h] = float(seq[-1])
+    return out
+
+
+def compute_cross_horizon_revision_diagnostics(
+    y_shifts_by_horizon: dict[int, torch.Tensor],
+    *,
+    availability_masks: dict[int, torch.Tensor] | None = None,
+    center_svd: bool = True,
+    normalize_inputs: bool = True,
+    subspace_rank_k: int = 8,
+    compute_loo_svd: bool = True,
+) -> tuple[dict, dict[str, torch.Tensor], dict[str, list[torch.Tensor]]]:
+    """量化 Revision 多状态滚动更新（K0 -> K1 -> K2）的跨状态时间捷径物理结构：
+
+    1. 初判态 K0 与回修态 K1, K2 各自的错位共模模长 ||y_bar^{(r,shift)}||_2；
+    2. 未来词窗接入产生的纯跨状态回修错位跳变 ||Delta y_bar^{(r<-0,shift)}||_2 = ||y_bar^{(r,shift)} - y_bar^{(0,shift)}||_2；
+    3. K0 子空间基底 U_K^{(0)} 与 K1/K2 子空间基底 U_K^{(r)} 及纯增量基底 U_K^{(Delta_r)} 之间的主子空间重叠度与旋转角；
+    4. 纯跨状态错位增量矩阵 Delta Y_bar^{(r<-0,shift)} 的中心化 SVD 奇异值能量谱与严格留一法基底 U_{K,LOO}^{(Delta_r)}。
+    """
+    horizons = sorted(int(k) for k in y_shifts_by_horizon.keys())
+    if 0 not in y_shifts_by_horizon or len(horizons) < 2:
+        return {"enabled": False}, {}, {}
+
+    shifts_normed: dict[int, torch.Tensor] = {}
+    means_by_h: dict[int, torch.Tensor] = {}
+    vh_by_h: dict[int, torch.Tensor] = {}
+
+    for h in horizons:
+        sf = y_shifts_by_horizon[h].detach().to(dtype=torch.float32)
+        if normalize_inputs:
+            sf = F.normalize(sf, p=2.0, dim=-1, eps=1e-12)
+        shifts_normed[h] = sf
+        ym = sf.mean(dim=1)  # [N, D]
+        means_by_h[h] = ym
+        svd_in = ym - ym.mean(dim=0, keepdim=True) if center_svd else ym
+        _, _, vh_h = torch.linalg.svd(svd_in, full_matrices=False)
+        vh_by_h[h] = vh_h
+
+    n_samples, num_shifts, dim = shifts_normed[0].shape
+    eff_k = max(1, min(int(subspace_rank_k), n_samples, dim))
+    u_k0 = vh_by_h[0][:eff_k, :].t().contiguous()  # [D, eff_k]
+
+    def _subspace_overlap_stats(
+        u_a: torch.Tensor, u_b: torch.Tensor
+    ) -> dict[str, object]:
+        k_dim = min(u_a.shape[1], u_b.shape[1])
+        cross = torch.matmul(u_a[:, :k_dim].t(), u_b[:, :k_dim])
+        _, svals, _ = torch.linalg.svd(cross, full_matrices=False)
+        svals_clamped = svals.clamp(min=0.0, max=1.0)
+        angles_deg = (
+            torch.acos(svals_clamped) * (180.0 / float(np.pi))
+        ).cpu().tolist()
+        overlap = float(svals_clamped.square().mean().item())
+        return {
+            "rank_k": int(k_dim),
+            "subspace_overlap_frobenius": round(overlap, 4),
+            "subspace_rotation_fraction": round(1.0 - overlap, 4),
+            "principal_angle_cosines": [
+                round(float(x), 4) for x in svals_clamped.cpu().tolist()
+            ],
+            "mean_principal_angle_deg": round(float(np.mean(angles_deg)), 2),
+            "max_principal_angle_deg": round(float(np.max(angles_deg)), 2),
+        }
+
+    horizon_norms: dict[str, dict] = {}
+    for h in horizons:
+        mask_h = (
+            availability_masks[h].detach().cpu().bool()
+            if (availability_masks is not None and h in availability_masks)
+            else torch.ones(n_samples, dtype=torch.bool)
+        )
+        norms_h = means_by_h[h][mask_h].norm(p=2, dim=-1).cpu().numpy()
+        horizon_norms[f"K{h}"] = {
+            "valid_samples": int(mask_h.sum().item()),
+            "mean_shift_coherence_norm": round(float(np.mean(norms_h)), 4),
+            "std_shift_coherence_norm": round(float(np.std(norms_h)), 4),
+            "median_shift_coherence_norm": round(float(np.median(norms_h)), 4),
+            "p90_shift_coherence_norm": round(
+                float(np.percentile(norms_h, 90)), 4
+            ),
+        }
+
+    delta_vh_by_key: dict[str, torch.Tensor] = {}
+    delta_vh_loo_by_key: dict[str, list[torch.Tensor]] = {}
+    transitions_diag: dict[str, dict] = {}
+
+    y_mean_0 = means_by_h[0]
+    shifts_0 = shifts_normed[0]
+    sum_shifts_0 = shifts_0.sum(dim=1)
+    loo_denom = float(max(1, num_shifts - 1))
+
+    for h in horizons:
+        if h == 0:
+            continue
+        key_h = f"K{h}"
+        trans_key = f"K0_to_K{h}"
+        if (
+            availability_masks is not None
+            and 0 in availability_masks
+            and h in availability_masks
+        ):
+            common_mask = (
+                availability_masks[0].detach().cpu().bool()
+                & availability_masks[h].detach().cpu().bool()
+            )
+        else:
+            common_mask = torch.ones(n_samples, dtype=torch.bool)
+
+        y_mean_h = means_by_h[h]
+        delta_all = y_mean_h - y_mean_0  # [N, D]
+        svd_delta_in = (
+            delta_all - delta_all.mean(dim=0, keepdim=True)
+            if center_svd
+            else delta_all
+        )
+        _, delta_svals, vh_delta = torch.linalg.svd(
+            svd_delta_in, full_matrices=False
+        )
+        delta_vh_by_key[key_h] = vh_delta
+
+        if compute_loo_svd and num_shifts >= 2:
+            shifts_h = shifts_normed[h]
+            sum_shifts_h = shifts_h.sum(dim=1)
+            vh_loo_list: list[torch.Tensor] = []
+            for k in range(num_shifts):
+                y_loo_0 = (sum_shifts_0 - shifts_0[:, k, :]) / loo_denom
+                y_loo_h = (sum_shifts_h - shifts_h[:, k, :]) / loo_denom
+                delta_loo_k = y_loo_h - y_loo_0
+                svd_loo_in = (
+                    delta_loo_k - delta_loo_k.mean(dim=0, keepdim=True)
+                    if center_svd
+                    else delta_loo_k
+                )
+                _, _, vh_loo_k = torch.linalg.svd(
+                    svd_loo_in, full_matrices=False
+                )
+                vh_loo_list.append(vh_loo_k)
+            delta_vh_loo_by_key[key_h] = vh_loo_list
+
+        # Stats on valid common events
+        y0_valid = y_mean_0[common_mask]
+        yh_valid = y_mean_h[common_mask]
+        delta_valid = delta_all[common_mask]
+
+        norm_0 = y0_valid.norm(p=2, dim=-1)
+        norm_h = yh_valid.norm(p=2, dim=-1)
+        norm_delta = delta_valid.norm(p=2, dim=-1)
+        ratio_delta_to_k0 = norm_delta / norm_0.clamp(min=1e-8)
+
+        cos_k0_kr = F.cosine_similarity(y0_valid, yh_valid, dim=-1, eps=1e-8)
+        cos_k0_delta = F.cosine_similarity(
+            y0_valid, delta_valid, dim=-1, eps=1e-8
+        )
+
+        energy = delta_svals.square()
+        total_energy = float(energy.sum().item())
+        cum_energy = torch.cumsum(energy, dim=0) / max(total_energy, 1e-12)
+        energy_by_rank: dict[str, float] = {}
+        for r_idx in (1, 2, 4, 8, 12, 16, 24, 32):
+            if r_idx <= len(cum_energy):
+                energy_by_rank[f"top_{r_idx}"] = round(
+                    float(cum_energy[r_idx - 1].item()), 4
+                )
+        sum_sq = float(energy.sum().item())
+        sum_quad = float(energy.square().sum().item())
+        eff_rank = (
+            (sum_sq * sum_sq) / max(sum_quad, 1e-12) if sum_quad > 0 else 0.0
+        )
+
+        u_kr = vh_by_h[h][:eff_k, :].t().contiguous()
+        u_delta_r = vh_delta[:eff_k, :].t().contiguous()
+
+        transitions_diag[trans_key] = {
+            "from_horizon": "K0",
+            "to_horizon": key_h,
+            "common_valid_samples": int(common_mask.sum().item()),
+            "k0_shift_norm_mean": round(float(norm_0.mean().item()), 4),
+            "kr_shift_norm_mean": round(float(norm_h.mean().item()), 4),
+            "shift_norm_jump_kr_minus_k0": round(
+                float((norm_h - norm_0).mean().item()), 4
+            ),
+            "delta_shift_norm_mean": round(float(norm_delta.mean().item()), 4),
+            "delta_shift_norm_std": round(float(norm_delta.std().item()), 4),
+            "delta_shift_norm_median": round(
+                float(norm_delta.median().item()), 4
+            ),
+            "delta_shift_norm_p90": round(
+                float(np.percentile(norm_delta.cpu().numpy(), 90)), 4
+            ),
+            "delta_to_k0_norm_ratio_mean": round(
+                float(ratio_delta_to_k0.mean().item()), 4
+            ),
+            "cosine_k0_vs_kr_mean": round(float(cos_k0_kr.mean().item()), 4),
+            "cosine_k0_vs_delta_mean": round(
+                float(cos_k0_delta.mean().item()), 4
+            ),
+            "delta_svd_effective_rank": round(eff_rank, 2),
+            "delta_svd_cumulative_energy": energy_by_rank,
+            "delta_top_8_singular_values": [
+                round(float(x), 4) for x in delta_svals[:8].cpu().tolist()
+            ],
+            "subspace_k0_vs_kr": _subspace_overlap_stats(u_k0, u_kr),
+            "subspace_k0_vs_delta": _subspace_overlap_stats(u_k0, u_delta_r),
+        }
+
+    return (
+        {
+            "enabled": True,
+            "horizons": [f"K{h}" for h in horizons],
+            "subspace_rank_k": int(eff_k),
+            "svd_centered": bool(center_svd),
+            "per_horizon_shift_norms": horizon_norms,
+            "cross_horizon_transitions": transitions_diag,
+        },
+        delta_vh_by_key,
+        delta_vh_loo_by_key,
+    )
+
+
+def rolling_delta_cms_loo_debiasing(
+    y_clean_by_horizon: dict[int, torch.Tensor],
+    y_shifts_by_horizon: dict[int, torch.Tensor],
+    *,
+    eta_base: float = 0.5,
+    eta_delta: float = 1.0,
+    eta_by_horizon: dict[int, float] | Iterable[float] | None = None,
+    mode: str = "delta",
+    normalize_inputs: bool = True,
+    normalize_outputs: bool = True,
+) -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor]]:
+    """针对 Revision 物理结构（K0 -> K1 -> K2）的跨状态回修增量共模扣除与非对称视野去偏（严格留一法 LOO）：
+
+    - mode="delta"（机制一：跨状态回修增量去偏 Cross-Horizon Revision-Delta CMS）：
+      將回修态 r in {1, 2} 的错位共模分解为初判背景 y_bar^{(0,shift)} 与未来词窗引入的纯时长跳变
+      Delta y_bar^{(r<-0,shift)} = y_bar^{(r,shift)} - y_bar^{(0,shift)}：
+        y_tilde^{(0)} = Normalize(y^{(0)} - eta_base * y_bar^{(0,shift)})
+        y_tilde^{(r)} = Normalize(y^{(r)} - eta_base * y_bar^{(0,shift)} - eta_delta^{(r)} * (y_bar^{(r,shift)} - y_bar^{(0,shift)}))
+      对于第 k 个错位条件，严格仅使用其余 M-1=5 个错位条件的留一法均值 y_bar_{LOO-k}^{(0,shift)} 与 y_bar_{LOO-k}^{(r,shift)}。
+    - mode="asymmetric"（机制二：状态非对称去偏梯度 Horizon-Asymmetric Schedule）：
+      对不同视野 r in {0, 1, 2} 施加阶梯式扣除权重 eta^{(0)} < eta^{(1)} <= eta^{(2)}：
+        y_tilde^{(r)} = Normalize(y^{(r)} - eta^{(r)} * y_bar^{(r,shift)})
+    """
+    horizons = sorted(int(h) for h in y_clean_by_horizon.keys())
+    if not horizons:
+        raise ValueError("y_clean_by_horizon 不能为空。")
+
+    clean_f: dict[int, torch.Tensor] = {}
+    shifts_f: dict[int, torch.Tensor] = {}
+    shift_means: dict[int, torch.Tensor] = {}
+    shift_sums: dict[int, torch.Tensor] = {}
+
+    num_shifts = 0
+    for h in horizons:
+        c_t = y_clean_by_horizon[h].detach().to(dtype=torch.float32)
+        s_t = y_shifts_by_horizon[h].detach().to(dtype=torch.float32)
+        if s_t.ndim != 3 or c_t.ndim != 2:
+            raise ValueError(
+                f"Horizon {h} 张量维度非法：clean={tuple(c_t.shape)}, shifts={tuple(s_t.shape)}"
+            )
+        if s_t.shape[1] < 2:
+            raise ValueError(
+                f"留一法去偏至少需要 M >= 2 个错位条件，当前 M={s_t.shape[1]}"
+            )
+        num_shifts = int(s_t.shape[1])
+        if normalize_inputs:
+            c_t = F.normalize(c_t, p=2.0, dim=-1, eps=1e-12)
+            s_t = F.normalize(s_t, p=2.0, dim=-1, eps=1e-12)
+        clean_f[h] = c_t
+        shifts_f[h] = s_t
+        shift_means[h] = s_t.mean(dim=1)
+        shift_sums[h] = s_t.sum(dim=1)
+
+    loo_denom = float(num_shifts - 1)
+    mode_norm = str(mode or "delta").strip().lower()
+    horizon_weights = _resolve_horizon_weight_map(
+        horizons,
+        eta_base=eta_base,
+        eta_delta=eta_delta,
+        eta_by_horizon=eta_by_horizon,
+    )
+    eta0 = float(horizon_weights.get(0, eta_base))
+    has_k0 = 0 in horizons
+
+    out_clean: dict[int, torch.Tensor] = {}
+    out_shifts: dict[int, torch.Tensor] = {}
+
+    for h in horizons:
+        eta_h = float(horizon_weights.get(h, eta_delta))
+        c_h = clean_f[h]
+        s_h = shifts_f[h]
+        mean_h = shift_means[h]
+        sum_h = shift_sums[h]
+
+        if mode_norm == "asymmetric" or not has_k0 or h == 0:
+            eff_eta = eta0 if (h == 0 and mode_norm != "asymmetric") else eta_h
+            deb_c = c_h - eff_eta * mean_h
+            if normalize_outputs:
+                deb_c = F.normalize(deb_c, p=2.0, dim=-1, eps=1e-12)
+            out_clean[h] = deb_c
+
+            deb_s_list: list[torch.Tensor] = []
+            for k in range(num_shifts):
+                loo_mean_h = (sum_h - s_h[:, k, :]) / loo_denom
+                deb_k = s_h[:, k, :] - eff_eta * loo_mean_h
+                if normalize_outputs:
+                    deb_k = F.normalize(deb_k, p=2.0, dim=-1, eps=1e-12)
+                deb_s_list.append(deb_k)
+            out_shifts[h] = torch.stack(deb_s_list, dim=1)
+        else:
+            # Decomposed base (K0) + cross-horizon jump (Kr - K0)
+            mean_0 = shift_means[0]
+            sum_0 = shift_sums[0]
+            s_0 = shifts_f[0]
+            delta_mean = mean_h - mean_0
+            deb_c = c_h - eta0 * mean_0 - eta_h * delta_mean
+            if normalize_outputs:
+                deb_c = F.normalize(deb_c, p=2.0, dim=-1, eps=1e-12)
+            out_clean[h] = deb_c
+
+            deb_s_list = []
+            for k in range(num_shifts):
+                loo_mean_0 = (sum_0 - s_0[:, k, :]) / loo_denom
+                loo_mean_h = (sum_h - s_h[:, k, :]) / loo_denom
+                loo_delta = loo_mean_h - loo_mean_0
+                deb_k = s_h[:, k, :] - eta0 * loo_mean_0 - eta_h * loo_delta
+                if normalize_outputs:
+                    deb_k = F.normalize(deb_k, p=2.0, dim=-1, eps=1e-12)
+                deb_s_list.append(deb_k)
+            out_shifts[h] = torch.stack(deb_s_list, dim=1)
+
+    return out_clean, out_shifts
+
+
+def apply_rolling_delta_cms_to_encoded(
+    clean_encoded: dict,
+    shifted_encoded_map: dict[str, dict],
+    *,
+    eta_base: float = 0.5,
+    eta_delta: float = 1.0,
+    eta_by_horizon: dict[int, float] | Iterable[float] | None = None,
+    mode: str = "delta",
+    normalize_inputs: bool = True,
+) -> tuple[dict, dict[str, dict]]:
+    """对 encode_loader 输出的完整字典执行跨状态回修增量共模扣除（Mechanism 1）或状态非对称共模扣除（Mechanism 2）。"""
+    shift_keys = list(shifted_encoded_map.keys())
+    if len(shift_keys) < 2:
+        raise ValueError(
+            f"滚动增量 LOO 去偏至少需要 2 个错位条件，当前仅有 {len(shift_keys)} 个。"
+        )
+    has_revision = "revision_predictions" in clean_encoded and isinstance(
+        clean_encoded["revision_predictions"], dict
+    )
+    if not has_revision:
+        return apply_subspace_coherence_debiasing_to_encoded(
+            clean_encoded,
+            shifted_encoded_map,
+            eta=float(eta_base),
+            rank_k=None,
+            use_coherence_gate=False,
+            normalize_inputs=normalize_inputs,
+        )
+
+    clean_rev = {
+        int(d): t for d, t in clean_encoded["revision_predictions"].items()
+    }
+    shifts_rev = {
+        int(d): torch.stack(
+            [shifted_encoded_map[k]["revision_predictions"][d] for k in shift_keys],
+            dim=1,
+        )
+        for d in sorted(clean_rev.keys())
+    }
+    deb_clean_rev, deb_shifts_rev = rolling_delta_cms_loo_debiasing(
+        clean_rev,
+        shifts_rev,
+        eta_base=eta_base,
+        eta_delta=eta_delta,
+        eta_by_horizon=eta_by_horizon,
+        mode=mode,
+        normalize_inputs=normalize_inputs,
+    )
+
+    new_clean = dict(clean_encoded)
+    new_shifted: dict[str, dict] = {
+        k: dict(shifted_encoded_map[k]) for k in shift_keys
+    }
+    max_delay = max(deb_clean_rev.keys())
+    new_clean["revision_predictions"] = deb_clean_rev
+    new_clean["predictions"] = deb_clean_rev[max_delay]
+    for idx_k, k in enumerate(shift_keys):
+        k_rev = {d: deb_shifts_rev[d][:, idx_k, :] for d in sorted(deb_shifts_rev.keys())}
+        new_shifted[k]["revision_predictions"] = k_rev
+        new_shifted[k]["predictions"] = k_rev[max_delay]
+    return new_clean, new_shifted
+
+
+def rolling_delta_subspace_loo_debiasing(
+    y_clean_by_horizon: dict[int, torch.Tensor],
+    y_shifts_by_horizon: dict[int, torch.Tensor],
+    *,
+    rank_k: int = 8,
+    eta_base: float = 0.5,
+    eta_delta: float = 1.0,
+    eta_by_horizon: dict[int, float] | Iterable[float] | None = None,
+    center_svd: bool = True,
+    normalize_inputs: bool = True,
+    normalize_outputs: bool = True,
+    precomputed_vh_k0: torch.Tensor | None = None,
+    precomputed_vh_loo_k0: list[torch.Tensor] | None = None,
+    precomputed_delta_vh: dict[str, torch.Tensor] | None = None,
+    precomputed_delta_vh_loo: dict[str, list[torch.Tensor]] | None = None,
+) -> tuple[dict[int, torch.Tensor], dict[int, torch.Tensor]]:
+    """机制三（跨状态增量低秩子空间投影去偏 Cross-Horizon Delta-Subspace LOO）：
+
+    利用 K0 的错位向量 y_bar^{(0,shift)} 仅含历史背景共模、而 K1/K2 与 K0 之差
+    Delta y_bar^{(r<-0,shift)} = y_bar^{(r,shift)} - y_bar^{(0,shift)} 纯粹分离出由未来窗口
+    x_{i+1}, x_{i+2} 引入的目标词时长 Delta tau_i 偏置分量的物理性质：
+    1. 在初判背景低秩子空间 U_K^{(0)} 内以权重 eta_base 扣除 y_bar^{(0,shift)} 的投影；
+    2. 在纯跨状态增量低秩子空间 U_K^{(Delta_r)} 内以权重 eta_delta^{(r)} 专门扣除跨状态跳变
+       Delta y_bar^{(r<-0,shift)} 的投影，100% 保护正交的纯神经语义回修增量。
+    """
+    horizons = sorted(int(h) for h in y_clean_by_horizon.keys())
+    if 0 not in horizons:
+        raise ValueError("rolling_delta_subspace_loo_debiasing 需要包含初判视野 K0 (delay=0)。")
+
+    clean_f: dict[int, torch.Tensor] = {}
+    shifts_f: dict[int, torch.Tensor] = {}
+    shift_means: dict[int, torch.Tensor] = {}
+    shift_sums: dict[int, torch.Tensor] = {}
+
+    num_shifts = 0
+    n_samples = 0
+    dim = 0
+    for h in horizons:
+        c_t = y_clean_by_horizon[h].detach().to(dtype=torch.float32)
+        s_t = y_shifts_by_horizon[h].detach().to(dtype=torch.float32)
+        n_samples, num_shifts, dim = s_t.shape
+        if normalize_inputs:
+            c_t = F.normalize(c_t, p=2.0, dim=-1, eps=1e-12)
+            s_t = F.normalize(s_t, p=2.0, dim=-1, eps=1e-12)
+        clean_f[h] = c_t
+        shifts_f[h] = s_t
+        shift_means[h] = s_t.mean(dim=1)
+        shift_sums[h] = s_t.sum(dim=1)
+
+    eff_k = max(1, min(int(rank_k), n_samples, dim))
+    loo_denom = float(max(1, num_shifts - 1))
+    horizon_weights = _resolve_horizon_weight_map(
+        horizons,
+        eta_base=eta_base,
+        eta_delta=eta_delta,
+        eta_by_horizon=eta_by_horizon,
+    )
+    eta0 = float(horizon_weights.get(0, eta_base))
+
+    def _project(vec: torch.Tensor, basis_u: torch.Tensor) -> torch.Tensor:
+        return torch.matmul(torch.matmul(vec, basis_u), basis_u.t())
+
+    # 1. K0 base subspace U_K^{(0)} and LOO bases U_{K,LOO}^{(0)}
+    mean_0 = shift_means[0]
+    sum_0 = shift_sums[0]
+    s_0 = shifts_f[0]
+    if precomputed_vh_k0 is not None:
+        vh_0 = precomputed_vh_k0
+    else:
+        svd_0_in = mean_0 - mean_0.mean(dim=0, keepdim=True) if center_svd else mean_0
+        _, _, vh_0 = torch.linalg.svd(svd_0_in, full_matrices=False)
+    u_k0 = vh_0[:eff_k, :].t().contiguous()
+
+    u_k0_loo_list: list[torch.Tensor] = []
+    for k in range(num_shifts):
+        if precomputed_vh_loo_k0 is not None and k < len(precomputed_vh_loo_k0):
+            u_k0_loo_list.append(
+                precomputed_vh_loo_k0[k][:eff_k, :].t().contiguous()
+            )
+        else:
+            loo_0 = (sum_0 - s_0[:, k, :]) / loo_denom
+            svd_loo_0 = (
+                loo_0 - loo_0.mean(dim=0, keepdim=True) if center_svd else loo_0
+            )
+            _, _, vh_loo_0 = torch.linalg.svd(svd_loo_0, full_matrices=False)
+            u_k0_loo_list.append(vh_loo_0[:eff_k, :].t().contiguous())
+
+    out_clean: dict[int, torch.Tensor] = {}
+    out_shifts: dict[int, torch.Tensor] = {}
+
+    # Horizon K0 debiasing
+    proj_c0 = _project(mean_0, u_k0)
+    deb_c0 = clean_f[0] - eta0 * proj_c0
+    if normalize_outputs:
+        deb_c0 = F.normalize(deb_c0, p=2.0, dim=-1, eps=1e-12)
+    out_clean[0] = deb_c0
+
+    deb_s0_list: list[torch.Tensor] = []
+    for k in range(num_shifts):
+        loo_mean_0 = (sum_0 - s_0[:, k, :]) / loo_denom
+        proj_s0_k = _project(loo_mean_0, u_k0_loo_list[k])
+        deb_s0_k = s_0[:, k, :] - eta0 * proj_s0_k
+        if normalize_outputs:
+            deb_s0_k = F.normalize(deb_s0_k, p=2.0, dim=-1, eps=1e-12)
+        deb_s0_list.append(deb_s0_k)
+    out_shifts[0] = torch.stack(deb_s0_list, dim=1)
+
+    # Horizons r > 0: subtract base K0 projection + cross-horizon delta subspace projection
+    for h in horizons:
+        if h == 0:
+            continue
+        key_h = f"K{h}"
+        eta_h = float(horizon_weights.get(h, eta_delta))
+        mean_h = shift_means[h]
+        sum_h = shift_sums[h]
+        s_h = shifts_f[h]
+        delta_mean = mean_h - mean_0
+
+        if precomputed_delta_vh is not None and key_h in precomputed_delta_vh:
+            vh_delta = precomputed_delta_vh[key_h]
+        else:
+            svd_d_in = (
+                delta_mean - delta_mean.mean(dim=0, keepdim=True)
+                if center_svd
+                else delta_mean
+            )
+            _, _, vh_delta = torch.linalg.svd(svd_d_in, full_matrices=False)
+        u_delta = vh_delta[:eff_k, :].t().contiguous()
+
+        proj_delta_c = _project(delta_mean, u_delta)
+        deb_ch = clean_f[h] - eta0 * proj_c0 - eta_h * proj_delta_c
+        if normalize_outputs:
+            deb_ch = F.normalize(deb_ch, p=2.0, dim=-1, eps=1e-12)
+        out_clean[h] = deb_ch
+
+        vh_delta_loo_h = (
+            precomputed_delta_vh_loo.get(key_h)
+            if precomputed_delta_vh_loo is not None
+            else None
+        )
+        deb_sh_list: list[torch.Tensor] = []
+        for k in range(num_shifts):
+            loo_mean_0 = (sum_0 - s_0[:, k, :]) / loo_denom
+            loo_mean_h = (sum_h - s_h[:, k, :]) / loo_denom
+            loo_delta = loo_mean_h - loo_mean_0
+            if vh_delta_loo_h is not None and k < len(vh_delta_loo_h):
+                u_delta_loo_k = vh_delta_loo_h[k][:eff_k, :].t().contiguous()
+            else:
+                svd_loo_d = (
+                    loo_delta - loo_delta.mean(dim=0, keepdim=True)
+                    if center_svd
+                    else loo_delta
+                )
+                _, _, vh_loo_d = torch.linalg.svd(svd_loo_d, full_matrices=False)
+                u_delta_loo_k = vh_loo_d[:eff_k, :].t().contiguous()
+            proj_base_k = _project(loo_mean_0, u_k0_loo_list[k])
+            proj_delta_k = _project(loo_delta, u_delta_loo_k)
+            deb_sh_k = s_h[:, k, :] - eta0 * proj_base_k - eta_h * proj_delta_k
+            if normalize_outputs:
+                deb_sh_k = F.normalize(deb_sh_k, p=2.0, dim=-1, eps=1e-12)
+            deb_sh_list.append(deb_sh_k)
+        out_shifts[h] = torch.stack(deb_sh_list, dim=1)
+
+    return out_clean, out_shifts
+
+
+def apply_rolling_delta_subspace_to_encoded(
+    clean_encoded: dict,
+    shifted_encoded_map: dict[str, dict],
+    *,
+    rank_k: int = 8,
+    eta_base: float = 0.5,
+    eta_delta: float = 1.0,
+    eta_by_horizon: dict[int, float] | Iterable[float] | None = None,
+    center_svd: bool = True,
+    normalize_inputs: bool = True,
+    precomputed_vh_k0: torch.Tensor | None = None,
+    precomputed_vh_loo_k0: list[torch.Tensor] | None = None,
+    precomputed_delta_vh: dict[str, torch.Tensor] | None = None,
+    precomputed_delta_vh_loo: dict[str, list[torch.Tensor]] | None = None,
+) -> tuple[dict, dict[str, dict]]:
+    """对 encode_loader 输出的完整字典执行跨状态增量低秩子空间去偏（Mechanism 3）。"""
+    shift_keys = list(shifted_encoded_map.keys())
+    if len(shift_keys) < 2:
+        raise ValueError(
+            f"跨状态增量子空间 LOO 去偏至少需要 2 个错位条件，当前仅有 {len(shift_keys)} 个。"
+        )
+    has_revision = "revision_predictions" in clean_encoded and isinstance(
+        clean_encoded["revision_predictions"], dict
+    )
+    if not has_revision:
+        return apply_subspace_coherence_debiasing_to_encoded(
+            clean_encoded,
+            shifted_encoded_map,
+            eta=float(eta_base),
+            rank_k=rank_k,
+            use_coherence_gate=False,
+            center_svd=center_svd,
+            normalize_inputs=normalize_inputs,
+        )
+
+    clean_rev = {
+        int(d): t for d, t in clean_encoded["revision_predictions"].items()
+    }
+    shifts_rev = {
+        int(d): torch.stack(
+            [shifted_encoded_map[k]["revision_predictions"][d] for k in shift_keys],
+            dim=1,
+        )
+        for d in sorted(clean_rev.keys())
+    }
+    deb_clean_rev, deb_shifts_rev = rolling_delta_subspace_loo_debiasing(
+        clean_rev,
+        shifts_rev,
+        rank_k=rank_k,
+        eta_base=eta_base,
+        eta_delta=eta_delta,
+        eta_by_horizon=eta_by_horizon,
+        center_svd=center_svd,
+        normalize_inputs=normalize_inputs,
+        precomputed_vh_k0=precomputed_vh_k0,
+        precomputed_vh_loo_k0=precomputed_vh_loo_k0,
+        precomputed_delta_vh=precomputed_delta_vh,
+        precomputed_delta_vh_loo=precomputed_delta_vh_loo,
+    )
+
+    new_clean = dict(clean_encoded)
+    new_shifted: dict[str, dict] = {
+        k: dict(shifted_encoded_map[k]) for k in shift_keys
+    }
+    max_delay = max(deb_clean_rev.keys())
+    new_clean["revision_predictions"] = deb_clean_rev
+    new_clean["predictions"] = deb_clean_rev[max_delay]
+    for idx_k, k in enumerate(shift_keys):
+        k_rev = {
+            d: deb_shifts_rev[d][:, idx_k, :]
+            for d in sorted(deb_shifts_rev.keys())
+        }
+        new_shifted[k]["revision_predictions"] = k_rev
+        new_shifted[k]["predictions"] = k_rev[max_delay]
     return new_clean, new_shifted
 
 
@@ -902,10 +1598,14 @@ def run_subspace_coherence_debiasing_sweep(
     subspace_diagnostics: dict[str, dict] = {}
     vh_cache: dict[str, torch.Tensor] = {}
     vh_loo_cache: dict[str, list[torch.Tensor]] = {}
+    cross_horizon_diagnostics: dict = {"enabled": False}
+    delta_vh_cache: dict[str, torch.Tensor] = {}
+    delta_vh_loo_cache: dict[str, list[torch.Tensor]] = {}
     has_revision = "revision_predictions" in clean_encoded and isinstance(
         clean_encoded["revision_predictions"], dict
     )
     if has_revision:
+        y_shifts_by_h: dict[int, torch.Tensor] = {}
         for delay in sorted(clean_encoded["revision_predictions"]):
             y_shifts_d = torch.stack(
                 [
@@ -914,6 +1614,7 @@ def run_subspace_coherence_debiasing_sweep(
                 ],
                 dim=1,
             )
+            y_shifts_by_h[int(delay)] = y_shifts_d
             diag_d, vh_d = analyze_shift_subspace_and_coherence(
                 y_shifts_d,
                 coherence_low=coherence_low,
@@ -929,6 +1630,26 @@ def run_subspace_coherence_debiasing_sweep(
             vh_cache[f"K{delay}"] = vh_d
             if vh_loo_d is not None:
                 vh_loo_cache[f"K{delay}"] = vh_loo_d
+
+        avail_masks_by_h = (
+            clean_encoded.get("revision_availability_masks")
+            if isinstance(
+                clean_encoded.get("revision_availability_masks"), dict
+            )
+            else None
+        )
+        (
+            cross_horizon_diagnostics,
+            delta_vh_cache,
+            delta_vh_loo_cache,
+        ) = compute_cross_horizon_revision_diagnostics(
+            y_shifts_by_h,
+            availability_masks=avail_masks_by_h,
+            center_svd=center_svd,
+            normalize_inputs=normalize_inputs,
+            subspace_rank_k=ranks[0] if ranks else 8,
+            compute_loo_svd=True,
+        )
     else:
         y_shifts_main = torch.stack(
             [shifted_encoded_map[k]["predictions"] for k in shift_keys], dim=1
@@ -1058,6 +1779,156 @@ def run_subspace_coherence_debiasing_sweep(
                 )
                 subspace_entries.append(s_entry)
 
+    # 4B. 若当前为 Revision 阶段（含 K0/K1/K2 预测），扫描原生滚动跨状态去偏算子（机制一/二/三）
+    rolling_delta_entries: list[dict] = []
+    best_rolling_by_gap50: dict | None = None
+    best_rolling_by_clean50: dict | None = None
+    if has_revision and "K0" in vh_cache:
+        # 机制一：跨状态回修增量共模扣除 (Cross-Horizon Revision-Delta CMS LOO)
+        for eta_b, eta_d1, eta_d2 in DEFAULT_ROLLING_DELTA_CMS_CONFIGS:
+            deb_c, deb_s = apply_rolling_delta_cms_to_encoded(
+                clean_encoded,
+                shifted_encoded_map,
+                eta_base=eta_b,
+                eta_delta=eta_d2,
+                eta_by_horizon=[eta_b, eta_d1, eta_d2],
+                mode="delta",
+                normalize_inputs=normalize_inputs,
+            )
+            c_row, conds, s_agg = _evaluate_pair(deb_c, deb_s)
+            eta_d_str = (
+                f"{eta_d1:g}"
+                if abs(eta_d1 - eta_d2) < 1e-6
+                else f"{eta_d1:g},{eta_d2:g}"
+            )
+            d_entry = _build_method_entry(
+                method_id=f"delta_cms:eta0={eta_b:g},eta_d={eta_d_str}",
+                method_family="rolling_delta_cms",
+                label=f"Delta-CMS LOO (eta0={eta_b:g}, eta_d={eta_d_str})",
+                eta=float(eta_d2),
+                rank_k=None,
+                use_coherence_gate=False,
+                clean_summary=c_row,
+                condition_entries=conds,
+                shifted_aggregate=s_agg,
+                baseline_raw_entry=raw_entry,
+                baseline_full_loo_entry=full_loo_eta1_entry,
+            )
+            d_entry["eta_base"] = float(eta_b)
+            d_entry["eta_delta"] = float(eta_d2)
+            d_entry["eta_by_horizon"] = [
+                float(eta_b),
+                float(eta_d1),
+                float(eta_d2),
+            ]
+            rolling_delta_entries.append(d_entry)
+
+        # 机制二：状态非对称共模扣除梯度 (Horizon-Asymmetric Schedule CMS LOO)
+        for eta0, eta1, eta2 in DEFAULT_ASYMMETRIC_CMS_CONFIGS:
+            deb_c, deb_s = apply_rolling_delta_cms_to_encoded(
+                clean_encoded,
+                shifted_encoded_map,
+                eta_base=eta0,
+                eta_delta=eta2,
+                eta_by_horizon=[eta0, eta1, eta2],
+                mode="asymmetric",
+                normalize_inputs=normalize_inputs,
+            )
+            c_row, conds, s_agg = _evaluate_pair(deb_c, deb_s)
+            a_entry = _build_method_entry(
+                method_id=f"asymmetric_cms:{eta0:g},{eta1:g},{eta2:g}",
+                method_family="asymmetric_cms",
+                label=f"Asym-CMS LOO (eta={eta0:g},{eta1:g},{eta2:g})",
+                eta=float(eta2),
+                rank_k=None,
+                use_coherence_gate=False,
+                clean_summary=c_row,
+                condition_entries=conds,
+                shifted_aggregate=s_agg,
+                baseline_raw_entry=raw_entry,
+                baseline_full_loo_entry=full_loo_eta1_entry,
+            )
+            a_entry["eta_base"] = float(eta0)
+            a_entry["eta_delta"] = float(eta2)
+            a_entry["eta_by_horizon"] = [
+                float(eta0),
+                float(eta1),
+                float(eta2),
+            ]
+            rolling_delta_entries.append(a_entry)
+
+        # 机制三：跨状态增量低秩子空间投影去偏 (Cross-Horizon Delta-Subspace LOO)
+        for rk, eta_b, eta_d1, eta_d2 in DEFAULT_ROLLING_DELTA_SUBSPACE_CONFIGS:
+            deb_c, deb_s = apply_rolling_delta_subspace_to_encoded(
+                clean_encoded,
+                shifted_encoded_map,
+                rank_k=rk,
+                eta_base=eta_b,
+                eta_delta=eta_d2,
+                eta_by_horizon=[eta_b, eta_d1, eta_d2],
+                center_svd=center_svd,
+                normalize_inputs=normalize_inputs,
+                precomputed_vh_k0=vh_cache.get("K0"),
+                precomputed_vh_loo_k0=vh_loo_cache.get("K0"),
+                precomputed_delta_vh=delta_vh_cache,
+                precomputed_delta_vh_loo=delta_vh_loo_cache,
+            )
+            c_row, conds, s_agg = _evaluate_pair(deb_c, deb_s)
+            eta_d_str = (
+                f"{eta_d1:g}"
+                if abs(eta_d1 - eta_d2) < 1e-6
+                else f"{eta_d1:g},{eta_d2:g}"
+            )
+            ds_entry = _build_method_entry(
+                method_id=f"delta_subspace:K={rk},eta0={eta_b:g},eta_d={eta_d_str}",
+                method_family="rolling_delta_subspace",
+                label=f"Delta-Subspace LOO (K={rk}, eta0={eta_b:g}, eta_d={eta_d_str})",
+                eta=float(eta_d2),
+                rank_k=int(rk),
+                use_coherence_gate=False,
+                clean_summary=c_row,
+                condition_entries=conds,
+                shifted_aggregate=s_agg,
+                baseline_raw_entry=raw_entry,
+                baseline_full_loo_entry=full_loo_eta1_entry,
+            )
+            ds_entry["eta_base"] = float(eta_b)
+            ds_entry["eta_delta"] = float(eta_d2)
+            ds_entry["eta_by_horizon"] = [
+                float(eta_b),
+                float(eta_d1),
+                float(eta_d2),
+            ]
+            rolling_delta_entries.append(ds_entry)
+
+        if rolling_delta_entries:
+            best_rolling_by_gap50 = max(
+                rolling_delta_entries,
+                key=lambda item: (
+                    float(
+                        item["shifted_aggregate"].get(
+                            "clean_minus_shifted_vocab50_macro_top10", 0.0
+                        )
+                    ),
+                    float(
+                        item["clean_reference"].get("vocab50_macro_top10", 0.0)
+                    ),
+                ),
+            )
+            best_rolling_by_clean50 = max(
+                rolling_delta_entries,
+                key=lambda item: (
+                    float(
+                        item["clean_reference"].get("vocab50_macro_top10", 0.0)
+                    ),
+                    float(
+                        item["shifted_aggregate"].get(
+                            "clean_minus_shifted_vocab50_macro_top10", 0.0
+                        )
+                    ),
+                ),
+            )
+
     # 5. 选出特征层最优方案一配置
     best_by_gap50 = max(
         subspace_entries,
@@ -1109,6 +1980,8 @@ def run_subspace_coherence_debiasing_sweep(
             "coherence_gate": f"gate_i = clamp((||y_shift_mean_i||_2 - {coherence_low}) / ({coherence_high} - {coherence_low}), min={gate_min}, max={gate_max})",
             "clean_debiasing": "y_clean_debiased = normalize(y_clean - (eta * gate_clean) * (y_shift_mean_all @ U_K @ U_K.T))",
             "shifted_loo_debiasing": "y_k_debiased = normalize(y_shift_k - (eta * gate_k) * (y_shift_loo_mean_k @ U_{K,LOO} @ U_{K,LOO}.T))",
+            "rolling_delta_cms_debiasing": "y_r_debiased = normalize(y_r - eta0 * y_shift_0 - eta_delta * (y_shift_r - y_shift_0))",
+            "rolling_delta_subspace_debiasing": "y_r_debiased = normalize(y_r - eta0 * (y_shift_0 @ U_K0 @ U_K0.T) - eta_delta * ((y_shift_r - y_shift_0) @ U_K_delta @ U_K_delta.T))",
             "num_shifted_conditions_M": len(shift_meta),
             "shift_seconds": [sec for sec, _, _ in shift_meta],
             "coherence_low": float(coherence_low),
@@ -1124,12 +1997,16 @@ def run_subspace_coherence_debiasing_sweep(
             "full_loo_etas": full_etas,
         },
         "subspace_and_coherence_diagnostics": subspace_diagnostics,
+        "cross_horizon_revision_diagnostics": cross_horizon_diagnostics,
         "context_stage_reference": context_reference_summary,
         "raw_baseline": raw_entry,
         "full_rank_loo_baselines": full_loo_entries,
         "subspace_sweep": subspace_entries,
+        "rolling_delta_sweep": rolling_delta_entries,
         "best_by_net_gap_vocab50": best_by_gap50,
         "best_by_clean_preservation_vocab50": best_by_clean_preserving,
+        "best_rolling_delta_by_net_gap_vocab50": best_rolling_by_gap50,
+        "best_rolling_delta_by_clean_preservation_vocab50": best_rolling_by_clean50,
         "figures": {},
     }
 

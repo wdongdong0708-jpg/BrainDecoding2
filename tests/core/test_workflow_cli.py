@@ -1928,7 +1928,7 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
         zero_signal_control=False,
     )
     assert subspace_ctrl_spec["subspace_coherence_debiasing"]["enabled"] is True
-    assert subspace_ctrl_spec["subspace_coherence_debiasing"]["rank_k_values"] == [8, 12, 16, 24]
+    assert subspace_ctrl_spec["subspace_coherence_debiasing"]["rank_k_values"] == [8, 12]
 
     nb_path = PROJECT_ROOT / "scripts/colab/colab_gpu_evaluation.ipynb"
     old_nb_path = PROJECT_ROOT / "scripts/colab/colab_subspace_coherence_debiasing.ipynb"
@@ -3251,6 +3251,526 @@ def test_multi_seed_evaluation_full_reports_markdown_and_control_selection(tmp_p
     )
     assert "Active Control Method  (--control-method): [cms:eta=0.8]" in rendered_override
     assert "Primary Control Metric (--control-metric): [full_vocab_macro_top1]" in rendered_override
+
+
+def test_rolling_revision_delta_debiasing_track_a_and_track_b(tmp_path):
+    """验证原生滚动回修增量去偏（Track A 零重训跨状态诊断与去偏 + Track B 跨状态增量零化与非对称去偏训练）。"""
+    import numpy as np
+    import pandas as pd
+    import torch
+
+    from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+        apply_leave_one_out_subtraction_to_tensors,
+    )
+    from braindecoding.evaluation.evaluation_exports import (
+        export_subspace_coherence_debiasing_tables_and_markdown,
+    )
+    from braindecoding.evaluation.evaluation_reporting import (
+        REPORT_WIDTH,
+        format_subspace_coherence_debiasing_report,
+    )
+    from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+        apply_rolling_delta_cms_to_encoded,
+        apply_rolling_delta_subspace_to_encoded,
+        compute_cross_horizon_revision_diagnostics,
+        rolling_delta_cms_loo_debiasing,
+        rolling_delta_subspace_loo_debiasing,
+        run_subspace_coherence_debiasing_sweep,
+    )
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        summarize_multi_seed_evaluation,
+    )
+    from braindecoding.losses import build_siglip_loss
+    from braindecoding.models import build_brain_embedding_model
+    from braindecoding.optimizers import build_adamw_for_modules
+    from braindecoding.training.siamese_debiased_training import (
+        build_centered_vocabulary_bank,
+        compute_norm_damped_rolling_debiased_embedding,
+        preextract_frozen_cnn_features,
+        resolve_siamese_debiased_config,
+        train_one_epoch_siamese_debiased,
+    )
+    from braindecoding.training.word_encoder_training import SentenceBatchSampler
+    from braindecoding.training.workflow_runner import build_workflow_config
+
+    torch.manual_seed(42)
+    np.random.seed(42)
+    n_samples, dim, m_shifts = 24, 16, 6
+
+    # --- Track A: 1. Equivalence of rolling_delta_cms_loo_debiasing when eta_delta == eta_base ---
+    y_clean_k0 = torch.nn.functional.normalize(torch.randn(n_samples, dim), dim=-1)
+    y_clean_k2 = torch.nn.functional.normalize(torch.randn(n_samples, dim), dim=-1)
+    # Shape [N, M, D] for subspace/rolling_delta functions
+    y_shifts_k0 = torch.nn.functional.normalize(
+        torch.randn(n_samples, m_shifts, dim), dim=-1
+    )
+    # Inject a strong rank-2 future-word duration bias into K2 shifts
+    future_bias_basis = torch.nn.functional.normalize(torch.randn(2, dim), dim=-1)
+    future_amps = torch.randn(n_samples, 2) @ future_bias_basis
+    y_shifts_k2 = torch.nn.functional.normalize(
+        y_shifts_k0 + 0.9 * future_amps.unsqueeze(1), dim=-1
+    )
+    y_clean_k1 = torch.nn.functional.normalize(
+        0.5 * (y_clean_k0 + y_clean_k2), dim=-1
+    )
+    y_shifts_k1 = torch.nn.functional.normalize(
+        0.5 * (y_shifts_k0 + y_shifts_k2), dim=-1
+    )
+
+    y_clean_by_h = {0: y_clean_k0, 1: y_clean_k1, 2: y_clean_k2}
+    y_shifts_by_h = {0: y_shifts_k0, 1: y_shifts_k1, 2: y_shifts_k2}
+
+    deb_c_same, deb_s_same = rolling_delta_cms_loo_debiasing(
+        y_clean_by_h,
+        y_shifts_by_h,
+        eta_base=0.8,
+        eta_delta=0.8,
+        mode="delta",
+        normalize_inputs=True,
+    )
+    ref_c_cms, ref_s_cms_map = apply_leave_one_out_subtraction_to_tensors(
+        y_clean_k2,
+        {f"s{k}": y_shifts_k2[:, k, :] for k in range(m_shifts)},
+        eta=0.8,
+        normalize_inputs=True,
+    )
+    ref_c_cms = torch.nn.functional.normalize(ref_c_cms, p=2.0, dim=-1)
+    ref_s_cms = torch.nn.functional.normalize(
+        torch.stack([ref_s_cms_map[f"s{k}"] for k in range(m_shifts)], dim=1),
+        p=2.0,
+        dim=-1,
+    )
+    assert torch.allclose(deb_c_same[2], ref_c_cms, atol=1e-6)
+    assert torch.allclose(deb_s_same[2], ref_s_cms, atol=1e-6)
+
+    # --- Track A: 2. Cross-horizon diagnostics & Low-rank future-delta subspace LOO ---
+    vocab = [f"w{i}" for i in range(6)]
+    word_embs = {
+        w: torch.nn.functional.normalize(torch.randn(dim), dim=-1)
+        for w in vocab
+    }
+    words_list = [f"w{i % 6}" for i in range(n_samples)]
+    targets_tensor = torch.stack([word_embs[w] for w in words_list])
+
+    shift_keys = [f"shift_{s}s" for s in (15, 30, 45, 60, 90, 120)]
+    common_mask = torch.ones(n_samples, dtype=torch.bool)
+    clean_encoded = {
+        "predictions": y_clean_k2,
+        "targets": targets_tensor,
+        "words": words_list,
+        "event_ids": [f"e{i}" for i in range(n_samples)],
+        "revision_predictions": {
+            0: y_clean_k0,
+            1: y_clean_k1,
+            2: y_clean_k2,
+        },
+        "revision_availability_masks": {
+            0: common_mask.clone(),
+            1: common_mask.clone(),
+            2: common_mask.clone(),
+        },
+    }
+    shifted_encoded_map = {}
+    for m_idx, s_key in enumerate(shift_keys):
+        y_s0 = y_shifts_k0[:, m_idx, :]
+        y_s1 = y_shifts_k1[:, m_idx, :]
+        y_s2 = y_shifts_k2[:, m_idx, :]
+        shifted_encoded_map[s_key] = {
+            "predictions": y_s2,
+            "targets": targets_tensor,
+            "words": clean_encoded["words"],
+            "event_ids": clean_encoded["event_ids"],
+            "revision_predictions": {0: y_s0, 1: y_s1, 2: y_s2},
+            "revision_availability_masks": {
+                0: common_mask.clone(),
+                1: common_mask.clone(),
+                2: common_mask.clone(),
+            },
+        }
+
+    cross_diag, delta_vh, delta_vh_loo = compute_cross_horizon_revision_diagnostics(
+        y_shifts_by_h,
+        availability_masks=clean_encoded["revision_availability_masks"],
+        subspace_rank_k=4,
+    )
+    assert cross_diag["enabled"] is True
+    assert "K0_to_K1" in cross_diag["cross_horizon_transitions"]
+    assert "K0_to_K2" in cross_diag["cross_horizon_transitions"]
+    k2_trans = cross_diag["cross_horizon_transitions"]["K0_to_K2"]
+    assert k2_trans["delta_shift_norm_mean"] > 0.1
+    assert k2_trans["delta_svd_cumulative_energy"]["top_4"] > 0.5
+    assert "K2" in delta_vh
+    assert len(delta_vh_loo["K2"]) == m_shifts
+
+    deb_sub_c, deb_sub_s = rolling_delta_subspace_loo_debiasing(
+        y_clean_by_h,
+        y_shifts_by_h,
+        rank_k=2,
+        eta_base=0.5,
+        eta_delta=1.0,
+    )
+    assert deb_sub_c[2].shape == (n_samples, dim)
+    assert deb_sub_s[2].shape == (n_samples, m_shifts, dim)
+
+    deb_enc_cms, deb_sh_cms = apply_rolling_delta_cms_to_encoded(
+        clean_encoded,
+        shifted_encoded_map,
+        eta_base=0.3,
+        eta_delta=0.8,
+        eta_by_horizon={0: 0.3, 1: 0.8, 2: 0.8},
+        mode="asymmetric",
+    )
+    assert set(deb_enc_cms["revision_predictions"].keys()) == {0, 1, 2}
+    assert len(deb_sh_cms) == 6
+
+    deb_enc_sub, deb_sh_sub = apply_rolling_delta_subspace_to_encoded(
+        clean_encoded,
+        shifted_encoded_map,
+        rank_k=2,
+        eta_base=0.5,
+        eta_delta=1.0,
+    )
+    assert set(deb_enc_sub["revision_predictions"].keys()) == {0, 1, 2}
+    assert len(deb_sh_sub) == 6
+
+    # --- Track A: 3. Full sweep + report + markdown/CSV exports + --control-method selectors ---
+    class _DummyEvalDS:
+        def __init__(self):
+            self.embedding_map = {
+                w: word_embs[w].numpy() for w in vocab
+            }
+            self.table = pd.DataFrame(
+                {
+                    "event_id": clean_encoded["event_ids"],
+                    "subject_id": ["sub-01"] * n_samples,
+                    "normalized_word": clean_encoded["words"],
+                }
+            )
+
+    eval_ds = _DummyEvalDS()
+    shifted_encoded_by_shift = [
+        (
+            float(-s),
+            f"shift_{s}s",
+            f"-{s}s Shift",
+            shifted_encoded_map[f"shift_{s}s"],
+        )
+        for s in (15, 30, 45, 60, 90, 120)
+    ]
+    sweep_res = run_subspace_coherence_debiasing_sweep(
+        dataset="pallier2025",
+        stage="revision",
+        split="test",
+        seed=0,
+        exp_tag="",
+        word_exp_tag="",
+        clean_encoded=clean_encoded,
+        shifted_encoded_by_shift=shifted_encoded_by_shift,
+        eval_ds=eval_ds,
+        vocabulary=vocab,
+        vocab50=vocab,
+        eta_values=[0.5, 0.8],
+        rank_k_values=[8],
+        coherence_gate_modes=[False],
+        plot=False,
+        print_report=False,
+    )
+    assert sweep_res["cross_horizon_revision_diagnostics"]["enabled"] is True
+    rolling_methods = [
+        item["method_id"] for item in sweep_res.get("rolling_delta_sweep", [])
+    ]
+    assert "delta_cms:eta0=0.5,eta_d=1" in rolling_methods
+    assert "asymmetric_cms:0.3,0.8,0.8" in rolling_methods
+    assert any(m.startswith("delta_subspace:") for m in rolling_methods)
+
+    compact_rep = format_subspace_coherence_debiasing_report(
+        sweep_res, verbose=False
+    )
+    assert max(len(line) for line in compact_rep.splitlines()) <= REPORT_WIDTH
+    verbose_rep = format_subspace_coherence_debiasing_report(
+        sweep_res, verbose=True
+    )
+    assert "1B. Cross-Horizon Revision Shortcut Diagnostics" in verbose_rep
+    assert "Asym-CMS" in verbose_rep
+
+    exported_files = export_subspace_coherence_debiasing_tables_and_markdown(
+        sweep_res, output_dir=tmp_path / "subspace_exports"
+    )
+    assert Path(exported_files["subspace_coherence_debiasing_md"]).is_file()
+    assert Path(exported_files["subspace_debiasing_sweep_csv"]).is_file()
+    md_text = Path(exported_files["subspace_coherence_debiasing_md"]).read_text(encoding="utf-8")
+    assert "Cross-Horizon Revision Shortcut Diagnostics" in md_text
+    assert "Delta-CMS" in md_text
+
+    # Verify --control-method selectors on multi-seed summary
+    raw_clean_ref = sweep_res["raw_baseline"]["clean_reference"]
+    seed_payload = {
+        "dataset": "pallier2025",
+        "stage": "revision",
+        "split": "test",
+        "seed": 0,
+        "subset": {"subset_tag": "all-subjects"},
+        "primary_50_word": raw_clean_ref,
+        "full_vocabulary": raw_clean_ref,
+        "vocabulary_sweep": {},
+        "linguistic_breakdown": {},
+        "per_subject": [],
+        "horizons": raw_clean_ref.get("horizons", {}),
+        "negative_controls": {
+            "enabled": True,
+            "control_type": "subspace_coherence_debiasing",
+            "clean_0s": raw_clean_ref,
+            "shifted_conditions": [],
+            "shifted_aggregate": sweep_res["raw_baseline"]["shifted_aggregate"],
+            "subspace_coherence_debiasing": sweep_res,
+        },
+    }
+    for selector in (
+        "delta_cms:eta0=0.5,eta_d=1",
+        "asymmetric_cms:0.3,0.8,0.8",
+        "delta_subspace:K=8,eta0=0.5,eta_d=1",
+    ):
+        ms_sel = summarize_multi_seed_evaluation(
+            [seed_payload], control_method=selector
+        )
+        assert (
+            ms_sel["negative_controls_aggregate"]["active_control_method"]
+            == selector
+        )
+
+    # --- Track B: 1. Config resolution & standalone YAML configs ---
+    for yaml_rel in (
+        "configs/training/siamese_debiased/pallier2025_siamese_debiased_revision_rolling_delta.yaml",
+        "configs/training/siamese_debiased/chineseeeg2_siamese_debiased_revision_rolling_delta.yaml",
+    ):
+        cfg_rd, _ = build_workflow_config(config_path=yaml_rel)
+        siam_rd = cfg_rd["workflow"]["siamese_debiased"]
+        assert siam_rd["enabled"] is True
+        assert siam_rd["lambda_delta_null"] == pytest.approx(20.0)
+        assert siam_rd["eta_delta_train"] == pytest.approx(0.30)
+        assert siam_rd["eta_train_by_horizon"] == {0: 0.3, 1: 0.8, 2: 0.8}
+        assert siam_rd["lambda_null_by_horizon"] == {0: 5.0, 1: 20.0, 2: 20.0}
+        assert cfg_rd["workflow"]["exp_tag"] == "rolling_delta_debiased"
+
+    # --- Track B: 2. compute_norm_damped_rolling_debiased_embedding gradient & forward verification ---
+    y_c = torch.nn.functional.normalize(
+        torch.randn(8, dim, requires_grad=True), dim=-1
+    )
+    y_sr = torch.nn.functional.normalize(
+        torch.randn(8, dim, requires_grad=True), dim=-1
+    )
+    y_s0 = torch.nn.functional.normalize(
+        torch.randn(8, dim, requires_grad=True), dim=-1
+    )
+    rev_delays = torch.full((8,), 2, dtype=torch.long)
+    y_tilde_roll = compute_norm_damped_rolling_debiased_embedding(
+        y_c,
+        y_sr,
+        rev_delays,
+        eta_train=0.5,
+        eta_delta_train=0.3,
+        y_shift_k0_aligned=y_s0,
+        has_k0_mask=torch.ones(8, dtype=torch.bool),
+    )
+    u_roll_ref = (
+        y_c - 0.5 * y_sr.detach() - 0.3 * (y_sr.detach() - y_s0.detach())
+    )
+    y_tilde_roll_ref = u_roll_ref / u_roll_ref.norm(
+        p=2, dim=-1, keepdim=True
+    ).clamp(min=1e-6)
+    assert torch.allclose(y_tilde_roll, y_tilde_roll_ref, atol=1e-6)
+    grads_shift = torch.autograd.grad(
+        y_tilde_roll.sum(),
+        [y_sr, y_s0],
+        retain_graph=True,
+        allow_unused=True,
+    )
+    assert grads_shift[0] is None
+    assert grads_shift[1] is None
+
+    # --- Track B: 3. train_one_epoch_siamese_debiased with lambda_delta_null & horizon schedules ---
+    class _MiniRollingDS(torch.utils.data.Dataset):
+        def __init__(self, n_rows: int):
+            self.n_rows = n_rows
+            self.channel_count = 8
+            self.window_samples = 25
+            self.temporal_shift_seconds = 0.0
+            self.temporal_shift_samples = 0
+            self.sampling_rate_hz = 50.0
+            self.sentence_uids = [f"sent-{i // 6}" for i in range(n_rows)]
+            self._sentence_index_tensors = torch.tensor(
+                [i // 6 for i in range(n_rows)], dtype=torch.long
+            )
+            self._subject_index_tensors = torch.tensor(
+                [i % 2 for i in range(n_rows)], dtype=torch.long
+            )
+            self._words = tuple(vocab[i % len(vocab)] for i in range(n_rows))
+            self._event_ids = tuple(f"ev-{i:03d}" for i in range(n_rows))
+            self.embedding_map = {
+                w: word_embs[w].numpy() for w in vocab
+            }
+            self._embedding_tensors = {
+                w: torch.from_numpy(vec) for w, vec in self.embedding_map.items()
+            }
+            self._brains = torch.randn(
+                n_rows, 8, 25, generator=torch.Generator().manual_seed(99)
+            )
+
+        def __len__(self):
+            return self.n_rows
+
+        def __getitem__(self, idx: int):
+            i = int(idx)
+            w = self._words[i]
+            shift_offset = int(self.temporal_shift_samples)
+            shifted_idx = (i + shift_offset) % self.n_rows
+            return {
+                "meg": self._brains[shifted_idx].clone(),
+                "text_embedding": self._embedding_tensors[w],
+                "subject_index": self._subject_index_tensors[i],
+                "sentence_index": self._sentence_index_tensors[i],
+                "word": w,
+                "event_id": self._event_ids[i],
+                "recording_id": "rec-01",
+            }
+
+    device = torch.device("cpu")
+    train_ds_b = _MiniRollingDS(12)
+    val_ds_b = _MiniRollingDS(6)
+    ch_pos = np.linspace(0.1, 0.9, 8 * 2, dtype=np.float32).reshape(8, 2)
+    model_cfg_b = {
+        "embedding_dimension": dim,
+        "use_transformer": True,
+        "context_mode": "grouped",
+        "conv": {
+            "merger_channels": 8,
+            "merger_position_dimension": 8,
+            "merger_per_subject": False,
+            "merger_dropout": 0.0,
+            "initial_linear": 16,
+            "hidden": 16,
+            "depth": 2,
+            "kernel_size": 3,
+            "dilation_growth": 2,
+            "dilation_period": 2,
+            "dropout_input": 0.0,
+            "convolution_dropout": 0.0,
+            "batch_norm": True,
+            "gelu": True,
+            "skip": True,
+            "glu_every": 0,
+            "glu_context": 0,
+            "temporal_attention_hidden": 16,
+        },
+        "transformer": {
+            "depth": 1,
+            "heads": 2,
+            "attention_dropout": 0.0,
+            "feedforward_dropout": 0.0,
+            "use_scalenorm": True,
+            "use_rmsnorm": False,
+            "rotary_position_embedding": True,
+            "residual_attention": False,
+            "scale_residual": True,
+        },
+        "local_window_revision": {
+            "enabled": True,
+            "history_radius": 2,
+            "horizons": [0, 1, 2],
+            "validation_query_batch_size": 16,
+        },
+    }
+    model_b = build_brain_embedding_model(8, ch_pos, 2, model_cfg_b).to(device)
+    for p in model_b.brain_encoder.parameters():
+        p.requires_grad_(False)
+    model_b.brain_encoder.eval()
+    loss_mod_b = build_siglip_loss(
+        {
+            "name": "SigLip",
+            "initial_temperature": 10.0,
+            "initial_bias": -10.0,
+            "identical_candidates_threshold": 0.999,
+        }
+    ).to(device)
+    shifts_b = [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
+    pre_cache_b = preextract_frozen_cnn_features(
+        model_b,
+        train_ds_b,
+        val_ds_b,
+        dataset="pallier2025",
+        subset_tag="unit-test-rolling-delta",
+        word_ckpt_sha256="",
+        window_seconds=0.5,
+        shift_seconds=shifts_b,
+        device=device,
+        batch_size=6,
+        amp=False,
+        cache_to_disk=False,
+        show_progress=False,
+    )
+    centered_bank_b = build_centered_vocabulary_bank(train_ds_b, vocab, device)
+    sampler_b = SentenceBatchSampler(
+        train_ds_b.sentence_uids,
+        batch_size=6,
+        shuffle=True,
+        seed=0,
+        preserve_complete_groups=True,
+    )
+    tc_b = {
+        "seed": 0,
+        "epochs": 1,
+        "batch_size": 6,
+        "learning_rate": 1e-3,
+        "weight_decay": 0.01,
+        "amp": False,
+        "amp_dtype": "float32",
+        "revision_cutoff_policy": "all",
+    }
+    siam_cfg_b = resolve_siamese_debiased_config(
+        {},
+        siamese_debiased=True,
+        eta_train=0.5,
+        lambda_null=10.0,
+        lambda_delta_null=20.0,
+        eta_delta_train=0.30,
+        eta_train_by_horizon="0.3,0.8,0.8",
+        lambda_null_by_horizon="5.0,20.0,20.0",
+        shifts_per_step=2,
+    )
+    opt_b = build_adamw_for_modules([model_b, loss_mod_b], tc_b)
+    scaler_b = torch.amp.GradScaler("cuda", enabled=False)
+    loss_b, updates_b, batches_b, diag_b = train_one_epoch_siamese_debiased(
+        model_b,
+        loss_mod_b,
+        sampler_b,
+        pre_cache_b,
+        opt_b,
+        scaler_b,
+        device,
+        tc_b,
+        siam_cfg_b,
+        centered_vocab_bank=centered_bank_b,
+        epoch_index=0,
+        show_progress=False,
+    )
+    assert np.isfinite(loss_b)
+    assert updates_b == 2
+    assert batches_b == 2
+    assert diag_b["lambda_delta_null"] == pytest.approx(20.0)
+    assert diag_b["eta_delta_train"] == pytest.approx(0.30)
+    assert diag_b["eta_train_by_horizon"] == {0: 0.3, 1: 0.8, 2: 0.8}
+    assert diag_b["lambda_null_by_horizon"] == {0: 5.0, 1: 20.0, 2: 20.0}
+    assert diag_b["shift_delta_null_loss"] > 0.0
+    assert (
+        diag_b["prefix_revision"]["delay_mean_delta_null_losses"][0] == 0.0
+    )
+    assert (
+        diag_b["prefix_revision"]["delay_mean_delta_null_losses"][1] > 0.0
+    )
+    assert (
+        diag_b["prefix_revision"]["delay_mean_delta_null_losses"][2] > 0.0
+    )
+
 
 
 

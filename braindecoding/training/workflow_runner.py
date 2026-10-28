@@ -599,6 +599,10 @@ def build_workflow_config(
     siamese_debiased: bool | None = None,
     eta_train: float | None = None,
     lambda_null: float | None = None,
+    lambda_delta_null: float | None = None,
+    eta_delta_train: float | None = None,
+    eta_train_by_horizon: str | Iterable[float | int | str] | dict | None = None,
+    lambda_null_by_horizon: str | Iterable[float | int | str] | dict | None = None,
     shifts_per_step: int | None = None,
     preextract_frozen_cnn: bool | None = None,
 ) -> tuple[dict, dict]:
@@ -987,6 +991,18 @@ def build_workflow_config(
         siamese_debiased=False if ignore_implicit_siamese_on_word else siamese_debiased,
         eta_train=None if ignore_implicit_siamese_on_word else eta_train,
         lambda_null=None if ignore_implicit_siamese_on_word else lambda_null,
+        lambda_delta_null=(
+            None if ignore_implicit_siamese_on_word else lambda_delta_null
+        ),
+        eta_delta_train=(
+            None if ignore_implicit_siamese_on_word else eta_delta_train
+        ),
+        eta_train_by_horizon=(
+            None if ignore_implicit_siamese_on_word else eta_train_by_horizon
+        ),
+        lambda_null_by_horizon=(
+            None if ignore_implicit_siamese_on_word else lambda_null_by_horizon
+        ),
         shifts_per_step=None if ignore_implicit_siamese_on_word else shifts_per_step,
         preextract_frozen_cnn=(
             False if ignore_implicit_siamese_on_word else preextract_frozen_cnn
@@ -1648,6 +1664,10 @@ def run_training_workflow(
     siamese_debiased: bool | None = None,
     eta_train: float | None = None,
     lambda_null: float | None = None,
+    lambda_delta_null: float | None = None,
+    eta_delta_train: float | None = None,
+    eta_train_by_horizon: str | Iterable[float | int | str] | dict | None = None,
+    lambda_null_by_horizon: str | Iterable[float | int | str] | dict | None = None,
     shifts_per_step: int | None = None,
     preextract_frozen_cnn: bool | None = None,
 ) -> dict:
@@ -1678,6 +1698,10 @@ def run_training_workflow(
         siamese_debiased=siamese_debiased,
         eta_train=eta_train,
         lambda_null=lambda_null,
+        lambda_delta_null=lambda_delta_null,
+        eta_delta_train=eta_delta_train,
+        eta_train_by_horizon=eta_train_by_horizon,
+        lambda_null_by_horizon=lambda_null_by_horizon,
         shifts_per_step=shifts_per_step,
         preextract_frozen_cnn=preextract_frozen_cnn,
     )
@@ -1881,9 +1905,18 @@ def run_training_workflow(
         and (siamese_enabled or bool(siamese_spec.get("preextract_frozen_cnn", False)))
     )
     if siamese_enabled:
+        siam_extra = ""
+        if float(siamese_spec.get("lambda_delta_null", 0.0)) > 0.0:
+            siam_extra += f", lambda_delta_null={float(siamese_spec['lambda_delta_null']):.2f}"
+        if float(siamese_spec.get("eta_delta_train", 0.0)) > 0.0:
+            siam_extra += f", eta_delta_train={float(siamese_spec['eta_delta_train']):.2f}"
+        if siamese_spec.get("eta_train_by_horizon"):
+            siam_extra += f", eta_horizons={siamese_spec['eta_train_by_horizon']}"
+        if siamese_spec.get("lambda_null_by_horizon"):
+            siam_extra += f", lambda_horizons={siamese_spec['lambda_null_by_horizon']}"
         print(
             f" Siamese Deb : enabled (eta_train={float(siamese_spec.get('eta_train', 0.8)):.2f}, "
-            f"lambda_null={float(siamese_spec.get('lambda_null', 10.0)):.2f}, "
+            f"lambda_null={float(siamese_spec.get('lambda_null', 10.0)):.2f}{siam_extra}, "
             f"M={int(siamese_spec.get('shifts_per_step', 2))}/{len(siamese_spec.get('shift_seconds', ()))} shifts, "
             f"preextract_cnn={use_preextracted_cnn})",
             flush=True,
@@ -1934,7 +1967,15 @@ def run_training_workflow(
             ),
             show_progress=show_progress,
         )
-        if siamese_enabled and float(siamese_spec.get("lambda_null", 0.0)) > 0.0:
+        need_vocab_bank = siamese_enabled and (
+            float(siamese_spec.get("lambda_null", 0.0)) > 0.0
+            or float(siamese_spec.get("lambda_delta_null", 0.0)) > 0.0
+            or any(
+                float(v) > 0.0
+                for v in (siamese_spec.get("lambda_null_by_horizon") or {}).values()
+            )
+        )
+        if need_vocab_bank:
             centered_vocab_bank = build_centered_vocabulary_bank(
                 train_ds, vocabulary, device
             )
@@ -2133,9 +2174,11 @@ def run_training_workflow(
         if frozen:
             status_str += " [frozen]"
         if siamese_enabled and isinstance(diagnostics, dict) and "shift_null_loss" in diagnostics:
+            d_null_val = float(diagnostics.get("shift_delta_null_loss", 0.0))
+            d_null_str = f",dnull={d_null_val:.4f}" if d_null_val > 0.0 else ""
             status_str += (
                 f" [sig={float(diagnostics.get('siglip_loss', train_loss)):.3f},"
-                f"null={float(diagnostics.get('shift_null_loss', 0.0)):.4f}]"
+                f"null={float(diagnostics.get('shift_null_loss', 0.0)):.4f}{d_null_str}]"
             )
 
         epoch_col = f"{epoch + 1:02d}/{max_epochs:02d}"
