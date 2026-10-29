@@ -999,7 +999,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         "-c",
         default="configs/decoding/sequence_decoding_protocol.yaml",
-        help="S3 序列解码协议 YAML 配置文件路径",
+        help=(
+            "S3 序列解码协议 YAML 或神经训练阶段 YAML 配置文件路径"
+            "（若传入如 configs/training/siamese_debiased/pallier2025_siamese_debiased_prefix_revision.yaml 的训练配置，"
+            "将自动加载默认 S3 协议并提取 dataset、revision_stage 与 window_seconds）"
+        ),
+    )
+    decode_cmd.add_argument(
+        "--training-config",
+        default=None,
+        help="可选显式指定神经编码器训练阶段 YAML 配置文件路径（如 configs/training/siamese_debiased/pallier2025_siamese_debiased_prefix_revision.yaml）",
     )
     decode_cmd.add_argument(
         "--dataset",
@@ -1024,6 +1033,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_subject_subset_args(decode_cmd)
     decode_cmd.add_argument("--exp-tag", default=None, help="可选神经训练实验标签")
     decode_cmd.add_argument("--word-exp-tag", default=None, help="可选阶段 1 实验标签")
+    decode_cmd.add_argument(
+        "--revision-stage",
+        choices=("auto", "revision", "prefix_revision"),
+        default="auto",
+        help="可选指定 K0/K1/K2 神经表征来源阶段：auto（默认自动检测或优先 revision 回退 prefix_revision）、revision (Stage 2.2) 或 prefix_revision (Stage 2.3)",
+    )
     decode_cmd.add_argument("--window-seconds", type=float, default=None, help="可选覆写单字脑信号时间窗长度（秒）")
     decode_cmd.add_argument("--window-start-offset-seconds", type=float, default=None, help="可选覆写相对词起始时刻的窗口起点偏移（秒）")
     decode_cmd.add_argument("--language-model", default=None, help="可选覆写因果语言模型名称或路径")
@@ -1044,6 +1059,12 @@ def build_parser() -> argparse.ArgumentParser:
     decode_cmd.add_argument("--no-plot", action="store_true", help="禁用可视化图表生成")
     decode_cmd.add_argument("--no-progress", action="store_true", help="禁用 tqdm 实时进度条")
     decode_cmd.add_argument("--json", dest="json_output", action="store_true", help="输出原始 JSON 而非格式化对比表格")
+    decode_cmd.add_argument(
+        "--shared-language-weight",
+        action="store_true",
+        default=None,
+        help="校准时令 K0/K1/K2 共享同一语言模型权重 λ_r >= 0.05（默认按状态自适应正下界单调递减 λ_K0 >= λ_K1 >= λ_K2 >= 0.05）",
+    )
     decode_cmd.add_argument("--force", action="store_true", help="强制重跑全部步骤，忽略已保存的匹配缓存与中间解码产物")
     decode_cmd.add_argument("--device", default=None, help="计算设备（cuda / cpu）")
     decode_cmd.add_argument("--verbose", "-v", action="store_true", help="打印完整宽表拆解报告（默认输出单屏 <= 86 列核心执行摘要）")

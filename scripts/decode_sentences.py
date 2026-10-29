@@ -52,7 +52,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         "-c",
         default=DEFAULT_CONFIG_PATH,
-        help=f"S3 序列解码协议 YAML 配置文件路径（默认：{DEFAULT_CONFIG_PATH}）",
+        help=(
+            f"S3 序列解码协议 YAML 或神经训练阶段 YAML 配置文件路径（默认：{DEFAULT_CONFIG_PATH}；"
+            "若传入如 configs/training/siamese_debiased/pallier2025_siamese_debiased_prefix_revision.yaml 的训练配置，"
+            "将自动加载默认 S3 协议并提取 dataset、revision_stage 与 window_seconds）"
+        ),
+    )
+    parser.add_argument(
+        "--training-config",
+        default=None,
+        help="可选显式指定神经编码器训练阶段 YAML 配置文件路径（如 configs/training/siamese_debiased/pallier2025_siamese_debiased_prefix_revision.yaml）",
     )
     parser.add_argument(
         "--dataset",
@@ -348,8 +357,68 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             "per_seed_summaries": per_seed_summaries,
         }
     args.seed = int(seed_list[0])
-    cfg_path = resolve_config_path(project_path(args.config))
-    protocol_cfg = load_yaml_with_extends(cfg_path) if cfg_path.is_file() else {}
+    default_proto_path = resolve_config_path(project_path(DEFAULT_CONFIG_PATH))
+    cfg_path = resolve_config_path(project_path(args.config or DEFAULT_CONFIG_PATH))
+    loaded_cfg = load_yaml_with_extends(cfg_path) if cfg_path.is_file() else {}
+
+    training_cfg_arg = getattr(args, "training_config", None)
+    training_cfg_path: Path | None = None
+    training_yaml: dict[str, Any] | None = None
+
+    is_training_yaml_in_config = (
+        isinstance(loaded_cfg, dict)
+        and any(k in loaded_cfg for k in ("workflow", "siamese_debiased", "model", "training"))
+        and "decoding" not in loaded_cfg
+        and "language_model" not in loaded_cfg
+    )
+    if is_training_yaml_in_config:
+        training_cfg_path = cfg_path
+        training_yaml = loaded_cfg
+        protocol_cfg = (
+            load_yaml_with_extends(default_proto_path)
+            if default_proto_path.is_file()
+            else {}
+        )
+    else:
+        protocol_cfg = loaded_cfg
+        if training_cfg_arg is not None and str(training_cfg_arg).strip():
+            cand_train_p = resolve_config_path(project_path(training_cfg_arg))
+            if cand_train_p.is_file():
+                raw_t = load_yaml_with_extends(cand_train_p)
+                if isinstance(raw_t, dict):
+                    training_cfg_path = cand_train_p
+                    training_yaml = raw_t
+
+    effective_rev_stage = str(getattr(args, "revision_stage", "auto") or "auto").strip().lower()
+    yaml_exp_tag: str | None = None
+    yaml_word_exp_tag: str | None = None
+    yaml_win_sec: float | None = None
+    yaml_win_off: float | None = None
+    if isinstance(training_yaml, dict):
+        from braindecoding.training.workflow_runner import (
+            _infer_dataset_and_stage_from_yaml,
+        )
+
+        inferred_ds, inferred_stage = _infer_dataset_and_stage_from_yaml(training_yaml)
+        args.dataset = inferred_ds
+        if effective_rev_stage == "auto" and inferred_stage in {"revision", "prefix_revision"}:
+            effective_rev_stage = inferred_stage
+            args.revision_stage = inferred_stage
+        wf_b = training_yaml.get("workflow") if isinstance(training_yaml.get("workflow"), dict) else {}
+        exp_b = training_yaml.get("experiment") if isinstance(training_yaml.get("experiment"), dict) else {}
+        ds_b = training_yaml.get("dataset") if isinstance(training_yaml.get("dataset"), dict) else {}
+        yaml_exp_tag = wf_b.get("exp_tag") or exp_b.get("exp_tag")
+        yaml_word_exp_tag = wf_b.get("word_exp_tag") or exp_b.get("word_exp_tag")
+        raw_w = wf_b.get("window_seconds") if wf_b.get("window_seconds") is not None else ds_b.get("window_seconds")
+        raw_o = (
+            wf_b.get("window_start_offset_seconds")
+            if wf_b.get("window_start_offset_seconds") is not None
+            else ds_b.get("window_start_offset_seconds")
+        )
+        if raw_w is not None:
+            yaml_win_sec = float(raw_w)
+        if raw_o is not None:
+            yaml_win_off = float(raw_o)
 
     dec_cfg = dict(protocol_cfg.get("decoding") or {})
     cal_cfg = dict(protocol_cfg.get("calibration") or {})
@@ -361,12 +430,12 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     exp_tag = (
         args.exp_tag
         if getattr(args, "exp_tag", None) is not None
-        else (os.environ.get("BRAINDECODING_EXP_TAG", "").strip() or None)
+        else (os.environ.get("BRAINDECODING_EXP_TAG", "").strip() or yaml_exp_tag or None)
     )
     word_exp_tag = (
         args.word_exp_tag
         if getattr(args, "word_exp_tag", None) is not None
-        else (os.environ.get("BRAINDECODING_WORD_EXP_TAG", "").strip() or None)
+        else (os.environ.get("BRAINDECODING_WORD_EXP_TAG", "").strip() or yaml_word_exp_tag or None)
     )
 
     top_k = int(
@@ -455,8 +524,16 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             )
             if int(x) > 0
         )
-    window_seconds = getattr(args, "window_seconds", None)
-    window_start_offset_seconds = getattr(args, "window_start_offset_seconds", None)
+    window_seconds = (
+        getattr(args, "window_seconds", None)
+        if getattr(args, "window_seconds", None) is not None
+        else yaml_win_sec
+    )
+    window_start_offset_seconds = (
+        getattr(args, "window_start_offset_seconds", None)
+        if getattr(args, "window_start_offset_seconds", None) is not None
+        else yaml_win_off
+    )
     show_progress = not bool(getattr(args, "no_progress", False))
     plot_enabled = not bool(getattr(args, "no_plot", False))
 
@@ -523,7 +600,8 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             subjects=args.subjects,
             exp_tag=exp_tag,
             word_exp_tag=word_exp_tag,
-            revision_stage=str(getattr(args, "revision_stage", "auto") or "auto"),
+            revision_stage=effective_rev_stage,
+            config_path=training_cfg_path,
             window_seconds=window_seconds,
             window_start_offset_seconds=window_start_offset_seconds,
             background_shift_seconds=cms_shifts,
@@ -539,6 +617,18 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             return False
         try:
             payload = load_neural_vocabulary_scores(pt_path)
+            ckpt_prov = dict(
+                payload.get("checkpoint_provenance")
+                or payload.get("checkpoints")
+                or {}
+            )
+            saved_rev_stage = ckpt_prov.get("revision_stage")
+            if (
+                effective_rev_stage in ("revision", "prefix_revision")
+                and saved_rev_stage
+                and saved_rev_stage != effective_rev_stage
+            ):
+                return False
             cms_meta = dict(payload.get("cms_metadata") or {})
             if "subtraction_eta" not in cms_meta:
                 return True

@@ -26,6 +26,7 @@ from braindecoding.config import (
     ensure_default_environment,
     load_yaml_with_extends,
     project_path,
+    resolve_config_path,
     results_root,
 )
 from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import train as chinese_task
@@ -44,6 +45,7 @@ from braindecoding.training.word_encoder_training import (
     resolve_amp_dtype,
 )
 from braindecoding.training.workflow_runner import (
+    _infer_dataset_and_stage_from_yaml,
     build_workflow_config,
     run_cache_workflow,
     verify_cache_ready,
@@ -523,6 +525,7 @@ def export_neural_vocabulary_scores(
     context_checkpoint: str | Path | None = None,
     revision_checkpoint: str | Path | None = None,
     revision_stage: str = "auto",
+    config_path: str | Path | None = None,
     window_seconds: float | None = None,
     window_start_offset_seconds: float | None = None,
     background_shift_seconds: Sequence[float] = DEFAULT_BACKGROUND_SHIFT_SECONDS,
@@ -551,6 +554,24 @@ def export_neural_vocabulary_scores(
         raise ValueError(
             f"revision_stage 仅支持 'auto'、'revision' 或 'prefix_revision'，当前为：{revision_stage!r}"
         )
+
+    matched_rev_cfg_path: Path | None = None
+    inferred_rev_stage: str | None = None
+    if config_path is not None:
+        resolved_cfg_p = resolve_config_path(project_path(config_path))
+        if resolved_cfg_p.is_file():
+            raw_yaml = load_yaml_with_extends(resolved_cfg_p)
+            if isinstance(raw_yaml, dict) and any(
+                k in raw_yaml for k in ("workflow", "model", "siamese_debiased", "training")
+            ):
+                inferred_ds, inferred_stage = _infer_dataset_and_stage_from_yaml(raw_yaml)
+                dataset = inferred_ds
+                if rev_stage_mode == "auto" and inferred_stage in {"revision", "prefix_revision"}:
+                    rev_stage_mode = inferred_stage
+                if inferred_stage in {"revision", "prefix_revision"}:
+                    matched_rev_cfg_path = resolved_cfg_p
+                    inferred_rev_stage = inferred_stage
+
     initial_rev_stage = (
         "prefix_revision" if rev_stage_mode == "prefix_revision" else "revision"
     )
@@ -570,6 +591,11 @@ def export_neural_vocabulary_scores(
         mode="train",
         exp_tag=rev_tag,
         word_exp_tag=w_tag,
+        config_path=(
+            matched_rev_cfg_path
+            if (matched_rev_cfg_path is not None and inferred_rev_stage == initial_rev_stage)
+            else None
+        ),
     )
     dataset = subset_spec["dataset"]
     subset_tag = subset_spec["subset_tag"]
