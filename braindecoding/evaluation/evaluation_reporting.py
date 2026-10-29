@@ -1463,9 +1463,21 @@ def format_sequence_decoding_executive_summary(
     report: Mapping[str, Any],
 ) -> str:
     """Format a compact <= 86-column Executive Summary for S3 sequence decoding."""
+    from braindecoding.evaluation.evaluation_exports import (
+        _s3_format_lambda_temp,
+        _s3_lookup_cond_metrics,
+        _s3_resolve_mean_wait_s,
+        _s3_strategy_name,
+    )
+
     dataset = str(report.get("dataset", "pallier2025"))
     split = str(report.get("split", "test"))
-    seed = report.get("seed", 0)
+    seeds_list = report.get("seeds")
+    seed_lbl = (
+        f"Seeds: {list(seeds_list)} (n={len(seeds_list)})"
+        if isinstance(seeds_list, Sequence) and seeds_list
+        else f"Seed: {report.get('seed', 0)}"
+    )
     exp_tag = report.get("exp_tag") or "(default)"
     cms_eta = report.get("cms_eta", 0.0)
 
@@ -1473,8 +1485,8 @@ def format_sequence_decoding_executive_summary(
     rule = "-" * REPORT_WIDTH
     lines: list[str] = [
         banner,
-        f"S3 Sequence Decoding Executive Summary | {dataset} ({split.upper()}) | Seed: {seed}",
-        f"ExpTag: {exp_tag} | CMS η: {cms_eta}",
+        f"S3 Sequence Decoding Executive Summary | {dataset} ({split.upper()}) | {seed_lbl}"[:REPORT_WIDTH],
+        f"ExpTag: {exp_tag} | CMS η: {cms_eta}"[:REPORT_WIDTH],
         banner,
     ]
 
@@ -1486,7 +1498,7 @@ def format_sequence_decoding_executive_summary(
             if isinstance(state_hp.get(st), Mapping)
         ]
         if hp_parts:
-            lines.append("Calibrated: " + " | ".join(hp_parts))
+            lines.append(("Calibrated: " + " | ".join(hp_parts))[:REPORT_WIDTH])
             lines.append(rule)
 
     conds = report.get("conditions")
@@ -1496,30 +1508,32 @@ def format_sequence_decoding_executive_summary(
         segs = first_c.get("segment_count", "-")
         words = first_c.get("total_words", "-")
         lines.append(
-            f"[1] Latency-Budget Conditions (Segments={segs}, TotalWords={words})"[:REPORT_WIDTH]
+            f"[1] Full-Vocabulary Strategies (Segments={segs}, TotalWords={words})"[:REPORT_WIDTH]
         )
         c_hdr = (
-            f"{'Condition':<22} | {'BLEU-1':>7} | {'InVoc%':>7} | "
-            f"{'WordAcc':>7} | {'Acc@5':>7} | {'CER(%)':>7} | {'BERT-F1':>7}"
+            f"{'Strategy':<18} | {'CorpBLEU':>8} | {'SentBLEU':>8} | "
+            f"{'InVoc%':>7} | {'Top5%':>6} | {'WER%':>7} | {'Wait(s)':>7}"
         )
         lines.append(rule)
         lines.append(c_hdr)
         lines.append(rule)
         for c_name, m in main_conds.items():
+            disp = _s3_strategy_name(c_name)[:18]
+            wait_s = _s3_resolve_mean_wait_s(c_name, m)
             lines.append(
-                f"{str(c_name)[:22]:<22} | "
-                f"{_fmt_pct(m.get('bleu1_pct'), 7)} | "
+                f"{disp:<18} | "
+                f"{_fmt_pct(m.get('corpus_bleu1_pct'), 8)} | "
+                f"{_fmt_pct(m.get('bleu1_pct'), 8)} | "
                 f"{_fmt_pct(m.get('in_vocabulary_word_acc_pct'), 7)} | "
-                f"{_fmt_pct(m.get('word_acc_pct'), 7)} | "
-                f"{_fmt_pct(m.get('word_acc_top5_pct'), 7)} | "
-                f"{_fmt_pct(m.get('cer_pct'), 7)} | "
-                f"{_fmt_pct(m.get('bertscore_f1_pct'), 7)}"
+                f"{_fmt_pct(m.get('word_acc_top5_pct'), 6)} | "
+                f"{_fmt_pct(m.get('wer_pct'), 7)} | "
+                f"{wait_s:>6.2f}s"
             )
         lines.append(rule)
         gains = _compute_s3_revision_gain_deltas(main_conds)
         for g_key, g_lbl in (
-            ("clean_C_minus_A_pp", "Clean Revision Gain (S3 - K0)"),
-            ("clean_minus_shifted_S3_pp", "Net Neural Advantage (Clean - Shift)"),
+            ("clean_C_minus_A_pp", "Rolling-K2 vs Rolling-K0"),
+            ("clean_minus_shifted_S3_pp", "Rolling-K2 vs Shifted-K2 (-75s)"),
         ):
             gv = gains.get(g_key)
             if isinstance(gv, Mapping) and gv:
@@ -1529,12 +1543,16 @@ def format_sequence_decoding_executive_summary(
                     f"ΔInVoc={_fmt_signed_pct(gv.get('in_vocabulary_word_acc_pct'), 6)} | "
                     f"ΔWAcc={_fmt_signed_pct(gv.get('word_acc_pct'), 6)}"
                 )
-        s3_sig = report.get("statistical_significance") or {}
+        s3_sig = (
+            report.get("paired_statistical_significance")
+            or report.get("statistical_significance")
+            or {}
+        )
         if isinstance(s3_sig, Mapping):
             sig_c = s3_sig.get("s3_clean_vs_k0_bleu1")
             if isinstance(sig_c, Mapping) and sig_c.get("ci_lower_pp") is not None:
                 lines.append(
-                    f" * K2 vs K0 BLEU-1 95% CI: "
+                    f" * Rolling-K2 vs K0 BLEU-1 95% CI: "
                     f"[{float(sig_c['ci_lower_pp']):+.2f}, {float(sig_c['ci_upper_pp']):+.2f}] pp "
                     f"(p={float(sig_c.get('p_two_sided', 1.0)):.4f} {sig_c.get('significance', '')})"[
                         :REPORT_WIDTH
@@ -1543,7 +1561,7 @@ def format_sequence_decoding_executive_summary(
             sig_sh = s3_sig.get("s3_clean_vs_shifted_bleu1")
             if isinstance(sig_sh, Mapping) and sig_sh.get("ci_lower_pp") is not None:
                 lines.append(
-                    f" * Clean vs Shifted BLEU-1 95% CI: "
+                    f" * Rolling-K2 vs Shifted-K2 95% CI: "
                     f"[{float(sig_sh['ci_lower_pp']):+.2f}, {float(sig_sh['ci_upper_pp']):+.2f}] pp "
                     f"(p={float(sig_sh.get('p_two_sided', 1.0)):.4f} {sig_sh.get('significance', '')})"[
                         :REPORT_WIDTH
@@ -1556,7 +1574,7 @@ def format_sequence_decoding_executive_summary(
             mw = float(s3_sub_sum.get("mean_word_acc_pct", 0.0))
             sw = float(s3_sub_sum.get("std_word_acc_pct", 0.0))
             lines.append(
-                f" * Across-Subject K2: BLEU1={mb:.2f}±{sb:.2f}% | WordAcc={mw:.2f}±{sw:.2f}%"[
+                f" * Across-Subject Rolling-K2: BLEU1={mb:.2f}±{sb:.2f}% | WordAcc={mw:.2f}±{sw:.2f}%"[
                     :REPORT_WIDTH
                 ]
             )
@@ -1564,11 +1582,11 @@ def format_sequence_decoding_executive_summary(
     vs = report.get("vocabulary_scaling")
     if isinstance(vs, Mapping) and vs:
         lines.append(
-            "\n[2] Core & Multi-Scale Vocabulary Scaling (All Segments vs. >=80% Core)"
+            "\n[2] Core & Multi-Scale Vocabulary Scaling (All Segs vs Core Subsets)"
         )
         v_hdr = (
-            f"{'Scale |V|':<10} | {'TokCov':>6} | {'All K2':>9} | "
-            f"{'All K0':>9} | {'All InV%':>8} | {'Core80':>9} | {'CoreInV%':>9}"
+            f"{'Scale V':<10} | {'TokCov':>6} | {'Roll-K2':>9} | "
+            f"{'Roll-K0':>9} | {'WordOnly':>8} | {'FullCtx':>8} | {'InVoc%':>8}"
         )
         lines.append(rule)
         lines.append(v_hdr)
@@ -1585,29 +1603,24 @@ def format_sequence_decoding_executive_summary(
             if not isinstance(s_entry, Mapping):
                 continue
             all_c = s_entry.get("conditions") or s_entry.get("all_segments") or {}
-            s3_m = all_c.get("S3_clean") or {}
-            k0_m = all_c.get("K0") or {}
-            c80_blk = s_entry.get("core_subset_80pct") or {}
-            c80_map = (
-                c80_blk.get("conditions")
-                if isinstance(c80_blk.get("conditions"), Mapping)
-                else c80_blk
-            ) or {}
-            c80_s3 = c80_map.get("S3_clean") or {}
+            s3_m = _s3_lookup_cond_metrics(all_c, "Rolling-K2") or {}
+            k0_m = _s3_lookup_cond_metrics(all_c, "Rolling-K0") or {}
+            s0_m = _s3_lookup_cond_metrics(all_c, "Word-Only") or {}
+            f_m = _s3_lookup_cond_metrics(all_c, "Full-Context") or {}
             lines.append(
                 f"{str(s_key):<10} | "
                 f"{_fmt_pct(s_entry.get('test_token_coverage_pct'), 6)} | "
                 f"{_fmt_pct(s3_m.get('bleu1_pct'), 9)} | "
                 f"{_fmt_pct(k0_m.get('bleu1_pct'), 9)} | "
-                f"{_fmt_pct(s3_m.get('in_vocabulary_word_acc_pct'), 8)} | "
-                f"{_fmt_pct(c80_s3.get('bleu1_pct'), 9)} | "
-                f"{_fmt_pct(c80_s3.get('in_vocabulary_word_acc_pct'), 9)}"
+                f"{_fmt_pct(s0_m.get('bleu1_pct'), 8)} | "
+                f"{_fmt_pct(f_m.get('bleu1_pct'), 8)} | "
+                f"{_fmt_pct(s3_m.get('in_vocabulary_word_acc_pct'), 8)}"
             )
         lines.append(rule)
 
     ms = report.get("multi_subject_scaling")
     if isinstance(ms, Mapping) and ms:
-        lines.append("\n[3] Multi-Subject Observation Scaling (k = 1..10)")
+        lines.append("\n[3] Multi-Subject Observation Scaling (Rolling-K2, k = 1..10)")
         m_hdr = (
             f"{'Subjects k':<12} | {'BLEU-1':>8} | {'OraclBLEU':>9} | "
             f"{'InVocAcc':>9} | {'WordAcc':>8} | {'Acc@5':>8} | {'BERT-F1':>8}"
@@ -1638,7 +1651,7 @@ def format_sequence_decoding_executive_summary(
         lines.append(rule)
 
     lines.append(
-        f"[Tip] Full reports: s3_evaluation_report_{split}.md, s3_decoded_sentences_{split}.md"[
+        f"[Tip] Full 6-Module Report: s3_evaluation_report_{split}.md, multi_seed_sequence_decoding_report_{split}.md"[
             :REPORT_WIDTH
         ]
     )
@@ -1649,11 +1662,16 @@ def format_sequence_decoding_executive_summary(
 def _format_s3_conditions_table_full(
     conds_map: Mapping[str, Mapping[str, Any]],
 ) -> list[str]:
+    from braindecoding.evaluation.evaluation_exports import (
+        _s3_resolve_mean_wait_s,
+        _s3_strategy_name,
+    )
+
     lines: list[str] = []
     header = (
-        f"{'Condition':<25} | {'BLEU-1':>7} | {'CorpBLEU':>8} | {'OraclBLEU':>9} | "
+        f"{'Strategy':<25} | {'BLEU-1':>7} | {'CorpBLEU':>8} | {'OraclBLEU':>9} | "
         f"{'WordAcc':>7} | {'InVocAcc':>8} | {'Acc@5':>7} | {'ContAcc':>7} | "
-        f"{'FuncAcc':>7} | {'WER(%)':>7} | {'CER(%)':>7} | {'BERT-F1':>7}"
+        f"{'FuncAcc':>7} | {'WER(%)':>7} | {'CER(%)':>7} | {'BERT-F1':>7} | {'Wait(s)':>7}"
     )
     sep = "-" * len(header)
     lines.append(sep)
@@ -1662,8 +1680,10 @@ def _format_s3_conditions_table_full(
     for cond_name, m in conds_map.items():
         if not isinstance(m, Mapping):
             continue
+        disp = _s3_strategy_name(cond_name)
+        wait_s = _s3_resolve_mean_wait_s(cond_name, m)
         lines.append(
-            f"{str(cond_name):<25} | "
+            f"{disp:<25} | "
             f"{_fmt_pct(m.get('bleu1_pct'), 7)} | "
             f"{_fmt_pct(m.get('corpus_bleu1_pct'), 8)} | "
             f"{_fmt_pct(m.get('beam_oracle_bleu1_pct'), 9)} | "
@@ -1674,7 +1694,8 @@ def _format_s3_conditions_table_full(
             f"{_fmt_pct(m.get('function_word_acc_pct'), 7)} | "
             f"{_fmt_pct(m.get('wer_pct'), 7)} | "
             f"{_fmt_pct(m.get('cer_pct'), 7)} | "
-            f"{_fmt_pct(m.get('bertscore_f1_pct'), 7)}"
+            f"{_fmt_pct(m.get('bertscore_f1_pct'), 7)} | "
+            f"{wait_s:>6.2f}s"
         )
     lines.append(sep)
     return lines
@@ -1687,8 +1708,8 @@ def _format_s3_revision_gains_block_full(
         return []
     label_map = {
         "clean_C_minus_A_pp": "Clean 滚动修正净增益 (Rolling-K2 - Rolling-K0)",
-        "shifted_C_minus_A_pp": "Shifted 错位滚动增益 (K2_shift - K0_shift)",
-        "clean_minus_shifted_S3_pp": "真实 vs 错位地面实况净优势 (K2_clean - K2_shift)",
+        "shifted_C_minus_A_pp": "Shifted 错位滚动增益 (Shifted-K2 - Shifted-K0)",
+        "clean_minus_shifted_S3_pp": "真实 vs 错位地面实况净优势 (Rolling-K2 - Shifted-K2)",
     }
     out: list[str] = []
     for g_key in (
@@ -1700,7 +1721,7 @@ def _format_s3_revision_gains_block_full(
         if not isinstance(g_val, Mapping) or not g_val:
             continue
         out.append(
-            f"  * {label_map.get(g_key, g_key):<46}: "
+            f"  * {label_map.get(g_key, g_key):<50}: "
             f"ΔBLEU-1={_fmt_signed_pct(g_val.get('bleu1_pct'), 6)} pp | "
             f"ΔWordAcc={_fmt_signed_pct(g_val.get('word_acc_pct'), 6)} pp | "
             f"ΔInVocAcc={_fmt_signed_pct(g_val.get('in_vocabulary_word_acc_pct'), 6)} pp | "
@@ -1719,26 +1740,33 @@ def format_sequence_decoding_report(
     *,
     verbose: bool = True,
 ) -> str:
-    """Format S3 sequence decoding evaluation report.
-
-    When ``verbose=True`` (default for `.txt` export and backward compatibility),
-    returns the full 6-table report (`[表 1]` .. `[表 6]`).
-    When ``verbose=False``, returns the compact ``<= 86``-column Executive Summary.
-    """
+    """Format S3 sequence decoding evaluation report into the 6 standardized modules."""
     if not verbose:
         return format_sequence_decoding_executive_summary(report)
 
+    from braindecoding.evaluation.evaluation_exports import (
+        _s3_format_lambda_temp,
+        _s3_lookup_cond_metrics,
+        _s3_resolve_mean_wait_s,
+        _s3_strategy_name,
+    )
+
     dataset = str(report.get("dataset", "pallier2025"))
     split = str(report.get("split", "test"))
-    seed = report.get("seed", 0)
+    seeds_list = report.get("seeds")
+    seed_lbl = (
+        f"Seeds: {list(seeds_list)} (n={len(seeds_list)})"
+        if isinstance(seeds_list, Sequence) and seeds_list
+        else f"Seed: {report.get('seed', 0)}"
+    )
     exp_tag = report.get("exp_tag") or "(default)"
     cms_eta = report.get("cms_eta", 0.0)
     f_mode = report.get("f_condition_mode") or ""
 
-    banner = "=" * 132
+    banner = "=" * 138
     lines: list[str] = [
         banner,
-        f"S3 序列解码协议评估汇总报告 | Dataset: {dataset} | Split: {split.upper()} | Seed: {seed} | ExpTag: {exp_tag} | CMS η: {cms_eta}"
+        f"S3 序列解码协议评估汇总报告 (6 大标准化模块) | Dataset: {dataset} | Split: {split.upper()} | {seed_lbl} | ExpTag: {exp_tag} | CMS η: {cms_eta}"
         + (f" | F-Mode: {f_mode}" if f_mode else ""),
         banner,
     ]
@@ -1753,228 +1781,308 @@ def format_sequence_decoding_report(
                 l_val = st_cfg.get("language_weight", "-")
                 hp_parts.append(f"{st_name}: (T={t_val}, λ={l_val})")
         if hp_parts:
-            lines.append("[状态自适应校准超参] " + " | ".join(hp_parts))
-            lines.append("-" * 132)
+            lines.append("[验证集状态校准超参] " + " | ".join(hp_parts))
+            lines.append("-" * 138)
 
-    conds = report.get("conditions")
-    if isinstance(conds, Mapping) and conds:
-        main_conds = _filter_main_latency_conditions(conds)
-        first_cond = next(iter(main_conds.values()), next(iter(conds.values()), {}))
-        tot_segs = first_cond.get("segment_count", "-")
-        tot_words = first_cond.get("total_words", "-")
-        invoc_rate = first_cond.get("in_vocabulary_rate_pct", None)
-        cov_str = f"{float(invoc_rate):.2f}%" if invoc_rate is not None else "-"
-        lines.append(
-            f"\n[表 1] 全词库主实验结果 — 4 档输入延迟预算统一束搜索对比 (Full Vocabulary | Segments={tot_segs}, TotalWords={tot_words}, TokenCoverage={cov_str})"
+    conds = report.get("conditions") or {}
+    core_benchmarks = dict(report.get("core_vocabulary_benchmarks") or {})
+    vocab_scaling = dict(report.get("vocabulary_scaling") or {})
+    full_core = report.get("full_vocab_core_subsets") or {}
+    full_v_sz = int(
+        full_core.get("vocabulary_size")
+        or max(
+            (
+                int(str(k).lstrip("vV=_") or 0)
+                for k in list(vocab_scaling.keys()) + list(core_benchmarks.keys())
+                if str(k).lstrip("vV=_").isdigit()
+            ),
+            default=2020 if dataset == "pallier2025" else 2180,
         )
-        lines.extend(_format_s3_conditions_table_full(main_conds))
-        main_gains = _compute_s3_revision_gain_deltas(main_conds)
-        lines.extend(_format_s3_revision_gains_block_full(main_gains))
+    )
+    if full_v_sz <= 250:
+        full_v_sz = 2020 if dataset == "pallier2025" else 2180
+    full_v_key = f"V={full_v_sz}"
 
-    core_benchmarks = report.get("core_vocabulary_benchmarks")
-    core_bench_list: list[Mapping[str, Any]] = []
-    if isinstance(core_benchmarks, Mapping) and core_benchmarks:
-        ordered_cb = sorted(
-            core_benchmarks.items(),
-            key=lambda kv: int(
-                kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
-            )
-            if isinstance(kv[1], Mapping)
-            else 0,
+    if full_v_key not in core_benchmarks:
+        fv_subs = (
+            dict(full_core.get("subsets") or {})
+            if isinstance(full_core, Mapping)
+            else {}
         )
-        core_bench_list = [
-            cb for _, cb in ordered_cb if isinstance(cb, Mapping) and cb.get("subsets")
-        ]
-    else:
-        single_cb = report.get("core_vocabulary_benchmark")
-        if isinstance(single_cb, Mapping) and single_cb.get("subsets"):
-            core_bench_list = [single_cb]
+        if not fv_subs and conds:
+            s3_c = conds.get("S3_clean") or conds.get("S3") or {}
+            fv_subs = {
+                "all_segments": {
+                    "segment_count": int(s3_c.get("segment_count", 0)),
+                    "conditions": conds,
+                }
+            }
+        if fv_subs:
+            core_benchmarks[full_v_key] = {
+                "vocabulary_size": full_v_sz,
+                "subsets": fv_subs,
+            }
 
-    if core_bench_list:
-        lines.append(
-            "\n[表 2] 高频核心词表三档基准对比 (Core Vocabulary |V| ∈ {50, 100, 250}，对标 Moses 2021 / SimpleB2T / Jayalath 2025 / d'Ascoli 2025)"
+    ordered_scale_blocks: list[tuple[str, str, Mapping[str, Any]]] = []
+    for v_key, cb_entry in sorted(
+        core_benchmarks.items(),
+        key=lambda kv: int(
+            kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
         )
-        subset_titles = (
-            ("all_segments", "口径 1 [all_segments]: 全部测试句段 (含 In-Vocab Word Acc)"),
-            ("core_subset_100pct", "口径 2a [core_subset_100pct]: 100% 词表内核心句 (0% OOV Core Set，直接对标 SimpleB2T)"),
-            ("core_subset_80pct", "口径 2b [core_subset_80pct]: >=80% 词表内高覆盖核心句"),
+        if isinstance(kv[1], Mapping)
+        else 0,
+    ):
+        if not isinstance(cb_entry, Mapping):
+            continue
+        v_sz = int(
+            cb_entry.get("vocabulary_size", str(v_key).lstrip("vV=_") or 0)
         )
-        for cb_entry in core_bench_list:
-            v_core = cb_entry.get("vocabulary_size", 250)
-            tok_cov_core = cb_entry.get("test_token_coverage_pct")
-            cov_core_str = (
-                f"{float(tok_cov_core):.2f}%" if tok_cov_core is not None else "-"
-            )
-            lines.append(
-                f"\n  === 核心词表档位 |V| = {v_core} (全集词位覆盖率 = {cov_core_str}) ==="
-            )
-            subsets_map = cb_entry.get("subsets") or {}
-            for sub_key, sub_title in subset_titles:
-                sub_block = subsets_map.get(sub_key)
-                if not isinstance(sub_block, Mapping):
-                    continue
-                sub_conds = _filter_main_latency_conditions(
-                    sub_block.get("conditions") or {}
+        subsets_map = cb_entry.get("subsets") or {}
+        c100_blk = subsets_map.get("core_subset_100pct") or {}
+        c80_blk = subsets_map.get("core_subset_80pct") or {}
+        all_blk = subsets_map.get("all_segments") or {}
+        n100 = int(c100_blk.get("segment_count", 0))
+        n80 = int(c80_blk.get("segment_count", 0))
+        nall = int(all_blk.get("segment_count", 0))
+        if v_sz < full_v_sz:
+            if n100 > 0 and isinstance(c100_blk.get("conditions"), Mapping):
+                ordered_scale_blocks.append(
+                    (str(v_key), f"0% OOV (n={n100})", c100_blk["conditions"])
                 )
-                if not sub_conds:
+            elif n80 > 0 and isinstance(c80_blk.get("conditions"), Mapping):
+                ordered_scale_blocks.append(
+                    (str(v_key), f">=80% (n={n80})", c80_blk["conditions"])
+                )
+            if (
+                n100 > 0
+                and n80 > n100
+                and isinstance(c80_blk.get("conditions"), Mapping)
+            ):
+                ordered_scale_blocks.append(
+                    (str(v_key), f">=80% (n={n80})", c80_blk["conditions"])
+                )
+            if nall > 0 and isinstance(all_blk.get("conditions"), Mapping):
+                ordered_scale_blocks.append(
+                    (str(v_key), f"All Segs (n={nall})", all_blk["conditions"])
+                )
+        else:
+            if (
+                n100 > 0
+                and n100 < nall
+                and isinstance(c100_blk.get("conditions"), Mapping)
+            ):
+                ordered_scale_blocks.append(
+                    (str(v_key), f"0% OOV (n={n100})", c100_blk["conditions"])
+                )
+            if nall > 0 and isinstance(all_blk.get("conditions"), Mapping):
+                ordered_scale_blocks.append(
+                    (str(v_key), f"All Segs (n={nall})", all_blk["conditions"])
+                )
+
+    module1_strategies = (
+        "Word-Only",
+        "Rolling-K0",
+        "Rolling-K1",
+        "Rolling-K2",
+        "Full-Context",
+        "Shifted-K0 (-75s)",
+        "Shifted-K2 (-75s)",
+    )
+    module2_strategies = (
+        "LM-Only",
+        "Word-Only",
+        "Rolling-K0",
+        "Rolling-K1",
+        "Rolling-K2",
+        "Full-Context",
+        "Shifted-K0 (-75s)",
+        "Shifted-K2 (-75s)",
+    )
+
+    # 模块 1
+    if ordered_scale_blocks:
+        lines.append(
+            "\n[模块 1] 核心词表主表数据 (Core Vocabulary Main Table | V in {50, 250, 2020})"
+        )
+        m1_hdr = (
+            f"{'Scale':<8} | {'Subset':<18} | {'Strategy':<18} | {'lambda_r (T_r)':<14} | "
+            f"{'CorpBLEU':>8} | {'SentBLEU (Oracle)':>18} | {'WER(%)':>7} | {'CER(%)':>7} | "
+            f"{'BERT-F1':>8} | {'Wait(s)':>7}"
+        )
+        m1_sep = "-" * len(m1_hdr)
+        lines.extend([m1_sep, m1_hdr, m1_sep])
+        for v_key, sub_lbl, sub_conds in ordered_scale_blocks:
+            for strat_disp in module1_strategies:
+                cm = _s3_lookup_cond_metrics(sub_conds, strat_disp)
+                if cm is None:
                     continue
-                seg_cnt = sub_block.get("segment_count", 0)
-                lines.append(f"\n  >>> {sub_title} (Segments = {seg_cnt}) <<<")
-                lines.extend(_format_s3_conditions_table_full(sub_conds))
-                lines.extend(
-                    _format_s3_revision_gains_block_full(
-                        sub_block.get("revision_gains") or {}
+                lam_t = _s3_format_lambda_temp(strat_disp, state_hp)
+                s_b = float(cm.get("bleu1_pct", 0.0))
+                o_b = float(cm.get("beam_oracle_bleu1_pct", 0.0))
+                sb_str = f"{s_b:6.2f}% ({o_b:5.2f}%)"
+                wait_s = _s3_resolve_mean_wait_s(strat_disp, cm)
+                lines.append(
+                    f"{v_key:<8} | {sub_lbl:<18} | {strat_disp:<18} | {lam_t:<14} | "
+                    f"{_fmt_pct(cm.get('corpus_bleu1_pct'), 8)} | {sb_str:>18} | "
+                    f"{_fmt_pct(cm.get('wer_pct'), 7)} | {_fmt_pct(cm.get('cer_pct'), 7)} | "
+                    f"{_fmt_pct(cm.get('bertscore_f1_pct'), 8)} | {wait_s:>6.2f}s"
+                )
+            lines.append(m1_sep)
+
+    # 模块 2
+    if ordered_scale_blocks:
+        lines.append(
+            "\n[模块 2] 词位准确率与实义词/功能词拆解 (Word Position Accuracy & Content/Function Breakdown)"
+        )
+        m2_hdr = (
+            f"{'Scale':<8} | {'Subset':<18} | {'Strategy':<18} | {'WordAcc':>8} | "
+            f"{'InVocTop1':>9} | {'PosTop5':>8} | {'ContentAcc':>10} | {'FuncAcc':>8} | "
+            f"{'Content - Function (p)':>24}"
+        )
+        m2_sep = "-" * len(m2_hdr)
+        lines.extend([m2_sep, m2_hdr, m2_sep])
+        for v_key, sub_lbl, sub_conds in ordered_scale_blocks:
+            for strat_disp in module2_strategies:
+                cm = _s3_lookup_cond_metrics(sub_conds, strat_disp)
+                if cm is None:
+                    continue
+                cf_d = float(
+                    cm.get(
+                        "content_minus_function_acc_pp",
+                        float(cm.get("content_word_acc_pct", 0.0))
+                        - float(cm.get("function_word_acc_pct", 0.0)),
                     )
                 )
-
-    full_core = report.get("full_vocab_core_subsets")
-    if isinstance(full_core, Mapping) and full_core.get("subsets"):
-        lines.append(
-            "\n[表 3] 全词库 (Full Vocabulary) 下的高覆盖核心子集拆解 (100% 零 OOV / >=80% 高覆盖核心集)"
-        )
-        fc_header = (
-            f"{'Subset':<26} | {'Segs':>5} | {'Condition':<18} | {'BLEU-1':>7} | "
-            f"{'CorpBLEU':>8} | {'WordAcc':>7} | {'InVocAcc':>8} | {'Acc@5':>7} | "
-            f"{'WER(%)':>7} | {'CER(%)':>7} | {'BERT-F1':>7}"
-        )
-        fc_sep = "-" * len(fc_header)
-        lines.append(fc_sep)
-        lines.append(fc_header)
-        lines.append(fc_sep)
-        fc_subsets = full_core.get("subsets") or {}
-        for sub_key in (
-            "all_segments",
-            "core_subset_100pct",
-            "core_subset_80pct",
-        ):
-            sb = fc_subsets.get(sub_key)
-            if not isinstance(sb, Mapping):
-                continue
-            seg_cnt = sb.get("segment_count", 0)
-            sb_conds = _filter_main_latency_conditions(sb.get("conditions") or {})
-            for c_name, m in sb_conds.items():
+                cf_p = float(cm.get("content_vs_function_p_value", 1.0))
+                cf_str = f"{cf_d:+6.2f} pp (p={cf_p:.4f})"
                 lines.append(
-                    f"{sub_key:<26} | {int(seg_cnt):>5d} | {c_name:<18} | "
-                    f"{_fmt_pct(m.get('bleu1_pct'), 7)} | "
-                    f"{_fmt_pct(m.get('corpus_bleu1_pct'), 8)} | "
-                    f"{_fmt_pct(m.get('word_acc_pct'), 7)} | "
-                    f"{_fmt_pct(m.get('in_vocabulary_word_acc_pct'), 8)} | "
-                    f"{_fmt_pct(m.get('word_acc_top5_pct'), 7)} | "
-                    f"{_fmt_pct(m.get('wer_pct'), 7)} | "
-                    f"{_fmt_pct(m.get('cer_pct'), 7)} | "
-                    f"{_fmt_pct(m.get('bertscore_f1_pct'), 7)}"
+                    f"{v_key:<8} | {sub_lbl:<18} | {strat_disp:<18} | "
+                    f"{_fmt_pct(cm.get('word_acc_pct'), 8)} | "
+                    f"{_fmt_pct(cm.get('in_vocabulary_word_acc_pct'), 9)} | "
+                    f"{_fmt_pct(cm.get('word_acc_top5_pct'), 8)} | "
+                    f"{_fmt_pct(cm.get('content_word_acc_pct'), 10)} | "
+                    f"{_fmt_pct(cm.get('function_word_acc_pct'), 8)} | "
+                    f"{cf_str:>24}"
                 )
-            lines.append(fc_sep)
+            lines.append(m2_sep)
 
-    vocab_scaling = report.get("vocabulary_scaling")
-    if isinstance(vocab_scaling, Mapping) and vocab_scaling:
+    # 模块 3：C-Gated 帕累托扫描表
+    pareto_map = report.get("confidence_gate_pareto") or {}
+    if isinstance(pareto_map, Mapping) and pareto_map:
         lines.append(
-            "\n[表 4A] 多尺度候选词表缩放曲线 — 全测试句段 (All Segments，对标 Jayalath et al. 2025 Fig. 4)"
+            "\n[模块 3] 门控防闪烁帕累托扫描表 (Confidence-Gated Anti-Flicker Pareto Sweep | Clean & Shifted -75s)"
         )
-        vs_header = (
-            f"{'Scale |V|':<10} | {'TokCov%':>7} | {'S3 BLEU-1':>9} | {'K0 BLEU-1':>9} | "
-            f"{'S0 BLEU-1':>9} | {'ShiftBLEU':>9} | {'Δ(C-A)BLEU':>10} | {'S3 InVocAcc':>11} | "
-            f"{'K0 InVocAcc':>11} | {'S3 WordAcc':>10} | {'S3 CER(%)':>9} | {'S3 BERT-F1':>10}"
+        m3_hdr = (
+            f"{'Input Condition':<28} | {'tau_gate':<14} | {'Rewrite Rate':>12} | "
+            f"{'Flicker Filtered':>16} | {'Corpus BLEU-1':>13} | {'Sent BLEU-1':>11} | {'WER(%)':>8}"
         )
-        vs_sep = "-" * len(vs_header)
-        lines.append(vs_sep)
-        lines.append(vs_header)
-        lines.append(vs_sep)
-
-        ordered_scales = sorted(
-            vocab_scaling.items(),
-            key=lambda kv: int(
-                kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
-            )
-            if isinstance(kv[1], Mapping)
-            else 0,
-        )
-        for s_key, s_entry in ordered_scales:
-            if not isinstance(s_entry, Mapping):
-                continue
-            all_c = (
-                s_entry.get("conditions")
-                or s_entry.get("all_segments")
+        m3_sep = "-" * len(m3_hdr)
+        lines.extend([m3_sep, m3_hdr, m3_sep])
+        for p_key, cond_lbl in (
+            ("S3_clean", "Clean (Rolling-K2)"),
+            ("S3_shifted_neg75s", "Shifted (-75s) (Shifted-K2)"),
+        ):
+            p_blk = (
+                pareto_map.get(p_key)
+                or (pareto_map.get("S3") if p_key == "S3_clean" else None)
                 or {}
             )
-            s3_m = all_c.get("S3_clean") or {}
-            k0_m = all_c.get("K0") or {}
-            s0_m = all_c.get("S0") or {}
-            sh_m = all_c.get("S3_shifted_neg75s") or {}
-            raw_gains = (
-                s_entry.get("revision_gains")
-                or s_entry.get("revision_gains_all_segments")
+            pts = (
+                p_blk.get("pareto_curve") or []
+                if isinstance(p_blk, Mapping)
+                else []
+            )
+            if not pts:
+                continue
+            base_rw = float(
+                pts[0].get("screen_rewrite_rate_pct", 0.0)
+                if isinstance(pts[0], Mapping)
+                else 0.0
+            )
+            for pt in pts:
+                if not isinstance(pt, Mapping):
+                    continue
+                tau_v = float(pt.get("tau_gate", 0.0))
+                tau_s = f"{tau_v:.1f} (Ungated)" if tau_v == 0.0 else f"{tau_v:.1f}"
+                rw = float(pt.get("screen_rewrite_rate_pct", 0.0))
+                filt = (
+                    float(pt["rewrite_filtered_pct"])
+                    if "rewrite_filtered_pct" in pt
+                    else (
+                        max(0.0, (1.0 - rw / base_rw) * 100.0)
+                        if base_rw > 0.0
+                        else 0.0
+                    )
+                )
+                lines.append(
+                    f"{cond_lbl:<28} | {tau_s:<14} | {_fmt_pct(rw, 12)} | "
+                    f"{_fmt_pct(filt, 16)} | "
+                    f"{_fmt_pct(pt.get('corpus_bleu1_pct', pt.get('bleu1_pct')), 13)} | "
+                    f"{_fmt_pct(pt.get('bleu1_pct'), 11)} | {_fmt_pct(pt.get('wer_pct'), 8)}"
+                )
+            lines.append(m3_sep)
+
+    # 模块 4：多尺度词表缩放与跨受试者多观测聚合
+    ms_scaling = report.get("multi_subject_scaling") or {}
+    if vocab_scaling or ms_scaling:
+        lines.append(
+            "\n[模块 4] 多尺度词表缩放与跨受试者多观测聚合 (Vocabulary Scaling & Cross-Subject Aggregation | V in {50, 100, 250, 2020})"
+        )
+        if vocab_scaling:
+            lines.append(
+                "\n  [4A] 单次流式词表缩放 (Single-Subject k=1 Vocabulary Scaling)"
+            )
+            m4a_hdr = (
+                f"{'Scale':<8} | {'TokCov%':>7} | {'Strategy':<18} | {'CorpBLEU':>8} | "
+                f"{'SentBLEU (Oracle)':>18} | {'WER(%)':>7} | {'InVocTop1':>9} | {'PosTop5':>8}"
+            )
+            m4a_sep = "-" * len(m4a_hdr)
+            lines.extend([m4a_sep, m4a_hdr, m4a_sep])
+            for s_key, s_entry in sorted(
+                vocab_scaling.items(),
+                key=lambda kv: int(
+                    kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
+                )
+                if isinstance(kv[1], Mapping)
+                else 0,
+            ):
+                if not isinstance(s_entry, Mapping):
+                    continue
+                all_c = s_entry.get("conditions") or {}
+                tok_cov = s_entry.get("test_token_coverage_pct", 0.0)
+                for strat_disp in module1_strategies:
+                    cm = _s3_lookup_cond_metrics(all_c, strat_disp)
+                    if cm is None:
+                        continue
+                    s_b = float(cm.get("bleu1_pct", 0.0))
+                    o_b = float(cm.get("beam_oracle_bleu1_pct", 0.0))
+                    lines.append(
+                        f"{str(s_key):<8} | {_fmt_pct(tok_cov, 7)} | {strat_disp:<18} | "
+                        f"{_fmt_pct(cm.get('corpus_bleu1_pct'), 8)} | "
+                        f"{f'{s_b:6.2f}% ({o_b:5.2f}%)':>18} | "
+                        f"{_fmt_pct(cm.get('wer_pct'), 7)} | "
+                        f"{_fmt_pct(cm.get('in_vocabulary_word_acc_pct'), 9)} | "
+                        f"{_fmt_pct(cm.get('word_acc_top5_pct'), 8)}"
+                    )
+                lines.append(m4a_sep)
+
+        if isinstance(ms_scaling, Mapping) and ms_scaling:
+            lines.append(
+                "\n  [4B] 跨受试者多观测神经聚合 (Cross-Subject Aggregation k in {1, 2, 5, 10})"
+            )
+            m4b_hdr = (
+                f"{'Scale':<8} | {'Subjects':<8} | {'Strategy':<18} | {'CorpBLEU':>8} | "
+                f"{'SentBLEU':>8} | {'WER(%)':>7} | {'InVocTop1':>9} | "
+                f"{'Gain BLEU-1 vs k=1':>22} | {'Gain InVocTop1 vs k=1':>22}"
+            )
+            m4b_sep = "-" * len(m4b_hdr)
+            lines.extend([m4b_sep, m4b_hdr, m4b_sep])
+            sig_map = (
+                report.get("paired_statistical_significance")
+                or report.get("statistical_significance")
                 or {}
             )
-            gains_all = raw_gains.get("clean_C_minus_A_pp") or {}
-            lines.append(
-                f"{str(s_key):<10} | "
-                f"{_fmt_pct(s_entry.get('test_token_coverage_pct'), 7)} | "
-                f"{_fmt_pct(s3_m.get('bleu1_pct'), 9)} | "
-                f"{_fmt_pct(k0_m.get('bleu1_pct'), 9)} | "
-                f"{_fmt_pct(s0_m.get('bleu1_pct'), 9)} | "
-                f"{_fmt_pct(sh_m.get('bleu1_pct'), 9)} | "
-                f"{_fmt_signed_pct(gains_all.get('bleu1_pct'), 10)} | "
-                f"{_fmt_pct(s3_m.get('in_vocabulary_word_acc_pct'), 11)} | "
-                f"{_fmt_pct(k0_m.get('in_vocabulary_word_acc_pct'), 11)} | "
-                f"{_fmt_pct(s3_m.get('word_acc_pct'), 10)} | "
-                f"{_fmt_pct(s3_m.get('cer_pct'), 9)} | "
-                f"{_fmt_pct(s3_m.get('bertscore_f1_pct'), 10)}"
-            )
-        lines.append(vs_sep)
-
-        lines.append(
-            "\n[表 4B] 多尺度候选词表缩放曲线 — 高覆盖核心子集 (100% Core [0% OOV] 与 >=80% Core Sentences)"
-        )
-        vc_header = (
-            f"{'Scale |V|':<10} | {'100%Segs':>8} | {'100% S3 BLEU':>12} | {'100% S3 Acc':>11} | "
-            f"{'>=80%Segs':>9} | {'>=80% S3 BLEU':>13} | {'>=80% K0 BLEU':>13} | "
-            f"{'>=80% ShiftBLEU':>15} | {'>=80% S3 InVocAcc':>17} | {'>=80% S3 Acc@5':>14}"
-        )
-        vc_sep = "-" * len(vc_header)
-        lines.append(vc_sep)
-        lines.append(vc_header)
-        lines.append(vc_sep)
-        for s_key, s_entry in ordered_scales:
-            if not isinstance(s_entry, Mapping):
-                continue
-            c100_block = s_entry.get("core_subset_100pct") or {}
-            c100_conds = (
-                c100_block.get("conditions")
-                if isinstance(c100_block.get("conditions"), Mapping)
-                else c100_block
-            ) or {}
-            c100 = c100_conds.get("S3_clean") or {}
-            c80_block = s_entry.get("core_subset_80pct") or {}
-            c80_map = (
-                c80_block.get("conditions")
-                if isinstance(c80_block.get("conditions"), Mapping)
-                else c80_block
-            ) or {}
-            c80_s3 = c80_map.get("S3_clean") or {}
-            c80_k0 = c80_map.get("K0") or {}
-            c80_sh = c80_map.get("S3_shifted_neg75s") or {}
-            lines.append(
-                f"{str(s_key):<10} | "
-                f"{int(s_entry.get('core_100pct_segment_count', 0)):>8d} | "
-                f"{_fmt_pct(c100.get('bleu1_pct'), 12)} | "
-                f"{_fmt_pct(c100.get('word_acc_pct'), 11)} | "
-                f"{int(s_entry.get('core_80pct_segment_count', 0)):>9d} | "
-                f"{_fmt_pct(c80_s3.get('bleu1_pct'), 13)} | "
-                f"{_fmt_pct(c80_k0.get('bleu1_pct'), 13)} | "
-                f"{_fmt_pct(c80_sh.get('bleu1_pct'), 15)} | "
-                f"{_fmt_pct(c80_s3.get('in_vocabulary_word_acc_pct'), 17)} | "
-                f"{_fmt_pct(c80_s3.get('word_acc_top5_pct'), 14)}"
-            )
-        lines.append(vc_sep)
-
-    ms_scaling = report.get("multi_subject_scaling")
-    if isinstance(ms_scaling, Mapping) and ms_scaling:
-        lines.append(
-            "\n[表 5] 跨被试多观测神经聚合曲线 (Multi-Subject Observation Scaling k ∈ {1, 2, 5, 10})"
-        )
-        ordered_ms = dict(
-            sorted(
+            ordered_ms = sorted(
                 ms_scaling.items(),
                 key=lambda kv: int(
                     kv[1].get("k_observations", str(kv[0]).lstrip("kK=_") or 1)
@@ -1982,77 +2090,174 @@ def format_sequence_decoding_report(
                 if isinstance(kv[1], Mapping)
                 else 1,
             )
-        )
-        lines.extend(_format_s3_conditions_table_full(ordered_ms))
-
-        has_ms_by_vocab = any(
-            isinstance(v, Mapping) and isinstance(v.get("by_vocabulary_size"), Mapping) and v.get("by_vocabulary_size")
-            for v in ordered_ms.values()
-        )
-        if has_ms_by_vocab:
-            lines.append(
-                "\n[表 5B] 跨被试多观测神经聚合 × 核心词表规模 (k ∈ {1, 2, 5, 10} × |V| ∈ {50, 100, 250, Full})"
-            )
-            msv_hdr = (
-                f"{'Scale |V|':<10} | {'Subjects':<8} | {'All BLEU1':>9} | {'All WAcc':>8} | "
-                f"{'All InV%':>8} | {'Core80 BLEU':>11} | {'Core80 Acc':>10} | "
-                f"{'100%Segs':>8} | {'Core100 BLEU':>12} | {'Core100 Acc':>11}"
-            )
-            msv_sep = "-" * len(msv_hdr)
-            lines.append(msv_sep)
-            lines.append(msv_hdr)
-            lines.append(msv_sep)
-            vocab_keys_seen: list[str] = []
-            for m_entry in ordered_ms.values():
+            k1_m_entry = ms_scaling.get("k=1") or {}
+            k1_by_v = (
+                k1_m_entry.get("by_vocabulary_size")
+                if isinstance(k1_m_entry, Mapping)
+                else {}
+            ) or {}
+            for k_lbl, m_entry in ordered_ms:
                 if not isinstance(m_entry, Mapping):
                     continue
-                by_v = m_entry.get("by_vocabulary_size") or {}
-                if isinstance(by_v, Mapping):
-                    for vk in by_v.keys():
-                        if str(vk) not in vocab_keys_seen:
-                            vocab_keys_seen.append(str(vk))
-            vocab_keys_sorted = sorted(
-                vocab_keys_seen,
-                key=lambda s: int(str(s).lstrip("vV=_") or 0),
-            )
-            for vk in vocab_keys_sorted:
-                for k_lbl, m_entry in ordered_ms.items():
-                    if not isinstance(m_entry, Mapping):
-                        continue
-                    by_v = m_entry.get("by_vocabulary_size") or {}
-                    v_blk = by_v.get(vk) if isinstance(by_v, Mapping) else None
+                k_obs = int(
+                    m_entry.get("k_observations", str(k_lbl).lstrip("kK=_") or 1)
+                )
+                by_v = dict(m_entry.get("by_vocabulary_size") or {})
+                for v_key, v_blk in sorted(
+                    by_v.items(),
+                    key=lambda kv: int(
+                        kv[1].get("vocabulary_size", str(kv[0]).lstrip("vV=_") or 0)
+                    )
+                    if isinstance(kv[1], Mapping)
+                    else 0,
+                ):
                     if not isinstance(v_blk, Mapping):
                         continue
-                    c80 = v_blk.get("core_subset_80pct") or {}
-                    c100 = v_blk.get("core_subset_100pct") or {}
-                    lines.append(
-                        f"{vk:<10} | {str(k_lbl):<8} | "
-                        f"{_fmt_pct(v_blk.get('bleu1_pct'), 9)} | "
-                        f"{_fmt_pct(v_blk.get('word_acc_pct'), 8)} | "
-                        f"{_fmt_pct(v_blk.get('in_vocabulary_word_acc_pct'), 8)} | "
-                        f"{_fmt_pct(c80.get('bleu1_pct'), 11)} | "
-                        f"{_fmt_pct(c80.get('word_acc_pct'), 10)} | "
-                        f"{int(v_blk.get('core_100pct_segment_count', 0)):>8d} | "
-                        f"{_fmt_pct(c100.get('bleu1_pct'), 12)} | "
-                        f"{_fmt_pct(c100.get('word_acc_pct'), 11)}"
+                    v_sz = int(
+                        v_blk.get("vocabulary_size", str(v_key).lstrip("vV=_") or 0)
                     )
-                lines.append(msv_sep)
+                    v_conds = v_blk.get("conditions") or {"S3_clean": v_blk}
+                    k1_v_blk = k1_by_v.get(v_key) or vocab_scaling.get(v_key) or {}
+                    k1_v_conds = (
+                        k1_v_blk.get("conditions")
+                        if isinstance(k1_v_blk, Mapping)
+                        else {}
+                    ) or {}
+                    for strat_disp in (
+                        "Rolling-K2",
+                        "Word-Only",
+                        "Rolling-K0",
+                        "Shifted-K2 (-75s)",
+                    ):
+                        cm = _s3_lookup_cond_metrics(v_conds, strat_disp)
+                        if cm is None:
+                            continue
+                        cm_k1 = _s3_lookup_cond_metrics(k1_v_conds, strat_disp)
+                        if k_obs <= 1 or cm_k1 is None:
+                            g_b = "Baseline (k=1)"
+                            g_iv = "Baseline (k=1)"
+                        else:
+                            db = float(cm.get("bleu1_pct", 0.0)) - float(
+                                cm_k1.get("bleu1_pct", 0.0)
+                            )
+                            div = float(
+                                cm.get("in_vocabulary_word_acc_pct", 0.0)
+                            ) - float(
+                                cm_k1.get("in_vocabulary_word_acc_pct", 0.0)
+                            )
+                            pb_d = (
+                                sig_map.get(
+                                    f"g8_k{k_obs}_vs_k1_V{v_sz}_sent_bleu1"
+                                )
+                                if strat_disp == "Rolling-K2"
+                                else None
+                            )
+                            piv_d = (
+                                sig_map.get(
+                                    f"g8_k{k_obs}_vs_k1_V{v_sz}_in_vocab_top1"
+                                )
+                                if strat_disp == "Rolling-K2"
+                                else None
+                            )
+                            g_b = (
+                                f"{db:+6.2f} pp (p={float(pb_d['p_two_sided']):.4f})"
+                                if isinstance(pb_d, Mapping)
+                                else f"{db:+6.2f} pp"
+                            )
+                            g_iv = (
+                                f"{div:+6.2f} pp (p={float(piv_d['p_two_sided']):.4f})"
+                                if isinstance(piv_d, Mapping)
+                                else f"{div:+6.2f} pp"
+                            )
+                        lines.append(
+                            f"{str(v_key):<8} | {str(k_lbl):<8} | {strat_disp:<18} | "
+                            f"{_fmt_pct(cm.get('corpus_bleu1_pct'), 8)} | "
+                            f"{_fmt_pct(cm.get('bleu1_pct'), 8)} | "
+                            f"{_fmt_pct(cm.get('wer_pct'), 7)} | "
+                            f"{_fmt_pct(cm.get('in_vocabulary_word_acc_pct'), 9)} | "
+                            f"{g_b:>22} | {g_iv:>22}"
+                        )
+            lines.append(m4b_sep)
 
-    cg_stab = report.get("c_gated_online_stability")
-    if isinstance(cg_stab, Mapping) and cg_stab:
-        tau_val = cg_stab.get("recommended_tau_gate", 0.5)
+    # 模块 5：8 组固定配对统计检验汇总表
+    sig_map = (
+        report.get("paired_statistical_significance")
+        or report.get("statistical_significance")
+        or {}
+    )
+    if isinstance(sig_map, Mapping) and sig_map:
         lines.append(
-            f"\n[表 6] 在线屏幕防闪烁置信度门控稳定性分析 (Online Screen Anti-Flicker C-Gated | τ_gate = {tau_val})"
+            "\n[模块 5] 配对统计检验 p 值汇总表 (Paired Material-Block Statistical Significance | 8 Fixed Groups + Holm)"
         )
-        cg_conds: dict[str, Mapping[str, Any]] = {}
-        if isinstance(cg_stab.get("S3_clean_ungated"), Mapping):
-            cg_conds["Rolling-K2 (Ungated τ=0)"] = cg_stab["S3_clean_ungated"]
-        if isinstance(cg_stab.get("S3_clean_c_gated"), Mapping):
-            cg_conds[f"C-Gated (τ={tau_val})"] = cg_stab["S3_clean_c_gated"]
-        if isinstance(cg_stab.get("S3_shifted_neg75s_c_gated"), Mapping):
-            cg_conds[f"C-Gated Shift (τ={tau_val})"] = cg_stab["S3_shifted_neg75s_c_gated"]
-        if cg_conds:
-            lines.extend(_format_s3_conditions_table_full(cg_conds))
+        m5_hdr = (
+            f"{'Grp':<4} | {'Comparison':<38} | {'Scale':<7} | {'Subset':<16} | "
+            f"{'Metric':<18} | {'Delta(pp)':>9} | {'95% Block CI':>18} | "
+            f"{'p(2-sided)':>10} | {'p(Holm)':>8} | {'Sig':>4}"
+        )
+        m5_sep = "-" * len(m5_hdr)
+        lines.extend([m5_sep, m5_hdr, m5_sep])
+        ordered_sig = sorted(
+            [
+                (k, v)
+                for k, v in sig_map.items()
+                if isinstance(v, Mapping) and (k.startswith("g") or "group_id" in v)
+            ],
+            key=lambda kv: (int(kv[1].get("group_id", 99)), str(kv[0])),
+        )
+        if not ordered_sig:
+            ordered_sig = [
+                (k, v) for k, v in sig_map.items() if isinstance(v, Mapping)
+            ]
+        for comp_k, sd in ordered_sig:
+            gid = int(sd.get("group_id", 0))
+            g_str = f"#{gid}" if gid > 0 else "-"
+            comp_s = str(sd.get("comparison", sd.get("label", comp_k)))[:38]
+            sc_s = str(sd.get("scale", f"V={full_v_sz}"))[:7]
+            sub_s = str(sd.get("subset", "All Segs"))[:16]
+            met_s = str(sd.get("metric", "-"))[:18]
+            eff = float(sd.get("effect_pp", 0.0))
+            ci_l = float(sd.get("ci_lower_pp", 0.0))
+            ci_u = float(sd.get("ci_upper_pp", 0.0))
+            p2 = float(sd.get("p_two_sided", sd.get("p_one_sided", 1.0)))
+            ph = float(sd.get("p_holm", p2))
+            sig_s = str(sd.get("significance_holm", sd.get("significance", "ns")))
+            lines.append(
+                f"{g_str:<4} | {comp_s:<38} | {sc_s:<7} | {sub_s:<16} | "
+                f"{met_s:<18} | {eff:+8.2f} | "
+                f"{f'[{ci_l:+6.2f}, {ci_u:+6.2f}]':>18} | "
+                f"{p2:>10.4f} | {ph:>8.4f} | {sig_s:>4}"
+            )
+        lines.append(m5_sep)
+
+    # 模块 6：受试者级序列解码表现
+    per_subj = report.get("per_subject") or []
+    if isinstance(per_subj, Sequence) and per_subj:
+        lines.append(
+            "\n[模块 6] 受试者级序列解码表现 (Per-Subject Rolling-K2 vs Rolling-K0 Performance)"
+        )
+        m6_hdr = (
+            f"{'Subject':<10} | {'Segs':>5} | {'Words':>6} | {'Roll-K2 BLEU1':>13} | "
+            f"{'Roll-K0 BLEU1':>13} | {'Delta BLEU1':>11} | {'Roll-K2 WAcc':>12} | "
+            f"{'ContentAcc':>10} | {'FuncAcc':>8} | {'BERT-F1':>8}"
+        )
+        m6_sep = "-" * len(m6_hdr)
+        lines.extend([m6_sep, m6_hdr, m6_sep])
+        for s in per_subj:
+            if not isinstance(s, Mapping):
+                continue
+            lines.append(
+                f"{str(s.get('subject_id', '-')):<10} | "
+                f"{int(s.get('segment_count', 0)):>5d} | "
+                f"{int(s.get('total_words', 0)):>6d} | "
+                f"{_fmt_pct(s.get('bleu1_pct'), 13)} | "
+                f"{_fmt_pct(s.get('k0_bleu1_pct'), 13)} | "
+                f"{_fmt_signed_pct(s.get('s3_minus_k0_bleu1_pp'), 11)} | "
+                f"{_fmt_pct(s.get('word_acc_pct'), 12)} | "
+                f"{_fmt_pct(s.get('content_word_acc_pct'), 10)} | "
+                f"{_fmt_pct(s.get('function_word_acc_pct'), 8)} | "
+                f"{_fmt_pct(s.get('bertscore_f1_pct'), 8)}"
+            )
+        lines.append(m6_sep)
 
     lines.append("\n[导出产物与可视化图表路径]")
     for path_key in (
@@ -2060,13 +2265,15 @@ def format_sequence_decoding_report(
         "calibration_path",
         "decoding_path",
         "evaluation_dir",
+        "multi_seed_json_path",
+        "multi_seed_report_md_path",
     ):
         if report.get(path_key):
-            lines.append(f"  - {path_key:<18}: {report[path_key]}")
+            lines.append(f"  - {path_key:<26}: {report[path_key]}")
     figs = report.get("figures")
     if isinstance(figs, Mapping) and figs:
         for fig_k, fig_p in figs.items():
-            lines.append(f"  - {fig_k:<28}: {fig_p}")
+            lines.append(f"  - {fig_k:<26}: {fig_p}")
     lines.append(banner)
     return "\n".join(lines)
 
@@ -2642,11 +2849,22 @@ def upgrade_and_refresh_saved_multi_seed_reports(
             direct_json_files.append(src)
         elif src.name.startswith("evaluation_") and src.parent.name.startswith("seed-"):
             stage_dirs.append(src.parent.parent)
+        elif src.name.startswith(("s3_evaluation_summary_", "sequence_decoding_")) and src.parent.name.startswith("seed-"):
+            stage_dirs.append(src.parent.parent)
+        elif src.name.startswith(("s3_evaluation_summary_", "sequence_decoding_")):
+            stage_dirs.append(src.parent)
         else:
             direct_json_files.append(src)
     else:
         # Check if src itself is a stage/subset directory containing multi_seed_*.json or seed-*/
-        if list(src.glob(f"multi_seed_*_{split_l}.json")) or list(src.glob(f"seed-*/evaluation_{split_l}.json")):
+        if (
+            list(src.glob(f"multi_seed_*_{split_l}.json"))
+            or list(src.glob(f"seed-*/evaluation_{split_l}.json"))
+            or list(src.glob(f"seed-*/s3_evaluation_summary_{split_l}.json"))
+            or list(src.glob(f"seed-*/sequence_decoding_{split_l}.json"))
+            or list(src.glob(f"s3_evaluation_summary_{split_l}.json"))
+            or list(src.glob(f"sequence_decoding_{split_l}.json"))
+        ):
             stage_dirs.append(src)
         else:
             found_dirs: set[Path] = set()
@@ -2659,8 +2877,105 @@ def upgrade_and_refresh_saved_multi_seed_reports(
                 if st_dir.resolve() not in found_dirs:
                     found_dirs.add(st_dir.resolve())
                     stage_dirs.append(st_dir)
+            for s3_f in sorted(src.rglob(f"seed-*/s3_evaluation_summary_{split_l}.json")):
+                st_dir = s3_f.parent.parent
+                if st_dir.resolve() not in found_dirs:
+                    found_dirs.add(st_dir.resolve())
+                    stage_dirs.append(st_dir)
+            for s3_raw in sorted(src.rglob(f"seed-*/sequence_decoding_{split_l}.json")):
+                st_dir = s3_raw.parent.parent
+                if st_dir.resolve() not in found_dirs:
+                    found_dirs.add(st_dir.resolve())
+                    stage_dirs.append(st_dir)
 
     upgraded_summaries: list[dict[str, Any]] = []
+
+    def _upgrade_sequence_decoding_directory(seq_dir: Path, split_val: str) -> dict[str, Any] | None:
+        from braindecoding.evaluation.sequence_decoding_evaluation import (
+            evaluate_and_export_sequence_decoding,
+            summarize_and_export_multi_seed_sequence_decoding,
+        )
+
+        def _refresh_one_seed_dir(cdir: Path, seed_num: int | None) -> dict[str, Any] | None:
+            raw_decode_path = cdir / f"sequence_decoding_{split_val}.json"
+            eval_sub = cdir / f"evaluation_{split_val}"
+            summary_path = eval_sub / f"s3_evaluation_summary_{split_val}.json"
+            if not summary_path.is_file():
+                summary_path = cdir / f"s3_evaluation_summary_{split_val}.json"
+            target_out_dir = eval_sub if eval_sub.is_dir() else cdir
+            prev_sum: dict[str, Any] = {}
+            if summary_path.is_file():
+                try:
+                    loaded_sum = json.loads(summary_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded_sum, Mapping):
+                        prev_sum = dict(loaded_sum)
+                except Exception:
+                    pass
+            if raw_decode_path.is_file():
+                try:
+                    raw_bundle = json.loads(raw_decode_path.read_text(encoding="utf-8"))
+                    if isinstance(raw_bundle, Mapping):
+                        ds_name = str(raw_bundle.get("dataset") or prev_sum.get("dataset") or "pallier2025")
+                        lang_name = str(raw_bundle.get("language") or prev_sum.get("language") or ("fr" if ds_name == "pallier2025" else "zh"))
+                        decoded_map = dict(raw_bundle.get("decoded_bundles") or raw_bundle.get("conditions") or {})
+                        decoded_map.pop("F_local", None)
+                        ms_map = dict(raw_bundle.get("multi_subject_bundles") or raw_bundle.get("multi_subject_sweep") or {})
+                        vs_map = dict(raw_bundle.get("vocabulary_scaling_bundles") or raw_bundle.get("vocabulary_scaling") or {})
+                        state_hp = raw_bundle.get("state_hyperparameters") or prev_sum.get("state_hyperparameters")
+                        f_mode = raw_bundle.get("f_condition_mode") or prev_sum.get("f_condition_mode")
+                        exp_tag_val = raw_bundle.get("exp_tag") or prev_sum.get("exp_tag")
+                        cms_eta_val = raw_bundle.get("cms_eta") if raw_bundle.get("cms_eta") is not None else prev_sum.get("cms_eta")
+                        if decoded_map:
+                            return evaluate_and_export_sequence_decoding(
+                                decoded_map,
+                                dataset=ds_name,
+                                language=lang_name,
+                                split=split_val,
+                                output_dir=target_out_dir,
+                                multi_subject_bundles=ms_map,
+                                vocabulary_scaling_bundles=vs_map,
+                                state_hyperparameters=state_hp if isinstance(state_hp, Mapping) else None,
+                                seed=seed_num if seed_num is not None else prev_sum.get("seed"),
+                                exp_tag=str(exp_tag_val) if exp_tag_val is not None else None,
+                                cms_eta=float(cms_eta_val) if cms_eta_val is not None else None,
+                                f_condition_mode=str(f_mode) if f_mode is not None else None,
+                                plot=False,
+                            )
+                except Exception:
+                    pass
+            if prev_sum:
+                try:
+                    export_sequence_decoding_tables_and_markdown(prev_sum, target_out_dir)
+                    full_txt = format_sequence_decoding_report(prev_sum, verbose=True)
+                    (target_out_dir / f"s3_evaluation_report_{split_val}.txt").write_text(full_txt + "\n", encoding="utf-8")
+                except Exception:
+                    pass
+                return prev_sum
+            return None
+
+        refreshed_seed_summaries: list[dict[str, Any]] = []
+        seed_subdirs = sorted([d for d in seq_dir.glob("seed-*") if d.is_dir()])
+        if seed_subdirs:
+            for cdir in seed_subdirs:
+                seed_num = None
+                tail = cdir.name.split("seed-", 1)[-1]
+                if tail.isdigit():
+                    seed_num = int(tail)
+                ref = _refresh_one_seed_dir(cdir, seed_num)
+                if ref is not None:
+                    refreshed_seed_summaries.append(ref)
+        else:
+            ref = _refresh_one_seed_dir(seq_dir, None)
+            if ref is not None:
+                refreshed_seed_summaries.append(ref)
+
+        return summarize_and_export_multi_seed_sequence_decoding(
+            seq_dir,
+            split=split_val,
+            seed_summaries=refreshed_seed_summaries if refreshed_seed_summaries else None,
+            verbose=verbose,
+            print_report=print_to_stdout,
+        )
 
     for jf in direct_json_files:
         raw_obj = json.loads(jf.read_text(encoding="utf-8"))
@@ -2672,6 +2987,17 @@ def upgrade_and_refresh_saved_multi_seed_reports(
             else ("val" if jf.name.lower().endswith("_val.json") else split_l)
         )
         _cleanup_accidental_val_reports_in_test_dir(jf.parent, jf_split)
+        if (
+            jf.name.startswith("multi_seed_sequence_decoding_")
+            or str(raw_obj.get("protocol", "")) in (
+                "sequence_decoding_s3_evaluation",
+                "multi_seed_sequence_decoding_s3_evaluation",
+            )
+        ):
+            s3_built = _upgrade_sequence_decoding_directory(jf.parent, jf_split)
+            if s3_built is not None:
+                upgraded_summaries.append(s3_built)
+            continue
         enriched = _ensure_enriched_multi_seed_summary(
             raw_obj,
             base_dir=jf.parent,
@@ -2695,6 +3021,17 @@ def upgrade_and_refresh_saved_multi_seed_reports(
 
     for st_dir in stage_dirs:
         _cleanup_accidental_val_reports_in_test_dir(st_dir, split_l)
+        if (
+            (st_dir / f"multi_seed_sequence_decoding_{split_l}.json").is_file()
+            or list(st_dir.glob(f"seed-*/s3_evaluation_summary_{split_l}.json"))
+            or list(st_dir.glob(f"seed-*/sequence_decoding_{split_l}.json"))
+            or (st_dir / f"s3_evaluation_summary_{split_l}.json").is_file()
+            or (st_dir / f"sequence_decoding_{split_l}.json").is_file()
+        ):
+            s3_built = _upgrade_sequence_decoding_directory(st_dir, split_l)
+            if s3_built is not None:
+                upgraded_summaries.append(s3_built)
+            continue
         ms_stage_file = st_dir / f"multi_seed_stage_comparison_{split_l}.json"
         ms_eval_file = st_dir / f"multi_seed_evaluation_{split_l}.json"
         if ms_stage_file.is_file():
@@ -2805,13 +3142,15 @@ def render_saved_evaluation_report(
 
     if src.is_dir():
         candidates = (
-            list(sorted(src.glob("s3_evaluation_summary_*.json")))
+            list(sorted(src.glob("multi_seed_sequence_decoding_*.json")))
+            + list(sorted(src.glob("s3_evaluation_summary_*.json")))
             + list(sorted(src.glob("multi_seed_stage_comparison_*.json")))
             + list(sorted(src.glob("multi_seed_evaluation_*.json")))
             + list(sorted(src.glob("multi_stage_evaluation_*.json")))
             + list(sorted(src.glob("subspace_coherence_debiasing_*.json")))
             + list(sorted(src.glob("common_mode_subtraction_*.json")))
             + list(sorted(src.glob("evaluation_*.json")))
+            + list(sorted(src.rglob("multi_seed_sequence_decoding_*.json")))
             + list(sorted(src.rglob("s3_evaluation_summary_*.json")))
             + list(sorted(src.rglob("multi_seed_stage_comparison_*.json")))
             + list(sorted(src.rglob("multi_seed_evaluation_*.json")))
@@ -2872,11 +3211,32 @@ def render_saved_evaluation_report(
             control_metric=control_metric,
         )
 
-    if protocol == "sequence_decoding_s3_evaluation" or (
+    if protocol in ("sequence_decoding_s3_evaluation", "multi_seed_sequence_decoding_s3_evaluation") or (
         "conditions" in payload and "vocabulary_scaling" in payload
     ):
+        split_s3 = str(payload.get("split", "test"))
         try:
-            export_sequence_decoding_tables_and_markdown(payload, src.parent)
+            exported_s3 = export_sequence_decoding_tables_and_markdown(payload, src.parent)
+            if protocol == "multi_seed_sequence_decoding_s3_evaluation" or src.name.startswith("multi_seed_sequence_decoding_"):
+                md_str_path = exported_s3.get("markdown") or exported_s3.get("s3_evaluation_report_md")
+                if md_str_path:
+                    md_p = Path(str(md_str_path))
+                    if md_p.is_file():
+                        (src.parent / f"multi_seed_sequence_decoding_report_{split_s3}.md").write_text(
+                            md_p.read_text(encoding="utf-8"),
+                            encoding="utf-8",
+                        )
+        except OSError:
+            pass
+        full_txt = format_sequence_decoding_report(payload, verbose=True)
+        try:
+            (src.parent / f"s3_evaluation_report_{split_s3}.txt").write_text(
+                full_txt + "\n", encoding="utf-8"
+            )
+            if protocol == "multi_seed_sequence_decoding_s3_evaluation" or src.name.startswith("multi_seed_sequence_decoding_"):
+                (src.parent / f"multi_seed_sequence_decoding_report_{split_s3}.txt").write_text(
+                    full_txt + "\n", encoding="utf-8"
+                )
         except OSError:
             pass
         rendered = format_sequence_decoding_report(payload, verbose=verbose)

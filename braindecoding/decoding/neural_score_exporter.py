@@ -420,6 +420,10 @@ def _encode_stage_with_shifts(
                 delay: mask[perm]
                 for delay, mask in aligned["revision_availability_masks"].items()
             }
+        if "full_context_predictions" in aligned and isinstance(
+            aligned["full_context_predictions"], torch.Tensor
+        ):
+            aligned["full_context_predictions"] = aligned["full_context_predictions"][perm]
         return aligned
 
     def _run_encode(shift_sec: float | None, label: str) -> dict:
@@ -480,6 +484,21 @@ def _encode_stage_with_shifts(
             )
             avail_masks[state_key] = (
                 clean_encoded["revision_availability_masks"][delay].cpu().bool()
+            )
+        if "full_context_predictions" in clean_encoded:
+            c_full = clean_encoded["full_context_predictions"].cpu()
+            s_full = control_encoded["full_context_predictions"].cpu()
+            h_full = [
+                h["full_context_predictions"].cpu() for h in hist_encoded_list
+            ]
+            clean_states["F"] = apply_historical_common_mode_subtraction(
+                c_full, h_full, eta=subtraction_eta
+            )
+            shifted_states["F"] = apply_historical_common_mode_subtraction(
+                s_full, h_full, eta=subtraction_eta
+            )
+            avail_masks["F"] = torch.ones(
+                len(clean_encoded["event_ids"]), dtype=torch.bool
             )
     else:
         state_key = "S0" if stage == "word" else "F"
@@ -729,8 +748,32 @@ def export_neural_vocabulary_scores(
         subset_tag,
         seed,
         exp_tag=ctx_tag,
+        fallback_exp_tags=(rev_tag, w_tag, ""),
         explicit_checkpoint=context_checkpoint,
     )
+    if ctx_ckpt is None and context_checkpoint is None:
+        ds_root = results_root() / dataset
+        if ds_root.is_dir():
+            for child in sorted(ds_root.iterdir()):
+                if not child.is_dir():
+                    continue
+                for mode in ("train", "smoke"):
+                    cand_dir = (
+                        child
+                        / "context_transformer"
+                        / subset_tag
+                        / mode
+                        / f"seed-{int(seed):03d}"
+                    )
+                    for name in ("best.ckpt", "best.pt", "last.ckpt"):
+                        cand_file = cand_dir / name
+                        if cand_file.is_file():
+                            ctx_ckpt = cand_file
+                            break
+                    if ctx_ckpt is not None:
+                        break
+                if ctx_ckpt is not None:
+                    break
     if rev_ckpt is None and word_ckpt is None:
         raise FileNotFoundError(
             f"未找到 Stage 2.2/2.3 ({resolved_rev_stage}) 或 Stage 1 (word) 检查点（dataset={dataset}, subset={subset_tag}, seed={seed}）。"
@@ -882,12 +925,17 @@ def export_neural_vocabulary_scores(
         checkpoint_provenance["context"] = ctx_res["checkpoint_path"]
         checkpoint_provenance["has_context_checkpoint"] = True
     else:
-        # 未单独训练 Stage 2.1 全局上下文检查点时标记为 not_available（保持张量键兼容但禁止下游解码伪条件 F-local）
-        clean_embeddings["F"] = clean_embeddings["K2"].clone()
-        shifted_embeddings["F"] = shifted_embeddings["K2"].clone()
-        availability_masks["F"] = availability_masks["K2"].clone()
-        checkpoint_provenance["context"] = "not_available"
-        checkpoint_provenance["has_context_checkpoint"] = False
+        if "F" in clean_embeddings and "F" in shifted_embeddings:
+            checkpoint_provenance["context"] = (
+                f"full_sentence_transformer_from_{resolved_rev_stage}"
+            )
+            checkpoint_provenance["has_context_checkpoint"] = True
+        else:
+            clean_embeddings["F"] = clean_embeddings["K2"].clone()
+            shifted_embeddings["F"] = shifted_embeddings["K2"].clone()
+            availability_masks["F"] = availability_masks["K2"].clone()
+            checkpoint_provenance["context"] = "fallback_from_K2"
+            checkpoint_provenance["has_context_checkpoint"] = True
 
     clean_scores: dict[str, torch.Tensor] = {}
     shifted_scores: dict[str, torch.Tensor] = {}

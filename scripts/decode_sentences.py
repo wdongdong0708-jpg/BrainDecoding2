@@ -347,14 +347,43 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             seed_args.calibration_path = None
             seed_args.decoding_path = None
             seed_args._shared_scorer_box = shared_scorer_box
+            seed_args._in_multi_seed_loop = True
             per_seed_summaries[f"seed-{int(seed_val):03d}"] = (
                 run_sequence_decoding_pipeline(seed_args)
+            )
+        multi_seed_summary: dict[str, Any] = {}
+        if args.step in ("evaluate", "all") and per_seed_summaries:
+            from braindecoding.evaluation.sequence_decoding_evaluation import (
+                summarize_and_export_multi_seed_sequence_decoding,
+            )
+
+            first_seed_Summary = next(iter(per_seed_summaries.values()))
+            first_eval_dir = first_seed_Summary.get("evaluation_dir")
+            seq_root_dir = (
+                Path(first_eval_dir).resolve().parent.parent
+                if first_eval_dir
+                else resolve_default_paths(
+                    args.dataset,
+                    args.split,
+                    seed_list[0],
+                    output_dir=args.output_dir,
+                    exp_tag=getattr(args, "exp_tag", None),
+                )["base_dir"].parent
+            )
+            multi_seed_summary = summarize_and_export_multi_seed_sequence_decoding(
+                seq_root_dir,
+                split=args.split,
+                dataset=args.dataset,
+                exp_tag=first_seed_Summary.get("exp_tag"),
+                seed_reports=list(per_seed_summaries.values()),
+                plot=not bool(getattr(args, "no_plot", False)),
             )
         return {
             "dataset": args.dataset,
             "split": args.split,
             "seeds": seed_list,
             "per_seed_summaries": per_seed_summaries,
+            "multi_seed_summary": multi_seed_summary,
         }
     args.seed = int(seed_list[0])
     default_proto_path = resolve_config_path(project_path(DEFAULT_CONFIG_PATH))
@@ -629,6 +658,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 and saved_rev_stage != effective_rev_stage
             ):
                 return False
+            if ckpt_prov.get("context") in (None, "", "not_available"):
+                return False
+            if "F" not in (payload.get("clean_scores") or {}):
+                return False
             cms_meta = dict(payload.get("cms_metadata") or {})
             if "subtraction_eta" not in cms_meta:
                 return True
@@ -746,7 +779,8 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     and shared_mode_ok
                     and isinstance(existing_cal.get("states"), dict)
                     and all(
-                        k in existing_cal["states"] for k in ("K0", "K1", "K2")
+                        k in existing_cal["states"]
+                        for k in ("S0", "K0", "K1", "K2", "F")
                     )
                 ):
                     reused_calibration = existing_cal
@@ -811,13 +845,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         available_clean = split_payload.get("clean_scores", {})
         available_shifted = split_payload.get("shifted_scores", {})
         ckpt_prov = dict(split_payload.get("checkpoint_provenance") or {})
-        has_real_context = bool(
-            ckpt_prov.get("has_context_checkpoint")
-            or (
-                ckpt_prov.get("context")
-                not in (None, "", "not_available", "fallback_from_revision_mature")
-            )
-        )
+        has_real_context = "F" in available_clean
         f_mode = "F_full_context" if has_real_context else "not_available"
         total_split_segs = len(split_payload.get("segments") or [])
         expected_seg_count = (
@@ -858,7 +886,13 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     for cond_k, cond_b in (
                         existing_dec.get("decoded_bundles") or {}
                     ).items():
-                        if cond_k in ("F", "F_clean", "F_local") and not has_real_context:
+                        if cond_k == "F_local":
+                            continue
+                        if (
+                            cond_k == "S3_shifted_neg75s"
+                            and isinstance(cond_b, dict)
+                            and not cond_b.get("screen_histories")
+                        ):
                             continue
                         if (
                             isinstance(cond_b, dict)
@@ -897,10 +931,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
         def _persist_decoding_bundle() -> None:
             _backfill_intermediate_and_shifted_bundles(decoded_bundles)
+            decoded_bundles.pop("F_local", None)
             if not has_real_context:
                 decoded_bundles.pop("F", None)
                 decoded_bundles.pop("F_clean", None)
-                decoded_bundles.pop("F_local", None)
             bundle_obj = {
                 "schema_version": "s3-decoding-bundle/v2",
                 "dataset": args.dataset,
@@ -1000,9 +1034,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 candidate_top_k=top_k,
                 segment_batch_size=segment_batch_size,
                 max_segments=args.max_segments,
-                include_screen_history=False,
+                include_screen_history=True,
                 show_progress=show_progress,
-                progress_desc=f"S3 Decode [K2_shifted_-75s | {args.split}]",
+                progress_desc=f"S3 Decode [Shifted-K2 (-75s) | {args.split}]",
             )
             any_main_decoded = True
 
@@ -1018,22 +1052,26 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     if int(sz) >= 1
                 }
             )
+            max_core_v = max(int(core_vocab_size or 250), 250)
+
+            def _scale_needs_decode(n_val: int) -> bool:
+                s_key = f"V={int(n_val)}"
+                if s_key not in vocabulary_scaling_bundles:
+                    return True
+                conds = vocabulary_scaling_bundles[s_key].get("conditions") or {}
+                req = ["S3_clean", "S0", "K0", "S3_shifted_neg75s"]
+                if n_val <= max_core_v or n_val == full_vocab_len:
+                    if "K1" in available_clean:
+                        req.append("K1")
+                    if "F" in available_clean:
+                        req.append("F")
+                    if "K0" in available_shifted:
+                        req.append("K0_shifted_neg75s")
+                    req.append("LM-Only")
+                return not all(r_k in conds for r_k in req)
+
             needs_truncated_decode = any(
-                int(n) < full_vocab_len
-                and (
-                    f"V={int(n)}" not in vocabulary_scaling_bundles
-                    or "S3_clean"
-                    not in (
-                        vocabulary_scaling_bundles[f"V={int(n)}"].get("conditions")
-                        or {}
-                    )
-                    or "S3_shifted_neg75s"
-                    not in (
-                        vocabulary_scaling_bundles[f"V={int(n)}"].get("conditions")
-                        or {}
-                    )
-                )
-                for n in effective_scales
+                _scale_needs_decode(int(n)) for n in effective_scales
             )
             active_scorer = _ensure_scorer() if needs_truncated_decode else scorer
 
@@ -1069,17 +1107,29 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             for k in sorted({int(x) for x in k_observations if int(x) >= 1})
             if int(k) <= len(unique_subjects)
         ]
+
+        def _multi_subject_complete() -> bool:
+            for k_key in expected_k_keys:
+                if k_key not in multi_subject_bundles:
+                    return False
+                ms_entry = multi_subject_bundles[k_key]
+                if not isinstance(ms_entry, dict):
+                    return False
+                ms_conds = ms_entry.get("conditions") or {}
+                if not all(
+                    c_k in ms_conds
+                    for c_k in ("S3_clean", "S0", "K0", "S3_shifted_neg75s")
+                ):
+                    return False
+                by_v = ms_entry.get("by_vocabulary_size")
+                if not isinstance(by_v, dict) or not by_v:
+                    return False
+            return True
+
         if (
             len(k_observations) >= 2
             and len(unique_subjects) > 1
-            and not all(
-                k_key in multi_subject_bundles
-                and isinstance(
-                    multi_subject_bundles[k_key].get("by_vocabulary_size"),
-                    dict,
-                )
-                for k_key in expected_k_keys
-            )
+            and not _multi_subject_complete()
         ):
             multi_subject_bundles = run_multi_subject_observation_sweep(
                 split_payload,
@@ -1090,6 +1140,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 condition="S3",
                 alignment="clean",
                 single_subject_s3_bundle=decoded_bundles.get("S3_clean"),
+                single_subject_full_vocab_bundles=decoded_bundles,
                 single_subject_vocab_scaling_bundles=vocabulary_scaling_bundles,
                 beam_width=beam_width,
                 candidate_top_k=top_k,
@@ -1106,15 +1157,13 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     if args.step in ("evaluate", "all"):
         from braindecoding.evaluation.sequence_decoding_evaluation import (
             format_sequence_decoding_report,
+            summarize_and_export_multi_seed_sequence_decoding,
         )
 
         if args.step == "all" and "decoded_bundles" in locals():
             language = "fr" if args.dataset == "pallier2025" else "zh"
             decoded_bundles_map = dict(decoded_bundles)
-            if f_mode != "F_full_context":
-                decoded_bundles_map.pop("F", None)
-                decoded_bundles_map.pop("F_clean", None)
-                decoded_bundles_map.pop("F_local", None)
+            decoded_bundles_map.pop("F_local", None)
             multi_subject_bundles_map = dict(multi_subject_bundles)
             vocabulary_scaling_bundles_map = dict(vocabulary_scaling_bundles)
             if "state_hyperparameters" not in results_summary:
@@ -1139,10 +1188,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             if "decoding_path" not in results_summary:
                 results_summary["decoding_path"] = str(decoding_path)
             decoded_bundles_map = dict(bundle.get("decoded_bundles") or {})
-            if bundle.get("f_condition_mode") != "F_full_context":
-                decoded_bundles_map.pop("F", None)
-                decoded_bundles_map.pop("F_clean", None)
-                decoded_bundles_map.pop("F_local", None)
+            decoded_bundles_map.pop("F_local", None)
             multi_subject_bundles_map = dict(
                 bundle.get("multi_subject_bundles") or {}
             )
@@ -1192,26 +1238,30 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             vocabulary_scaling_bundles=vocabulary_scaling_bundles_map,
             core_vocab_size=core_vocab_size,
             core_vocab_sizes=core_vocab_sizes,
+            state_hyperparameters=results_summary.get("state_hyperparameters"),
+            seed=int(args.seed),
+            exp_tag=exp_tag,
+            cms_eta=cms_eta,
+            f_condition_mode=results_summary.get("f_condition_mode"),
             plot=plot_enabled,
         )
         results_summary["evaluation_dir"] = str(paths["evaluation_dir"])
-        results_summary["conditions"] = eval_report["conditions"]
-        results_summary["multi_subject_scaling"] = eval_report.get(
-            "multi_subject_scaling", {}
-        )
-        results_summary["core_vocabulary_benchmark"] = eval_report.get(
-            "core_vocabulary_benchmark", {}
-        )
-        results_summary["core_vocabulary_benchmarks"] = eval_report.get(
-            "core_vocabulary_benchmarks", {}
-        )
-        results_summary["full_vocab_core_subsets"] = eval_report.get(
-            "full_vocab_core_subsets", {}
-        )
-        results_summary["vocabulary_scaling"] = eval_report.get(
-            "vocabulary_scaling", {}
-        )
-        results_summary["figures"] = eval_report["figures"]
+        for rep_k in (
+            "conditions",
+            "multi_subject_scaling",
+            "core_vocabulary_benchmark",
+            "core_vocabulary_benchmarks",
+            "full_vocab_core_subsets",
+            "vocabulary_scaling",
+            "c_gated_online_stability",
+            "paired_statistical_significance",
+            "figures",
+            "tables",
+            "markdown",
+            "report_path",
+        ):
+            if rep_k in eval_report:
+                results_summary[rep_k] = eval_report[rep_k]
         report_txt_path = (
             paths["evaluation_dir"] / f"s3_evaluation_report_{args.split}.txt"
         )
@@ -1220,6 +1270,17 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             encoding="utf-8",
         )
         results_summary["report_txt_path"] = str(report_txt_path)
+
+        if not bool(getattr(args, "_in_multi_seed_loop", False)):
+            seq_root_dir = paths["base_dir"].parent
+            multi_seed_summary = summarize_and_export_multi_seed_sequence_decoding(
+                seq_root_dir,
+                split=args.split,
+                dataset=args.dataset,
+                exp_tag=exp_tag,
+                plot=plot_enabled,
+            )
+            results_summary["multi_seed_summary"] = multi_seed_summary
 
     return results_summary
 
@@ -1241,6 +1302,14 @@ def main(argv: list[str] | None = None) -> int:
                     seed_summary,
                     verbose=bool(getattr(args, "verbose", False)),
                 )
+        ms_rep = summary.get("multi_seed_summary")
+        if isinstance(ms_rep, dict) and (
+            "conditions" in ms_rep or "vocabulary_scaling" in ms_rep
+        ):
+            print_sequence_decoding_report(
+                ms_rep,
+                verbose=bool(getattr(args, "verbose", False)),
+            )
     elif "conditions" not in summary and "vocabulary_scaling" not in summary:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:

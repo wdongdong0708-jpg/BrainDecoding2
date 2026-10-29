@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-10-29T10:15:34Z",
+  "updated_at": "2026-10-29T12:41:41Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "f622d2f27e681be7adbdd128b5f3f9fd7f860af83ddab3f16ce57b084baedf33",
-      "size": 102201,
-      "normalized_sha256": "f622d2f27e681be7adbdd128b5f3f9fd7f860af83ddab3f16ce57b084baedf33"
+      "sha256": "5d2bfcbbadf76d85dc266736438683d29175b17b2ad4977250731d38fb3b06bc",
+      "size": 102398,
+      "normalized_sha256": "5d2bfcbbadf76d85dc266736438683d29175b17b2ad4977250731d38fb3b06bc"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -149,9 +149,9 @@
     },
     "braindecoding/decoding/neural_score_exporter.py": {
       "role": "index",
-      "sha256": "716a9e1b18f0fdb7be1ff9a3a87659961c34fb03de8460607cf7d97156af4b90",
-      "size": 44347,
-      "normalized_sha256": "716a9e1b18f0fdb7be1ff9a3a87659961c34fb03de8460607cf7d97156af4b90"
+      "sha256": "465392d6f2847849474d57f5a23d66e1ba54ba932f691a3f223bbe8c8550404d",
+      "size": 46436,
+      "normalized_sha256": "465392d6f2847849474d57f5a23d66e1ba54ba932f691a3f223bbe8c8550404d"
     },
     "braindecoding/decoding/revision_gain_evaluation.py": {
       "role": "index",
@@ -167,9 +167,9 @@
     },
     "braindecoding/decoding/rolling_beam_search.py": {
       "role": "index",
-      "sha256": "5c8dafb5cc14a12fd1c0562e07ba9c9bd8a5863b8890de74bc773946d2b34d42",
-      "size": 101921,
-      "normalized_sha256": "5c8dafb5cc14a12fd1c0562e07ba9c9bd8a5863b8890de74bc773946d2b34d42"
+      "sha256": "7e32af2539144c50952abc5152a7cc04d3b0cb6de93d4dce663d26cab984573f",
+      "size": 108540,
+      "normalized_sha256": "7e32af2539144c50952abc5152a7cc04d3b0cb6de93d4dce663d26cab984573f"
     },
     "braindecoding/decoding/rolling_sentence_decoding.py": {
       "role": "index",
@@ -215,9 +215,9 @@
     },
     "braindecoding/evaluation/__init__.py": {
       "role": "index",
-      "sha256": "fc089ed548f4c148ec574a09d6f117e7a081ee369dc3ce59d062eff940656184",
-      "size": 3683,
-      "normalized_sha256": "fc089ed548f4c148ec574a09d6f117e7a081ee369dc3ce59d062eff940656184"
+      "sha256": "14880780d1d08f4465172809c41f91361c8230d292e86a56379953fbee6c78af",
+      "size": 3772,
+      "normalized_sha256": "14880780d1d08f4465172809c41f91361c8230d292e86a56379953fbee6c78af"
     },
     "braindecoding/evaluation/block_length_sensitivity_evaluation.py": {
       "role": "index",
@@ -251,9 +251,9 @@
     },
     "braindecoding/evaluation/evaluation_exports.py": {
       "role": "index",
-      "sha256": "9af432ca07006956a190273cf4a03045c3388878e85a08d81d158f306a546d8c",
-      "size": 237216,
-      "normalized_sha256": "9af432ca07006956a190273cf4a03045c3388878e85a08d81d158f306a546d8c"
+      "sha256": "83fb84d34584128764b4e5a204c92a734104e093b0ca81e3a06951aff0dadb06",
+      "size": 266822,
+      "normalized_sha256": "83fb84d34584128764b4e5a204c92a734104e093b0ca81e3a06951aff0dadb06"
     },
     "braindecoding/evaluation/evaluation_figures.py": {
       "role": "index",
@@ -263,9 +263,9 @@
     },
     "braindecoding/evaluation/evaluation_reporting.py": {
       "role": "index",
-      "sha256": "14fbaa58446e2e5ce6df5355f0a03eb349cda0f961d0152ee3d824802123385b",
-      "size": 192691,
-      "normalized_sha256": "14fbaa58446e2e5ce6df5355f0a03eb349cda0f961d0152ee3d824802123385b"
+      "sha256": "d7ef10436c249608f319e34fb051b2cddf6994042b9cfee53eafdcde7cbc426d",
+      "size": 209138,
+      "normalized_sha256": "d7ef10436c249608f319e34fb051b2cddf6994042b9cfee53eafdcde7cbc426d"
     },
     "braindecoding/evaluation/full_context_sentence_evaluation.py": {
       "role": "index",
@@ -335,9 +335,9 @@
     },
     "braindecoding/evaluation/sequence_decoding_evaluation.py": {
       "role": "index",
-      "sha256": "abce6b0d0a288039f54066e94c40f53abbfa517edd642c3c8b6fd6780ada00d6",
-      "size": 74189,
-      "normalized_sha256": "abce6b0d0a288039f54066e94c40f53abbfa517edd642c3c8b6fd6780ada00d6"
+      "sha256": "21bfe37da4ffc34f8be4373228cf9607a6ab72146004b5dc17826ba3c6c75fcd",
+      "size": 124847,
+      "normalized_sha256": "21bfe37da4ffc34f8be4373228cf9607a6ab72146004b5dc17826ba3c6c75fcd"
     },
     "braindecoding/evaluation/single_step_atomic_writer.py": {
       "role": "index",
@@ -581,9 +581,9 @@
     },
     "braindecoding/training/word_encoder_training.py": {
       "role": "index",
-      "sha256": "dd3ff96402d206a92bae03309f3d47d394b2b0c26ac7f13170a36e74415a5452",
-      "size": 27538,
-      "normalized_sha256": "dd3ff96402d206a92bae03309f3d47d394b2b0c26ac7f13170a36e74415a5452"
+      "sha256": "f961489f7c2040cc695ec5f277aa4cc834451a4e073c096415da971b27652203",
+      "size": 28182,
+      "normalized_sha256": "f961489f7c2040cc695ec5f277aa4cc834451a4e073c096415da971b27652203"
     },
     "braindecoding/training/workflow_runner.py": {
       "role": "index",
@@ -1252,9 +1252,9 @@
     },
     "scripts/colab/colab_gpu_evaluation.ipynb": {
       "role": "index",
-      "sha256": "8277da58f2327dd5851469004c82bffc125d5915eb8320e385286ff72bcfaeb4",
-      "size": 38960,
-      "normalized_sha256": "8277da58f2327dd5851469004c82bffc125d5915eb8320e385286ff72bcfaeb4"
+      "sha256": "df255ad86a2713148353392e01256017da9f61fc0b5f0bb7d34459d5321ce5ac",
+      "size": 39171,
+      "normalized_sha256": "df255ad86a2713148353392e01256017da9f61fc0b5f0bb7d34459d5321ce5ac"
     },
     "scripts/colab/colab_gpu_train.ipynb": {
       "role": "index",
@@ -1276,9 +1276,9 @@
     },
     "scripts/decode_sentences.py": {
       "role": "index",
-      "sha256": "4c14b7ff145adc6c983f9ae49a179df7611c454da28e5433fe00115c0fbb8d1d",
-      "size": 49227,
-      "normalized_sha256": "4c14b7ff145adc6c983f9ae49a179df7611c454da28e5433fe00115c0fbb8d1d"
+      "sha256": "3cfc6b92832a850b90a340fa9070dd99600798301561b4ce3c1d3682175a2cb8",
+      "size": 52274,
+      "normalized_sha256": "3cfc6b92832a850b90a340fa9070dd99600798301561b4ce3c1d3682175a2cb8"
     },
     "scripts/generate_paper_assets.py": {
       "role": "index",

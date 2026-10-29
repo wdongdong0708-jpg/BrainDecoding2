@@ -2132,6 +2132,7 @@ def run_multi_subject_observation_sweep(
     condition: str = "S3",
     alignment: str = "clean",
     single_subject_s3_bundle: dict | None = None,
+    single_subject_full_vocab_bundles: dict[str, dict] | None = None,
     single_subject_vocab_scaling_bundles: dict[str, dict] | None = None,
     beam_width: int = 5,
     candidate_top_k: int = 20,
@@ -2197,6 +2198,12 @@ def run_multi_subject_observation_sweep(
 
         if k_int == 1 and single_subject_s3_bundle is not None:
             bundle = dict(single_subject_s3_bundle)
+        elif (
+            k_int == 1
+            and isinstance(single_subject_full_vocab_bundles, dict)
+            and "S3_clean" in single_subject_full_vocab_bundles
+        ):
+            bundle = dict(single_subject_full_vocab_bundles["S3_clean"])
         else:
             bundle = decode_dataset_segments(
                 agg_payload,
@@ -2214,6 +2221,42 @@ def run_multi_subject_observation_sweep(
             )
 
         conds_full: dict[str, dict] = {"S3_clean": dict(bundle)}
+        if k_int == 1 and isinstance(single_subject_full_vocab_bundles, dict):
+            for c_key in ("S0", "K0", "S3_shifted_neg75s", "F", "K1", "K0_shifted_neg75s"):
+                if c_key in single_subject_full_vocab_bundles:
+                    conds_full[c_key] = dict(single_subject_full_vocab_bundles[c_key])
+            if "S0" not in conds_full and "S0_clean" in single_subject_full_vocab_bundles:
+                conds_full["S0"] = dict(single_subject_full_vocab_bundles["S0_clean"])
+        else:
+            for st_key in ("S0", "K0"):
+                if st_key in available_clean:
+                    conds_full[st_key] = decode_dataset_segments(
+                        agg_payload,
+                        scorer,
+                        hyperparameters,
+                        condition=st_key,
+                        alignment="clean",
+                        beam_width=beam_width,
+                        candidate_top_k=candidate_top_k,
+                        segment_batch_size=segment_batch_size,
+                        max_segments=max_segments,
+                        include_screen_history=False,
+                        show_progress=False,
+                    )
+            if "K2" in available_shifted:
+                conds_full["S3_shifted_neg75s"] = decode_dataset_segments(
+                    agg_payload,
+                    scorer,
+                    hyperparameters,
+                    condition="S3",
+                    alignment="shifted",
+                    beam_width=beam_width,
+                    candidate_top_k=candidate_top_k,
+                    segment_batch_size=segment_batch_size,
+                    max_segments=max_segments,
+                    include_screen_history=False,
+                    show_progress=False,
+                )
 
         by_vocab: dict[str, dict] = {}
         for eff_v in eff_vocab_sizes:
@@ -2252,6 +2295,37 @@ def run_multi_subject_observation_sweep(
                     show_progress=False,
                 )
             }
+            for st_key in ("S0", "K0"):
+                if st_key in available_clean:
+                    v_conds[st_key] = decode_dataset_segments(
+                        agg_payload,
+                        scorer,
+                        hyperparameters,
+                        condition=st_key,
+                        alignment="clean",
+                        beam_width=beam_width,
+                        candidate_top_k=candidate_top_k,
+                        segment_batch_size=segment_batch_size,
+                        allowed_vocab_indices=active_indices,
+                        max_segments=max_segments,
+                        include_screen_history=False,
+                        show_progress=False,
+                    )
+            if "K2" in available_shifted:
+                v_conds["S3_shifted_neg75s"] = decode_dataset_segments(
+                    agg_payload,
+                    scorer,
+                    hyperparameters,
+                    condition="S3",
+                    alignment="shifted",
+                    beam_width=beam_width,
+                    candidate_top_k=candidate_top_k,
+                    segment_batch_size=segment_batch_size,
+                    allowed_vocab_indices=active_indices,
+                    max_segments=max_segments,
+                    include_screen_history=False,
+                    show_progress=False,
+                )
             by_vocab[v_key] = {
                 "vocabulary_size": int(eff_v),
                 "is_full_vocabulary": False,
@@ -2400,7 +2474,25 @@ def run_vocabulary_scaling_sweep(
             )
         )
 
-        if scale_key in scaling_bundles:
+        max_core_v = max(int(core_vocab_size or 250), 250)
+        is_core_benchmark_scale = eff_n <= max_core_v
+
+        existing_entry = scaling_bundles.get(scale_key)
+        existing_conds = (
+            dict(existing_entry.get("conditions") or {})
+            if isinstance(existing_entry, dict)
+            else {}
+        )
+        required_keys = ["S3_clean", "S0", "K0", "S3_shifted_neg75s"]
+        if is_core_benchmark_scale or eff_n == full_v_size:
+            if "K1" in available_clean:
+                required_keys.append("K1")
+            if "F" in available_clean:
+                required_keys.append("F")
+            if "K0" in available_shifted:
+                required_keys.append("K0_shifted_neg75s")
+            required_keys.append("LM-Only")
+        if existing_conds and all(rk in existing_conds for rk in required_keys):
             continue
 
         if (
@@ -2408,7 +2500,7 @@ def run_vocabulary_scaling_sweep(
             and isinstance(full_vocab_bundles, dict)
             and "S3_clean" in full_vocab_bundles
         ):
-            raw_reused: dict[str, dict] = {}
+            raw_reused: dict[str, dict] = dict(existing_conds)
             for k in (
                 "S0",
                 "S0_clean",
@@ -2417,6 +2509,7 @@ def run_vocabulary_scaling_sweep(
                 "S3_clean",
                 "F",
                 "F_clean",
+                "LM-Only",
                 "K0_shifted_neg75s",
                 "S3_shifted_neg75s",
             ):
@@ -2424,6 +2517,36 @@ def run_vocabulary_scaling_sweep(
                     raw_reused[k] = full_vocab_bundles[k]
             if "S0_clean" in raw_reused and "S0" not in raw_reused:
                 raw_reused["S0"] = raw_reused["S0_clean"]
+            if "F_clean" in raw_reused and "F" not in raw_reused:
+                raw_reused["F"] = raw_reused["F_clean"]
+            if "F" not in raw_reused and "F" in available_clean:
+                raw_reused["F"] = decode_dataset_segments(
+                    exported_payload,
+                    scorer,
+                    hyperparameters,
+                    condition="F",
+                    alignment="clean",
+                    beam_width=beam_width,
+                    candidate_top_k=candidate_top_k,
+                    segment_batch_size=segment_batch_size,
+                    max_segments=max_segments,
+                    show_progress=show_progress,
+                    progress_desc=f"S3 VocabScale [V={eff_n} | Full-Context]",
+                )
+            if "LM-Only" not in raw_reused:
+                raw_reused["LM-Only"] = decode_dataset_segments(
+                    exported_payload,
+                    scorer,
+                    hyperparameters,
+                    condition="LM-Only",
+                    alignment="clean",
+                    beam_width=beam_width,
+                    candidate_top_k=candidate_top_k,
+                    segment_batch_size=segment_batch_size,
+                    max_segments=max_segments,
+                    show_progress=show_progress,
+                    progress_desc=f"S3 VocabScale [V={eff_n} | LM-Only]",
+                )
             reused_conds = _backfill_intermediate_and_shifted_bundles(
                 raw_reused
             )
@@ -2441,29 +2564,28 @@ def run_vocabulary_scaling_sweep(
                 on_scale_completed(scale_key, scale_entry)
             continue
 
-        max_core_v = max(int(core_vocab_size or 250), 250)
-        is_core_benchmark_scale = eff_n <= max_core_v
-        cond_map: dict[str, dict] = {}
-        cond_map["S3_clean"] = decode_dataset_segments(
-            exported_payload,
-            scorer,
-            hyperparameters,
-            condition="S3",
-            alignment="clean",
-            beam_width=beam_width,
-            candidate_top_k=candidate_top_k,
-            segment_batch_size=segment_batch_size,
-            allowed_vocab_indices=active_indices,
-            max_segments=max_segments,
-            include_screen_history=False,
-            show_progress=show_progress,
-            progress_desc=f"S3 VocabScale [V={eff_n} | Rolling-K2]",
-        )
+        cond_map: dict[str, dict] = dict(existing_conds)
+        if "S3_clean" not in cond_map:
+            cond_map["S3_clean"] = decode_dataset_segments(
+                exported_payload,
+                scorer,
+                hyperparameters,
+                condition="S3",
+                alignment="clean",
+                beam_width=beam_width,
+                candidate_top_k=candidate_top_k,
+                segment_batch_size=segment_batch_size,
+                allowed_vocab_indices=active_indices,
+                max_segments=max_segments,
+                include_screen_history=False,
+                show_progress=show_progress,
+                progress_desc=f"S3 VocabScale [V={eff_n} | Rolling-K2]",
+            )
         static_states = (
             ("S0", "K0", "K1") if is_core_benchmark_scale else ("S0", "K0")
         )
         for static_state in static_states:
-            if static_state in available_clean:
+            if static_state in available_clean and static_state not in cond_map:
                 cond_map[static_state] = decode_dataset_segments(
                     exported_payload,
                     scorer,
@@ -2478,7 +2600,7 @@ def run_vocabulary_scaling_sweep(
                     show_progress=show_progress,
                     progress_desc=f"S3 VocabScale [V={eff_n} | {static_state}]",
                 )
-        if is_core_benchmark_scale and has_real_context and "F" in available_clean:
+        if is_core_benchmark_scale and "F" in available_clean and "F" not in cond_map:
             cond_map["F"] = decode_dataset_segments(
                 exported_payload,
                 scorer,
@@ -2493,7 +2615,26 @@ def run_vocabulary_scaling_sweep(
                 show_progress=show_progress,
                 progress_desc=f"S3 VocabScale [V={eff_n} | Full-Context]",
             )
-        if is_core_benchmark_scale and "K0" in available_shifted:
+        if is_core_benchmark_scale and "LM-Only" not in cond_map:
+            cond_map["LM-Only"] = decode_dataset_segments(
+                exported_payload,
+                scorer,
+                hyperparameters,
+                condition="LM-Only",
+                alignment="clean",
+                beam_width=beam_width,
+                candidate_top_k=candidate_top_k,
+                segment_batch_size=segment_batch_size,
+                allowed_vocab_indices=active_indices,
+                max_segments=max_segments,
+                show_progress=show_progress,
+                progress_desc=f"S3 VocabScale [V={eff_n} | LM-Only]",
+            )
+        if (
+            is_core_benchmark_scale
+            and "K0" in available_shifted
+            and "K0_shifted_neg75s" not in cond_map
+        ):
             cond_map["K0_shifted_neg75s"] = decode_dataset_segments(
                 exported_payload,
                 scorer,
@@ -2506,9 +2647,9 @@ def run_vocabulary_scaling_sweep(
                 allowed_vocab_indices=active_indices,
                 max_segments=max_segments,
                 show_progress=show_progress,
-                progress_desc=f"S3 VocabScale [V={eff_n} | K0_shifted_-75s]",
+                progress_desc=f"S3 VocabScale [V={eff_n} | Shifted-K0 (-75s)]",
             )
-        if "K2" in available_shifted:
+        if "K2" in available_shifted and "S3_shifted_neg75s" not in cond_map:
             cond_map["S3_shifted_neg75s"] = decode_dataset_segments(
                 exported_payload,
                 scorer,
@@ -2522,7 +2663,7 @@ def run_vocabulary_scaling_sweep(
                 max_segments=max_segments,
                 include_screen_history=False,
                 show_progress=show_progress,
-                progress_desc=f"S3 VocabScale [V={eff_n} | K2_shifted_-75s]",
+                progress_desc=f"S3 VocabScale [V={eff_n} | Shifted-K2 (-75s)]",
             )
 
         cond_map = _backfill_intermediate_and_shifted_bundles(cond_map)
