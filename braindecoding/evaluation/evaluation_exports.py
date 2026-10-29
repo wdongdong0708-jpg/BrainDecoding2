@@ -794,10 +794,10 @@ def export_word_evaluation_tables_and_markdown(
         md_lines.extend(
             [
                 "> [!IMPORTANT]",
-                f"> **Executive Headline**: Top-50 Vocab Macro Top-10 = **{_fmt_pct(n50_top10)}** (`{n50_fold:.2f}x` chance `{_fmt_pct(n50_chance)}`), "
-                f"Micro Top-10 = **{_fmt_pct(n50_d.get('micro_top10'))}**, Top-1 = **{_fmt_pct(n50_d.get('macro_top1'))}** | "
-                f"Full-Vocab (`|V|={fv_d.get('candidate_count', '-')}`) Macro Top-10 = **{_fmt_pct(fv_top10)}** (`{fv_fold:.2f}x` chance `{_fmt_pct(fv_chance)}`), "
-                f"Micro Top-10 = **{_fmt_pct(fv_micro10)}**, Macro Top-1 = **{_fmt_pct(fv_d.get('macro_top1', 0.0))}**.",
+                f"> **Executive Headline**: 50-Word Word-Macro Top-10 = **{_fmt_pct(n50_top10)}** (`{n50_fold:.2f}x` chance `{_fmt_pct(n50_chance)}`), "
+                f"50-Word Event-Micro Top-10 = **{_fmt_pct(n50_d.get('micro_top10'))}**, 50-Word Word-Macro Top-1 = **{_fmt_pct(n50_d.get('macro_top1'))}** | "
+                f"Full-Vocab (`|V|={fv_d.get('candidate_count', '-')}`) Word-Macro Top-10 = **{_fmt_pct(fv_top10)}** (`{fv_fold:.2f}x` chance `{_fmt_pct(fv_chance)}`), "
+                f"Full-Vocab Event-Micro Top-10 = **{_fmt_pct(fv_micro10)}**, Full-Vocab Word-Macro Top-1 = **{_fmt_pct(fv_d.get('macro_top1', 0.0))}**.",
                 "",
             ]
         )
@@ -807,7 +807,7 @@ def export_word_evaluation_tables_and_markdown(
             [
                 "## 1. Multi-Scale Vocabulary Retrieval Metrics",
                 "",
-                "| Scale | OOV Policy | Candidates | Queries (Cov%) | Macro@10 | Micro@10 | Subj-Macro@10 | Chance@10 (Fold) | Macro@1 | Micro@1 | MRR | Median Rank (Chance) |",
+                "| Scale | OOV Policy | Candidates | Queries (Cov%) | Word-Macro Top-10 | Event-Micro Top-10 | Subject-Macro Top-10 | Chance Top-10 (Fold) | Word-Macro Top-1 | Event-Micro Top-1 | MRR | Median Rank (Chance) |",
                 "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
@@ -827,7 +827,7 @@ def export_word_evaluation_tables_and_markdown(
             [
                 "## 2. Rolling Revision Horizons (`K0 -> K1 -> K2`) & Transition Diagnostics",
                 "",
-                "| Horizon | Delay | N50 Macro@10 | N50 Micro@10 | N50 Macro@1 | Full-Vocab Macro@10 | Full-Vocab Micro@10 | Full-Vocab Macro@1 | Full-Vocab MRR |",
+                "| Horizon | Delay | 50-Word Word-Macro Top-10 | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | Full-Vocab Word-Macro Top-10 | Full-Vocab Event-Micro Top-10 | Full-Vocab Word-Macro Top-1 | Full-Vocab MRR |",
                 "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
@@ -898,7 +898,7 @@ def export_word_evaluation_tables_and_markdown(
                 if not isinstance(t_group, Mapping):
                     continue
                 for crit_key, crit_label in (
-                    ("vocab50_top10", "N50 Top-10"),
+                    ("vocab50_top10", "50-Word Top-10"),
                     ("full_vocab_top10", "Full-Vocab Top-10"),
                 ):
                     td = t_group.get(crit_key)
@@ -919,7 +919,7 @@ def export_word_evaluation_tables_and_markdown(
             [
                 "## 3. Content Words vs. Function Words Breakdown",
                 "",
-                "| Word Class | Events (Share) | Unique Words | N50 Macro@10 | N50 Micro@10 | N50 Macro@1 | Full-Vocab Macro@10 | Full-Vocab Micro@10 | Full-Vocab MRR |",
+                "| Word Class | Events (Share) | Unique Words | 50-Word Word-Macro Top-10 | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | Full-Vocab Word-Macro Top-10 | Full-Vocab Event-Micro Top-10 | Full-Vocab MRR |",
                 "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
@@ -941,7 +941,7 @@ def export_word_evaluation_tables_and_markdown(
             [
                 "## 4. Negative Controls & Neural Specificity (`Clean vs. Shifted`)",
                 "",
-                "| Condition | Shift (s) | N50 Macro@10 | Δ vs Clean | N50 Micro@10 | N50 Macro@1 | Full-Vocab Macro@10 | Δ Full-Vocab |",
+                "| Condition | Shift (s) | 50-Word Word-Macro Top-10 | Δ vs Clean | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | Full-Vocab Word-Macro Top-10 | Δ Full-Vocab |",
                 "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
@@ -1017,14 +1017,14 @@ def export_word_evaluation_tables_and_markdown(
                 else ""
             )
             md_lines.append(
-                f"- **Across-Subject N50 Macro@10**: `{_fmt_pct(subj_sum.get('mean_macro_top10'))} ± {_fmt_pct(subj_sum.get('std_macro_top10'))}` "
+                f"- **Across-Subject 50-Word Word-Macro Top-10**: `{_fmt_pct(subj_sum.get('mean_macro_top10'))} ± {_fmt_pct(subj_sum.get('std_macro_top10'))}` "
                 f"(Range: `{_fmt_pct(subj_sum.get('min_macro_top10'))} ~ {_fmt_pct(subj_sum.get('max_macro_top10'))}`) | "
-                f"**Full-Vocab Micro@10**: `{_fmt_pct(subj_sum.get('mean_full_vocab_micro_top10', subj_sum.get('mean_full_vocab_top10')))} ± {_fmt_pct(subj_sum.get('std_full_vocab_micro_top10', subj_sum.get('std_full_vocab_top10')))}`{imp_str}"
+                f"**Full-Vocab Event-Micro Top-10**: `{_fmt_pct(subj_sum.get('mean_full_vocab_micro_top10', subj_sum.get('mean_full_vocab_top10')))} ± {_fmt_pct(subj_sum.get('std_full_vocab_micro_top10', subj_sum.get('std_full_vocab_top10')))}`{imp_str}"
             )
             md_lines.append("")
         if has_k2_k0:
             md_lines.append(
-                "| Subject | Events (N50) | N50 Macro@10 | N50 Micro@10 | N50 Macro@1 | N50 MRR | Full-Vocab Macro@10 | Full-Vocab Micro@10 | K0 N50@10 | K2 N50@10 | Δ (K2 - K0) |"
+                "| Subject | Events (50-Word) | 50-Word Word-Macro Top-10 | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | 50-Word MRR | Full-Vocab Word-Macro Top-10 | Full-Vocab Event-Micro Top-10 | K0 50-Word Top-10 | K2 50-Word Top-10 | Δ (K2 - K0) |"
             )
             md_lines.append(
                 "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
@@ -1042,7 +1042,7 @@ def export_word_evaluation_tables_and_markdown(
                 )
         else:
             md_lines.append(
-                "| Subject | Events (N50) | N50 Macro@10 | N50 Micro@10 | N50 Macro@1 | N50 MRR | N50 MedRank | Full-Vocab Macro@10 | Full-Vocab Micro@10 | Full-Vocab MRR |"
+                "| Subject | Events (50-Word) | 50-Word Word-Macro Top-10 | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | 50-Word MRR | 50-Word Median Rank | Full-Vocab Word-Macro Top-10 | Full-Vocab Event-Micro Top-10 | Full-Vocab MRR |"
             )
             md_lines.append(
                 "| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
@@ -1192,7 +1192,7 @@ def export_stage_comparison_tables_and_markdown(
         md_lines = [
             f"# Cross-Stage Comparison Report (`{dataset}` | `{resolved_split}` | `seed={seed}`)",
             "",
-            "| Stage | Best Epoch | N50 Macro@10 | Δ vs Stage 1 (95% CI / p) | N50 Micro@10 | N50 Macro@1 | Full-Vocab Macro@10 | Full-Vocab Micro@10 | Δ Full-Vocab | Clean - Shifted |",
+            "| Stage | Best Epoch | 50-Word Word-Macro Top-10 | Δ vs Stage 1 (95% CI / p) | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | Full-Vocab Word-Macro Top-10 | Full-Vocab Event-Micro Top-10 | Δ Full-Vocab | Clean - Shifted |",
             "| :--- | ---: | ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
         for r in rows:
@@ -1290,7 +1290,7 @@ def _build_single_stage_multi_seed_markdown_lines(
         "",
         f"{sub_prefix} 1A. 50-Word Frozen Bank (`N50`) (Per-Seed & Mean ± SD)",
         "",
-        "| Seed / Summary | Best Epoch | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-5 | 50w Macro Top-1 | 50w Micro Top-1 | 50w MRR | 50w MedRank | Strict-50 Macro Top-10 | Control 50w Top-10 | Net Gap 50w Top-10 |",
+        "| Seed / Summary | Best Epoch | 50-Word Word-Macro Top-10 | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-5 | 50-Word Word-Macro Top-1 | 50-Word Event-Micro Top-1 | 50-Word MRR | 50-Word Median Rank | Strict-50 Word-Macro Top-10 | Control 50-Word Top-10 | Net Gap 50-Word Top-10 |",
         "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
     ]
     for r in per_seed:
@@ -1357,7 +1357,7 @@ def _build_single_stage_multi_seed_markdown_lines(
             "",
             f"{sub_prefix} 1B. Full Training Vocabulary (Per-Seed & Mean ± SD)",
             "",
-            "| Seed / Summary | Best Epoch | FullVoc Word-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Subject-Macro Top-10 | FullVoc Word-Macro Top-1 | FullVoc Micro Top-1 | FullVoc MRR | FullVoc MedRank | Control FullVoc Top-10 | Net Gap FullVoc Top-10 |",
+            "| Seed / Summary | Best Epoch | Full-Vocab Word-Macro Top-10 | Full-Vocab Event-Micro Top-10 | Full-Vocab Subject-Macro Top-10 | Full-Vocab Word-Macro Top-1 | Full-Vocab Event-Micro Top-1 | Full-Vocab MRR | Full-Vocab Median Rank | Control Full-Vocab Top-10 | Net Gap Full-Vocab Top-10 |",
             "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
         ]
     )
@@ -1466,7 +1466,7 @@ def _build_single_stage_multi_seed_markdown_lines(
                 "",
                 f"{sub_prefix} 2B. Linguistic Word-Class Breakdown Across Seeds (Mean ± SD)",
                 "",
-                "| Word Class | Queries | Unique Words | Event Share | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-1 | FullVoc Word-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Word-Macro Top-1 | FullVoc MRR | FullVoc MedRank |",
+                "| Word Class | Queries | Unique Words | Event Share | 50-Word Word-Macro Top-10 | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | Full-Vocab Word-Macro Top-10 | Full-Vocab Event-Micro Top-10 | Full-Vocab Word-Macro Top-1 | Full-Vocab MRR | Full-Vocab Median Rank |",
                 "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
             ]
         )
@@ -1506,7 +1506,7 @@ def _build_single_stage_multi_seed_markdown_lines(
                 "",
                 f"{sub_prefix} 3A. 50-Word & Full-Vocabulary Horizon Trajectory",
                 "",
-                "| Horizon | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-1 | 50w Micro Top-1 | 50w MRR | 50w MedRank | FullVoc Word-Macro Top-10 | FullVoc Subject-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Word-Macro Top-1 | FullVoc Micro Top-1 | FullVoc MRR | FullVoc MedRank |",
+                "| Horizon | 50-Word Word-Macro Top-10 | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | 50-Word Event-Micro Top-1 | 50-Word MRR | 50-Word Median Rank | Full-Vocab Word-Macro Top-10 | Full-Vocab Subject-Macro Top-10 | Full-Vocab Event-Micro Top-10 | Full-Vocab Word-Macro Top-1 | Full-Vocab Event-Micro Top-1 | Full-Vocab MRR | Full-Vocab Median Rank |",
                 "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
             ]
         )
@@ -1610,7 +1610,7 @@ def _build_single_stage_multi_seed_markdown_lines(
             nc_agg.get("primary_control_metric", "vocab50_macro_top10")
         )
         prim_m_lbl = str(
-            nc_agg.get("primary_control_metric_label", "50-Word Macro Top-10")
+            nc_agg.get("primary_control_metric_label", "50-Word Word-Macro Top-10")
         )
         prim_sum = nc_agg.get("primary_metric_summary") or {}
         avail_methods = list(nc_agg.get("available_control_methods") or [])
@@ -1769,7 +1769,7 @@ def _build_single_stage_multi_seed_markdown_lines(
                     "",
                     f"{sub_prefix} {hdr_tag}. Overall Clean vs. Control vs. Net Gap Across All Retrieval Metrics (`{cur_m_id}` — {cur_m_lbl})",
                     "",
-                    "| Condition | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-1 | 50w Micro Top-1 | 50w MRR | 50w MedRank | FullVoc Word-Macro Top-10 | FullVoc Subject-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Word-Macro Top-1 | FullVoc Micro Top-1 | FullVoc MRR | FullVoc MedRank |",
+                    "| Condition | 50-Word Word-Macro Top-10 | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | 50-Word Event-Micro Top-1 | 50-Word MRR | 50-Word Median Rank | Full-Vocab Word-Macro Top-10 | Full-Vocab Subject-Macro Top-10 | Full-Vocab Event-Micro Top-10 | Full-Vocab Word-Macro Top-1 | Full-Vocab Event-Micro Top-1 | Full-Vocab MRR | Full-Vocab Median Rank |",
                     "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
                     f"| **Clean (0s)** | "
                     f"{_fmt_mean_sd_md_pct(m_agg_item.get('mean_clean_vocab50_macro_top10'), m_agg_item.get('std_clean_vocab50_macro_top10'))} | "
@@ -1842,7 +1842,7 @@ def _build_single_stage_multi_seed_markdown_lines(
                         "",
                         f"{sub_prefix} {hdr_tag}-H. Rolling Revision Horizons (`K0`, `K1`, `K2`) Under Negative Control (`{cur_m_id}`, Mean ± SD)",
                         "",
-                        "| Horizon | Condition | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-1 | 50w MRR | FullVoc Word-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Word-Macro Top-1 | FullVoc MRR |",
+                        "| Horizon | Condition | 50-Word Word-Macro Top-10 | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | 50-Word MRR | Full-Vocab Word-Macro Top-10 | Full-Vocab Event-Micro Top-10 | Full-Vocab Word-Macro Top-1 | Full-Vocab MRR |",
                         "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
                     ]
                 )
@@ -1878,7 +1878,7 @@ def _build_single_stage_multi_seed_markdown_lines(
                     "",
                     f"{sub_prefix} 4B. Leave-One-Out Common-Mode Subtraction (CMS) Multi-Seed Sweep (Mean ± SD)",
                     "",
-                    "| Method | `eta` | Clean 50w Macro Top-10 | Shifted 50w Macro Top-10 | Net Gap 50w Top-10 | Clean 50w Macro Top-1 | Net Gap 50w Top-1 | Clean FullVoc Word-Macro Top-10 | Shifted FullVoc Word-Macro Top-10 | Net Gap FullVoc Top-10 | Clean FullVoc Word-Macro Top-1 | Net Gap FullVoc Top-1 | Clean FullVoc MRR |",
+                    "| Method | `eta` | Clean 50-Word Word-Macro Top-10 | Shifted 50-Word Word-Macro Top-10 | Net Gap 50-Word Top-10 | Clean 50-Word Word-Macro Top-1 | Net Gap 50-Word Top-1 | Clean Full-Vocab Word-Macro Top-10 | Shifted Full-Vocab Word-Macro Top-10 | Net Gap Full-Vocab Top-10 | Clean Full-Vocab Word-Macro Top-1 | Net Gap Full-Vocab Top-1 | Clean Full-Vocab MRR |",
                     "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
                 ]
             )
@@ -1913,7 +1913,7 @@ def _build_single_stage_multi_seed_markdown_lines(
                         "",
                         f"{sub_prefix} 4B-H. Rolling Revision Horizons (`K0`, `K1`, `K2`) Across `CMS` `eta` Values",
                         "",
-                        "| Method | `eta` | Horizon | Clean 50w Macro Top-10 | Shifted 50w Macro Top-10 | Gap 50w Top-10 | Clean 50w Macro Top-1 | Gap 50w Top-1 | Clean FullVoc Word-Macro Top-10 | Shifted FullVoc Word-Macro Top-10 | Gap FullVoc Top-10 | Clean FullVoc Word-Macro Top-1 | Gap FullVoc Top-1 |",
+                        "| Method | `eta` | Horizon | Clean 50-Word Word-Macro Top-10 | Shifted 50-Word Word-Macro Top-10 | Gap 50-Word Top-10 | Clean 50-Word Word-Macro Top-1 | Gap 50-Word Top-1 | Clean Full-Vocab Word-Macro Top-10 | Shifted Full-Vocab Word-Macro Top-10 | Gap Full-Vocab Top-10 | Clean Full-Vocab Word-Macro Top-1 | Gap Full-Vocab Top-1 |",
                         "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
                     ]
                 )
@@ -1947,7 +1947,7 @@ def _build_single_stage_multi_seed_markdown_lines(
                     "",
                     f"{sub_prefix} 4C. Subspace Coherence LOO Debiasing Multi-Seed Sweep (Mean ± SD)",
                     "",
-                    "| Selector ID | Rank `K` | `eta` | Gate | Clean 50w Macro Top-10 | Shifted 50w Macro Top-10 | Net Gap 50w Top-10 | Clean 50w Macro Top-1 | Net Gap 50w Top-1 | Clean FullVoc Word-Macro Top-10 | Shifted FullVoc Word-Macro Top-10 | Net Gap FullVoc Top-10 | Clean FullVoc Word-Macro Top-1 | Net Gap FullVoc Top-1 | Clean FullVoc MRR |",
+                    "| Selector ID | Rank `K` | `eta` | Gate | Clean 50-Word Word-Macro Top-10 | Shifted 50-Word Word-Macro Top-10 | Net Gap 50-Word Top-10 | Clean 50-Word Word-Macro Top-1 | Net Gap 50-Word Top-1 | Clean Full-Vocab Word-Macro Top-10 | Shifted Full-Vocab Word-Macro Top-10 | Net Gap Full-Vocab Top-10 | Clean Full-Vocab Word-Macro Top-1 | Net Gap Full-Vocab Top-1 | Clean Full-Vocab MRR |",
                     "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
                 ]
             )
@@ -1984,7 +1984,7 @@ def _build_single_stage_multi_seed_markdown_lines(
                         "",
                         f"{sub_prefix} 4C-H. Rolling Revision Horizons (`K0`, `K1`, `K2`) Across Subspace LOO Configurations",
                         "",
-                        "| Selector ID | Horizon | Clean 50w Macro Top-10 | Shifted 50w Macro Top-10 | Gap 50w Top-10 | Clean 50w Macro Top-1 | Gap 50w Top-1 | Clean FullVoc Word-Macro Top-10 | Shifted FullVoc Word-Macro Top-10 | Gap FullVoc Top-10 | Clean FullVoc Word-Macro Top-1 | Gap FullVoc Top-1 |",
+                        "| Selector ID | Horizon | Clean 50-Word Word-Macro Top-10 | Shifted 50-Word Word-Macro Top-10 | Gap 50-Word Top-10 | Clean 50-Word Word-Macro Top-1 | Gap 50-Word Top-1 | Clean Full-Vocab Word-Macro Top-10 | Shifted Full-Vocab Word-Macro Top-10 | Gap Full-Vocab Top-10 | Clean Full-Vocab Word-Macro Top-1 | Gap Full-Vocab Top-1 |",
                         "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
                     ]
                 )
@@ -2016,7 +2016,7 @@ def _build_single_stage_multi_seed_markdown_lines(
                 "",
                 f"{section_prefix} 5. Per-Subject Multi-Seed Summary (Mean ± SD)",
                 "",
-                "| Subject | Events | 50w Events | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-1 | 50w MRR | FullVoc Word-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Word-Macro Top-1 | FullVoc MRR | K2-K0 50w Top-10 | K2-K0 FullVoc Top-10 |",
+                "| Subject | Events | 50-Word Events | 50-Word Word-Macro Top-10 | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | 50-Word MRR | Full-Vocab Word-Macro Top-10 | Full-Vocab Event-Micro Top-10 | Full-Vocab Word-Macro Top-1 | Full-Vocab MRR | K2-K0 50-Word Top-10 | K2-K0 Full-Vocab Top-10 |",
                 "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
             ]
         )
@@ -2074,7 +2074,14 @@ def export_multi_seed_tables_and_markdown(
     tables_dir = out_dir / "tables"
     tables_dir.mkdir(parents=True, exist_ok=True)
 
-    split = str(summary.get("split", "val"))
+    raw_split = str(summary.get("split", "")).strip().lower()
+    if not raw_split:
+        eval_json_str = str(summary.get("evaluation_json", "")).lower()
+        if eval_json_str.endswith("_test.json"):
+            raw_split = "test"
+        elif eval_json_str.endswith("_val.json"):
+            raw_split = "val"
+    split = raw_split or "val"
     dataset = str(summary.get("dataset", "-"))
     seeds = list(summary.get("seeds") or [])
     exp_tag = str(summary.get("exp_tag", "") or "default")
@@ -2100,7 +2107,7 @@ def export_multi_seed_tables_and_markdown(
             "",
             "## Cross-Stage Multi-Seed Comparison (Mean ± SD)",
             "",
-            "| Stage | 50w Macro Top-10 | 50w Micro Top-10 | 50w Macro Top-1 | 50w MRR | FullVoc Word-Macro Top-10 | FullVoc Subject-Macro Top-10 | FullVoc Micro Top-10 | FullVoc Word-Macro Top-1 | FullVoc MRR | Net Gap 50w Top-10 | Net Gap FullVoc Top-10 |",
+            "| Stage | 50-Word Word-Macro Top-10 | 50-Word Event-Micro Top-10 | 50-Word Word-Macro Top-1 | 50-Word MRR | Full-Vocab Word-Macro Top-10 | Full-Vocab Subject-Macro Top-10 | Full-Vocab Event-Micro Top-10 | Full-Vocab Word-Macro Top-1 | Full-Vocab MRR | Net Gap 50-Word Top-10 | Net Gap Full-Vocab Top-10 |",
             "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
         ]
         for st_key, st_agg in summary["stages_aggregate"].items():
@@ -3886,9 +3893,9 @@ def _append_debiasing_markdown_tables(
     # Table 1: 50-Word Retrieval Summary
     md_lines.extend(
         [
-            f"## {s1}. 50-Word Retrieval Summary (Word-Macro & Micro Top-10, Top-1, MRR, Median Rank)",
+            f"## {s1}. 50-Word Retrieval Summary (Word-Macro & Event-Micro Top-10, Top-1, MRR, Median Rank)",
             "",
-            f"{meta_hdr} 50w Clean Macro Top-10 | 50w Shift Macro Top-10 | 50w Top-10 Gap | 50w Clean Macro Top-1 | 50w Shift Macro Top-1 | 50w Top-1 Gap | 50w Clean Micro Top-10 | 50w Shift Micro Top-10 | 50w Clean MRR | 50w Shift MRR | 50w Clean MedRank | 50w Shift MedRank |",
+            f"{meta_hdr} 50-Word Clean Word-Macro Top-10 | 50-Word Shift Word-Macro Top-10 | 50-Word Top-10 Gap | 50-Word Clean Word-Macro Top-1 | 50-Word Shift Word-Macro Top-1 | 50-Word Top-1 Gap | 50-Word Clean Event-Micro Top-10 | 50-Word Shift Event-Micro Top-10 | 50-Word Clean MRR | 50-Word Shift MRR | 50-Word Clean Median Rank | 50-Word Shift Median Rank |",
             f"{meta_sep} ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
@@ -3908,9 +3915,9 @@ def _append_debiasing_markdown_tables(
     # Table 2: Full-Vocabulary Retrieval Summary (100% symmetric with Table 1: Macro = Word-Macro, Micro = Event-Micro)
     md_lines.extend(
         [
-            f"## {s2}. Full-Vocabulary Retrieval Summary (Word-Macro & Micro Top-10, Top-1, MRR, Median Rank)",
+            f"## {s2}. Full-Vocabulary Retrieval Summary (Word-Macro & Event-Micro Top-10, Top-1, MRR, Median Rank)",
             "",
-            f"{meta_hdr} Full Clean Macro Top-10 | Full Shift Macro Top-10 | Full Top-10 Gap | Full Clean Macro Top-1 | Full Shift Macro Top-1 | Full Top-1 Gap | Full Clean Micro Top-10 | Full Shift Micro Top-10 | Full Clean MRR | Full Shift MRR | Full Clean MedRank | Full Shift MedRank |",
+            f"{meta_hdr} Full-Vocab Clean Word-Macro Top-10 | Full-Vocab Shift Word-Macro Top-10 | Full-Vocab Top-10 Gap | Full-Vocab Clean Word-Macro Top-1 | Full-Vocab Shift Word-Macro Top-1 | Full-Vocab Top-1 Gap | Full-Vocab Clean Event-Micro Top-10 | Full-Vocab Shift Event-Micro Top-10 | Full-Vocab Clean MRR | Full-Vocab Shift MRR | Full-Vocab Clean Median Rank | Full-Vocab Shift Median Rank |",
             f"{meta_sep} ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
@@ -3935,9 +3942,9 @@ def _append_debiasing_markdown_tables(
     # Table 3A: Revision Horizons (K0 / K1 / K2) — 50-Word Breakdown
     md_lines.extend(
         [
-            f"## {s3a}. Revision Horizons (`K0 / K1 / K2`) — 50-Word Macro Top-10 & Macro Top-1 Breakdown",
+            f"## {s3a}. Revision Horizons (`K0 / K1 / K2`) — 50-Word Word-Macro Top-10 & Word-Macro Top-1 Breakdown",
             "",
-            f"{meta_hdr} K0 50w Clean Top-10 | K0 50w Shift Top-10 | K1 50w Clean Top-10 | K1 50w Shift Top-10 | K2 50w Clean Top-10 | K2 50w Shift Top-10 | K2 50w Gap Top-10 | K2-K0 Clean Top-10 | K0 50w Clean Top-1 | K0 50w Shift Top-1 | K1 50w Clean Top-1 | K1 50w Shift Top-1 | K2 50w Clean Top-1 | K2 50w Shift Top-1 | K2 50w Gap Top-1 | K2-K0 Clean Top-1 |",
+            f"{meta_hdr} K0 50-Word Clean Top-10 | K0 50-Word Shift Top-10 | K1 50-Word Clean Top-10 | K1 50-Word Shift Top-10 | K2 50-Word Clean Top-10 | K2 50-Word Shift Top-10 | K2 50-Word Gap Top-10 | K2-K0 50-Word Clean Top-10 | K0 50-Word Clean Top-1 | K0 50-Word Shift Top-1 | K1 50-Word Clean Top-1 | K1 50-Word Shift Top-1 | K2 50-Word Clean Top-1 | K2 50-Word Shift Top-1 | K2 50-Word Gap Top-1 | K2-K0 50-Word Clean Top-1 |",
             f"{meta_sep} ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
@@ -3957,9 +3964,9 @@ def _append_debiasing_markdown_tables(
     # Table 3B: Revision Horizons (K0 / K1 / K2) — Full-Vocabulary Breakdown
     md_lines.extend(
         [
-            f"## {s3b}. Revision Horizons (`K0 / K1 / K2`) — Full-Vocabulary Macro Top-10, Macro Top-1 & MRR Breakdown",
+            f"## {s3b}. Revision Horizons (`K0 / K1 / K2`) — Full-Vocabulary Word-Macro Top-10, Word-Macro Top-1 & MRR Breakdown",
             "",
-            f"{meta_hdr} K0 Full Clean Top-10 | K0 Full Shift Top-10 | K1 Full Clean Top-10 | K1 Full Shift Top-10 | K2 Full Clean Top-10 | K2 Full Shift Top-10 | K2 Full Gap Top-10 | K2-K0 Full Clean Top-10 | K0 Full Clean Top-1 | K0 Full Shift Top-1 | K1 Full Clean Top-1 | K1 Full Shift Top-1 | K2 Full Clean Top-1 | K2 Full Shift Top-1 | K2 Full Gap Top-1 | K2-K0 Full Clean Top-1 | K0 Full Clean MRR | K2 Full Clean MRR |",
+            f"{meta_hdr} K0 Full-Vocab Clean Top-10 | K0 Full-Vocab Shift Top-10 | K1 Full-Vocab Clean Top-10 | K1 Full-Vocab Shift Top-10 | K2 Full-Vocab Clean Top-10 | K2 Full-Vocab Shift Top-10 | K2 Full-Vocab Gap Top-10 | K2-K0 Full-Vocab Clean Top-10 | K0 Full-Vocab Clean Top-1 | K0 Full-Vocab Shift Top-1 | K1 Full-Vocab Clean Top-1 | K1 Full-Vocab Shift Top-1 | K2 Full-Vocab Clean Top-1 | K2 Full-Vocab Shift Top-1 | K2 Full-Vocab Gap Top-1 | K2-K0 Full-Vocab Clean Top-1 | K0 Full-Vocab Clean MRR | K2 Full-Vocab Clean MRR |",
             f"{meta_sep} ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )

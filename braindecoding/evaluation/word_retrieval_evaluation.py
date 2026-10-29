@@ -2786,36 +2786,43 @@ _CONTROL_METRIC_REGISTRY: dict[str, dict[str, object]] = {
     "vocab50_macro_top10": {
         "key": "vocab50_macro_top10",
         "horizon_key": "common_vocab50_macro_top10",
-        "label": "50-Word Macro Top-10",
-        "short_label": "50w MacTop10",
+        "label": "50-Word Word-Macro Top-10",
+        "short_label": "50w Word-Macro Top-10",
         "is_ratio": True,
     },
     "vocab50_micro_top10": {
         "key": "vocab50_micro_top10",
         "horizon_key": "common_vocab50_micro_top10",
-        "label": "50-Word Micro Top-10",
-        "short_label": "50w MicTop10",
+        "label": "50-Word Event-Micro Top-10",
+        "short_label": "50w Event-Micro Top-10",
+        "is_ratio": True,
+    },
+    "vocab50_subject_macro_top10": {
+        "key": "vocab50_subject_macro_top10",
+        "horizon_key": "common_vocab50_subject_macro_top10",
+        "label": "50-Word Subject-Macro Top-10",
+        "short_label": "50w Subj-Macro Top-10",
         "is_ratio": True,
     },
     "vocab50_macro_top5": {
         "key": "vocab50_macro_top5",
         "horizon_key": "common_vocab50_macro_top10",
-        "label": "50-Word Macro Top-5",
-        "short_label": "50w MacTop5",
+        "label": "50-Word Word-Macro Top-5",
+        "short_label": "50w Word-Macro Top-5",
         "is_ratio": True,
     },
     "vocab50_macro_top1": {
         "key": "vocab50_macro_top1",
         "horizon_key": "common_vocab50_macro_top1",
-        "label": "50-Word Macro Top-1",
-        "short_label": "50w MacTop1",
+        "label": "50-Word Word-Macro Top-1",
+        "short_label": "50w Word-Macro Top-1",
         "is_ratio": True,
     },
     "vocab50_micro_top1": {
         "key": "vocab50_micro_top1",
         "horizon_key": "common_vocab50_micro_top1",
-        "label": "50-Word Micro Top-1",
-        "short_label": "50w MicTop1",
+        "label": "50-Word Event-Micro Top-1",
+        "short_label": "50w Event-Micro Top-1",
         "is_ratio": True,
     },
     "vocab50_mrr": {
@@ -2836,35 +2843,35 @@ _CONTROL_METRIC_REGISTRY: dict[str, dict[str, object]] = {
         "key": "full_vocab_macro_top10",
         "horizon_key": "common_full_vocab_macro_top10",
         "label": "Full-Vocab Word-Macro Top-10",
-        "short_label": "FullVoc MacTop10",
+        "short_label": "FullVoc Word-Macro Top-10",
         "is_ratio": True,
     },
     "full_vocab_subject_macro_top10": {
         "key": "full_vocab_subject_macro_top10",
         "horizon_key": "common_full_vocab_subject_macro_top10",
         "label": "Full-Vocab Subject-Macro Top-10",
-        "short_label": "FullVoc SubjTop10",
+        "short_label": "FullVoc Subj-Macro Top-10",
         "is_ratio": True,
     },
     "full_vocab_micro_top10": {
         "key": "full_vocab_micro_top10",
         "horizon_key": "common_full_vocab_micro_top10",
-        "label": "Full-Vocab Micro Top-10",
-        "short_label": "FullVoc MicTop10",
+        "label": "Full-Vocab Event-Micro Top-10",
+        "short_label": "FullVoc Event-Micro Top-10",
         "is_ratio": True,
     },
     "full_vocab_macro_top1": {
         "key": "full_vocab_macro_top1",
         "horizon_key": "common_full_vocab_macro_top1",
         "label": "Full-Vocab Word-Macro Top-1",
-        "short_label": "FullVoc MacTop1",
+        "short_label": "FullVoc Word-Macro Top-1",
         "is_ratio": True,
     },
     "full_vocab_micro_top1": {
         "key": "full_vocab_micro_top1",
         "horizon_key": "common_full_vocab_micro_top1",
-        "label": "Full-Vocab Micro Top-1",
-        "short_label": "FullVoc MicTop1",
+        "label": "Full-Vocab Event-Micro Top-1",
+        "short_label": "FullVoc Event-Micro Top-1",
         "is_ratio": True,
     },
     "full_vocab_mrr": {
@@ -2887,10 +2894,16 @@ _CONTROL_METRIC_ALIASES: dict[str, str] = {
     "50w_top10": "vocab50_macro_top10",
     "n50_top10": "vocab50_macro_top10",
     "50w_macro_top10": "vocab50_macro_top10",
+    "50w_word_macro_top10": "vocab50_macro_top10",
+    "vocab50_word_macro_top10": "vocab50_macro_top10",
     "n50_macro_top10": "vocab50_macro_top10",
     "vocab50_top10": "vocab50_macro_top10",
     "50w_micro_top10": "vocab50_micro_top10",
+    "50w_event_micro_top10": "vocab50_micro_top10",
+    "vocab50_event_micro_top10": "vocab50_micro_top10",
     "n50_micro_top10": "vocab50_micro_top10",
+    "50w_subject_macro_top10": "vocab50_subject_macro_top10",
+    "n50_subject_macro_top10": "vocab50_subject_macro_top10",
     "50w_top5": "vocab50_macro_top5",
     "n50_top5": "vocab50_macro_top5",
     "50w_macro_top5": "vocab50_macro_top5",
@@ -2898,9 +2911,13 @@ _CONTROL_METRIC_ALIASES: dict[str, str] = {
     "50w_top1": "vocab50_macro_top1",
     "n50_top1": "vocab50_macro_top1",
     "50w_macro_top1": "vocab50_macro_top1",
+    "50w_word_macro_top1": "vocab50_macro_top1",
+    "vocab50_word_macro_top1": "vocab50_macro_top1",
     "n50_macro_top1": "vocab50_macro_top1",
     "vocab50_top1": "vocab50_macro_top1",
     "50w_micro_top1": "vocab50_micro_top1",
+    "50w_event_micro_top1": "vocab50_micro_top1",
+    "vocab50_event_micro_top1": "vocab50_micro_top1",
     "n50_micro_top1": "vocab50_micro_top1",
     "50w_mrr": "vocab50_mrr",
     "n50_mrr": "vocab50_mrr",
@@ -2917,6 +2934,7 @@ _CONTROL_METRIC_ALIASES: dict[str, str] = {
     "subj_macro_top10": "full_vocab_subject_macro_top10",
     "full_subject_macro_top10": "full_vocab_subject_macro_top10",
     "full_micro_top10": "full_vocab_micro_top10",
+    "full_vocab_event_micro_top10": "full_vocab_micro_top10",
     "fv_micro_top10": "full_vocab_micro_top10",
     "full_top1": "full_vocab_macro_top1",
     "fv_top1": "full_vocab_macro_top1",
@@ -2926,6 +2944,7 @@ _CONTROL_METRIC_ALIASES: dict[str, str] = {
     "full_vocab_word_macro_top1": "full_vocab_macro_top1",
     "full_vocab_top1": "full_vocab_macro_top1",
     "full_micro_top1": "full_vocab_micro_top1",
+    "full_vocab_event_micro_top1": "full_vocab_micro_top1",
     "fv_micro_top1": "full_vocab_micro_top1",
     "full_mrr": "full_vocab_mrr",
     "fv_mrr": "full_vocab_mrr",
@@ -3994,17 +4013,25 @@ def apply_multi_seed_control_selection(
                         "rank_k": m_agg.get("rank_k"),
                         "use_coherence_gate": m_agg.get("use_coherence_gate"),
                         "metric_key": str(m_sum["metric_key"]),
+                        "metric_id": str(m_sum["metric_key"]),
                         "base_metric_key": str(m_sum["base_metric_key"]),
                         "horizon": m_sum.get("horizon"),
                         "metric_label": str(m_sum["metric_label"]),
                         "short_label": str(m_sum["short_label"]),
                         "is_ratio": bool(m_sum.get("is_ratio", True)),
+                        "is_percentage": bool(m_sum.get("is_ratio", True)),
                         "mean_clean": float(m_sum["mean_clean"]),
                         "std_clean": float(m_sum["std_clean"]),
+                        "clean_mean": float(m_sum["mean_clean"]),
+                        "clean_std": float(m_sum["std_clean"]),
                         "mean_shifted": float(m_sum["mean_shifted"]),
                         "std_shifted": float(m_sum["std_shifted"]),
+                        "shifted_mean": float(m_sum["mean_shifted"]),
+                        "shifted_std": float(m_sum["std_shifted"]),
                         "mean_gap": float(m_sum["mean_gap"]),
                         "std_gap": float(m_sum["std_gap"]),
+                        "gap_mean": float(m_sum["mean_gap"]),
+                        "gap_std": float(m_sum["std_gap"]),
                         "per_seed": list(m_sum.get("per_seed") or []),
                     }
                 )
@@ -4128,16 +4155,208 @@ def _load_seed_exploratory_json(
     return None
 
 
+def _infer_split_from_seed_results(
+    seed_results: Sequence[dict],
+    split: str | None = None,
+) -> str:
+    """从显式参数或单种子评估字典中安全推断数据划分 (test/val)，防止未传 split 时误回退为 val。"""
+    if split is not None and str(split).strip():
+        return str(split).strip().lower()
+    for r in seed_results:
+        if not isinstance(r, dict):
+            continue
+        sp = r.get("split") or (r.get("metrics") or {}).get("split")
+        if sp is not None and str(sp).strip():
+            return str(sp).strip().lower()
+        if isinstance(r.get("stages"), dict):
+            for st_v in r["stages"].values():
+                if isinstance(st_v, dict):
+                    st_sp = st_v.get("split") or (
+                        st_v.get("metrics") or {}
+                    ).get("split")
+                    if st_sp is not None and str(st_sp).strip():
+                        return str(st_sp).strip().lower()
+        ev_j = str(r.get("evaluation_json", "")).lower()
+        if ev_j.endswith("_test.json"):
+            return "test"
+        if ev_j.endswith("_val.json"):
+            return "val"
+    return "val"
+
+
+def _repair_control_entry_clean_ref(
+    entry_dict: dict,
+    *,
+    true_word_top10: float | None,
+    rh: dict | None = None,
+) -> None:
+    """确保负对照/去偏条目的 clean_reference 与 shifted_aggregate 中全词表 Macro Top-10 严格采用 Word-Macro 口径。"""
+    if not isinstance(entry_dict, dict):
+        return
+    c_ref = entry_dict.get("clean_reference")
+    if isinstance(c_ref, dict) and true_word_top10 is not None:
+        if c_ref.get("full_vocab_subject_macro_top10") is None:
+            c_ref["full_vocab_subject_macro_top10"] = float(
+                c_ref.get(
+                    "full_vocab_macro_top10",
+                    c_ref.get("full_vocab_micro_top10", 0.0),
+                )
+            )
+        c_ref["full_vocab_word_macro_top10"] = float(true_word_top10)
+        c_ref["full_vocab_macro_top10"] = float(true_word_top10)
+        if isinstance(rh, dict):
+            for hk in ("K0", "K1", "K2"):
+                hb = rh.get(hk)
+                if (
+                    isinstance(hb, dict)
+                    and hb.get("common_full_vocab_word_macro_top10") is not None
+                ):
+                    hk_w = float(hb["common_full_vocab_word_macro_top10"])
+                    c_ref[f"{hk.lower()}_full_vocab_word_macro_top10"] = hk_w
+                    c_ref[f"{hk.lower()}_full_vocab_macro_top10"] = hk_w
+    sh_agg = entry_dict.get("shifted_aggregate")
+    if isinstance(sh_agg, dict) and true_word_top10 is not None:
+        sh_fv_w = sh_agg.get(
+            "mean_full_vocab_word_macro_top10",
+            sh_agg.get("mean_full_vocab_macro_top10"),
+        )
+        if sh_fv_w is not None:
+            gap_fv_w = float(true_word_top10) - float(sh_fv_w)
+            sh_agg["clean_minus_shifted_full_vocab_word_macro_top10"] = gap_fv_w
+            sh_agg["clean_minus_shifted_full_vocab_macro_top10"] = gap_fv_w
+
+
+def _repair_legacy_seed_evaluation_payload(
+    res: dict,
+    *,
+    split: str = "test",
+) -> dict:
+    """修复旧版单种子 evaluation_{split}.json 中 full_vocab_macro_top10 混用 Subject/Micro 口径的问题，并自动从已升级的 exploratory JSON 同步 raw_baseline。"""
+    if not isinstance(res, dict):
+        return res
+    metrics = res.get("metrics") or {}
+    sweep = (
+        metrics.get("vocabulary_sweep")
+        or res.get("vocabulary_sweep")
+        or {}
+    )
+    fv = sweep.get("full_vocab") if isinstance(sweep, dict) else None
+    rh = (
+        metrics.get("revision_horizons")
+        or res.get("revision_horizons")
+        or {}
+    )
+    true_word_top10: float | None = None
+    if isinstance(fv, dict):
+        if fv.get("word_macro_top10") is not None:
+            true_word_top10 = float(fv["word_macro_top10"])
+        elif (res.get("full_vocabulary") or {}).get("word_macro_recall_at_10") is not None:
+            true_word_top10 = float(res["full_vocabulary"]["word_macro_recall_at_10"])
+        elif fv.get("macro_top10") is not None:
+            true_word_top10 = float(fv["macro_top10"])
+        if true_word_top10 is not None:
+            if (
+                fv.get("subject_macro_top10") is None
+                and fv.get("macro_top10") is not None
+                and abs(float(fv["macro_top10"]) - true_word_top10) > 1e-7
+            ):
+                fv["subject_macro_top10"] = float(fv["macro_top10"])
+            fv["word_macro_top10"] = true_word_top10
+            fv["macro_top10"] = true_word_top10
+    if isinstance(rh, dict):
+        for hk in ("K0", "K1", "K2"):
+            hb = rh.get(hk)
+            if (
+                isinstance(hb, dict)
+                and hb.get("common_full_vocab_word_macro_top10") is not None
+            ):
+                hb["common_full_vocab_macro_top10"] = float(
+                    hb["common_full_vocab_word_macro_top10"]
+                )
+
+    sub_rep = _load_seed_exploratory_json(
+        res,
+        split=split,
+        json_key="exploratory_subspace_coherence_debiasing_json",
+        filename_prefix="subspace_coherence_debiasing",
+    )
+    cms_rep = _load_seed_exploratory_json(
+        res,
+        split=split,
+        json_key="exploratory_common_mode_subtraction_json",
+        filename_prefix="common_mode_subtraction",
+    )
+    upgraded_raw: dict | None = None
+    if isinstance(sub_rep, dict) and isinstance(sub_rep.get("raw_baseline"), dict):
+        rb = sub_rep["raw_baseline"]
+        if (rb.get("shifted_aggregate") or {}).get("mean_full_vocab_word_macro_top10") is not None or (
+            rb.get("clean_reference") or {}
+        ).get("full_vocab_word_macro_top10") is not None:
+            upgraded_raw = rb
+    if upgraded_raw is None and isinstance(cms_rep, dict):
+        sw_obj = cms_rep.get("sweep")
+        eta0_ent = None
+        if isinstance(sw_obj, dict):
+            eta0_ent = sw_obj.get("eta_0")
+        elif isinstance(sw_obj, list):
+            for item in sw_obj:
+                if isinstance(item, dict) and abs(float(item.get("eta", 1.0))) <= 1e-9:
+                    eta0_ent = item
+                    break
+        if isinstance(eta0_ent, dict) and (
+            (eta0_ent.get("shifted_aggregate") or {}).get("mean_full_vocab_word_macro_top10") is not None
+            or (eta0_ent.get("clean_reference") or {}).get("full_vocab_word_macro_top10") is not None
+        ):
+            upgraded_raw = eta0_ent
+
+    nc = res.get("negative_controls")
+    if isinstance(upgraded_raw, dict):
+        if not isinstance(nc, dict):
+            nc = {}
+            res["negative_controls"] = nc
+        if isinstance(upgraded_raw.get("clean_reference"), dict):
+            nc["clean_reference"] = dict(upgraded_raw["clean_reference"])
+            if true_word_top10 is None and nc["clean_reference"].get("full_vocab_word_macro_top10") is not None:
+                true_word_top10 = float(nc["clean_reference"]["full_vocab_word_macro_top10"])
+                if isinstance(fv, dict):
+                    fv["word_macro_top10"] = true_word_top10
+                    fv["macro_top10"] = true_word_top10
+        if isinstance(upgraded_raw.get("shifted_aggregate"), dict):
+            nc["shifted_aggregate"] = dict(upgraded_raw["shifted_aggregate"])
+        up_conds = upgraded_raw.get("conditions")
+        if isinstance(up_conds, list) and up_conds:
+            old_conds = nc.get("conditions") or []
+            zero_conds = [
+                c
+                for c in old_conds
+                if isinstance(c, dict) and c.get("control_type") == "zero_signal"
+            ]
+            nc["conditions"] = list(up_conds) + zero_conds
+
+    if isinstance(nc, dict):
+        _repair_control_entry_clean_ref(
+            nc,
+            true_word_top10=true_word_top10,
+            rh=rh if isinstance(rh, dict) else None,
+        )
+    return res
+
+
 def _aggregate_single_stage_multi_seed(
     seed_results: Sequence[dict],
     *,
-    split: str = "val",
+    split: str | None = None,
     control_method: str | Iterable[str] | None = None,
     control_metric: str | Iterable[str] | None = None,
 ) -> dict:
     """聚合同一阶段在多个随机种子上的词级检索、词表扫描、实虚词拆解、滚动修订视界/转移矩阵、被试分布及全部负对照与去偏指标（Mean ± SD）。"""
     if not seed_results:
         return {}
+    split = _infer_split_from_seed_results(seed_results, split)
+    seed_results = [
+        _repair_legacy_seed_evaluation_payload(r, split=split)
+        for r in seed_results
+    ]
     first = seed_results[0]
     dataset = str(first.get("dataset", "-"))
     stage = str(first.get("stage", "word"))
@@ -4942,6 +5161,12 @@ def _aggregate_single_stage_multi_seed(
             return out_d
         return {}
 
+    seed_word_top10_map: dict[int, float] = {
+        int(r["seed"]): float(r["full_vocab_word_macro_top10"])
+        for r in per_seed
+        if r.get("full_vocab_word_macro_top10") is not None
+    }
+
     # Aggregate Leave-One-Out Common-Mode Subtraction (CMS) across seeds if available
     cms_reports_by_seed: list[tuple[int, dict]] = []
     for r in seed_results:
@@ -4974,6 +5199,11 @@ def _aggregate_single_stage_multi_seed(
                 sw_i = _normalize_cms_sweep_dict(c_rep.get("sweep"))
                 ent_i = sw_i.get(eta_key)
                 if isinstance(ent_i, dict):
+                    if abs(eta_val) <= 1e-9:
+                        _repair_control_entry_clean_ref(
+                            ent_i,
+                            true_word_top10=seed_word_top10_map.get(sd),
+                        )
                     eta_seed_entries.append((sd, ent_i))
             if not eta_seed_entries:
                 continue
@@ -4989,7 +5219,11 @@ def _aggregate_single_stage_multi_seed(
                 cms_methods[eta_key] = agg_eta
                 if abs(eta_val) > 1e-9:
                     methods_map[m_id] = agg_eta
-                elif "raw" not in methods_map:
+                elif (
+                    "raw" not in methods_map
+                    or agg_eta.get("mean_shifted_full_vocab_word_macro_top10")
+                    is not None
+                ):
                     methods_map["raw"] = agg_eta
                     raw_nc_agg = agg_eta
         if cms_methods:
@@ -5032,11 +5266,14 @@ def _aggregate_single_stage_multi_seed(
         if full_cms_raw is not None:
             norm_fc = _normalize_cms_sweep_dict(full_cms_raw)
             if isinstance(first_sub.get("raw_baseline"), dict):
-                raw_seed_ents = [
-                    (sd, sr["raw_baseline"])
-                    for sd, sr in sub_reports_by_seed
-                    if isinstance(sr.get("raw_baseline"), dict)
-                ]
+                raw_seed_ents = []
+                for sd, sr in sub_reports_by_seed:
+                    if isinstance(sr.get("raw_baseline"), dict):
+                        _repair_control_entry_clean_ref(
+                            sr["raw_baseline"],
+                            true_word_top10=seed_word_top10_map.get(sd),
+                        )
+                        raw_seed_ents.append((sd, sr["raw_baseline"]))
                 if raw_seed_ents:
                     agg_r0 = _aggregate_control_entries_across_seeds(
                         raw_seed_ents,
@@ -5047,7 +5284,13 @@ def _aggregate_single_stage_multi_seed(
                     )
                     if agg_r0.get("enabled"):
                         full_cms_methods_dict["eta_0"] = agg_r0
-                        if "raw" not in methods_map:
+                        if (
+                            "raw" not in methods_map
+                            or agg_r0.get(
+                                "mean_shifted_full_vocab_word_macro_top10"
+                            )
+                            is not None
+                        ):
                             methods_map["raw"] = agg_r0
                             raw_nc_agg = agg_r0
             for f_key, f_ent in norm_fc.items():
@@ -5217,10 +5460,11 @@ def _aggregate_single_stage_multi_seed(
 def summarize_multi_seed_evaluation(
     seed_results: Sequence[dict] | dict,
     *,
-    split: str = "val",
+    split: str | None = None,
     output_dir: str | Path | None = None,
     verbose: bool = False,
     print_report: bool = True,
+    save_files: bool = True,
     control_method: str | Iterable[str] | None = None,
     control_metric: str | Iterable[str] | None = None,
     **_extra_kwargs,
@@ -5230,6 +5474,7 @@ def summarize_multi_seed_evaluation(
         seed_results = list(seed_results.values())
     if not seed_results:
         raise ValueError("seed_results 不能为空。")
+    split = _infer_split_from_seed_results(seed_results, split)
     first = seed_results[0]
     is_multi_stage = (
         "stages" in first and isinstance(first.get("stages"), dict)
@@ -5254,7 +5499,6 @@ def summarize_multi_seed_evaluation(
             if output_dir is not None
             else Path(str(first.get("output_dir", "."))).resolve().parent
         )
-        target_dir.mkdir(parents=True, exist_ok=True)
         first_st_agg = next(iter(stages_agg.values()), {})
         summary = {
             "status": "multi_seed_stage_comparison_completed",
@@ -5292,7 +5536,41 @@ def summarize_multi_seed_evaluation(
             "seed_results": list(seed_results),
             "output_dir": str(target_dir),
         }
-        json_path = target_dir / f"multi_seed_stage_comparison_{split}.json"
+        if save_files:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            json_path = target_dir / f"multi_seed_stage_comparison_{split}.json"
+            multi_exports = export_multi_seed_tables_and_markdown(
+                summary, target_dir
+            )
+            summary["exports"] = multi_exports
+            save_json(json_path, summary)
+            summary["evaluation_json"] = str(json_path)
+            print_multi_seed_evaluation_report(
+                summary,
+                verbose=verbose,
+                output_dir=target_dir,
+                print_to_stdout=print_report,
+                control_method=control_method,
+                control_metric=control_metric,
+            )
+        return summary
+
+    summary = _aggregate_single_stage_multi_seed(
+        seed_results,
+        split=split,
+        control_method=control_method,
+        control_metric=control_metric,
+    )
+    target_dir = (
+        Path(output_dir).resolve()
+        if output_dir is not None
+        else Path(str(first.get("output_dir", "."))).resolve().parent
+    )
+    summary["seed_results"] = list(seed_results)
+    summary["output_dir"] = str(target_dir)
+    if save_files:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        json_path = target_dir / f"multi_seed_evaluation_{split}.json"
         multi_exports = export_multi_seed_tables_and_markdown(
             summary, target_dir
         )
@@ -5307,35 +5585,6 @@ def summarize_multi_seed_evaluation(
             control_method=control_method,
             control_metric=control_metric,
         )
-        return summary
-
-    summary = _aggregate_single_stage_multi_seed(
-        seed_results,
-        split=split,
-        control_method=control_method,
-        control_metric=control_metric,
-    )
-    target_dir = (
-        Path(output_dir).resolve()
-        if output_dir is not None
-        else Path(str(first.get("output_dir", "."))).resolve().parent
-    )
-    target_dir.mkdir(parents=True, exist_ok=True)
-    summary["seed_results"] = list(seed_results)
-    summary["output_dir"] = str(target_dir)
-    json_path = target_dir / f"multi_seed_evaluation_{split}.json"
-    multi_exports = export_multi_seed_tables_and_markdown(summary, target_dir)
-    summary["exports"] = multi_exports
-    save_json(json_path, summary)
-    summary["evaluation_json"] = str(json_path)
-    print_multi_seed_evaluation_report(
-        summary,
-        verbose=verbose,
-        output_dir=target_dir,
-        print_to_stdout=print_report,
-        control_method=control_method,
-        control_metric=control_metric,
-    )
     return summary
 
 

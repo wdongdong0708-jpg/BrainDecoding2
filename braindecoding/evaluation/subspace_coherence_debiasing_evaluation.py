@@ -1328,10 +1328,13 @@ def evaluate_cached_pt_common_mode_subtraction(
     eta_values: str | Iterable[float | int | str] | None = (0.5, 0.8, 1.0),
     output_dir: str | Path | None = None,
     plot: bool = False,
+    plot_figures: bool | None = None,
     print_report: bool = False,
     verbose: bool = False,
 ) -> dict:
     """直接基于 subspace_encoded_cache_{split}.pt 在 1 秒内重算并更新留一法共模扣除（Common-Mode Subtraction）JSON 与 CSV 表格。"""
+    if plot_figures is not None:
+        plot = bool(plot_figures)
     from braindecoding.evaluation.common_mode_subtraction_evaluation import (
         run_common_mode_subtraction_sweep,
     )
@@ -1409,11 +1412,14 @@ def evaluate_cached_pt_subspace_loo(
     gate_max: float = 1.2,
     output_dir: str | Path | None = None,
     plot: bool = True,
+    plot_figures: bool | None = None,
     print_report: bool = True,
     verbose: bool = False,
     update_common_mode_subtraction: bool = True,
 ) -> dict:
     """直接加载已保存的 subspace_encoded_cache_{split}.pt 文件并在 3~5 秒内完成中心化 SVD + 严格留一法基底 Subspace LOO 全量扫描。"""
+    if plot_figures is not None:
+        plot = bool(plot_figures)
     pt_path = Path(cache_pt_path)
     if not pt_path.is_file():
         raise FileNotFoundError(f"未找到特征缓存文件：{pt_path}")
@@ -1488,7 +1494,7 @@ def evaluate_cached_pt_subspace_loo(
             )
         except Exception:
             pass
-    return run_subspace_coherence_debiasing_sweep(
+    sub_res = run_subspace_coherence_debiasing_sweep(
         dataset=dataset,
         stage=stage,
         split=split,
@@ -1513,6 +1519,54 @@ def evaluate_cached_pt_subspace_loo(
         print_report=print_report,
         verbose=verbose,
     )
+    eval_json_p = resolved_out / f"evaluation_{split}.json"
+    if eval_json_p.is_file() and isinstance(sub_res, dict):
+        try:
+            raw_b = sub_res.get("raw_baseline")
+            if isinstance(raw_b, dict) and isinstance(raw_b.get("clean_reference"), dict):
+                eval_payload = json.loads(eval_json_p.read_text(encoding="utf-8"))
+                if isinstance(eval_payload, dict):
+                    nc = eval_payload.get("negative_controls")
+                    if not isinstance(nc, dict):
+                        nc = {}
+                    nc["clean_reference"] = dict(raw_b["clean_reference"])
+                    if isinstance(raw_b.get("conditions"), dict):
+                        conds = dict(nc.get("conditions") or {})
+                        conds.update(raw_b["conditions"])
+                        nc["conditions"] = conds
+                    if isinstance(raw_b.get("shifted_aggregate"), dict):
+                        nc["shifted_aggregate"] = dict(raw_b["shifted_aggregate"])
+                    eval_payload["negative_controls"] = nc
+                    m_blk = eval_payload.get("metrics")
+                    if isinstance(m_blk, dict):
+                        vs_blk = m_blk.get("vocabulary_sweep")
+                        if isinstance(vs_blk, dict) and isinstance(vs_blk.get("full_vocab"), dict):
+                            fv_blk = dict(vs_blk["full_vocab"])
+                            cref_fv = raw_b["clean_reference"].get("full_vocab_word_macro_top10")
+                            if cref_fv is not None:
+                                fv_blk["word_macro_top10"] = float(cref_fv)
+                                fv_blk["macro_top10"] = float(cref_fv)
+                                vs_blk = dict(vs_blk)
+                                vs_blk["full_vocab"] = fv_blk
+                                m_blk = dict(m_blk)
+                                m_blk["vocabulary_sweep"] = vs_blk
+                                eval_payload["metrics"] = m_blk
+                    eval_json_p.write_text(
+                        json.dumps(eval_payload, indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8",
+                    )
+                    from braindecoding.evaluation.evaluation_exports import (
+                        export_word_evaluation_tables_and_markdown,
+                    )
+
+                    export_word_evaluation_tables_and_markdown(
+                        eval_payload,
+                        resolved_out,
+                        split=split,
+                    )
+        except Exception:
+            pass
+    return sub_res
 
 
 def run_standalone_subspace_evaluation(

@@ -2085,10 +2085,53 @@ def print_sequence_decoding_report(
 # ============================================================================
 
 
+def _needs_exploratory_pt_upgrade(
+    payload_dict: Mapping[str, Any],
+    *,
+    is_cms: bool = False,
+) -> bool:
+    """判断已保存的 exploratory 子空间去偏或共模扣除 JSON 是否缺失新增的全词表 Word-Macro / Top-1 或视界指标。"""
+    if not isinstance(payload_dict, Mapping):
+        return True
+    base_blk = (
+        payload_dict.get("baseline_raw_eta0")
+        if is_cms
+        else payload_dict.get("raw_baseline")
+    )
+    if not isinstance(base_blk, Mapping):
+        return True
+    c_ref = base_blk.get("clean_reference")
+    if not isinstance(c_ref, Mapping):
+        return True
+    if (
+        "full_vocab_word_macro_top10" not in c_ref
+        or "full_vocab_macro_top1" not in c_ref
+    ):
+        return True
+    sh_agg = base_blk.get("shifted_aggregate")
+    if not isinstance(sh_agg, Mapping):
+        return True
+    if (
+        "mean_full_vocab_word_macro_top10" not in sh_agg
+        or "mean_full_vocab_macro_top1" not in sh_agg
+    ):
+        return True
+    k0_blk = (c_ref.get("horizons") or {}).get("K0")
+    if isinstance(k0_blk, Mapping) and k0_blk:
+        if (
+            "common_vocab50_macro_top1" not in k0_blk
+            or "common_full_vocab_word_macro_top10" not in k0_blk
+        ):
+            return True
+    return False
+
+
 def _ensure_enriched_multi_seed_summary(
     summary: Mapping[str, Any],
     *,
     base_dir: Path | str | None = None,
+    split: str | None = None,
+    force_reaggregate: bool = False,
     control_method: str | Sequence[str] | None = None,
     control_metric: str | Sequence[str] | None = None,
 ) -> dict[str, Any]:
@@ -2096,6 +2139,7 @@ def _ensure_enriched_multi_seed_summary(
     payload = dict(summary)
     try:
         from braindecoding.evaluation.word_retrieval_evaluation import (
+            _repair_legacy_seed_evaluation_payload,
             apply_multi_seed_control_selection,
             summarize_multi_seed_evaluation,
         )
@@ -2103,9 +2147,59 @@ def _ensure_enriched_multi_seed_summary(
         return payload
 
     is_multi_stage = bool(payload.get("stages_aggregate"))
-    needs_reaggregation = False
+    needs_reaggregation = bool(force_reaggregate)
     bdir = Path(str(base_dir)) if base_dir is not None else None
-    split_l = str(payload.get("split", "test")).lower()
+
+    # Safely determine split without letting a previously-corrupted payload["split"] override explicit split or filename
+    ev_json_str = str(payload.get("evaluation_json", "")).lower()
+    if split is not None and str(split).strip():
+        split_l = str(split).strip().lower()
+    elif ev_json_str.endswith("_test.json"):
+        split_l = "test"
+    elif ev_json_str.endswith("_val.json"):
+        split_l = "val"
+    elif bdir is not None and bdir.is_dir():
+        raw_sp = str(payload.get("split", "")).strip().lower()
+        if (
+            raw_sp == "val"
+            and not list(bdir.glob("seed-*/evaluation_val.json"))
+            and list(bdir.glob("seed-*/evaluation_test.json"))
+        ):
+            split_l = "test"
+        elif raw_sp in {"test", "val"}:
+            split_l = raw_sp
+        elif list(bdir.glob("seed-*/evaluation_test.json")) or (
+            bdir / "multi_seed_evaluation_test.json"
+        ).is_file():
+            split_l = "test"
+        else:
+            split_l = "val"
+    else:
+        split_l = str(payload.get("split", "test")).strip().lower()
+    payload["split"] = split_l
+
+    def _stage_block_has_metric_discrepancy(st_blk: Mapping[str, Any]) -> bool:
+        fv_agg_b = (st_blk.get("vocabulary_sweep_aggregate") or {}).get(
+            "full_vocab"
+        ) or {}
+        nc_by_m = st_blk.get("negative_controls_by_method") or {}
+        raw_m = (
+            nc_by_m.get("raw")
+            if isinstance(nc_by_m, Mapping)
+            else None
+        ) or st_blk.get("negative_controls_aggregate") or {}
+        if isinstance(fv_agg_b, Mapping) and isinstance(raw_m, Mapping) and raw_m.get("enabled"):
+            if "mean_clean_full_vocab_word_macro_top10" not in raw_m:
+                return True
+            fv_c = fv_agg_b.get("mean_macro_top10")
+            nc_c = raw_m.get("mean_clean_full_vocab_macro_top10")
+            if (
+                fv_c is not None
+                and nc_c is not None
+                and abs(float(fv_c) - float(nc_c)) > 1e-6
+            ):
+                return True
+        return False
 
     if not is_multi_stage:
         if (
@@ -2115,6 +2209,7 @@ def _ensure_enriched_multi_seed_summary(
             or "subspace_debiasing_aggregate" not in payload
             or "linguistic_breakdown_aggregate" not in payload
             or "per_subject_summary_aggregate" not in payload
+            or _stage_block_has_metric_discrepancy(payload)
         ):
             needs_reaggregation = True
         elif bdir is not None and bdir.is_dir():
@@ -2134,13 +2229,14 @@ def _ensure_enriched_multi_seed_summary(
                 if isinstance(st_blk, Mapping) and (
                     "negative_controls_by_method" not in st_blk
                     or "negative_control_methods_aggregate" not in st_blk
+                    or _stage_block_has_metric_discrepancy(st_blk)
                 ):
                     needs_reaggregation = True
                     break
 
     if needs_reaggregation:
         seed_results = list(payload.get("seed_results") or [])
-        if not seed_results and bdir is not None and bdir.is_dir():
+        if bdir is not None and bdir.is_dir():
             seeds_l = list(payload.get("seeds") or [])
             fname = (
                 f"multi_stage_evaluation_{split_l}.json"
@@ -2171,13 +2267,9 @@ def _ensure_enriched_multi_seed_summary(
                     if not need_pt_upgrade:
                         try:
                             sub_raw = json.loads(sub_json_cand.read_text(encoding="utf-8"))
-                            k0_blk = (
-                                ((sub_raw.get("raw_baseline") or {}).get("clean_reference") or {})
-                                .get("horizons", {})
-                                .get("K0", {})
+                            need_pt_upgrade = _needs_exploratory_pt_upgrade(
+                                sub_raw, is_cms=False
                             )
-                            if isinstance(k0_blk, Mapping) and k0_blk and "common_vocab50_macro_top1" not in k0_blk:
-                                need_pt_upgrade = True
                         except Exception:
                             need_pt_upgrade = True
                     if need_pt_upgrade:
@@ -2189,7 +2281,8 @@ def _ensure_enriched_multi_seed_summary(
                             evaluate_cached_pt_subspace_loo(
                                 pt_cand,
                                 output_dir=cdir,
-                                plot_figures=False,
+                                plot=False,
+                                print_report=False,
                                 verbose=False,
                             )
                         except Exception:
@@ -2203,6 +2296,27 @@ def _ensure_enriched_multi_seed_summary(
                             s_dict = dict(s_obj)
                             s_dict.setdefault("output_dir", str(cdir))
                             s_dict.setdefault("seed", int(sd_num))
+                            s_dict["split"] = split_l
+                            if not is_multi_stage:
+                                s_dict = _repair_legacy_seed_evaluation_payload(
+                                    s_dict, split=split_l
+                                )
+                                if force_reaggregate:
+                                    try:
+                                        f_cand.write_text(
+                                            json.dumps(
+                                                s_dict,
+                                                ensure_ascii=False,
+                                                indent=2,
+                                            )
+                                            + "\n",
+                                            encoding="utf-8",
+                                        )
+                                        export_word_evaluation_tables_and_markdown(
+                                            s_dict, cdir, split=split_l
+                                        )
+                                    except Exception:
+                                        pass
                             loaded_seeds.append(s_dict)
                     except Exception:
                         pass
@@ -2212,11 +2326,14 @@ def _ensure_enriched_multi_seed_summary(
             try:
                 re_agg = summarize_multi_seed_evaluation(
                     seed_results,
+                    split=split_l,
                     output_dir=None,
                     print_report=False,
+                    save_files=False,
                     control_method=control_method,
                     control_metric=control_metric,
                 )
+                re_agg["split"] = split_l
                 if payload.get("output_dir") and not re_agg.get("output_dir"):
                     re_agg["output_dir"] = payload["output_dir"]
                 elif bdir is not None and not re_agg.get("output_dir"):
@@ -2231,6 +2348,7 @@ def _ensure_enriched_multi_seed_summary(
         for st_k, st_v in list(stages_agg.items()):
             if isinstance(st_v, Mapping):
                 st_copy = dict(st_v)
+                st_copy["split"] = split_l
                 apply_multi_seed_control_selection(
                     st_copy,
                     control_method=control_method,
@@ -2270,6 +2388,30 @@ def _ensure_enriched_multi_seed_summary(
             )
 
     return payload
+
+
+def _cleanup_accidental_val_reports_in_test_dir(st_dir: Path, split_l: str) -> None:
+    """若当前为 test 升级且目录下不存在真实 seed-*/evaluation_val.json，清理此前因默认 split='val' 误生成的 _val 报表文件。"""
+    if split_l != "test" or not st_dir.is_dir():
+        return
+    if list(st_dir.glob("seed-*/evaluation_val.json")) or list(
+        st_dir.glob("seed-*/multi_stage_evaluation_val.json")
+    ):
+        return
+    for stale_name in (
+        "multi_seed_evaluation_val.json",
+        "multi_seed_evaluation_report_val.md",
+        "multi_seed_evaluation_report_val.txt",
+        "multi_seed_stage_comparison_val.json",
+        "multi_seed_stage_comparison_report_val.md",
+        "multi_seed_stage_comparison_report_val.txt",
+    ):
+        stale_p = st_dir / stale_name
+        if stale_p.is_file():
+            try:
+                stale_p.unlink()
+            except OSError:
+                pass
 
 
 def upgrade_and_refresh_saved_multi_seed_reports(
@@ -2323,12 +2465,21 @@ def upgrade_and_refresh_saved_multi_seed_reports(
         raw_obj = json.loads(jf.read_text(encoding="utf-8"))
         if not isinstance(raw_obj, Mapping):
             continue
+        jf_split = (
+            "test"
+            if jf.name.lower().endswith("_test.json")
+            else ("val" if jf.name.lower().endswith("_val.json") else split_l)
+        )
+        _cleanup_accidental_val_reports_in_test_dir(jf.parent, jf_split)
         enriched = _ensure_enriched_multi_seed_summary(
             raw_obj,
             base_dir=jf.parent,
+            split=jf_split,
+            force_reaggregate=True,
             control_method=control_method,
             control_metric=control_metric,
         )
+        enriched["split"] = jf_split
         enriched.pop("_was_reaggregated", None)
         jf.write_text(json.dumps(enriched, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print_multi_seed_evaluation_report(
@@ -2342,6 +2493,7 @@ def upgrade_and_refresh_saved_multi_seed_reports(
         upgraded_summaries.append(enriched)
 
     for st_dir in stage_dirs:
+        _cleanup_accidental_val_reports_in_test_dir(st_dir, split_l)
         ms_stage_file = st_dir / f"multi_seed_stage_comparison_{split_l}.json"
         ms_eval_file = st_dir / f"multi_seed_evaluation_{split_l}.json"
         if ms_stage_file.is_file():
@@ -2349,9 +2501,12 @@ def upgrade_and_refresh_saved_multi_seed_reports(
             enriched = _ensure_enriched_multi_seed_summary(
                 raw_obj,
                 base_dir=st_dir,
+                split=split_l,
+                force_reaggregate=True,
                 control_method=control_method,
                 control_metric=control_metric,
             )
+            enriched["split"] = split_l
             enriched.pop("_was_reaggregated", None)
             ms_stage_file.write_text(
                 json.dumps(enriched, ensure_ascii=False, indent=2) + "\n",
@@ -2373,9 +2528,12 @@ def upgrade_and_refresh_saved_multi_seed_reports(
             enriched = _ensure_enriched_multi_seed_summary(
                 raw_obj,
                 base_dir=st_dir,
+                split=split_l,
+                force_reaggregate=True,
                 control_method=control_method,
                 control_metric=control_metric,
             )
+            enriched["split"] = split_l
             enriched.pop("_was_reaggregated", None)
             ms_eval_file.write_text(
                 json.dumps(enriched, ensure_ascii=False, indent=2) + "\n",
@@ -2395,6 +2553,31 @@ def upgrade_and_refresh_saved_multi_seed_reports(
         # Fallback: build outer multi_seed_evaluation_{split}.json directly from seed-*/evaluation_{split}.json
         seed_Payloads: list[dict[str, Any]] = []
         for cdir in sorted(st_dir.glob("seed-*")):
+            pt_cand = cdir / "exploratory" / f"subspace_encoded_cache_{split_l}.pt"
+            sub_json_cand = cdir / "exploratory" / f"subspace_coherence_debiasing_{split_l}.json"
+            if pt_cand.is_file():
+                need_pt_up = not sub_json_cand.is_file()
+                if not need_pt_up:
+                    try:
+                        sub_raw = json.loads(sub_json_cand.read_text(encoding="utf-8"))
+                        need_pt_up = _needs_exploratory_pt_upgrade(sub_raw, is_cms=False)
+                    except Exception:
+                        need_pt_up = True
+                if need_pt_up:
+                    try:
+                        from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+                            evaluate_cached_pt_subspace_loo,
+                        )
+
+                        evaluate_cached_pt_subspace_loo(
+                            pt_cand,
+                            output_dir=cdir,
+                            plot=False,
+                            print_report=False,
+                            verbose=False,
+                        )
+                    except Exception:
+                        pass
             f_cand = cdir / f"evaluation_{split_l}.json"
             if f_cand.is_file():
                 try:
@@ -2402,6 +2585,7 @@ def upgrade_and_refresh_saved_multi_seed_reports(
                     if isinstance(s_obj, Mapping):
                         s_dict = dict(s_obj)
                         s_dict.setdefault("output_dir", str(cdir))
+                        s_dict["split"] = split_l
                         tail = cdir.name.split("seed-", 1)[-1]
                         if tail.isdigit():
                             s_dict.setdefault("seed", int(tail))
@@ -2411,6 +2595,7 @@ def upgrade_and_refresh_saved_multi_seed_reports(
         if seed_Payloads:
             built = summarize_multi_seed_evaluation(
                 seed_Payloads,
+                split=split_l,
                 output_dir=st_dir,
                 print_report=False,
                 control_method=control_method,
@@ -2484,6 +2669,11 @@ def render_saved_evaluation_report(
     payload = json.loads(src.read_text(encoding="utf-8"))
     if not isinstance(payload, Mapping):
         raise ValueError(f"Expected JSON object in {src}")
+    payload = dict(payload)
+    if src.name.lower().endswith("_test.json"):
+        payload["split"] = "test"
+    elif src.name.lower().endswith("_val.json"):
+        payload["split"] = "val"
 
     status_str = str(payload.get("status", ""))
     protocol = str(payload.get("protocol", ""))
@@ -2527,15 +2717,10 @@ def render_saved_evaluation_report(
     ):
         base_out = src.parent.parent if src.parent.name == "exploratory" else src.parent
         split_s = str(payload.get("split", "test"))
-        raw_k0 = (
-            ((payload.get("raw_baseline") or {}).get("clean_reference") or {})
-            .get("horizons", {})
-            .get("K0", {})
-        )
         pt_candidate = (base_out / "exploratory" / f"subspace_encoded_cache_{split_s}.pt")
         if not pt_candidate.exists():
             pt_candidate = src.parent / f"subspace_encoded_cache_{split_s}.pt"
-        if isinstance(raw_k0, Mapping) and raw_k0 and "common_vocab50_macro_top1" not in raw_k0 and pt_candidate.exists():
+        if _needs_exploratory_pt_upgrade(payload, is_cms=False) and pt_candidate.exists():
             try:
                 from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
                     evaluate_cached_pt_subspace_loo,
@@ -2544,7 +2729,8 @@ def render_saved_evaluation_report(
                 payload = evaluate_cached_pt_subspace_loo(
                     pt_candidate,
                     output_dir=base_out,
-                    plot_figures=False,
+                    plot=False,
+                    print_report=False,
                     verbose=verbose,
                 )
                 return format_subspace_coherence_debiasing_report(payload, verbose=verbose)
@@ -2559,15 +2745,10 @@ def render_saved_evaluation_report(
     ):
         base_out = src.parent.parent if src.parent.name == "exploratory" else src.parent
         split_s = str(payload.get("split", "test"))
-        raw_k0 = (
-            ((payload.get("baseline_raw_eta0") or {}).get("clean_reference") or {})
-            .get("horizons", {})
-            .get("K0", {})
-        )
         pt_candidate = (base_out / "exploratory" / f"subspace_encoded_cache_{split_s}.pt")
         if not pt_candidate.exists():
             pt_candidate = src.parent / f"subspace_encoded_cache_{split_s}.pt"
-        if isinstance(raw_k0, Mapping) and raw_k0 and "common_vocab50_macro_top1" not in raw_k0 and pt_candidate.exists():
+        if _needs_exploratory_pt_upgrade(payload, is_cms=True) and pt_candidate.exists():
             try:
                 from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
                     evaluate_cached_pt_common_mode_subtraction,
@@ -2576,7 +2757,8 @@ def render_saved_evaluation_report(
                 payload = evaluate_cached_pt_common_mode_subtraction(
                     pt_candidate,
                     output_dir=base_out,
-                    plot_figures=False,
+                    plot=False,
+                    print_report=False,
                     verbose=verbose,
                 )
                 return format_common_mode_subtraction_report(payload, verbose=verbose)
@@ -2867,11 +3049,15 @@ def format_multi_seed_evaluation_report(
             act_method_key = str(nc_agg.get("active_control_method", "raw"))
             act_method_lbl = str(nc_agg.get("active_control_method_label", "Raw Un-Debiased Temporal Shift (eta=0.0)"))
             prim_metric_key = str(nc_agg.get("primary_control_metric", "vocab50_macro_top10"))
-            prim_metric_lbl = str(nc_agg.get("primary_control_metric_label", "50-Word Macro Top-10 (%)"))
+            prim_metric_lbl = str(nc_agg.get("primary_control_metric_label", "50-Word Word-Macro Top-10"))
             sel_methods = list(nc_agg.get("selected_control_methods") or [act_method_key])
             sel_metrics_info = list(nc_agg.get("selected_control_metrics") or [])
             sel_metric_ids = [
-                str(m.get("metric_id")) for m in sel_metrics_info if isinstance(m, Mapping) and m.get("metric_id")
+                str(m.get("metric_key") or m.get("metric_id"))
+                if isinstance(m, Mapping)
+                else str(m)
+                for m in sel_metrics_info
+                if m
             ] or [prim_metric_key]
             mm_comp = list(nc_agg.get("multi_method_metric_comparison") or [])
             is_pct = bool(nc_agg.get("primary_metric_is_percentage", True))
@@ -2909,22 +3095,28 @@ def format_multi_seed_evaluation_report(
                     if not isinstance(mm_r, Mapping):
                         continue
                     m_id_s = str(mm_r.get("method_id", "-"))[:22]
-                    mt_id_s = str(mm_r.get("metric_id", "-"))[:18]
-                    m_is_pct = bool(mm_r.get("is_percentage", True))
+                    mt_id_s = str(mm_r.get("metric_key") or mm_r.get("metric_id") or "-")[:18]
+                    m_is_pct = bool(mm_r.get("is_ratio", mm_r.get("is_percentage", True)))
+                    c_m = mm_r.get("mean_clean", mm_r.get("clean_mean"))
+                    c_sd = mm_r.get("std_clean", mm_r.get("clean_std"))
+                    s_m = mm_r.get("mean_shifted", mm_r.get("shifted_mean"))
+                    s_sd = mm_r.get("std_shifted", mm_r.get("shifted_std"))
+                    g_m = mm_r.get("mean_gap", mm_r.get("gap_mean"))
+                    g_sd = mm_r.get("std_gap", mm_r.get("gap_std"))
                     mc_s = (
-                        _fmt_mean_sd_pct(mm_r.get("clean_mean"), mm_r.get("clean_std"), 12)
+                        _fmt_mean_sd_pct(c_m, c_sd, 12)
                         if m_is_pct
-                        else _fmt_mean_sd_num(mm_r.get("clean_mean"), mm_r.get("clean_std"), 12)
+                        else _fmt_mean_sd_num(c_m, c_sd, 12)
                     )
                     ms_s = (
-                        _fmt_mean_sd_pct(mm_r.get("shifted_mean"), mm_r.get("shifted_std"), 12)
+                        _fmt_mean_sd_pct(s_m, s_sd, 12)
                         if m_is_pct
-                        else _fmt_mean_sd_num(mm_r.get("shifted_mean"), mm_r.get("shifted_std"), 12)
+                        else _fmt_mean_sd_num(s_m, s_sd, 12)
                     )
                     mg_s = (
-                        _fmt_signed_mean_sd_pct(mm_r.get("gap_mean"), mm_r.get("gap_std"), 12)
+                        _fmt_signed_mean_sd_pct(g_m, g_sd, 12)
                         if m_is_pct
-                        else _fmt_mean_sd_num(mm_r.get("gap_mean"), mm_r.get("gap_std"), 12, signed=True)
+                        else _fmt_mean_sd_num(g_m, g_sd, 12, signed=True)
                     )
                     lines.append(f"{m_id_s:<22} | {mt_id_s:<18} | {mc_s} | {ms_s} | {mg_s}")
             lines.append(rule)
@@ -3250,12 +3442,16 @@ def format_multi_seed_evaluation_report(
         )
         prim_metric_key = str(nc_agg.get("primary_control_metric", "vocab50_macro_top10"))
         prim_metric_lbl = str(
-            nc_agg.get("primary_control_metric_label", "50-Word Macro Top-10 (%)")
+            nc_agg.get("primary_control_metric_label", "50-Word Word-Macro Top-10")
         )
         sel_methods = list(nc_agg.get("selected_control_methods") or [act_method_key])
         sel_metrics_info = list(nc_agg.get("selected_control_metrics") or [])
         sel_metric_ids = [
-            str(m.get("metric_id")) for m in sel_metrics_info if isinstance(m, Mapping) and m.get("metric_id")
+            str(m.get("metric_key") or m.get("metric_id"))
+            if isinstance(m, Mapping)
+            else str(m)
+            for m in sel_metrics_info
+            if m
         ] or [prim_metric_key]
         mm_comp = list(nc_agg.get("multi_method_metric_comparison") or [])
         sel_methods_agg = nc_agg.get("selected_methods_aggregates") or {}
@@ -3308,22 +3504,28 @@ def format_multi_seed_evaluation_report(
                 if not isinstance(mm_r, Mapping):
                     continue
                 m_id_s = str(mm_r.get("method_id", "-"))[:28]
-                mt_id_s = str(mm_r.get("metric_id", "-"))[:26]
-                m_is_pct = bool(mm_r.get("is_percentage", True))
+                mt_id_s = str(mm_r.get("metric_key") or mm_r.get("metric_id") or "-")[:26]
+                m_is_pct = bool(mm_r.get("is_ratio", mm_r.get("is_percentage", True)))
+                c_m = mm_r.get("mean_clean", mm_r.get("clean_mean"))
+                c_sd = mm_r.get("std_clean", mm_r.get("clean_std"))
+                s_m = mm_r.get("mean_shifted", mm_r.get("shifted_mean"))
+                s_sd = mm_r.get("std_shifted", mm_r.get("shifted_std"))
+                g_m = mm_r.get("mean_gap", mm_r.get("gap_mean"))
+                g_sd = mm_r.get("std_gap", mm_r.get("gap_std"))
                 mc_s = (
-                    _fmt_mean_sd_pct(mm_r.get("clean_mean"), mm_r.get("clean_std"), 16)
+                    _fmt_mean_sd_pct(c_m, c_sd, 16)
                     if m_is_pct
-                    else _fmt_mean_sd_num(mm_r.get("clean_mean"), mm_r.get("clean_std"), 16)
+                    else _fmt_mean_sd_num(c_m, c_sd, 16)
                 )
                 ms_s = (
-                    _fmt_mean_sd_pct(mm_r.get("shifted_mean"), mm_r.get("shifted_std"), 16)
+                    _fmt_mean_sd_pct(s_m, s_sd, 16)
                     if m_is_pct
-                    else _fmt_mean_sd_num(mm_r.get("shifted_mean"), mm_r.get("shifted_std"), 16)
+                    else _fmt_mean_sd_num(s_m, s_sd, 16)
                 )
                 mg_s = (
-                    _fmt_signed_mean_sd_pct(mm_r.get("gap_mean"), mm_r.get("gap_std"), 20)
+                    _fmt_signed_mean_sd_pct(g_m, g_sd, 20)
                     if m_is_pct
-                    else _fmt_mean_sd_num(mm_r.get("gap_mean"), mm_r.get("gap_std"), 20, signed=True)
+                    else _fmt_mean_sd_num(g_m, g_sd, 20, signed=True)
                 )
                 lines.append(f"{m_id_s:<28} | {mt_id_s:<26} | {mc_s} | {ms_s} | {mg_s}")
             lines.append(wide_rule)
@@ -3362,7 +3564,12 @@ def format_multi_seed_evaluation_report(
             lines.append(wide_rule)
 
         methods_to_render: list[tuple[str, Mapping[str, Any]]] = []
-        if isinstance(sel_methods_agg, Mapping) and sel_methods_agg:
+        if isinstance(sel_methods_agg, list):
+            for m_item in sel_methods_agg:
+                if isinstance(m_item, Mapping):
+                    m_k = str(m_item.get("method_id") or m_item.get("active_control_method") or "raw")
+                    methods_to_render.append((m_k, m_item))
+        elif isinstance(sel_methods_agg, Mapping) and sel_methods_agg:
             for m_id in sel_methods:
                 if m_id in sel_methods_agg and isinstance(sel_methods_agg[m_id], Mapping):
                     methods_to_render.append((m_id, sel_methods_agg[m_id]))
