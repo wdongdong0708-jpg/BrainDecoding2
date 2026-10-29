@@ -204,6 +204,32 @@ def _build_eta_entry(
 ) -> dict:
     """构建单个 eta 权重下的完整汇总字典（含相对 eta=0 的增益差值）。"""
     num_shifts = len(condition_entries)
+    c_fv_word = clean_summary.get(
+        "full_vocab_word_macro_top10",
+        clean_summary.get("full_vocab_macro_top10"),
+    )
+    if c_fv_word is not None:
+        clean_summary["full_vocab_word_macro_top10"] = float(c_fv_word)
+        clean_summary["full_vocab_macro_top10"] = float(c_fv_word)
+    s_word_macro = [
+        float(
+            (c.get("summary") or c).get(
+                "full_vocab_word_macro_top10",
+                (c.get("summary") or c).get("full_vocab_macro_top10", 0.0),
+            )
+        )
+        for c in condition_entries
+        if isinstance(c, dict)
+    ]
+    if s_word_macro:
+        sh_w_mean = float(np.mean(s_word_macro))
+        shifted_aggregate["mean_full_vocab_word_macro_top10"] = sh_w_mean
+        shifted_aggregate["mean_full_vocab_macro_top10"] = sh_w_mean
+        if c_fv_word is not None:
+            gap_w = float(c_fv_word) - sh_w_mean
+            shifted_aggregate["clean_minus_shifted_full_vocab_word_macro_top10"] = gap_w
+            shifted_aggregate["clean_minus_shifted_full_vocab_macro_top10"] = gap_w
+
     entry = {
         "eta": float(eta),
         "label": "Raw Baseline (eta=0.0)" if abs(eta) <= 1e-9 else f"LOO Subtracted (eta={eta:g})",
@@ -234,8 +260,24 @@ def _build_eta_entry(
                 - base_clean.get("vocab50_mrr", 0.0)
             ),
             "full_vocab_macro_top10": float(
-                clean_summary.get("full_vocab_macro_top10", 0.0)
-                - base_clean.get("full_vocab_macro_top10", 0.0)
+                clean_summary.get(
+                    "full_vocab_word_macro_top10",
+                    clean_summary.get("full_vocab_macro_top10", 0.0),
+                )
+                - base_clean.get(
+                    "full_vocab_word_macro_top10",
+                    base_clean.get("full_vocab_macro_top10", 0.0),
+                )
+            ),
+            "full_vocab_word_macro_top10": float(
+                clean_summary.get(
+                    "full_vocab_word_macro_top10",
+                    clean_summary.get("full_vocab_macro_top10", 0.0),
+                )
+                - base_clean.get(
+                    "full_vocab_word_macro_top10",
+                    base_clean.get("full_vocab_macro_top10", 0.0),
+                )
             ),
             "full_vocab_micro_top10": float(
                 clean_summary.get("full_vocab_micro_top10", 0.0)
@@ -266,8 +308,24 @@ def _build_eta_entry(
                 - base_agg.get("clean_minus_shifted_vocab50_macro_top1", 0.0)
             ),
             "clean_minus_shifted_full_vocab_macro_top10": float(
-                shifted_aggregate.get("clean_minus_shifted_full_vocab_macro_top10", 0.0)
-                - base_agg.get("clean_minus_shifted_full_vocab_macro_top10", 0.0)
+                shifted_aggregate.get(
+                    "clean_minus_shifted_full_vocab_word_macro_top10",
+                    shifted_aggregate.get("clean_minus_shifted_full_vocab_macro_top10", 0.0),
+                )
+                - base_agg.get(
+                    "clean_minus_shifted_full_vocab_word_macro_top10",
+                    base_agg.get("clean_minus_shifted_full_vocab_macro_top10", 0.0),
+                )
+            ),
+            "clean_minus_shifted_full_vocab_word_macro_top10": float(
+                shifted_aggregate.get(
+                    "clean_minus_shifted_full_vocab_word_macro_top10",
+                    shifted_aggregate.get("clean_minus_shifted_full_vocab_macro_top10", 0.0),
+                )
+                - base_agg.get(
+                    "clean_minus_shifted_full_vocab_word_macro_top10",
+                    base_agg.get("clean_minus_shifted_full_vocab_macro_top10", 0.0),
+                )
             ),
             "shifted_mean_full_vocab_macro_top1": float(
                 shifted_aggregate.get("mean_full_vocab_macro_top1", 0.0)
@@ -482,6 +540,7 @@ def run_common_mode_subtraction_sweep(
         "eta_grid": [0.0, *etas],
         "best_eta_by_clean_vocab50_top10": float(best_by_clean50["eta"]),
         "best_eta_by_clean_minus_shifted_vocab50_top10": float(best_by_gap50["eta"]),
+        "baseline_raw_eta0": eta0_entry,
         "sweep": sweep_results,
         "figures": {},
     }

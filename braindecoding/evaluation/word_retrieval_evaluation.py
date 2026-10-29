@@ -5167,6 +5167,46 @@ def _aggregate_single_stage_multi_seed(
         if r.get("full_vocab_word_macro_top10") is not None
     }
 
+    # Load Subspace Coherence LOO Debiasing across seeds first so its upgraded full_rank_loo_baselines can repair stale CMS entries
+    sub_reports_by_seed: list[tuple[int, dict]] = []
+    sub_full_loo_by_seed_and_eta: dict[tuple[int, float], dict] = {}
+    for r in seed_results:
+        sd = int(r.get("seed", 0))
+        sub_rep = _load_seed_exploratory_json(
+            r,
+            split=split,
+            json_key="exploratory_subspace_coherence_debiasing_json",
+            filename_prefix="subspace_coherence_debiasing",
+        )
+        if (
+            isinstance(sub_rep, dict)
+            and sub_rep.get("subspace_sweep") is not None
+        ):
+            sub_reports_by_seed.append((sd, sub_rep))
+            rb = sub_rep.get("raw_baseline")
+            if isinstance(rb, dict) and (
+                (rb.get("clean_reference") or {}).get("full_vocab_word_macro_top10") is not None
+                or (rb.get("shifted_aggregate") or {}).get("mean_full_vocab_word_macro_top10") is not None
+            ):
+                _repair_control_entry_clean_ref(
+                    rb,
+                    true_word_top10=seed_word_top10_map.get(sd),
+                )
+                sub_full_loo_by_seed_and_eta[(sd, 0.0)] = rb
+            sr_fc = _normalize_cms_sweep_dict(
+                sub_rep.get("full_loo_cms")
+                or sub_rep.get("full_rank_cms_sweep")
+                or sub_rep.get("full_rank_loo_baselines")
+            )
+            for fc_ent in sr_fc.values():
+                if isinstance(fc_ent, dict) and (
+                    (fc_ent.get("clean_reference") or {}).get("full_vocab_word_macro_top10") is not None
+                    or (fc_ent.get("shifted_aggregate") or {}).get("mean_full_vocab_word_macro_top10") is not None
+                ):
+                    sub_full_loo_by_seed_and_eta[
+                        (sd, round(float(fc_ent.get("eta", 0.0)), 6))
+                    ] = fc_ent
+
     # Aggregate Leave-One-Out Common-Mode Subtraction (CMS) across seeds if available
     cms_reports_by_seed: list[tuple[int, dict]] = []
     for r in seed_results:
@@ -5188,6 +5228,7 @@ def _aggregate_single_stage_multi_seed(
         cms_methods: dict[str, dict] = {}
         for eta_key, first_eta_ent in first_sweep.items():
             eta_val = float(first_eta_ent.get("eta", 0.0))
+            eta_round = round(eta_val, 6)
             m_id = "raw" if abs(eta_val) <= 1e-9 else f"cms:eta={eta_val:g}"
             m_lbl = (
                 "Raw Baseline (eta=0.0)"
@@ -5199,6 +5240,13 @@ def _aggregate_single_stage_multi_seed(
                 sw_i = _normalize_cms_sweep_dict(c_rep.get("sweep"))
                 ent_i = sw_i.get(eta_key)
                 if isinstance(ent_i, dict):
+                    c_ref_i = ent_i.get("clean_reference") or {}
+                    s_agg_i = ent_i.get("shifted_aggregate") or {}
+                    if (
+                        c_ref_i.get("full_vocab_word_macro_top10") is None
+                        or s_agg_i.get("mean_full_vocab_word_macro_top10") is None
+                    ) and (sd, eta_round) in sub_full_loo_by_seed_and_eta:
+                        ent_i = sub_full_loo_by_seed_and_eta[(sd, eta_round)]
                     if abs(eta_val) <= 1e-9:
                         _repair_control_entry_clean_ref(
                             ent_i,
@@ -5237,22 +5285,6 @@ def _aggregate_single_stage_multi_seed(
                 "methods": cms_methods,
                 "sweep": list(cms_methods.values()),
             }
-
-    # Aggregate Subspace Coherence LOO Debiasing across seeds if available
-    sub_reports_by_seed: list[tuple[int, dict]] = []
-    for r in seed_results:
-        sd = int(r.get("seed", 0))
-        sub_rep = _load_seed_exploratory_json(
-            r,
-            split=split,
-            json_key="exploratory_subspace_coherence_debiasing_json",
-            filename_prefix="subspace_coherence_debiasing",
-        )
-        if (
-            isinstance(sub_rep, dict)
-            and sub_rep.get("subspace_sweep") is not None
-        ):
-            sub_reports_by_seed.append((sd, sub_rep))
 
     subspace_aggregate: dict[str, object] = {"enabled": False}
     if sub_reports_by_seed:
@@ -5316,8 +5348,14 @@ def _aggregate_single_stage_multi_seed(
                 )
                 if agg_f.get("enabled"):
                     full_cms_methods_dict[f_key] = agg_f
-                    if m_id not in methods_map:
+                    if (
+                        m_id not in methods_map
+                        or agg_f.get("mean_clean_full_vocab_word_macro_top10") is not None
+                    ):
                         methods_map[m_id] = agg_f
+                        if isinstance(cms_aggregate.get("methods"), dict):
+                            cms_aggregate["methods"][f_key] = agg_f
+                            cms_aggregate["sweep"] = list(cms_aggregate["methods"].values())
             if not cms_aggregate.get("enabled") and full_cms_methods_dict:
                 cms_aggregate = {
                     "enabled": True,

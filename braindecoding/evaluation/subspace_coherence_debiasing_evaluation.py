@@ -20,12 +20,13 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 import gc
 import json
 from pathlib import Path
 import re
 import time
+from typing import Any
 
 import numpy as np
 import torch
@@ -1399,6 +1400,137 @@ def evaluate_cached_pt_common_mode_subtraction(
     )
 
 
+def sync_common_mode_subtraction_from_subspace_report(
+    sub_report: Mapping[str, Any],
+    output_dir: str | Path | None = None,
+    *,
+    plot: bool = False,
+) -> dict | None:
+    """直接利用 Subspace LOO 报告中已计算的 raw_baseline (eta=0.0) 与 full_rank_loo_baselines (eta in {0.5, 0.8, 1.0}) 0秒同步生成/升级 common_mode_subtraction_{split}.json 及 CSV/Markdown 导出。"""
+    if not isinstance(sub_report, Mapping):
+        return None
+    raw_b = sub_report.get("raw_baseline")
+    full_list = sub_report.get("full_rank_loo_baselines")
+    if not isinstance(raw_b, Mapping) or not isinstance(full_list, Sequence) or not full_list:
+        return None
+    if not isinstance(raw_b.get("clean_reference"), Mapping) or not isinstance(
+        raw_b.get("shifted_aggregate"), Mapping
+    ):
+        return None
+
+    from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+        _build_eta_entry,
+        plot_common_mode_subtraction_figures,
+    )
+    from braindecoding.evaluation.evaluation_exports import (
+        export_common_mode_subtraction_tables_and_markdown,
+    )
+
+    eta0_entry = _build_eta_entry(
+        0.0,
+        dict(raw_b["clean_reference"]),
+        [dict(c) for c in (raw_b.get("conditions") or ()) if isinstance(c, Mapping)],
+        dict(raw_b["shifted_aggregate"]),
+        baseline_entry=None,
+    )
+    sweep_results: list[dict] = [eta0_entry]
+    etas: list[float] = []
+    for f_ent in full_list:
+        if not isinstance(f_ent, Mapping):
+            continue
+        if not isinstance(f_ent.get("clean_reference"), Mapping) or not isinstance(
+            f_ent.get("shifted_aggregate"), Mapping
+        ):
+            continue
+        f_eta = float(f_ent.get("eta", 0.0))
+        if abs(f_eta) <= 1e-9:
+            continue
+        etas.append(f_eta)
+        eta_entry = _build_eta_entry(
+            f_eta,
+            dict(f_ent["clean_reference"]),
+            [dict(c) for c in (f_ent.get("conditions") or ()) if isinstance(c, Mapping)],
+            dict(f_ent["shifted_aggregate"]),
+            baseline_entry=eta0_entry,
+        )
+        sweep_results.append(eta_entry)
+
+    if len(sweep_results) < 2:
+        return None
+
+    best_by_clean50 = max(
+        sweep_results,
+        key=lambda item: float(item["clean_reference"].get("vocab50_macro_top10", 0.0)),
+    )
+    best_by_gap50 = max(
+        sweep_results,
+        key=lambda item: float(
+            item["shifted_aggregate"].get("clean_minus_shifted_vocab50_macro_top10", 0.0)
+        ),
+    )
+    sub_formula = sub_report.get("formula") if isinstance(sub_report.get("formula"), Mapping) else {}
+    shift_secs = list(
+        sub_formula.get("shift_seconds")
+        or (raw_b.get("shifted_aggregate") or {}).get("shift_seconds")
+        or DEFAULT_HISTORICAL_SHIFTS
+    )
+    num_m = int(sub_formula.get("num_shifted_conditions_M", len(shift_secs)))
+    split = str(sub_report.get("split", "test"))
+
+    cms_payload: dict[str, Any] = {
+        "schema_version": 1,
+        "experiment_type": "exploratory_leave_one_out_common_mode_subtraction",
+        "dataset": str(sub_report.get("dataset", "pallier2025")),
+        "stage": str(sub_report.get("stage", "revision")),
+        "split": split,
+        "seed": int(sub_report.get("seed", 0)),
+        "exp_tag": str(sub_report.get("exp_tag", "")),
+        "word_exp_tag": str(sub_report.get("word_exp_tag", "")),
+        "formula": {
+            "clean": "s_tilde_i^(0) = s_i^(0) - eta * (1 / M) * sum_{delta != 0} s_i^(delta)",
+            "shifted_leave_one_out": "s_tilde_i^(delta_k) = s_i^(delta_k) - eta * (1 / (M - 1)) * sum_{delta not in {0, delta_k}} s_i^(delta)",
+            "num_shifted_conditions_M": num_m,
+            "clean_divisor": num_m,
+            "shifted_loo_divisor": max(1, num_m - 1),
+            "shift_seconds": shift_secs,
+            "normalize_before_subtraction": True,
+        },
+        "eta_grid": [0.0, *etas],
+        "best_eta_by_clean_vocab50_top10": float(best_by_clean50["eta"]),
+        "best_eta_by_clean_minus_shifted_vocab50_top10": float(best_by_gap50["eta"]),
+        "baseline_raw_eta0": eta0_entry,
+        "sweep": sweep_results,
+        "figures": {},
+    }
+
+    if output_dir is not None:
+        out_path = Path(output_dir)
+        exploratory_dir = out_path / "exploratory"
+        exploratory_dir.mkdir(parents=True, exist_ok=True)
+        cms_payload["exported_files"] = (
+            export_common_mode_subtraction_tables_and_markdown(cms_payload, out_path)
+        )
+        json_file = exploratory_dir / f"common_mode_subtraction_{split}.json"
+        json_file.write_text(
+            json.dumps(cms_payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        cms_payload["exploratory_json"] = str(json_file)
+        if plot:
+            try:
+                figs = plot_common_mode_subtraction_figures(
+                    cms_payload, out_path / "figures"
+                )
+                cms_payload["figures"].update(figs)
+                json_file.write_text(
+                    json.dumps(cms_payload, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+    return cms_payload
+
+
 def evaluate_cached_pt_subspace_loo(
     cache_pt_path: str | Path,
     *,
@@ -1452,48 +1584,6 @@ def evaluate_cached_pt_subspace_loo(
             else pt_path.parent
         )
     )
-    if update_common_mode_subtraction:
-        try:
-            from braindecoding.evaluation.common_mode_subtraction_evaluation import (
-                run_common_mode_subtraction_sweep,
-            )
-            from braindecoding.evaluation.word_retrieval_evaluation import (
-                _summarize_shifted_conditions,
-            )
-
-            fast_eval = _build_fast_summary_evaluator(
-                proxy_ds,
-                cached_bundle["vocabulary"],
-                cached_bundle["vocab50"],
-                stage=stage,
-            )
-            run_common_mode_subtraction_sweep(
-                dataset=dataset,
-                stage=stage,
-                split=split,
-                seed=seed,
-                exp_tag=str(cached_bundle.get("exp_tag", "")),
-                word_exp_tag=str(cached_bundle.get("word_exp_tag", "")),
-                clean_encoded=cached_bundle["clean_encoded"],
-                shifted_encoded_by_shift=cached_bundle["shifted_encoded_by_shift"],
-                eval_ds=proxy_ds,
-                shifted_ds_by_shift={},
-                vocabulary=cached_bundle["vocabulary"],
-                vocab50=cached_bundle["vocab50"],
-                cfg={},
-                eta_values=(0.5, 0.8, 1.0),
-                compute_metrics_fn=lambda enc, *_args, **_kw: enc,
-                extract_summary_row_fn=lambda key, label, sec, enc, *, clean_summary=None: fast_eval(
-                    enc, key, label, sec, clean_summary=clean_summary
-                ),
-                summarize_shifted_fn=_summarize_shifted_conditions,
-                output_dir=resolved_out,
-                plot=plot,
-                print_report=False,
-                verbose=verbose,
-            )
-        except Exception:
-            pass
     sub_res = run_subspace_coherence_debiasing_sweep(
         dataset=dataset,
         stage=stage,
@@ -1519,6 +1609,27 @@ def evaluate_cached_pt_subspace_loo(
         print_report=print_report,
         verbose=verbose,
     )
+    if update_common_mode_subtraction and isinstance(sub_res, dict):
+        synced_cms = None
+        try:
+            synced_cms = sync_common_mode_subtraction_from_subspace_report(
+                sub_res,
+                resolved_out,
+                plot=plot,
+            )
+        except Exception:
+            synced_cms = None
+        if synced_cms is None:
+            try:
+                evaluate_cached_pt_common_mode_subtraction(
+                    pt_path,
+                    output_dir=resolved_out,
+                    plot=plot,
+                    print_report=False,
+                    verbose=verbose,
+                )
+            except Exception:
+                pass
     eval_json_p = resolved_out / f"evaluation_{split}.json"
     if eval_json_p.is_file() and isinstance(sub_res, dict):
         try:
@@ -1530,7 +1641,21 @@ def evaluate_cached_pt_subspace_loo(
                     if not isinstance(nc, dict):
                         nc = {}
                     nc["clean_reference"] = dict(raw_b["clean_reference"])
-                    if isinstance(raw_b.get("conditions"), dict):
+                    if isinstance(raw_b.get("conditions"), list) and raw_b["conditions"]:
+                        old_conds = nc.get("conditions") or []
+                        zero_conds = [
+                            c
+                            for c in old_conds
+                            if isinstance(c, dict) and c.get("control_type") == "zero_signal"
+                        ]
+                        sh_conds = []
+                        for c_item in raw_b["conditions"]:
+                            if isinstance(c_item, dict):
+                                c_copy = dict(c_item)
+                                c_copy.setdefault("control_type", "temporal_shift")
+                                sh_conds.append(c_copy)
+                        nc["conditions"] = sh_conds + zero_conds
+                    elif isinstance(raw_b.get("conditions"), dict):
                         conds = dict(nc.get("conditions") or {})
                         conds.update(raw_b["conditions"])
                         nc["conditions"] = conds

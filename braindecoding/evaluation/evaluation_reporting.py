@@ -2085,22 +2085,10 @@ def print_sequence_decoding_report(
 # ============================================================================
 
 
-def _needs_exploratory_pt_upgrade(
-    payload_dict: Mapping[str, Any],
-    *,
-    is_cms: bool = False,
-) -> bool:
-    """判断已保存的 exploratory 子空间去偏或共模扣除 JSON 是否缺失新增的全词表 Word-Macro / Top-1 或视界指标。"""
-    if not isinstance(payload_dict, Mapping):
+def _entry_needs_exploratory_pt_upgrade(entry_blk: Any) -> bool:
+    if not isinstance(entry_blk, Mapping):
         return True
-    base_blk = (
-        payload_dict.get("baseline_raw_eta0")
-        if is_cms
-        else payload_dict.get("raw_baseline")
-    )
-    if not isinstance(base_blk, Mapping):
-        return True
-    c_ref = base_blk.get("clean_reference")
+    c_ref = entry_blk.get("clean_reference")
     if not isinstance(c_ref, Mapping):
         return True
     if (
@@ -2108,12 +2096,28 @@ def _needs_exploratory_pt_upgrade(
         or "full_vocab_macro_top1" not in c_ref
     ):
         return True
-    sh_agg = base_blk.get("shifted_aggregate")
+    fv_wm = c_ref.get("full_vocab_word_macro_top10")
+    fv_m = c_ref.get("full_vocab_macro_top10")
+    if (
+        fv_wm is not None
+        and fv_m is not None
+        and abs(float(fv_wm) - float(fv_m)) > 1e-6
+    ):
+        return True
+    sh_agg = entry_blk.get("shifted_aggregate")
     if not isinstance(sh_agg, Mapping):
         return True
     if (
         "mean_full_vocab_word_macro_top10" not in sh_agg
         or "mean_full_vocab_macro_top1" not in sh_agg
+    ):
+        return True
+    sh_wm = sh_agg.get("mean_full_vocab_word_macro_top10")
+    sh_m = sh_agg.get("mean_full_vocab_macro_top10")
+    if (
+        sh_wm is not None
+        and sh_m is not None
+        and abs(float(sh_wm) - float(sh_m)) > 1e-6
     ):
         return True
     k0_blk = (c_ref.get("horizons") or {}).get("K0")
@@ -2124,6 +2128,132 @@ def _needs_exploratory_pt_upgrade(
         ):
             return True
     return False
+
+
+def _needs_exploratory_pt_upgrade(
+    payload_dict: Mapping[str, Any],
+    *,
+    is_cms: bool = False,
+) -> bool:
+    """判断已保存的 exploratory 子空间去偏或共模扣除 JSON 是否缺失新增的全词表 Word-Macro / Top-1 或视界指标。"""
+    if not isinstance(payload_dict, Mapping):
+        return True
+    if is_cms:
+        sweep_list = (
+            payload_dict.get("sweep")
+            or payload_dict.get("subtraction_sweep")
+            or []
+        )
+        if not isinstance(sweep_list, Sequence) or not sweep_list:
+            return True
+        for item in sweep_list:
+            if _entry_needs_exploratory_pt_upgrade(item):
+                return True
+        if "baseline_raw_eta0" in payload_dict and _entry_needs_exploratory_pt_upgrade(
+            payload_dict.get("baseline_raw_eta0")
+        ):
+            return True
+        return False
+
+    base_blk = payload_dict.get("raw_baseline")
+    if _entry_needs_exploratory_pt_upgrade(base_blk):
+        return True
+    for item in payload_dict.get("full_rank_loo_baselines") or []:
+        if _entry_needs_exploratory_pt_upgrade(item):
+            return True
+    for item in payload_dict.get("subspace_sweep") or []:
+        if _entry_needs_exploratory_pt_upgrade(item):
+            return True
+    return False
+
+
+def _auto_upgrade_seed_exploratory_files(cdir: Path, split_l: str) -> None:
+    """自动检查并零开销升级单种子目录下的 subspace_coherence_debiasing_{split}.json 与 common_mode_subtraction_{split}.json。"""
+    pt_cand = cdir / "exploratory" / f"subspace_encoded_cache_{split_l}.pt"
+    sub_json_cand = (
+        cdir / "exploratory" / f"subspace_coherence_debiasing_{split_l}.json"
+    )
+    cms_json_cand = (
+        cdir / "exploratory" / f"common_mode_subtraction_{split_l}.json"
+    )
+
+    sub_raw: dict[str, Any] | None = None
+    need_sub_upgrade = not sub_json_cand.is_file()
+    if not need_sub_upgrade:
+        try:
+            loaded_sub = json.loads(sub_json_cand.read_text(encoding="utf-8"))
+            if isinstance(loaded_sub, Mapping):
+                sub_raw = dict(loaded_sub)
+                need_sub_upgrade = _needs_exploratory_pt_upgrade(
+                    sub_raw, is_cms=False
+                )
+            else:
+                need_sub_upgrade = True
+        except Exception:
+            need_sub_upgrade = True
+
+    if need_sub_upgrade and pt_cand.is_file():
+        try:
+            from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+                evaluate_cached_pt_subspace_loo,
+            )
+
+            sub_raw = evaluate_cached_pt_subspace_loo(
+                pt_cand,
+                output_dir=cdir,
+                plot=False,
+                print_report=False,
+                verbose=False,
+            )
+            need_sub_upgrade = False
+        except Exception:
+            pass
+
+    need_cms_upgrade = not cms_json_cand.is_file()
+    if not need_cms_upgrade:
+        try:
+            loaded_cms = json.loads(cms_json_cand.read_text(encoding="utf-8"))
+            if isinstance(loaded_cms, Mapping):
+                need_cms_upgrade = _needs_exploratory_pt_upgrade(
+                    loaded_cms, is_cms=True
+                )
+            else:
+                need_cms_upgrade = True
+        except Exception:
+            need_cms_upgrade = True
+
+    if need_cms_upgrade:
+        upgraded_cms = False
+        if isinstance(sub_raw, Mapping) and not need_sub_upgrade:
+            try:
+                from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+                    sync_common_mode_subtraction_from_subspace_report,
+                )
+
+                synced = sync_common_mode_subtraction_from_subspace_report(
+                    sub_raw,
+                    cdir,
+                    plot=False,
+                )
+                if isinstance(synced, Mapping):
+                    upgraded_cms = True
+            except Exception:
+                pass
+        if not upgraded_cms and pt_cand.is_file():
+            try:
+                from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+                    evaluate_cached_pt_common_mode_subtraction,
+                )
+
+                evaluate_cached_pt_common_mode_subtraction(
+                    pt_cand,
+                    output_dir=cdir,
+                    plot=False,
+                    print_report=False,
+                    verbose=False,
+                )
+            except Exception:
+                pass
 
 
 def _ensure_enriched_multi_seed_summary(
@@ -2178,6 +2308,59 @@ def _ensure_enriched_multi_seed_summary(
         split_l = str(payload.get("split", "test")).strip().lower()
     payload["split"] = split_l
 
+    def _method_agg_has_metric_discrepancy(m_blk: Any) -> bool:
+        if not isinstance(m_blk, Mapping) or not m_blk.get("enabled", True):
+            return False
+        if (
+            "mean_clean_full_vocab_word_macro_top10" not in m_blk
+            or "mean_shifted_full_vocab_word_macro_top10" not in m_blk
+        ):
+            return True
+        c_wm = m_blk.get("mean_clean_full_vocab_word_macro_top10")
+        c_m = m_blk.get("mean_clean_full_vocab_macro_top10")
+        if (
+            c_wm is not None
+            and c_m is not None
+            and abs(float(c_wm) - float(c_m)) > 1e-6
+        ):
+            return True
+        sh_wm = m_blk.get("mean_shifted_full_vocab_word_macro_top10")
+        sh_m = m_blk.get("mean_shifted_full_vocab_macro_top10")
+        if (
+            sh_wm is not None
+            and sh_m is not None
+            and abs(float(sh_wm) - float(sh_m)) > 1e-6
+        ):
+            return True
+        for ps in m_blk.get("per_seed") or []:
+            if not isinstance(ps, Mapping):
+                continue
+            ps_c = ps.get("clean_reference")
+            if isinstance(ps_c, Mapping):
+                if "full_vocab_word_macro_top10" not in ps_c:
+                    return True
+                ps_c_wm = ps_c.get("full_vocab_word_macro_top10")
+                ps_c_m = ps_c.get("full_vocab_macro_top10")
+                if (
+                    ps_c_wm is not None
+                    and ps_c_m is not None
+                    and abs(float(ps_c_wm) - float(ps_c_m)) > 1e-6
+                ):
+                    return True
+            ps_sh = ps.get("shifted_aggregate")
+            if isinstance(ps_sh, Mapping):
+                if "mean_full_vocab_word_macro_top10" not in ps_sh:
+                    return True
+                ps_sh_wm = ps_sh.get("mean_full_vocab_word_macro_top10")
+                ps_sh_m = ps_sh.get("mean_full_vocab_macro_top10")
+                if (
+                    ps_sh_wm is not None
+                    and ps_sh_m is not None
+                    and abs(float(ps_sh_wm) - float(ps_sh_m)) > 1e-6
+                ):
+                    return True
+        return False
+
     def _stage_block_has_metric_discrepancy(st_blk: Mapping[str, Any]) -> bool:
         fv_agg_b = (st_blk.get("vocabulary_sweep_aggregate") or {}).get(
             "full_vocab"
@@ -2199,6 +2382,15 @@ def _ensure_enriched_multi_seed_summary(
                 and abs(float(fv_c) - float(nc_c)) > 1e-6
             ):
                 return True
+        if isinstance(nc_by_m, Mapping):
+            for m_blk in nc_by_m.values():
+                if _method_agg_has_metric_discrepancy(m_blk):
+                    return True
+        cms_agg = st_blk.get("common_mode_subtraction_aggregate") or {}
+        if isinstance(cms_agg, Mapping) and cms_agg.get("enabled"):
+            for m_blk in cms_agg.get("methods") or []:
+                if _method_agg_has_metric_discrepancy(m_blk):
+                    return True
         return False
 
     if not is_multi_stage:
@@ -2259,34 +2451,7 @@ def _ensure_enriched_multi_seed_summary(
 
             loaded_seeds: list[dict[str, Any]] = []
             for sd_num, cdir in candidate_seed_dirs:
-                # Auto-upgrade legacy per-seed exploratory JSONs from .pt cache if present
-                pt_cand = cdir / "exploratory" / f"subspace_encoded_cache_{split_l}.pt"
-                sub_json_cand = cdir / "exploratory" / f"subspace_coherence_debiasing_{split_l}.json"
-                if pt_cand.is_file():
-                    need_pt_upgrade = not sub_json_cand.is_file()
-                    if not need_pt_upgrade:
-                        try:
-                            sub_raw = json.loads(sub_json_cand.read_text(encoding="utf-8"))
-                            need_pt_upgrade = _needs_exploratory_pt_upgrade(
-                                sub_raw, is_cms=False
-                            )
-                        except Exception:
-                            need_pt_upgrade = True
-                    if need_pt_upgrade:
-                        try:
-                            from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
-                                evaluate_cached_pt_subspace_loo,
-                            )
-
-                            evaluate_cached_pt_subspace_loo(
-                                pt_cand,
-                                output_dir=cdir,
-                                plot=False,
-                                print_report=False,
-                                verbose=False,
-                            )
-                        except Exception:
-                            pass
+                _auto_upgrade_seed_exploratory_files(cdir, split_l)
 
                 f_cand = cdir / fname
                 if f_cand.is_file():
@@ -2553,31 +2718,7 @@ def upgrade_and_refresh_saved_multi_seed_reports(
         # Fallback: build outer multi_seed_evaluation_{split}.json directly from seed-*/evaluation_{split}.json
         seed_Payloads: list[dict[str, Any]] = []
         for cdir in sorted(st_dir.glob("seed-*")):
-            pt_cand = cdir / "exploratory" / f"subspace_encoded_cache_{split_l}.pt"
-            sub_json_cand = cdir / "exploratory" / f"subspace_coherence_debiasing_{split_l}.json"
-            if pt_cand.is_file():
-                need_pt_up = not sub_json_cand.is_file()
-                if not need_pt_up:
-                    try:
-                        sub_raw = json.loads(sub_json_cand.read_text(encoding="utf-8"))
-                        need_pt_up = _needs_exploratory_pt_upgrade(sub_raw, is_cms=False)
-                    except Exception:
-                        need_pt_up = True
-                if need_pt_up:
-                    try:
-                        from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
-                            evaluate_cached_pt_subspace_loo,
-                        )
-
-                        evaluate_cached_pt_subspace_loo(
-                            pt_cand,
-                            output_dir=cdir,
-                            plot=False,
-                            print_report=False,
-                            verbose=False,
-                        )
-                    except Exception:
-                        pass
+            _auto_upgrade_seed_exploratory_files(cdir, split_l)
             f_cand = cdir / f"evaluation_{split_l}.json"
             if f_cand.is_file():
                 try:
