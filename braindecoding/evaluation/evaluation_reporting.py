@@ -2314,8 +2314,19 @@ def _ensure_enriched_multi_seed_summary(
         if (
             "mean_clean_full_vocab_word_macro_top10" not in m_blk
             or "mean_shifted_full_vocab_word_macro_top10" not in m_blk
+            or "p_str_shifted_vs_chance_vocab50_macro_top10" not in m_blk
+            or "p_str_gap_vocab50_macro_top10" not in m_blk
         ):
             return True
+        hz_b = m_blk.get("horizons_aggregate")
+        if isinstance(hz_b, Mapping) and isinstance(hz_b.get("K2_minus_K0"), Mapping):
+            k20_b = hz_b["K2_minus_K0"]
+            if (
+                "p_str_shifted_common_vocab50_macro_top10" not in k20_b
+                or "p_str_clean_common_vocab50_macro_top10" not in k20_b
+                or "p_str_gap_common_vocab50_macro_top10" not in k20_b
+            ):
+                return True
         c_wm = m_blk.get("mean_clean_full_vocab_word_macro_top10")
         c_m = m_blk.get("mean_clean_full_vocab_macro_top10")
         if (
@@ -2362,6 +2373,22 @@ def _ensure_enriched_multi_seed_summary(
         return False
 
     def _stage_block_has_metric_discrepancy(st_blk: Mapping[str, Any]) -> bool:
+        ling_b = st_blk.get("linguistic_breakdown_aggregate")
+        if isinstance(ling_b, Mapping):
+            cmf = ling_b.get("content_minus_function")
+            if isinstance(cmf, Mapping) and "p_str_vocab50_word_macro_top10" not in cmf:
+                return True
+        tr_b = st_blk.get("revision_transitions_aggregate")
+        if isinstance(tr_b, Mapping) and tr_b:
+            k02 = tr_b.get("K0_to_K2")
+            if isinstance(k02, Mapping):
+                v50_tr = k02.get("vocab50_top10")
+                if isinstance(v50_tr, Mapping) and "mcnemar_p_str" not in v50_tr:
+                    return True
+        hz_st = st_blk.get("revision_horizons_aggregate")
+        if isinstance(hz_st, Mapping) and isinstance(hz_st.get("K2_minus_K0"), Mapping):
+            if "p_str_common_vocab50_macro_top10" not in hz_st["K2_minus_K0"]:
+                return True
         fv_agg_b = (st_blk.get("vocabulary_sweep_aggregate") or {}).get(
             "full_vocab"
         ) or {}
@@ -2372,7 +2399,10 @@ def _ensure_enriched_multi_seed_summary(
             else None
         ) or st_blk.get("negative_controls_aggregate") or {}
         if isinstance(fv_agg_b, Mapping) and isinstance(raw_m, Mapping) and raw_m.get("enabled"):
-            if "mean_clean_full_vocab_word_macro_top10" not in raw_m:
+            if (
+                "mean_clean_full_vocab_word_macro_top10" not in raw_m
+                or "p_str_shifted_vs_chance_vocab50_macro_top10" not in raw_m
+            ):
                 return True
             fv_c = fv_agg_b.get("mean_macro_top10")
             nc_c = raw_m.get("mean_clean_full_vocab_macro_top10")
@@ -2388,9 +2418,15 @@ def _ensure_enriched_multi_seed_summary(
                     return True
         cms_agg = st_blk.get("common_mode_subtraction_aggregate") or {}
         if isinstance(cms_agg, Mapping) and cms_agg.get("enabled"):
-            for m_blk in cms_agg.get("methods") or []:
-                if _method_agg_has_metric_discrepancy(m_blk):
-                    return True
+            cms_methods = cms_agg.get("methods")
+            if isinstance(cms_methods, Mapping):
+                for m_blk in cms_methods.values():
+                    if _method_agg_has_metric_discrepancy(m_blk):
+                        return True
+            elif isinstance(cms_methods, Sequence):
+                for m_blk in cms_methods:
+                    if _method_agg_has_metric_discrepancy(m_blk):
+                        return True
         return False
 
     if not is_multi_stage:
@@ -3465,27 +3501,31 @@ def format_multi_seed_evaluation_report(
                 "[2B] Linguistic Category Breakdown Across Seeds (Content vs Function Words, Mean ± SD)",
                 wide_rule,
                 (
-                    f"{'Category':<24} | {'Queries':>7} | {'Unique':>6} | {'50w MacTop10':>13} | "
-                    f"{'50w MicTop10':>13} | {'50w MacTop1':>12} | {'50w MRR':>11} | "
-                    f"{'Full MacTop10':>13} | {'Full MicTop10':>13} | {'Full MacTop1':>12}"
+                    f"{'Category':<26} | {'Queries':>7} | {'Unique':>6} | {'50w MacTop10':>13} | "
+                    f"{'50w MicTop10':>13} | {'50w MacTop1':>12} | "
+                    f"{'Full MacTop10':>13} | {'Full MicTop10':>13} | {'Full MacTop1':>12} | {'50w Top10 p-val':>18}"
                 ),
                 wide_rule,
             ]
         )
-        for lk in ("content_words", "function_words"):
+        for lk in ("content_words", "function_words", "content_minus_function"):
             lb = ling_agg.get(lk)
             if not isinstance(lb, Mapping) or int(lb.get("query_count", 0)) == 0:
                 continue
-            lbl = str(lb.get("label", lk))[:24]
+            is_d_l = lk == "content_minus_function"
+            fmt_l = _fmt_signed_mean_sd_pct if is_d_l else _fmt_mean_sd_pct
+            lbl = str(lb.get("label", lk))[:26]
+            u_cnt = int(lb.get("unique_word_count", lb.get("unique_targets", 0)))
+            p_l_str = str(lb.get("p_str_vocab50_word_macro_top10", "-") if is_d_l else "-")[:18]
             lines.append(
-                f"{lbl:<24} | {int(lb.get('query_count', 0)):>7d} | {int(lb.get('unique_targets', 0)):>6d} | "
-                f"{_fmt_mean_sd_pct(lb.get('mean_vocab50_macro_top10'), lb.get('std_vocab50_macro_top10'), 13)} | "
-                f"{_fmt_mean_sd_pct(lb.get('mean_vocab50_micro_top10'), lb.get('std_vocab50_micro_top10'), 13)} | "
-                f"{_fmt_mean_sd_pct(lb.get('mean_vocab50_macro_top1'), lb.get('std_vocab50_macro_top1'), 12)} | "
-                f"{_fmt_mean_sd_pct(lb.get('mean_vocab50_mrr'), lb.get('std_vocab50_mrr'), 11)} | "
-                f"{_fmt_mean_sd_pct(lb.get('mean_full_vocab_macro_top10'), lb.get('std_full_vocab_macro_top10'), 13)} | "
-                f"{_fmt_mean_sd_pct(lb.get('mean_full_vocab_micro_top10'), lb.get('std_full_vocab_micro_top10'), 13)} | "
-                f"{_fmt_mean_sd_pct(lb.get('mean_full_vocab_macro_top1'), lb.get('std_full_vocab_macro_top1'), 12)}"
+                f"{lbl:<26} | {int(lb.get('query_count', 0)):>7d} | {u_cnt:>6d} | "
+                f"{fmt_l(lb.get('mean_vocab50_word_macro_top10', lb.get('mean_vocab50_macro_top10')), lb.get('std_vocab50_word_macro_top10', lb.get('std_vocab50_macro_top10')), 13)} | "
+                f"{fmt_l(lb.get('mean_vocab50_micro_top10'), lb.get('std_vocab50_micro_top10'), 13)} | "
+                f"{fmt_l(lb.get('mean_vocab50_word_macro_top1', lb.get('mean_vocab50_macro_top1')), lb.get('std_vocab50_word_macro_top1', lb.get('std_vocab50_macro_top1')), 12)} | "
+                f"{fmt_l(lb.get('mean_full_vocab_word_macro_top10', lb.get('mean_full_vocab_macro_top10')), lb.get('std_full_vocab_word_macro_top10', lb.get('std_full_vocab_macro_top10')), 13)} | "
+                f"{fmt_l(lb.get('mean_full_vocab_micro_top10'), lb.get('std_full_vocab_micro_top10'), 13)} | "
+                f"{fmt_l(lb.get('mean_full_vocab_word_macro_top1', lb.get('mean_full_vocab_macro_top1')), lb.get('std_full_vocab_word_macro_top1', lb.get('std_full_vocab_macro_top1')), 12)} | "
+                f"{p_l_str:>18}"
             )
         lines.append(wide_rule)
 
@@ -3499,7 +3539,7 @@ def format_multi_seed_evaluation_report(
                 (
                     f"{'Horizon / Delta':<24} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
                     f"{'50w MacTop1':>12} | {'50w MicTop1':>12} | {'50w MRR':>11} | "
-                    f"{'Full MacTop10':>13} | {'Full MicTop10':>13} | {'Full MacTop1':>12} | {'Full MRR':>11}"
+                    f"{'Full MacTop10':>13} | {'Full MicTop10':>13} | {'Full MacTop1':>12} | {'50w Top10 p':>14}"
                 ),
                 wide_rule,
             ]
@@ -3519,7 +3559,7 @@ def format_multi_seed_evaluation_report(
                 f"{_fmt_mean_sd_pct(hb.get('mean_common_full_vocab_macro_top10'), hb.get('std_common_full_vocab_macro_top10'), 13)} | "
                 f"{_fmt_mean_sd_pct(hb.get('mean_common_full_vocab_micro_top10'), hb.get('std_common_full_vocab_micro_top10'), 13)} | "
                 f"{_fmt_mean_sd_pct(hb.get('mean_common_full_vocab_macro_top1'), hb.get('std_common_full_vocab_macro_top1'), 12)} | "
-                f"{_fmt_mean_sd_pct(hb.get('mean_common_full_vocab_mrr'), hb.get('std_common_full_vocab_mrr'), 11)}"
+                f"{'-':>14}"
             )
         lines.append(wide_rule)
         for g_key, g_lbl in (
@@ -3530,6 +3570,7 @@ def format_multi_seed_evaluation_report(
             if g_key not in hz_agg:
                 continue
             gb = hz_agg[g_key]
+            p_g_str = str(gb.get("p_str_common_vocab50_macro_top10", "-") or "-")[:14]
             lines.append(
                 f"{g_lbl:<24} | "
                 f"{_fmt_signed_mean_sd_pct(gb.get('mean_common_vocab50_macro_top10'), gb.get('std_common_vocab50_macro_top10'), 13)} | "
@@ -3540,7 +3581,7 @@ def format_multi_seed_evaluation_report(
                 f"{_fmt_signed_mean_sd_pct(gb.get('mean_common_full_vocab_macro_top10'), gb.get('std_common_full_vocab_macro_top10'), 13)} | "
                 f"{_fmt_signed_mean_sd_pct(gb.get('mean_common_full_vocab_micro_top10'), gb.get('std_common_full_vocab_micro_top10'), 13)} | "
                 f"{_fmt_signed_mean_sd_pct(gb.get('mean_common_full_vocab_macro_top1'), gb.get('std_common_full_vocab_macro_top1'), 12)} | "
-                f"{_fmt_signed_mean_sd_pct(gb.get('mean_common_full_vocab_mrr'), gb.get('std_common_full_vocab_mrr'), 11)}"
+                f"{p_g_str:>14}"
             )
         lines.append(wide_rule)
 
@@ -3550,11 +3591,12 @@ def format_multi_seed_evaluation_report(
         lines.extend(
             [
                 "",
-                "[3B] Rolling Revision Event Top-10 Transitions Across Seeds (50-Word Bank, Mean ± SD)",
+                "[3B] Rolling Revision Hit/Miss Transitions Across Seeds (Mean ± SD & McNemar Test)",
                 wide_rule,
                 (
-                    f"{'Transition':<14} | {'Queries':>7} | {'Before Mic10':>13} | {'After Mic10':>13} | "
-                    f"{'Repairs (W->R)':>15} | {'Harms (R->W)':>14} | {'Net Gain':>13} | {'Repair/Harm':>12}"
+                    f"{'Transition':<10} | {'Metric Scope':<16} | {'Events':>6} | "
+                    f"{'Repairs (M->H)':>15} | {'Harms (H->M)':>14} | {'Net Gain':>13} | "
+                    f"{'Repair/Harm':>11} | {'McNemar p-value':>26}"
                 ),
                 wide_rule,
             ]
@@ -3564,15 +3606,24 @@ def format_multi_seed_evaluation_report(
             if not isinstance(tb, Mapping):
                 continue
             lbl = tk.replace("_to_", " -> ")
-            lines.append(
-                f"{lbl:<14} | {int(tb.get('query_count', 0)):>7d} | "
-                f"{_fmt_mean_sd_pct(tb.get('mean_before_micro_top10'), tb.get('std_before_micro_top10'), 13)} | "
-                f"{_fmt_mean_sd_pct(tb.get('mean_after_micro_top10'), tb.get('std_after_micro_top10'), 13)} | "
-                f"{_fmt_mean_sd_num(tb.get('mean_repairs_wrong_to_right'), tb.get('std_repairs_wrong_to_right'), 15, decimals=1)} | "
-                f"{_fmt_mean_sd_num(tb.get('mean_harms_right_to_wrong'), tb.get('std_harms_right_to_wrong'), 14, decimals=1)} | "
-                f"{_fmt_mean_sd_num(tb.get('mean_net_event_gain'), tb.get('std_net_event_gain'), 13, decimals=1, signed=True)} | "
-                f"{_fmt_mean_sd_num(tb.get('mean_repair_to_harm_ratio'), tb.get('std_repair_to_harm_ratio'), 12, decimals=2)}"
-            )
+            for scope_k, scope_lbl in (
+                ("vocab50_top10", "50-Word Top-10"),
+                ("vocab50_top1", "50-Word Top-1"),
+                ("full_vocab_top10", "Full-Vocab Top-10"),
+                ("full_vocab_top1", "Full-Vocab Top-1"),
+            ):
+                sb = tb.get(scope_k)
+                if not isinstance(sb, Mapping):
+                    continue
+                mc_s = str(sb.get("mcnemar_p_str", "-") or "-")[:26]
+                lines.append(
+                    f"{lbl:<10} | {scope_lbl:<16} | {int(sb.get('total_common_events', 0)):>6d} | "
+                    f"{_fmt_mean_sd_num(sb.get('mean_beneficial_repairs'), sb.get('std_beneficial_repairs'), 15, decimals=1)} | "
+                    f"{_fmt_mean_sd_num(sb.get('mean_harmful_overwrites'), sb.get('std_harmful_overwrites'), 14, decimals=1)} | "
+                    f"{_fmt_mean_sd_num(sb.get('mean_net_gain_events'), sb.get('std_net_gain_events'), 13, decimals=1, signed=True)} | "
+                    f"{_fmt_mean_sd_num(sb.get('mean_repair_to_harm_ratio'), sb.get('std_repair_to_harm_ratio'), 10, decimals=2)}x | "
+                    f"{mc_s:>26}"
+                )
         lines.append(wide_rule)
 
     # [4A] Negative Control Multi-Seed Summary (Active Method & Multi-Method × Multi-Metric Spotlight)
@@ -3615,6 +3666,12 @@ def format_multi_seed_evaluation_report(
             else _fmt_mean_sd_num(nc_agg.get("primary_metric_gap_mean"), nc_agg.get("primary_metric_gap_std"), 1, signed=True)
         ).strip()
 
+        prim_sum_d = nc_agg.get("primary_metric_summary") or {}
+        p_s_p = str(prim_sum_d.get("p_str_shifted_vs_chance") or "").strip()
+        p_g_p = str(prim_sum_d.get("p_str_gap") or "").strip()
+        p_s_disp = f"{p_s} (vs. chance: {p_s_p})" if p_s_p else p_s
+        p_g_disp = f"{p_g} ({p_g_p})" if p_g_p else p_g
+
         lines.extend(
             [
                 "",
@@ -3624,7 +3681,7 @@ def format_multi_seed_evaluation_report(
                 f"Selected Control Metrics (--control-metric): {', '.join(sel_metric_ids)}",
                 f"Active Control Method  (--control-method): [{act_method_key}] {act_method_lbl}",
                 f"Primary Control Metric (--control-metric): [{prim_metric_key}] {prim_metric_lbl}",
-                f"Primary Metric Spotlight                 : Clean (0s) = {p_c} | Shifted Mean = {p_s} | Net Gap (Clean-Shifted) = {p_g}",
+                f"Primary Metric Spotlight                 : Clean (0s) = {p_c} | Shifted Mean = {p_s_disp} | Net Gap (Clean-Shifted) = {p_g_disp}",
                 f"Available Control Methods                : {avail_str}",
                 wide_rule,
             ]
@@ -3635,8 +3692,8 @@ def format_multi_seed_evaluation_report(
                 [
                     "[4A-0] Multi-Method × Multi-Metric Negative Control Comparison (Mean ± SD Across Seeds):",
                     (
-                        f"{'Control Method':<28} | {'Control Metric':<26} | {'Clean (0s)':>16} | "
-                        f"{'Shifted Mean':>16} | {'Net Gap (Clean-Shft)':>20}"
+                        f"{'Control Method':<24} | {'Control Metric':<24} | {'Clean (0s)':>14} | "
+                        f"{'Shifted (vs Chance)':>28} | {'Net Gap (Clean-Shft)':>28}"
                     ),
                     wide_rule,
                 ]
@@ -3644,8 +3701,8 @@ def format_multi_seed_evaluation_report(
             for mm_r in mm_comp:
                 if not isinstance(mm_r, Mapping):
                     continue
-                m_id_s = str(mm_r.get("method_id", "-"))[:28]
-                mt_id_s = str(mm_r.get("metric_key") or mm_r.get("metric_id") or "-")[:26]
+                m_id_s = str(mm_r.get("method_id", "-"))[:24]
+                mt_id_s = str(mm_r.get("metric_key") or mm_r.get("metric_id") or "-")[:24]
                 m_is_pct = bool(mm_r.get("is_ratio", mm_r.get("is_percentage", True)))
                 c_m = mm_r.get("mean_clean", mm_r.get("clean_mean"))
                 c_sd = mm_r.get("std_clean", mm_r.get("clean_std"))
@@ -3654,21 +3711,27 @@ def format_multi_seed_evaluation_report(
                 g_m = mm_r.get("mean_gap", mm_r.get("gap_mean"))
                 g_sd = mm_r.get("std_gap", mm_r.get("gap_std"))
                 mc_s = (
-                    _fmt_mean_sd_pct(c_m, c_sd, 16)
+                    _fmt_mean_sd_pct(c_m, c_sd, 14)
                     if m_is_pct
-                    else _fmt_mean_sd_num(c_m, c_sd, 16)
+                    else _fmt_mean_sd_num(c_m, c_sd, 14)
                 )
                 ms_s = (
-                    _fmt_mean_sd_pct(s_m, s_sd, 16)
+                    _fmt_mean_sd_pct(s_m, s_sd, 1)
                     if m_is_pct
-                    else _fmt_mean_sd_num(s_m, s_sd, 16)
-                )
+                    else _fmt_mean_sd_num(s_m, s_sd, 1)
+                ).strip()
                 mg_s = (
-                    _fmt_signed_mean_sd_pct(g_m, g_sd, 20)
+                    _fmt_signed_mean_sd_pct(g_m, g_sd, 1)
                     if m_is_pct
-                    else _fmt_mean_sd_num(g_m, g_sd, 20, signed=True)
-                )
-                lines.append(f"{m_id_s:<28} | {mt_id_s:<26} | {mc_s} | {ms_s} | {mg_s}")
+                    else _fmt_mean_sd_num(g_m, g_sd, 1, signed=True)
+                ).strip()
+                ps_ch = str(mm_r.get("p_str_shifted_vs_chance") or "").strip()
+                pg_st = str(mm_r.get("p_str_gap") or "").strip()
+                if ps_ch:
+                    ms_s = f"{ms_s} ({ps_ch})"
+                if pg_st:
+                    mg_s = f"{mg_s} ({pg_st})"
+                lines.append(f"{m_id_s:<24} | {mt_id_s:<24} | {mc_s} | {ms_s:>28} | {mg_s:>28}")
             lines.append(wide_rule)
 
         prim_per_seed = list(nc_agg.get("primary_metric_per_seed") or [])
@@ -3724,72 +3787,70 @@ def format_multi_seed_evaluation_report(
                 if len(methods_to_render) > 1
                 else ""
             )
+            p_sh_50 = str(m_agg.get("p_str_shifted_vs_chance_vocab50_macro_top10", "-") or "-")[:16]
+            p_gp_50 = str(m_agg.get("p_str_gap_vocab50_macro_top10", "-") or "-")[:16]
             lines.extend(
                 [
                     f"{hdr_prefix}All 50-Word & Full-Vocabulary Retrieval Metrics Under Control Method [{m_id}]:",
                     (
                         f"{'Condition':<22} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
-                        f"{'50w SubjTop10':>13} | {'50w MacTop1':>12} | {'50w MicTop1':>12} | "
-                        f"{'50w MRR':>11} | {'Full MacTop10':>13} | {'Full MicTop10':>13} | {'Full MacTop1':>12}"
+                        f"{'50w MacTop1':>12} | {'50w MRR':>11} | {'Full MacTop10':>13} | "
+                        f"{'Full MicTop10':>13} | {'Full MacTop1':>12} | {'50w Top10 p':>16}"
                     ),
                     wide_rule,
                     (
                         f"{'Clean (0s)':<22} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_macro_top10'), m_agg.get('std_clean_vocab50_macro_top10'), 13)} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_micro_top10'), m_agg.get('std_clean_vocab50_micro_top10'), 13)} | "
-                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_subject_macro_top10'), m_agg.get('std_clean_vocab50_subject_macro_top10'), 13)} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_macro_top1'), m_agg.get('std_clean_vocab50_macro_top1'), 12)} | "
-                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_micro_top1'), m_agg.get('std_clean_vocab50_micro_top1'), 12)} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_vocab50_mrr'), m_agg.get('std_clean_vocab50_mrr'), 11)} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_full_vocab_macro_top10'), m_agg.get('std_clean_full_vocab_macro_top10'), 13)} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_full_vocab_micro_top10'), m_agg.get('std_clean_full_vocab_micro_top10'), 13)} | "
-                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_full_vocab_macro_top1'), m_agg.get('std_clean_full_vocab_macro_top1'), 12)}"
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_clean_full_vocab_macro_top1'), m_agg.get('std_clean_full_vocab_macro_top1'), 12)} | "
+                        f"{'-':>16}"
                     ),
                     (
                         f"{'Shifted Mean':<22} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_macro_top10'), m_agg.get('std_shifted_vocab50_macro_top10'), 13)} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_micro_top10'), m_agg.get('std_shifted_vocab50_micro_top10'), 13)} | "
-                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_subject_macro_top10'), m_agg.get('std_shifted_vocab50_subject_macro_top10'), 13)} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_macro_top1'), m_agg.get('std_shifted_vocab50_macro_top1'), 12)} | "
-                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_micro_top1'), m_agg.get('std_shifted_vocab50_micro_top1'), 12)} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_vocab50_mrr'), m_agg.get('std_shifted_vocab50_mrr'), 11)} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_full_vocab_macro_top10'), m_agg.get('std_shifted_full_vocab_macro_top10'), 13)} | "
                         f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_full_vocab_micro_top10'), m_agg.get('std_shifted_full_vocab_micro_top10'), 13)} | "
-                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_full_vocab_macro_top1'), m_agg.get('std_shifted_full_vocab_macro_top1'), 12)}"
+                        f"{_fmt_mean_sd_pct(m_agg.get('mean_shifted_full_vocab_macro_top1'), m_agg.get('std_shifted_full_vocab_macro_top1'), 12)} | "
+                        f"{p_sh_50:>16}"
                     ),
                     (
                         f"{'Net Gap (Clean-Shft)':<22} | "
                         f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_macro_top10'), m_agg.get('std_gap_vocab50_macro_top10'), 13)} | "
                         f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_micro_top10'), m_agg.get('std_gap_vocab50_micro_top10'), 13)} | "
-                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_subject_macro_top10'), m_agg.get('std_gap_vocab50_subject_macro_top10'), 13)} | "
                         f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_macro_top1'), m_agg.get('std_gap_vocab50_macro_top1'), 12)} | "
-                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_micro_top1'), m_agg.get('std_gap_vocab50_micro_top1'), 12)} | "
                         f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_vocab50_mrr'), m_agg.get('std_gap_vocab50_mrr'), 11)} | "
                         f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_full_vocab_macro_top10'), m_agg.get('std_gap_full_vocab_macro_top10'), 13)} | "
                         f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_full_vocab_micro_top10'), m_agg.get('std_gap_full_vocab_micro_top10'), 13)} | "
-                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_full_vocab_macro_top1'), m_agg.get('std_gap_full_vocab_macro_top1'), 12)}"
+                        f"{_fmt_signed_mean_sd_pct(m_agg.get('mean_gap_full_vocab_macro_top1'), m_agg.get('std_gap_full_vocab_macro_top1'), 12)} | "
+                        f"{p_gp_50:>16}"
                     ),
                     wide_rule,
                 ]
             )
 
             # Per-Shift Conditions under this Control Method
-            per_shifts = list(m_agg.get("per_shift_aggregate") or m_agg.get("shifted_per_condition") or [])
+            per_shifts = list(m_agg.get("per_shift_aggregate") or m_agg.get("shifted_per_condition") or m_agg.get("conditions_aggregate") or [])
             if per_shifts:
                 lines.append(f"Per-Shift Conditions Across Seeds Under [{m_id}] (Mean ± SD):")
                 for sh_row in per_shifts:
-                    sh_lbl = f"  {sh_row.get('condition', 'shift')} ({sh_row.get('shift_seconds', 0):.0f}s)"[:22]
+                    sh_lbl = f"  {sh_row.get('label', sh_row.get('condition', 'shift'))}"[:22]
                     lines.append(
                         f"{sh_lbl:<22} | "
                         f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_macro_top10'), sh_row.get('std_vocab50_macro_top10'), 13)} | "
                         f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_micro_top10'), sh_row.get('std_vocab50_micro_top10'), 13)} | "
-                        f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_subject_macro_top10'), sh_row.get('std_vocab50_subject_macro_top10'), 13)} | "
                         f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_macro_top1'), sh_row.get('std_vocab50_macro_top1'), 12)} | "
-                        f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_micro_top1'), sh_row.get('std_vocab50_micro_top1'), 12)} | "
                         f"{_fmt_mean_sd_pct(sh_row.get('mean_vocab50_mrr'), sh_row.get('std_vocab50_mrr'), 11)} | "
                         f"{_fmt_mean_sd_pct(sh_row.get('mean_full_vocab_macro_top10'), sh_row.get('std_full_vocab_macro_top10'), 13)} | "
                         f"{_fmt_mean_sd_pct(sh_row.get('mean_full_vocab_micro_top10'), sh_row.get('std_full_vocab_micro_top10'), 13)} | "
-                        f"{_fmt_mean_sd_pct(sh_row.get('mean_full_vocab_macro_top1'), sh_row.get('std_full_vocab_macro_top1'), 12)}"
+                        f"{_fmt_mean_sd_pct(sh_row.get('mean_full_vocab_macro_top1'), sh_row.get('std_full_vocab_macro_top1'), 12)} | "
+                        f"{'-':>16}"
                     )
                 lines.append(wide_rule)
 
@@ -3800,8 +3861,8 @@ def format_multi_seed_evaluation_report(
                     [
                         f"Rolling Revision Horizons Under [{m_id}] (K0 / K1 / K2 Clean vs Shifted vs Net Gap):",
                         (
-                            f"{'Horizon':<10} | {'Condition':<12} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
-                            f"{'50w MacTop1':>12} | {'50w MRR':>11} | {'Full MacTop10':>13} | {'Full MicTop10':>13} | {'Full MacTop1':>12}"
+                            f"{'Horizon':<12} | {'Condition':<14} | {'50w MacTop10':>13} | {'50w MicTop10':>13} | "
+                            f"{'50w MacTop1':>12} | {'50w MRR':>11} | {'Full MacTop10':>13} | {'Full MicTop10':>13} | {'50w Top10 p':>16}"
                         ),
                         wide_rule,
                     ]
@@ -3810,30 +3871,36 @@ def format_multi_seed_evaluation_report(
                     if hk not in nc_hz:
                         continue
                     h_entry = nc_hz[hk]
+                    if not isinstance(h_entry, Mapping):
+                        continue
                     is_delta_h = "minus" in hk
                     h_disp = hk.replace("_minus_", "-")
-                    for cond_k, cond_lbl in (
+                    for prefix_k, cond_lbl in (
                         ("clean", "Clean (0s)"),
-                        ("shifted_mean", "Shifted Mean"),
-                        ("net_gap", "Net Gap"),
+                        ("shifted", "Control Mean"),
+                        ("gap", "Net Gap"),
                     ):
-                        cb = h_entry.get(cond_k) or {}
-                        if not isinstance(cb, Mapping) or not cb:
-                            continue
                         fmt_fn = (
                             _fmt_signed_mean_sd_pct
-                            if (is_delta_h or cond_k == "net_gap")
+                            if (is_delta_h or prefix_k == "gap")
                             else _fmt_mean_sd_pct
                         )
+                        p_col = "-"
+                        if is_delta_h:
+                            p_col = str(h_entry.get(f"p_str_{prefix_k}_common_vocab50_macro_top10", "-") or "-")
+                        elif prefix_k == "shifted":
+                            p_col = str(h_entry.get("p_str_shifted_vs_chance_common_vocab50_macro_top10", "-") or "-")
+                        elif prefix_k == "gap":
+                            p_col = str(h_entry.get("p_str_gap_common_vocab50_macro_top10", "-") or "-")
                         lines.append(
-                            f"{h_disp:<10} | {cond_lbl:<12} | "
-                            f"{fmt_fn(cb.get('mean_common_vocab50_macro_top10'), cb.get('std_common_vocab50_macro_top10'), 13)} | "
-                            f"{fmt_fn(cb.get('mean_common_vocab50_micro_top10'), cb.get('std_common_vocab50_micro_top10'), 13)} | "
-                            f"{fmt_fn(cb.get('mean_common_vocab50_macro_top1'), cb.get('std_common_vocab50_macro_top1'), 12)} | "
-                            f"{fmt_fn(cb.get('mean_common_vocab50_mrr'), cb.get('std_common_vocab50_mrr'), 11)} | "
-                            f"{fmt_fn(cb.get('mean_common_full_vocab_macro_top10'), cb.get('std_common_full_vocab_macro_top10'), 13)} | "
-                            f"{fmt_fn(cb.get('mean_common_full_vocab_micro_top10'), cb.get('std_common_full_vocab_micro_top10'), 13)} | "
-                            f"{fmt_fn(cb.get('mean_common_full_vocab_macro_top1'), cb.get('std_common_full_vocab_macro_top1'), 12)}"
+                            f"{h_disp:<12} | {cond_lbl:<14} | "
+                            f"{fmt_fn(h_entry.get(f'mean_{prefix_k}_common_vocab50_macro_top10'), h_entry.get(f'std_{prefix_k}_common_vocab50_macro_top10'), 13)} | "
+                            f"{fmt_fn(h_entry.get(f'mean_{prefix_k}_common_vocab50_micro_top10'), h_entry.get(f'std_{prefix_k}_common_vocab50_micro_top10'), 13)} | "
+                            f"{fmt_fn(h_entry.get(f'mean_{prefix_k}_common_vocab50_macro_top1'), h_entry.get(f'std_{prefix_k}_common_vocab50_macro_top1'), 12)} | "
+                            f"{fmt_fn(h_entry.get(f'mean_{prefix_k}_common_vocab50_mrr'), h_entry.get(f'std_{prefix_k}_common_vocab50_mrr'), 11)} | "
+                            f"{fmt_fn(h_entry.get(f'mean_{prefix_k}_common_full_vocab_macro_top10'), h_entry.get(f'std_{prefix_k}_common_full_vocab_macro_top10'), 13)} | "
+                            f"{fmt_fn(h_entry.get(f'mean_{prefix_k}_common_full_vocab_micro_top10'), h_entry.get(f'std_{prefix_k}_common_full_vocab_micro_top10'), 13)} | "
+                            f"{p_col[:16]:>16}"
                         )
                 lines.append(wide_rule)
 
