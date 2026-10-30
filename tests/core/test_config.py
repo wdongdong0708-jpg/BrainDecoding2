@@ -357,7 +357,7 @@ def test_active_word_configs_have_only_canonical_inheritance_and_data_paths(monk
     base_configs = [path for path in configs if path.name == "base.yaml"]
     experiment_configs = [path for path in configs if path.name != "base.yaml"]
     assert len(base_configs) == 2
-    assert len(experiment_configs) == 8
+    assert len(experiment_configs) == 10
     for path in configs:
         raw = path.read_text(encoding="utf-8")
         assert "tasks/word_decoding/" not in raw

@@ -510,6 +510,14 @@ def test_decode_sentences_cli_pipeline_steps(tmp_path, monkeypatch) -> None:
             "clean_scores": clean_scores,
             "shifted_scores": clean_scores,
             "segments": segments,
+            "checkpoint_provenance": {
+                "revision_stage": "revision",
+                "context": "mock_context",
+                "revision": "mock_revision",
+            },
+            "cms_metadata": {
+                "subtraction_eta": 0.0,
+            },
         },
         val_pt,
     )
@@ -525,6 +533,14 @@ def test_decode_sentences_cli_pipeline_steps(tmp_path, monkeypatch) -> None:
             "clean_scores": clean_scores,
             "shifted_scores": clean_scores,
             "segments": segments,
+            "checkpoint_provenance": {
+                "revision_stage": "revision",
+                "context": "mock_context",
+                "revision": "mock_revision",
+            },
+            "cms_metadata": {
+                "subtraction_eta": 0.0,
+            },
         },
         test_pt,
     )
@@ -868,7 +884,7 @@ def test_vocabulary_frequency_order_and_scaling_sweep() -> None:
         "K0_shifted_neg75s",
         "S3_shifted_neg75s",
     }.issubset(set(scaling_bundles["V=2"]["conditions"].keys()))
-    assert "F" not in scaling_bundles["V=2"]["conditions"]
+    assert "F" in scaling_bundles["V=2"]["conditions"]
     assert "F_local" not in scaling_bundles["V=2"]["conditions"]
 
 

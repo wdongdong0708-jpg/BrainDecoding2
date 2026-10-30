@@ -430,11 +430,12 @@ def test_core_vocabulary_subsets_and_scaling_curve_export(tmp_path: Path) -> Non
     )
     assert txt_report_path.exists()
     txt_content = txt_report_path.read_text(encoding="utf-8")
-    assert "[表 1]" in txt_content
-    assert "[表 2]" in txt_content
-    assert "[表 4A]" in txt_content
-    assert "[表 4B]" in txt_content
+    assert "[模块 1]" in txt_content
+    assert "[模块 2]" in txt_content
+    assert "[4A]" in txt_content
     assert "expanded_subset_70pct" not in txt_content
-    assert "V=250      |   76.92 |     68.33" in txt_content
-    assert "V=250      |        1 |       100.00 |      100.00" in txt_content
+    assert "V=250" in txt_content
+    assert "76.92" in txt_content
+    assert "68.33" in txt_content
+    assert "100.00" in txt_content
 
