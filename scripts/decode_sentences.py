@@ -605,7 +605,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         vocab_sizes = tuple(
             int(x)
             for x in eval_cfg.get(
-                "vocabulary_scaling_sizes", [50, 100, 250, 500, 1000, 2020]
+                "vocabulary_scaling_sizes", [50, 100, 250, 2020]
             )
             if int(x) > 0
         )
@@ -1317,7 +1317,11 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             return _get_or_init_shared_scorer(list(split_payload["vocabulary"]))
 
         def _persist_decoding_bundle() -> None:
-            _backfill_intermediate_and_shifted_bundles(decoded_bundles)
+            backfilled_main = _backfill_intermediate_and_shifted_bundles(
+                decoded_bundles
+            )
+            decoded_bundles.clear()
+            decoded_bundles.update(backfilled_main)
             decoded_bundles.pop("F_local", None)
             if not has_real_context:
                 decoded_bundles.pop("F", None)
@@ -1358,8 +1362,8 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             )
             any_main_decoded = True
 
-        # 全部神经解码条件合并为单次同步批量束搜索：静态条件（S0/K0/K1/F/Shifted-K0）
-        # 逐句段 λ 合并为一个批次，流式条件（Rolling-K2 / Shifted-K2）合并为一个批次，
+        # 全部神经解码条件合并为单次同步批量束搜索：静态条件（S0/K0/K1/F/Shifted-K0/Shifted-K2）
+        # 逐句段 λ 合并为一个批次，流式条件（Rolling-K2）单独跟踪在线屏幕改写轨迹，
         # 同一句段的不同条件相邻排入同一批次以共享语言模型前缀 KV-Cache。
         main_jobs: dict[str, dict] = {}
         for baseline_mode in ("S0", "K0", "K1"):
@@ -1378,7 +1382,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             main_jobs["S3_shifted_neg75s"] = {
                 "condition": "S3",
                 "alignment": "shifted",
-                "include_screen_history": True,
+                "include_screen_history": "K0" not in available_shifted,
             }
         if main_jobs:
             decoded_bundles.update(

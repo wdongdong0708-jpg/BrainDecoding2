@@ -418,9 +418,23 @@ class CachedVocabularyLanguageScorer:
             ctx: tensor.to(self.device)
             for ctx, tensor in self.vocab_table.first_token_by_context.items()
         }
-        self.max_batch_size = int(self.settings.get("score_batch_size", 256))
+        default_score_bsz = 256
+        default_prefix_states = 2048
+        if self.device.type == "cuda" and torch.cuda.is_available():
+            try:
+                vram_bytes = int(
+                    torch.cuda.get_device_properties(self.device).total_memory
+                )
+                if vram_bytes >= 50 * (1024**3):
+                    default_score_bsz = 512
+                    default_prefix_states = 4096
+            except Exception:
+                pass
+        self.max_batch_size = int(
+            self.settings.get("score_batch_size", default_score_bsz)
+        )
         self.max_prefix_cache_states = int(
-            self.settings.get("max_prefix_cache_states", 1024)
+            self.settings.get("max_prefix_cache_states", default_prefix_states)
         )
         self.max_transition_cache_prefixes = int(
             self.settings.get("max_transition_cache_prefixes", 200000)

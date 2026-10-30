@@ -543,6 +543,7 @@ def evaluate_six_dimensional_metrics(
     language: str,
     word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
     condition: str | None = None,
+    compute_paired_stats: bool = True,
 ) -> dict[str, float | int | str]:
     """同步计算 S3 序列解码协议规定的 6 维核心评价指标：
 
@@ -563,7 +564,11 @@ def evaluate_six_dimensional_metrics(
     predictions = [
         [str(w) for w in rec["predicted_words"]] for rec in segment_records
     ]
-    block_ids = _assign_material_blocks(segment_records)
+    block_ids = (
+        _assign_material_blocks(segment_records)
+        if compute_paired_stats
+        else []
+    )
 
     total_words = 0
     total_correct = 0
@@ -691,12 +696,13 @@ def evaluate_six_dimensional_metrics(
                 seg_f_tot += 1
                 seg_f_hit += hit
 
-        b_key = block_ids[rec_idx]
-        b_stat = block_content_stats[b_key]
-        b_stat[0] += seg_c_hit
-        b_stat[1] += seg_c_tot
-        b_stat[2] += seg_f_hit
-        b_stat[3] += seg_f_tot
+        if compute_paired_stats:
+            b_key = block_ids[rec_idx]
+            b_stat = block_content_stats[b_key]
+            b_stat[0] += seg_c_hit
+            b_stat[1] += seg_c_tot
+            b_stat[2] += seg_f_hit
+            b_stat[3] += seg_f_tot
 
         subj = str(rec.get("subject_id", "default"))
         per_subject_rows[subj].append(
@@ -801,20 +807,23 @@ def evaluate_six_dimensional_metrics(
         else 0.0
     )
 
-    cf_diffs: list[float] = []
-    cf_weights: list[float] = []
-    for c_hit, c_tot, f_hit, f_tot in block_content_stats.values():
-        if c_tot > 0 and f_tot > 0:
-            cf_diffs.append((c_hit / c_tot - f_hit / f_tot) * 100.0)
-            cf_weights.append(float(c_tot + f_tot))
-    cf_stat = _paired_block_permutation_and_bootstrap(
-        np.asarray(cf_diffs, dtype=np.float64),
-        np.asarray(cf_weights, dtype=np.float64),
-        n_resamples=10000,
-        seed=20261077,
-    )
     cf_delta_pp = float(content_acc_pct - function_acc_pct)
-    cf_p_two = float(cf_stat["p_two_sided"])
+    if compute_paired_stats:
+        cf_diffs: list[float] = []
+        cf_weights: list[float] = []
+        for c_hit, c_tot, f_hit, f_tot in block_content_stats.values():
+            if c_tot > 0 and f_tot > 0:
+                cf_diffs.append((c_hit / c_tot - f_hit / f_tot) * 100.0)
+                cf_weights.append(float(c_tot + f_tot))
+        cf_stat = _paired_block_permutation_and_bootstrap(
+            np.asarray(cf_diffs, dtype=np.float64),
+            np.asarray(cf_weights, dtype=np.float64),
+            n_resamples=10000,
+            seed=20261077,
+        )
+        cf_p_two = float(cf_stat["p_two_sided"])
+    else:
+        cf_p_two = 1.0
     mean_wait_s = compute_mean_wait_seconds(segment_records, condition=condition)
 
     res_dict: dict[str, float | int | str] = {
@@ -863,6 +872,8 @@ def evaluate_six_dimensional_metrics(
 def apply_confidence_gate_to_segment(
     segment_history_record: dict,
     tau_gate: float = 0.0,
+    *,
+    precomputed_top5: Sequence[list[str]] | None = None,
 ) -> dict:
     """对单个句段的流式轨迹应用置信度裕度门控 τ_{gate}：
 
@@ -876,7 +887,12 @@ def apply_confidence_gate_to_segment(
 
     final_gated_words: list[str] = []
     initial_k0_words: list[str] = []
-    top5_words_per_pos: list[list[str]] = []
+    top5_words_per_pos: list[list[str]] = (
+        list(precomputed_top5)
+        if precomputed_top5 is not None and len(precomputed_top5) == seg_len
+        else []
+    )
+    need_top5 = not top5_words_per_pos
 
     rewrite_opportunities = 0
     triggered_rewrites = 0
@@ -938,22 +954,24 @@ def apply_confidence_gate_to_segment(
             net_position_changes += 1
         final_gated_words.append(current_word)
 
-        cand_map = (
-            traj.get("k2_candidate_scores")
-            or traj.get("k1_candidate_scores")
-            or traj.get("k0_candidate_scores")
-            or {}
-        )
-        if cand_map:
-            ranked_w = [
-                str(w)
-                for w, _ in sorted(
-                    cand_map.items(), key=lambda kv: (-float(kv[1]), str(kv[0]))
-                )[:5]
-            ]
-        else:
-            ranked_w = [current_word]
-        top5_words_per_pos.append(ranked_w)
+        if need_top5:
+            cand_map = (
+                traj.get("k2_candidate_scores")
+                or traj.get("k1_candidate_scores")
+                or traj.get("k0_candidate_scores")
+                or {}
+            )
+            if cand_map:
+                ranked_w = [
+                    str(w)
+                    for w, _ in sorted(
+                        cand_map.items(),
+                        key=lambda kv: (-float(kv[1]), str(kv[0])),
+                    )[:5]
+                ]
+            else:
+                ranked_w = [current_word]
+            top5_words_per_pos.append(ranked_w)
 
     eligible_positions = max(0, seg_len - 1)
     return {
@@ -992,17 +1010,36 @@ def sweep_confidence_gate_pareto(
     curve_points: list[dict] = []
     baseline_invalid_flickers: int | None = None
     baseline_rewrites: int | None = None
+    cached_top5_by_seg: list[list[list[str]] | None] = [
+        None for _ in screen_histories
+    ]
+    records_by_tau: list[list[dict]] = []
 
-    for tau in taus:
-        gated_records = [
-            apply_confidence_gate_to_segment(rec, tau_gate=tau)
-            for rec in screen_histories
-        ]
+    for tau_idx, tau in enumerate(taus):
+        gated_records: list[dict] = []
+        for seg_i, rec in enumerate(screen_histories):
+            gated_rec = apply_confidence_gate_to_segment(
+                rec,
+                tau_gate=tau,
+                precomputed_top5=cached_top5_by_seg[seg_i],
+            )
+            if tau_idx == 0 and all(
+                (
+                    t.get("k2_candidate_scores")
+                    or t.get("k1_candidate_scores")
+                    or t.get("k0_candidate_scores")
+                )
+                for t in rec.get("position_trajectories", ())
+            ):
+                cached_top5_by_seg[seg_i] = gated_rec["top5_words_per_pos"]
+            gated_records.append(gated_rec)
+        records_by_tau.append(gated_records)
         metrics_6d = evaluate_six_dimensional_metrics(
             gated_records,
             language=language,
             word_embedding_map=word_embedding_map,
             condition="S3_clean",
+            compute_paired_stats=(tau_idx == 0),
         )
 
         tot_opps = sum(r["rewrite_opportunities"] for r in gated_records)
@@ -1064,18 +1101,33 @@ def sweep_confidence_gate_pareto(
         0.5 * unconstrained_pt["bleu1_pct"]
         + 0.5 * unconstrained_pt["word_acc_pct"]
     )
-    best_point = max(
-        curve_points,
-        key=lambda pt: (
+    best_idx = max(
+        range(len(curve_points)),
+        key=lambda idx: (
             round(
-                0.5 * pt["bleu1_pct"]
-                + 0.5 * pt["word_acc_pct"]
-                - 0.12 * pt["invalid_flicker_rate_pct"],
+                0.5 * curve_points[idx]["bleu1_pct"]
+                + 0.5 * curve_points[idx]["word_acc_pct"]
+                - 0.12 * curve_points[idx]["invalid_flicker_rate_pct"],
                 6,
             ),
-            -pt["screen_rewrite_rate_pct"],
+            -curve_points[idx]["screen_rewrite_rate_pct"],
         ),
     )
+    best_point = curve_points[best_idx]
+    if best_idx != 0:
+        best_stats = evaluate_six_dimensional_metrics(
+            records_by_tau[best_idx],
+            language=language,
+            word_embedding_map=word_embedding_map,
+            condition="S3_clean",
+            compute_paired_stats=True,
+        )
+        best_point["content_vs_function_p_value"] = best_stats[
+            "content_vs_function_p_value"
+        ]
+        best_point["content_vs_function_significance"] = best_stats[
+            "content_vs_function_significance"
+        ]
 
     return {
         "tau_grid": taus,

@@ -2103,8 +2103,136 @@ def decode_dataset_segments(
     )
 
     try:
-        # LM-Only 与受试者及脑信号无关，相同句长 L 仅需解码一次即可复用
-        length_cache: dict[int, dict] = {}
+        # LM-Only 与受试者及脑信号无关，单次推进至最大句长 max_len 即可一次生成全部句长 L 的精确解码结果
+        length_cache: dict[int, dict] = {
+            0: {
+                "final_words": [],
+                "beam_candidates": [],
+                "top5_words_per_pos": [],
+                "score": 0.0,
+                "elapsed_seconds": 0.0,
+            }
+        }
+        needed_lengths = {
+            len(seg["event_indices"])
+            for seg in segments
+            if len(seg["event_indices"]) > 0
+        }
+        if needed_lengths and len(vocabulary) > 0:
+            max_lm_len = max(needed_lengths)
+            vocab_tuple = tuple(str(w) for w in vocabulary)
+            vocab_size = len(vocab_tuple)
+            uniform_lp = -float(np.log(vocab_size))
+            lam = 1.0 if lm_weight <= 0 else float(lm_weight)
+            b_width = max(1, int(beam_width))
+            k_top = min(max(1, int(eff_top_k)), vocab_size)
+            lm_started = time.perf_counter()
+            prompt_state = scorer.init_prompt_state()
+            beams: list[BeamHypothesis] = [
+                BeamHypothesis(
+                    words=(),
+                    word_indices=(),
+                    cache_state=prompt_state,
+                    score=0.0,
+                    neural_score_sum=0.0,
+                    lm_score_sum=0.0,
+                )
+            ]
+            top5_words_per_pos: list[list[str]] = []
+            for pos in range(max_lm_len):
+                beam_states = [b.cache_state for b in beams]
+                cand_lists = [
+                    scorer.propose_top_k_from_language_model(
+                        b.cache_state, top_k=k_top
+                    ).tolist()
+                    for b in beams
+                ]
+                lm_scores_per_beam = scorer.score_candidates_with_cache(
+                    beam_states, cand_lists
+                )
+                if cand_lists and lm_scores_per_beam:
+                    top1_step_pairs = [
+                        (
+                            uniform_lp + lam * float(lm_val),
+                            vocab_tuple[w_id],
+                        )
+                        for w_id, lm_val in zip(
+                            cand_lists[0], lm_scores_per_beam[0]
+                        )
+                    ]
+                    top1_step_pairs.sort(key=lambda kv: (-kv[0], kv[1]))
+                    top5_words_per_pos.append(
+                        [w for _, w in top1_step_pairs[:5]]
+                    )
+                else:
+                    top5_words_per_pos.append([])
+
+                expanded: list[
+                    tuple[
+                        float,
+                        float,
+                        float,
+                        int,
+                        int,
+                        tuple[str, ...],
+                        tuple[int, ...],
+                    ]
+                ] = []
+                for b_idx, (beam, cands, lm_row) in enumerate(
+                    zip(beams, cand_lists, lm_scores_per_beam)
+                ):
+                    for c_pos, w_id in enumerate(cands):
+                        lm_lp = float(lm_row[c_pos])
+                        step_score = uniform_lp + lam * lm_lp
+                        new_total = beam.score + step_score
+                        w_str = vocab_tuple[w_id]
+                        expanded.append(
+                            (
+                                new_total,
+                                beam.neural_score_sum + uniform_lp,
+                                beam.lm_score_sum + lm_lp,
+                                b_idx,
+                                int(w_id),
+                                beam.words + (w_str,),
+                                beam.word_indices + (int(w_id),),
+                            )
+                        )
+                expanded.sort(key=lambda item: (-item[0], item[5]))
+                selected = expanded[:b_width]
+                cur_len = pos + 1
+                if cur_len in needed_lengths:
+                    winner_item = selected[0]
+                    length_cache[cur_len] = {
+                        "final_words": list(winner_item[5]),
+                        "beam_candidates": [list(item[5]) for item in selected],
+                        "top5_words_per_pos": [
+                            list(row) for row in top5_words_per_pos
+                        ],
+                        "score": float(winner_item[0]),
+                        "neural_score_sum": float(winner_item[1]),
+                        "lm_score_sum": float(winner_item[2]),
+                        "elapsed_seconds": round(
+                            time.perf_counter() - lm_started, 4
+                        ),
+                    }
+                if pos < max_lm_len - 1:
+                    adv_reqs = [
+                        (beams[item[3]].cache_state, item[4])
+                        for item in selected
+                    ]
+                    adv_caches = scorer.advance_prefix_states(adv_reqs)
+                    beams = [
+                        BeamHypothesis(
+                            words=item[5],
+                            word_indices=item[6],
+                            cache_state=adv_cache,
+                            score=item[0],
+                            neural_score_sum=item[1],
+                            lm_score_sum=item[2],
+                        )
+                        for item, adv_cache in zip(selected, adv_caches)
+                    ]
+
         for idx, seg in enumerate(segments):
             seg_len = len(seg["event_indices"])
             if seg_len not in length_cache:
@@ -2545,8 +2673,6 @@ DEFAULT_VOCABULARY_SCALING_SIZES: tuple[int, ...] = (
     50,
     100,
     250,
-    500,
-    1000,
     2020,
 )
 
