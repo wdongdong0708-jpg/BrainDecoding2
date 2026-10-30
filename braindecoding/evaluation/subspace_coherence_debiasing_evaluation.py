@@ -1786,20 +1786,54 @@ def run_standalone_subspace_evaluation(
         workflow_output_directory,
     )
 
-    cfg, subset_spec = build_workflow_config(
-        dataset,
-        stage=stage,
-        seed=seed,
-        subject=subject,
-        num_subjects=num_subjects,
-        subjects=subjects,
-        window_seconds=window_seconds,
-        window_start_offset_seconds=window_start_offset_seconds,
-        mode="train",
-        exp_tag=exp_tag,
-        word_exp_tag=word_exp_tag,
-        config_path=config_path,
-    )
+    stage_str = str(stage or "").strip().lower()
+    if stage_str in {"", "auto", "none", "default"}:
+        effective_stage = None if (config_path is not None and str(config_path).strip()) else "revision"
+    else:
+        effective_stage = stage
+
+    try:
+        cfg, subset_spec = build_workflow_config(
+            dataset,
+            stage=effective_stage,
+            seed=seed,
+            subject=subject,
+            num_subjects=num_subjects,
+            subjects=subjects,
+            window_seconds=window_seconds,
+            window_start_offset_seconds=window_start_offset_seconds,
+            mode="train",
+            exp_tag=exp_tag,
+            word_exp_tag=word_exp_tag,
+            config_path=config_path,
+        )
+    except ValueError as exc:
+        if (
+            config_path is not None
+            and str(config_path).strip()
+            and effective_stage is not None
+            and "与配置文件中的 stage=" in str(exc)
+        ):
+            print(
+                f" [Stage Auto-Align] 检测到 --config ({config_path}) 与 --stage={effective_stage!r} 阶段不一致，自动以配置文件阶段为准。",
+                flush=True,
+            )
+            cfg, subset_spec = build_workflow_config(
+                dataset,
+                stage=None,
+                seed=seed,
+                subject=subject,
+                num_subjects=num_subjects,
+                subjects=subjects,
+                window_seconds=window_seconds,
+                window_start_offset_seconds=window_start_offset_seconds,
+                mode="train",
+                exp_tag=exp_tag,
+                word_exp_tag=word_exp_tag,
+                config_path=config_path,
+            )
+        else:
+            raise
     dataset = subset_spec["dataset"]
     stage = cfg["workflow"]["stage"]
     resolved_exp_tag = cfg["workflow"].get("exp_tag", "")
@@ -1840,13 +1874,61 @@ def run_standalone_subspace_evaluation(
         else sub_cfg.get("rank_k_values", DEFAULT_SUBSPACE_RANKS)
     )
 
-    # 定位检查点
+    # 定位检查点（当 stage == 'word' 时自动兼容 WORD_EXP_TAG 与无标签根目录回退）
+    searched_ckpt_paths: list[Path] = [out / "best.ckpt"]
     ckpt_file = out / "best.ckpt"
     if not ckpt_file.is_file():
         ckpt_file = out / "best.pt"
     if not ckpt_file.is_file():
+        smoke_dir = workflow_output_directory(
+            dataset,
+            stage,
+            subset_spec["subset_tag"],
+            seed,
+            mode="smoke",
+            exp_tag=resolved_exp_tag,
+        )
+        smoke_ckpt = smoke_dir / "best.ckpt"
+        if not smoke_ckpt.is_file():
+            smoke_ckpt = smoke_dir / "best.pt"
+        if smoke_ckpt.is_file():
+            ckpt_file = smoke_ckpt
+            out = smoke_dir
+    if not ckpt_file.is_file() and stage == "word":
+        fallback_tags: list[tuple[str, bool]] = []
+        if resolved_word_exp_tag != resolved_exp_tag:
+            fallback_tags.append(
+                (resolved_word_exp_tag, resolved_word_exp_tag == "")
+            )
+        if resolved_exp_tag and ("", True) not in fallback_tags:
+            fallback_tags.append(("", True))
+        for cand_tag, cand_ignore_imp in fallback_tags:
+            for cand_mode in ("train", "smoke"):
+                cand_dir = workflow_output_directory(
+                    dataset,
+                    stage,
+                    subset_spec["subset_tag"],
+                    seed,
+                    mode=cand_mode,
+                    exp_tag=cand_tag,
+                    ignore_implicit_tag=cand_ignore_imp,
+                )
+                if cand_mode == "train" and (cand_dir / "best.ckpt") not in searched_ckpt_paths:
+                    searched_ckpt_paths.append(cand_dir / "best.ckpt")
+                cand_ckpt = cand_dir / "best.ckpt"
+                if not cand_ckpt.is_file():
+                    cand_ckpt = cand_dir / "best.pt"
+                if cand_ckpt.is_file():
+                    ckpt_file = cand_ckpt
+                    resolved_exp_tag = cand_tag
+                    out = cand_dir
+                    break
+            if ckpt_file.is_file():
+                break
+    if not ckpt_file.is_file():
+        searched_str = " 或 ".join(str(p) for p in searched_ckpt_paths)
         raise FileNotFoundError(
-            f"未找到阶段 {stage} ({STAGE_DISPLAY_NAMES.get(stage, stage)}) 的训练检查点：{out / 'best.ckpt'}。"
+            f"未找到阶段 {stage} ({STAGE_DISPLAY_NAMES.get(stage, stage)}) 的训练检查点：{searched_str}。"
         )
     ckpt_sha = file_sha256(ckpt_file)
 
@@ -2157,7 +2239,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         r"^-\d+(?:\.\d+)?(?:,\s*[+-]?\d+(?:\.\d+)?)*$"
     )
     parser.add_argument("--dataset", default=None, help="数据集名称: pallier2025 或 chineseeeg2_littleprince")
-    parser.add_argument("--stage", default="revision", help="评估阶段: revision (默认) / prefix_revision / context / word / all")
+    parser.add_argument(
+        "--stage",
+        default="auto",
+        help="评估阶段: auto (默认，自动从 --config 推断，无 --config 时默认 revision) / prefix_revision / revision / context / word / all",
+    )
     parser.add_argument("--config", default=None, help="可选训练阶段 YAML 配置文件路径")
     parser.add_argument(
         "--control-config",
@@ -2235,9 +2321,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    stage_raw = str(args.stage or "revision").strip().lower()
+    stage_raw = str(args.stage or "auto").strip().lower()
     if stage_raw == "all":
         stages = ["context", "revision"]
+    elif stage_raw in {"", "auto", "none", "default"}:
+        stages = ["auto"] if (args.config is not None and str(args.config).strip()) else ["revision"]
     else:
         stages = [s.strip() for s in stage_raw.split(",") if s.strip()]
 

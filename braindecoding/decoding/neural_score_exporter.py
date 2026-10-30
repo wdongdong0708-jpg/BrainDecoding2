@@ -744,20 +744,25 @@ def export_neural_vocabulary_scores(
         explicit_checkpoint=revision_checkpoint,
     )
     if rev_ckpt is None and rev_stage_mode == "auto":
+        alt_rev_stage = (
+            "revision"
+            if resolved_rev_stage == "prefix_revision"
+            else "prefix_revision"
+        )
         alt_ckpt = _locate_stage_checkpoint(
             dataset,
-            "prefix_revision",
+            alt_rev_stage,
             subset_tag,
             seed,
             exp_tag=rev_tag,
             explicit_checkpoint=None,
         )
         if alt_ckpt is not None:
-            resolved_rev_stage = "prefix_revision"
+            resolved_rev_stage = alt_rev_stage
             rev_ckpt = alt_ckpt
             rev_cfg, _ = build_workflow_config(
                 dataset,
-                stage="prefix_revision",
+                stage=alt_rev_stage,
                 seed=seed,
                 subject=subject,
                 num_subjects=num_subjects,
@@ -926,6 +931,7 @@ def export_neural_vocabulary_scores(
         checkpoint_provenance = {
             "word": word_res["checkpoint_path"],
             "revision": "fallback_from_word_S0",
+            "revision_stage": resolved_rev_stage,
         }
 
     if ctx_ckpt is not None:

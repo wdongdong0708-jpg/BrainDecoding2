@@ -2521,6 +2521,7 @@ def _evaluate_single_stage(
         if output_dir is None:
             out = ckpt_file.parent
     else:
+        searched_ckpt_paths: list[Path] = [out / "best.ckpt"]
         ckpt_file = out / "best.ckpt"
         if not ckpt_file.is_file():
             ckpt_file = out / "best.pt"
@@ -2559,6 +2560,8 @@ def _evaluate_single_stage(
                         exp_tag=cand_tag,
                         ignore_implicit_tag=cand_ignore_imp,
                     )
+                    if cand_mode == "train" and (cand_dir / "best.ckpt") not in searched_ckpt_paths:
+                        searched_ckpt_paths.append(cand_dir / "best.ckpt")
                     cand_ckpt = cand_dir / "best.ckpt"
                     if not cand_ckpt.is_file():
                         cand_ckpt = cand_dir / "best.pt"
@@ -2571,9 +2574,10 @@ def _evaluate_single_stage(
                 if ckpt_file.is_file():
                     break
         if not ckpt_file.is_file():
+            searched_str = " 或 ".join(str(p) for p in searched_ckpt_paths)
             raise FileNotFoundError(
-                f"未找到阶段 {stage} ({STAGE_DISPLAY_NAMES.get(stage, stage)}) 的训练检查点：{out / 'best.ckpt'}。"
-                f"请先完成该阶段的训练，或通过 --checkpoint 显式指定检查点路径。"
+                f"未找到阶段 {stage} ({STAGE_DISPLAY_NAMES.get(stage, stage)}) 的训练检查点：{searched_str}。"
+                f"请先完成该阶段的训练，或检查 EXP_TAG / WORD_EXP_TAG，或通过 --checkpoint 显式指定检查点路径。"
             )
 
     if require_cache:
@@ -4581,6 +4585,7 @@ def _select_control_methods_list(
     tokens = _parse_control_methods_list(control_method)
     selected_list: list[dict] = []
     seen_ids: set[str] = set()
+    last_err: ValueError | None = None
     for tok in tokens:
         low_tok = tok.strip().lower()
         if low_tok in ("all", "all_methods", "*"):
@@ -4592,14 +4597,32 @@ def _select_control_methods_list(
                     seen_ids.add(m_id)
                     selected_list.append(dict(m_val))
         else:
-            chosen = _select_active_control_method(
-                methods_map, control_method=tok, metric_spec=metric_spec
-            )
+            try:
+                chosen = _select_active_control_method(
+                    methods_map, control_method=tok, metric_spec=metric_spec
+                )
+            except ValueError as err:
+                last_err = err
+                continue
             if chosen.get("enabled"):
                 m_id = str(chosen.get("method_id", tok))
                 if m_id not in seen_ids:
                     seen_ids.add(m_id)
                     selected_list.append(dict(chosen))
+    if not selected_list:
+        has_debiased = any(
+            k.startswith("cms:") or k.startswith("subspace:")
+            for k in methods_map
+        )
+        if not has_debiased:
+            fallback_chosen = _select_active_control_method(
+                methods_map, control_method="auto", metric_spec=metric_spec
+            )
+            if fallback_chosen.get("enabled"):
+                selected_list.append(dict(fallback_chosen))
+                return selected_list
+        if last_err is not None:
+            raise last_err
     return selected_list
 
 

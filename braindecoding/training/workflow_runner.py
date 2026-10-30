@@ -165,10 +165,12 @@ def normalize_workflow_stage(stage: str | None) -> str:
     if stage is None:
         return "word"
     token = str(stage).strip().lower()
+    if not token or token in {"auto", "none", "default"}:
+        return "word"
     if token in _STAGE_ALIASES:
         return _STAGE_ALIASES[token]
     raise ValueError(
-        f"不支持的训练阶段 {stage!r}，可选：{WORKFLOW_STAGES}（或别名 1 / 2.1 / 2.2）"
+        f"不支持的训练阶段 {stage!r}，可选：{WORKFLOW_STAGES}（或别名 1 / 2.1 / 2.2 / 2.3）"
     )
 
 
@@ -438,8 +440,11 @@ def _infer_dataset_and_stage_from_yaml(
                     else "revision"
                 )
 
+    stage_token = str(stage).strip().lower() if stage is not None else ""
     norm_explicit_stage = (
-        normalize_workflow_stage(stage) if stage is not None else None
+        normalize_workflow_stage(stage)
+        if stage is not None and stage_token not in {"", "auto", "none", "default"}
+        else None
     )
     if dataset is not None and yaml_dataset and dataset != yaml_dataset:
         raise ValueError(

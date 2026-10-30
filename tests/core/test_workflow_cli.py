@@ -1097,9 +1097,9 @@ def test_leave_one_out_common_mode_subtraction_evaluation(tmp_path):
         assert hz_col in cms_hz_df.columns, f"Missing column in CMS horizons CSV: {hz_col}"
 
     cms_md_text = cms_md_path.read_text(encoding="utf-8")
-    assert "Full Clean Macro Top-1" in cms_md_text
-    assert "K0 Full Clean Top-1" in cms_md_text
-    assert "K2 Full Clean Top-1" in cms_md_text
+    assert "Full-Vocab Clean Word-Macro Top-1" in cms_md_text
+    assert "K0 Full-Vocab Clean Top-1" in cms_md_text
+    assert "K2 Full-Vocab Clean Top-1" in cms_md_text
 
 
 def test_siamese_common_mode_rejection_and_shift_null_training(tmp_path):
@@ -1873,9 +1873,9 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
     assert "clean_full_vocab_word_macro_top10_pct" not in sub_hz_df.columns
 
     sub_md_text = (tmp_path / "exploratory" / "subspace_coherence_debiasing_test.md").read_text(encoding="utf-8")
-    assert "Full Clean Macro Top-1" in sub_md_text
-    assert "K0 Full Clean Top-1" in sub_md_text
-    assert "K2 Full Clean Top-1" in sub_md_text
+    assert "Full-Vocab Clean Word-Macro Top-1" in sub_md_text
+    assert "K0 Full-Vocab Clean Top-1" in sub_md_text
+    assert "K2 Full-Vocab Clean Top-1" in sub_md_text
 
     # 4. Verify save_subspace_encoded_cache and direct .pt cache evaluation via evaluate_cached_pt_subspace_loo
     from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
@@ -1928,7 +1928,7 @@ def test_subspace_coherence_loo_debiasing_and_sweep(tmp_path, capsys):
         zero_signal_control=False,
     )
     assert subspace_ctrl_spec["subspace_coherence_debiasing"]["enabled"] is True
-    assert subspace_ctrl_spec["subspace_coherence_debiasing"]["rank_k_values"] == [8, 12, 16, 24]
+    assert subspace_ctrl_spec["subspace_coherence_debiasing"]["rank_k_values"] == [8, 12]
 
     nb_path = PROJECT_ROOT / "scripts/colab/colab_gpu_evaluation.ipynb"
     old_nb_path = PROJECT_ROOT / "scripts/colab/colab_subspace_coherence_debiasing.ipynb"
@@ -2142,7 +2142,7 @@ def test_decoupled_evaluation_reporting_replotting_and_cli_report(
     }
     compact_s3 = format_sequence_decoding_report(s3_payload, verbose=False)
     assert max(len(line) for line in compact_s3.splitlines()) <= REPORT_WIDTH
-    assert "Clean Revision Gain (S3 - K0)" in compact_s3
+    assert "Rolling-K2 vs Rolling-K0" in compact_s3
 
     # 5. CLI `brain-decoding report --input <json> --replot`
     rc = cli.main(["report", "--input", str(eval_json), "--replot"])
@@ -2734,7 +2734,7 @@ def test_stage23_prefix_revision_configs_cli_and_static_tables():
     assert eval_tbl[2]["win_global_idx"].shape == (6, 4)
 
 
-def test_multi_seed_evaluation_full_reports_markdown_and_control_selection(tmp_path):
+def test_multi_seed_evaluation_full_reports_markdown_and_control_selection(tmp_path, monkeypatch):
     import csv
     import json
     from braindecoding.evaluation.evaluation_reporting import (
@@ -3215,7 +3215,7 @@ def test_multi_seed_evaluation_full_reports_markdown_and_control_selection(tmp_p
         "[2A] Multi-Scale Vocabulary Sweep Across Seeds",
         "[2B] Linguistic Category Breakdown Across Seeds",
         "[3A] Rolling Revision Horizons Across Seeds",
-        "[3B] Rolling Revision Event Top-10 Transitions Across Seeds",
+        "[3B] Rolling Revision Hit/Miss Transitions Across Seeds",
         "[4A] Negative Control Multi-Seed Summary",
         "Active Control Method  (--control-method): [subspace:K=8,eta=0.8,gate=off]",
         "Primary Control Metric (--control-metric): [vocab50_macro_top10]",
@@ -3251,6 +3251,82 @@ def test_multi_seed_evaluation_full_reports_markdown_and_control_selection(tmp_p
     )
     assert "Active Control Method  (--control-method): [cms:eta=0.8]" in rendered_override
     assert "Primary Control Metric (--control-metric): [full_vocab_macro_top1]" in rendered_override
+
+    # 6. Verify multi-method CONTROL_METHOD graceful fallback when only 'raw' exists (e.g., Stage 1 temporal_shift evaluation)
+    from braindecoding.evaluation.word_retrieval_evaluation import _select_control_methods_list
+    from braindecoding.training.workflow_runner import (
+        _infer_dataset_and_stage_from_yaml,
+        normalize_workflow_stage,
+    )
+    from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+        build_arg_parser as build_subspace_parser,
+        run_standalone_subspace_evaluation,
+    )
+
+    assert normalize_workflow_stage("auto") == "word"
+    assert normalize_workflow_stage("default") == "word"
+    ds_inf, st_inf = _infer_dataset_and_stage_from_yaml(
+        {"workflow": {"dataset": "pallier2025", "stage": "word"}},
+        dataset=None,
+        stage="auto",
+    )
+    assert ds_inf == "pallier2025"
+    assert st_inf == "word"
+
+    raw_only_map = {
+        "raw": {
+            "enabled": True,
+            "method_id": "raw",
+            "label": "Raw (No Subtraction)",
+            "mean_clean_vocab50_macro_top10": 0.42,
+            "mean_shifted_vocab50_macro_top10": 0.36,
+            "mean_gap_vocab50_macro_top10": 0.06,
+        },
+    }
+    dummy_metric_spec = {
+        "requested_key": "vocab50_macro_top10",
+        "key": "vocab50_macro_top10",
+        "horizon_key": "common_vocab50_macro_top10",
+        "horizon": None,
+        "label": "50-Word Word-Macro Top-10",
+        "short_label": "50w MacTop10",
+        "is_ratio": True,
+    }
+    selected_methods = _select_control_methods_list(
+        raw_only_map,
+        control_method="raw,cms:eta=0.5,subspace:best_clean",
+        metric_spec=dummy_metric_spec,
+    )
+    assert len(selected_methods) == 1
+    assert selected_methods[0]["method_id"] == "raw"
+
+    selected_cms_only = _select_control_methods_list(
+        raw_only_map,
+        control_method="cms:eta=0.5",
+        metric_spec=dummy_metric_spec,
+    )
+    assert len(selected_cms_only) == 1
+    assert selected_cms_only[0]["method_id"] == "raw"
+
+    sub_default_args = build_subspace_parser().parse_args([])
+    assert sub_default_args.stage == "auto"
+
+    # Verify run_standalone_subspace_evaluation auto-aligns stage='prefix_revision' -> 'word' when config is word_encoder
+    # and searches both EXP_TAG and WORD_EXP_TAG
+    monkeypatch.setenv("BRAINDECODING_RESULTS_DIR", str(tmp_path / "empty_runs"))
+    with pytest.raises(FileNotFoundError) as exc_info:
+        run_standalone_subspace_evaluation(
+            dataset=None,
+            stage="prefix_revision",
+            config_path="configs/training/pallier2025_word_encoder.yaml",
+            seed=0,
+            exp_tag="stage23_exp_tag",
+            word_exp_tag="stage1_word_tag",
+        )
+    err_msg = str(exc_info.value).replace("\\", "/")
+    assert "stage23_exp_tag/word" in err_msg
+    assert "stage1_word_tag/word" in err_msg
+
 
 
 
