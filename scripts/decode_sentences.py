@@ -669,6 +669,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         except Exception:
             return False
 
+    export_was_regenerated = False
     if args.step in ("export", "all"):
         if (
             args.step == "all"
@@ -676,6 +677,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             and (force_rerun or not _export_matches_cms_eta(val_export_path, cms_eta))
         ):
             _run_export_for_split("val", val_export_path)
+            export_was_regenerated = True
         if (
             args.step == "all"
             and not force_rerun
@@ -684,6 +686,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             out_pt = export_path
         else:
             out_pt = _run_export_for_split(args.split, export_path)
+            export_was_regenerated = True
         exported_payload = load_neural_vocabulary_scores(out_pt)
         results_summary["export_path"] = str(out_pt)
         results_summary["vocabulary_size"] = int(exported_payload["vocabulary_size"])
@@ -743,10 +746,21 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
 
         reused_calibration: dict[str, Any] | None = None
-        if args.step == "all" and not force_rerun and calibration_path.is_file():
+        if (
+            args.step == "all"
+            and not force_rerun
+            and not export_was_regenerated
+            and calibration_path.is_file()
+        ):
             try:
                 existing_cal = json.loads(
                     calibration_path.read_text(encoding="utf-8")
+                )
+                saved_cal_stage = existing_cal.get("revision_stage")
+                cal_stage_ok = (
+                    not saved_cal_stage
+                    or effective_rev_stage not in ("revision", "prefix_revision")
+                    or saved_cal_stage == effective_rev_stage
                 )
                 saved_temps = [
                     round(float(t), 6)
@@ -773,7 +787,8 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     == shared_lam_cfg
                 )
                 if (
-                    saved_temps == expected_temps
+                    cal_stage_ok
+                    and saved_temps == expected_temps
                     and eta_ok
                     and k2_lam_ok
                     and shared_mode_ok
@@ -821,12 +836,25 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 output_path=calibration_path,
                 show_progress=show_progress,
             )
+            val_prov = dict(val_payload.get("checkpoint_provenance") or {})
+            calibration_res["revision_stage"] = str(
+                val_prov.get("revision_stage") or effective_rev_stage or ""
+            )
+            calibration_res["cms_eta"] = float(cms_eta)
+            try:
+                calibration_path.write_text(
+                    json.dumps(calibration_res, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
         results_summary["calibration_path"] = str(calibration_path)
         results_summary["state_hyperparameters"] = calibration_res["states"]
 
     if args.step in ("decode", "all"):
         if not _export_matches_cms_eta(export_path, cms_eta):
             _run_export_for_split(args.split, export_path)
+            export_was_regenerated = True
         split_payload = load_neural_vocabulary_scores(export_path)
         if calibration_path.is_file():
             cal_json = json.loads(calibration_path.read_text(encoding="utf-8"))
@@ -855,10 +883,25 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
         target_states_hp = hyperparameters.get("states", hyperparameters)
 
-        if not force_rerun and decoding_path.is_file():
+        if not force_rerun and not export_was_regenerated and decoding_path.is_file():
             try:
                 existing_dec = json.loads(
                     decoding_path.read_text(encoding="utf-8")
+                )
+                existing_prov = dict(existing_dec.get("checkpoint_provenance") or {})
+                saved_dec_stage = existing_prov.get("revision_stage")
+                cur_dec_stage = ckpt_prov.get("revision_stage")
+                dec_stage_ok = (
+                    not saved_dec_stage
+                    or not cur_dec_stage
+                    or saved_dec_stage == cur_dec_stage
+                )
+                saved_rev_ckpt = existing_prov.get("revision")
+                cur_rev_ckpt = ckpt_prov.get("revision")
+                dec_ckpt_ok = (
+                    not saved_rev_ckpt
+                    or not cur_rev_ckpt
+                    or str(saved_rev_ckpt) == str(cur_rev_ckpt)
                 )
                 saved_hp = existing_dec.get("state_hyperparameters") or {}
                 hp_matches = all(
@@ -881,6 +924,8 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     existing_dec.get("dataset") == args.dataset
                     and existing_dec.get("split") == args.split
                     and int(existing_dec.get("seed", -1)) == int(args.seed)
+                    and dec_stage_ok
+                    and dec_ckpt_ok
                     and hp_matches
                 ):
                     for cond_k, cond_b in (

@@ -625,14 +625,54 @@ def export_neural_vocabulary_scores(
         try:
             verify_cache_ready(rev_cfg, splits=("train", split))
         except FileNotFoundError:
-            run_cache_workflow(
-                dataset,
-                subject=subject,
-                num_subjects=num_subjects,
-                subjects=subjects,
-                include_test=(split == "test"),
-                force=False,
-            )
+            unpacked_from_archive = False
+            try:
+                from scripts.cache_archive import resolve_archive_path, unpack_cache
+
+                modality_key = "meg" if dataset == "pallier2025" else "eeg"
+                cand_archive_dirs: list[Path] = []
+                env_arch = os.environ.get("BRAINDECODING_ARCHIVE_DIR", "").strip()
+                if env_arch:
+                    cand_archive_dirs.append(Path(env_arch))
+                env_res = os.environ.get("BRAINDECODING_RESULTS_DIR", "").strip()
+                if env_res:
+                    cand_archive_dirs.append(Path(env_res).resolve().parent / "archives")
+                for colab_arch in (
+                    Path("/content/drive/MyDrive/BrainDecoding/archives"),
+                    Path("/content/drive/MyDrive/BrainDecoding_Colab/archives"),
+                ):
+                    if colab_arch not in cand_archive_dirs:
+                        cand_archive_dirs.append(colab_arch)
+
+                for arch_dir in cand_archive_dirs:
+                    tar_cand = resolve_archive_path(
+                        None, archive_dir=arch_dir, modality=modality_key
+                    )
+                    if tar_cand.is_file():
+                        print(
+                            f"[neural_score_exporter] 检测到本地缓存缺失，正在从云盘归档自动解包：{tar_cand} ...",
+                            flush=True,
+                        )
+                        unpack_cache(
+                            archive=tar_cand,
+                            cache_dir=os.environ.get("BRAINDECODING_CACHE_DIR") or None,
+                            modality=modality_key,
+                            skip_existing=True,
+                        )
+                        unpacked_from_archive = True
+                        break
+            except Exception:
+                unpacked_from_archive = False
+
+            if not unpacked_from_archive:
+                run_cache_workflow(
+                    dataset,
+                    subject=subject,
+                    num_subjects=num_subjects,
+                    subjects=subjects,
+                    include_test=(split == "test"),
+                    force=False,
+                )
             verify_cache_ready(rev_cfg, splits=("train", split))
 
     set_seed(int(seed))

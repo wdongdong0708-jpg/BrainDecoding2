@@ -1552,7 +1552,7 @@ def run_cache_workflow(
             if force or not event_path.is_file():
                 from braindecoding.data.dataset_builder import build_dataset
 
-                build_dataset("pallier2025", steps=["events"], force=force)
+                build_dataset("pallier2025", events=True, force=force)
             frames = [
                 pallier2025.load_event_table(
                     event_path,
