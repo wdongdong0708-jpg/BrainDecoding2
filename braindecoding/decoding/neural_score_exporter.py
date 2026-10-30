@@ -12,10 +12,11 @@ from collections import defaultdict
 import gc
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import time
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 import numpy as np
 import torch
@@ -46,6 +47,7 @@ from braindecoding.training.word_encoder_training import (
 )
 from braindecoding.training.workflow_runner import (
     _infer_dataset_and_stage_from_yaml,
+    _resolve_results_root_and_exp_tag,
     build_workflow_config,
     run_cache_workflow,
     verify_cache_ready,
@@ -420,10 +422,6 @@ def _encode_stage_with_shifts(
                 delay: mask[perm]
                 for delay, mask in aligned["revision_availability_masks"].items()
             }
-        if "full_context_predictions" in aligned and isinstance(
-            aligned["full_context_predictions"], torch.Tensor
-        ):
-            aligned["full_context_predictions"] = aligned["full_context_predictions"][perm]
         return aligned
 
     def _run_encode(shift_sec: float | None, label: str) -> dict:
@@ -485,21 +483,6 @@ def _encode_stage_with_shifts(
             avail_masks[state_key] = (
                 clean_encoded["revision_availability_masks"][delay].cpu().bool()
             )
-        if "full_context_predictions" in clean_encoded:
-            c_full = clean_encoded["full_context_predictions"].cpu()
-            s_full = control_encoded["full_context_predictions"].cpu()
-            h_full = [
-                h["full_context_predictions"].cpu() for h in hist_encoded_list
-            ]
-            clean_states["F"] = apply_historical_common_mode_subtraction(
-                c_full, h_full, eta=subtraction_eta
-            )
-            shifted_states["F"] = apply_historical_common_mode_subtraction(
-                s_full, h_full, eta=subtraction_eta
-            )
-            avail_masks["F"] = torch.ones(
-                len(clean_encoded["event_ids"]), dtype=torch.bool
-            )
     else:
         state_key = "S0" if stage == "word" else "F"
         c_raw = clean_encoded["predictions"].cpu()
@@ -528,10 +511,28 @@ def _encode_stage_with_shifts(
     }
 
 
-def export_neural_vocabulary_scores(
+def _is_fake_provenance(value: Any) -> bool:
+    """判定 checkpoint_provenance 字段是否为空或旧版跨阶段伪造回退标记。"""
+    text = str(value or "").strip()
+    if not text or text.lower() in {"not_available", "none", "null"}:
+        return True
+    return text.startswith("fallback_from_") or text.startswith(
+        "full_sentence_transformer_from_"
+    )
+
+
+def _same_checkpoint_path(saved_path: Any, current_path: Path | None) -> bool:
+    if current_path is None or _is_fake_provenance(saved_path):
+        return False
+    try:
+        return Path(str(saved_path)).resolve() == current_path.resolve()
+    except Exception:
+        return str(saved_path).strip() == str(current_path).strip()
+
+
+def resolve_stage_checkpoints(
     dataset: str = "pallier2025",
     *,
-    split: str = "val",
     seed: int = 0,
     subject: str | None = "all",
     num_subjects: int | None = None,
@@ -545,28 +546,45 @@ def export_neural_vocabulary_scores(
     revision_checkpoint: str | Path | None = None,
     revision_stage: str = "auto",
     config_path: str | Path | None = None,
-    window_seconds: float | None = None,
-    window_start_offset_seconds: float | None = None,
-    background_shift_seconds: Sequence[float] = DEFAULT_BACKGROUND_SHIFT_SECONDS,
-    control_shift_seconds: float = DEFAULT_CONTROL_SHIFT_SECONDS,
-    subtraction_eta: float = DEFAULT_SUBTRACTION_ETA,
+    word_config: str | Path | None = None,
+    context_config: str | Path | None = None,
+    revision_config: str | Path | None = None,
     eval_batch_size: int | None = None,
     num_workers: int | None = None,
     precision: str | None = None,
-    require_cache: bool = False,
-    max_eval_rows: int | None = None,
-    output_path: str | Path | None = None,
-    device: str = "auto",
-    show_progress: bool = True,
-) -> Path:
-    """导出 S0, K0, K1, K2, F 在全训练词表 V 上的 Clean (0s) 与 Shifted (-75s) [N, |V|] 余弦得分 .pt 文件。"""
-    ensure_default_environment()
-    if split not in {"val", "test"}:
-        raise ValueError(f"split 仅支持 'val' 或 'test'，当前为：{split!r}")
+    window_seconds: float | None = None,
+    window_start_offset_seconds: float | None = None,
+) -> dict[str, Any]:
+    """独立解析 S3 三大协议族对应的 Stage 1 (word)、Stage 2.1 (context) 与 Stage 2.2/2.3 (revision/prefix_revision) 检查点与配置。"""
+    env_exp_tag = os.environ.get("BRAINDECODING_EXP_TAG", "").strip() or None
+    env_word_tag = (
+        os.environ.get("BRAINDECODING_WORD_EXP_TAG", "").strip() or None
+    )
+    env_ctx_tag = (
+        os.environ.get("BRAINDECODING_CONTEXT_EXP_TAG", "").strip() or None
+    )
 
-    rev_tag = revision_exp_tag if revision_exp_tag is not None else exp_tag
-    ctx_tag = context_exp_tag if context_exp_tag is not None else exp_tag
-    w_tag = word_exp_tag if word_exp_tag is not None else exp_tag
+    eff_exp_tag = exp_tag if exp_tag is not None else env_exp_tag
+    rev_tag = (
+        revision_exp_tag if revision_exp_tag is not None else eff_exp_tag
+    )
+    raw_ctx_tag = (
+        context_exp_tag
+        if context_exp_tag is not None
+        else (env_ctx_tag if env_ctx_tag is not None else eff_exp_tag)
+    )
+    ctx_disabled = str(raw_ctx_tag or "").strip().lower() in {
+        "off",
+        "disable",
+        "disabled",
+        "false",
+    }
+    ctx_tag = None if ctx_disabled else raw_ctx_tag
+    w_tag = (
+        word_exp_tag
+        if word_exp_tag is not None
+        else (env_word_tag if env_word_tag is not None else eff_exp_tag)
+    )
 
     rev_stage_mode = str(revision_stage or "auto").strip().lower()
     if rev_stage_mode not in {"auto", "revision", "prefix_revision"}:
@@ -574,22 +592,49 @@ def export_neural_vocabulary_scores(
             f"revision_stage 仅支持 'auto'、'revision' 或 'prefix_revision'，当前为：{revision_stage!r}"
         )
 
+    matched_word_cfg_path: Path | None = None
+    matched_ctx_cfg_path: Path | None = None
     matched_rev_cfg_path: Path | None = None
     inferred_rev_stage: str | None = None
-    if config_path is not None:
-        resolved_cfg_p = resolve_config_path(project_path(config_path))
-        if resolved_cfg_p.is_file():
-            raw_yaml = load_yaml_with_extends(resolved_cfg_p)
-            if isinstance(raw_yaml, dict) and any(
-                k in raw_yaml for k in ("workflow", "model", "siamese_debiased", "training")
-            ):
-                inferred_ds, inferred_stage = _infer_dataset_and_stage_from_yaml(raw_yaml)
-                dataset = inferred_ds
-                if rev_stage_mode == "auto" and inferred_stage in {"revision", "prefix_revision"}:
-                    rev_stage_mode = inferred_stage
-                if inferred_stage in {"revision", "prefix_revision"}:
-                    matched_rev_cfg_path = resolved_cfg_p
-                    inferred_rev_stage = inferred_stage
+
+    def _inspect_stage_yaml(
+        raw_path: str | Path | None,
+    ) -> tuple[Path | None, str | None, str | None]:
+        if raw_path is None:
+            return None, None, None
+        resolved_p = resolve_config_path(project_path(raw_path))
+        if not resolved_p.is_file():
+            return None, None, None
+        raw_y = load_yaml_with_extends(resolved_p)
+        if isinstance(raw_y, dict) and any(
+            k in raw_y
+            for k in ("workflow", "model", "siamese_debiased", "training")
+        ):
+            inf_ds, inf_st = _infer_dataset_and_stage_from_yaml(raw_y)
+            return resolved_p, inf_ds, inf_st
+        return None, None, None
+
+    for candidate_cfg, role in (
+        (config_path, "general"),
+        (word_config, "word"),
+        (context_config, "context"),
+        (revision_config, "revision"),
+    ):
+        cfg_p, inf_ds, inf_st = _inspect_stage_yaml(candidate_cfg)
+        if cfg_p is None:
+            continue
+        if inf_ds:
+            dataset = inf_ds
+        if role == "word" or inf_st == "word":
+            matched_word_cfg_path = cfg_p
+        elif role == "context" or inf_st == "context":
+            matched_ctx_cfg_path = cfg_p
+        elif role == "revision" or inf_st in {"revision", "prefix_revision"}:
+            matched_rev_cfg_path = cfg_p
+            if inf_st in {"revision", "prefix_revision"}:
+                inferred_rev_stage = inf_st
+                if rev_stage_mode == "auto":
+                    rev_stage_mode = inf_st
 
     initial_rev_stage = (
         "prefix_revision" if rev_stage_mode == "prefix_revision" else "revision"
@@ -612,12 +657,393 @@ def export_neural_vocabulary_scores(
         word_exp_tag=w_tag,
         config_path=(
             matched_rev_cfg_path
-            if (matched_rev_cfg_path is not None and inferred_rev_stage == initial_rev_stage)
+            if (
+                matched_rev_cfg_path is not None
+                and inferred_rev_stage in {None, initial_rev_stage}
+            )
             else None
         ),
     )
     dataset = subset_spec["dataset"]
     subset_tag = subset_spec["subset_tag"]
+
+    resolved_rev_stage = initial_rev_stage
+    rev_ckpt = _locate_stage_checkpoint(
+        dataset,
+        resolved_rev_stage,
+        subset_tag,
+        seed,
+        exp_tag=rev_tag,
+        explicit_checkpoint=revision_checkpoint,
+    )
+    if rev_ckpt is None and rev_stage_mode == "auto":
+        alt_rev_stage = (
+            "revision"
+            if resolved_rev_stage == "prefix_revision"
+            else "prefix_revision"
+        )
+        alt_ckpt = _locate_stage_checkpoint(
+            dataset,
+            alt_rev_stage,
+            subset_tag,
+            seed,
+            exp_tag=rev_tag,
+            explicit_checkpoint=None,
+        )
+        if alt_ckpt is not None:
+            resolved_rev_stage = alt_rev_stage
+            rev_ckpt = alt_ckpt
+            rev_cfg, _ = build_workflow_config(
+                dataset,
+                stage=alt_rev_stage,
+                seed=seed,
+                subject=subject,
+                num_subjects=num_subjects,
+                subjects=subjects,
+                eval_batch_size=eval_batch_size,
+                num_workers=num_workers,
+                precision=precision,
+                window_seconds=window_seconds,
+                window_start_offset_seconds=window_start_offset_seconds,
+                mode="train",
+                exp_tag=rev_tag,
+                word_exp_tag=w_tag,
+            )
+
+    warmstart_fallback = rev_cfg["training"].get(
+        "pretrained_brain_encoder_checkpoint"
+    )
+    word_ckpt = _locate_stage_checkpoint(
+        dataset,
+        "word",
+        subset_tag,
+        seed,
+        exp_tag=w_tag,
+        fallback_exp_tags=(rev_tag, ctx_tag, ""),
+        explicit_checkpoint=word_checkpoint,
+        fallback_checkpoint=warmstart_fallback,
+    )
+
+    ctx_ckpt: Path | None = None
+    if not ctx_disabled:
+        ctx_ckpt = _locate_stage_checkpoint(
+            dataset,
+            "context",
+            subset_tag,
+            seed,
+            exp_tag=ctx_tag,
+            fallback_exp_tags=(rev_tag, w_tag, ""),
+            explicit_checkpoint=context_checkpoint,
+        )
+        if (
+            ctx_ckpt is None
+            and context_checkpoint is None
+            and context_exp_tag is None
+            and env_ctx_tag is None
+        ):
+            base_root, _ = _resolve_results_root_and_exp_tag(
+                None, ignore_implicit_tag=True
+            )
+            ds_root = base_root / dataset
+            if ds_root.is_dir():
+                for child in sorted(ds_root.iterdir()):
+                    if not child.is_dir():
+                        continue
+                    cand_dirs = [
+                        child / "context" / subset_tag / f"seed-{int(seed):03d}",
+                        child
+                        / "smoke_context"
+                        / subset_tag
+                        / f"seed-{int(seed):03d}",
+                        child
+                        / "context_transformer"
+                        / subset_tag
+                        / "train"
+                        / f"seed-{int(seed):03d}",
+                        child
+                        / "context_transformer"
+                        / subset_tag
+                        / "smoke"
+                        / f"seed-{int(seed):03d}",
+                    ]
+                    for cand_dir in cand_dirs:
+                        for name in ("best.ckpt", "best.pt", "last.ckpt"):
+                            cand_file = cand_dir / name
+                            if cand_file.is_file():
+                                ctx_ckpt = cand_file.resolve()
+                                break
+                        if ctx_ckpt is not None:
+                            break
+                    if ctx_ckpt is not None:
+                        break
+
+    return {
+        "dataset": dataset,
+        "subset_spec": subset_spec,
+        "subset_tag": subset_tag,
+        "rev_cfg": rev_cfg,
+        "resolved_rev_stage": resolved_rev_stage,
+        "rev_tag": rev_tag,
+        "ctx_tag": ctx_tag,
+        "w_tag": w_tag,
+        "word_cfg_path": matched_word_cfg_path,
+        "context_cfg_path": matched_ctx_cfg_path,
+        "revision_cfg_path": matched_rev_cfg_path,
+        "word_checkpoint": word_ckpt,
+        "context_checkpoint": ctx_ckpt,
+        "revision_checkpoint": rev_ckpt,
+    }
+
+
+def export_neural_vocabulary_scores(
+    dataset: str = "pallier2025",
+    *,
+    split: str = "val",
+    seed: int = 0,
+    subject: str | None = "all",
+    num_subjects: int | None = None,
+    subjects: str | Iterable[str] | None = None,
+    exp_tag: str | None = None,
+    word_exp_tag: str | None = None,
+    context_exp_tag: str | None = None,
+    revision_exp_tag: str | None = None,
+    word_checkpoint: str | Path | None = None,
+    context_checkpoint: str | Path | None = None,
+    revision_checkpoint: str | Path | None = None,
+    revision_stage: str = "auto",
+    config_path: str | Path | None = None,
+    word_config: str | Path | None = None,
+    context_config: str | Path | None = None,
+    revision_config: str | Path | None = None,
+    window_seconds: float | None = None,
+    window_start_offset_seconds: float | None = None,
+    background_shift_seconds: Sequence[float] = DEFAULT_BACKGROUND_SHIFT_SECONDS,
+    control_shift_seconds: float = DEFAULT_CONTROL_SHIFT_SECONDS,
+    subtraction_eta: float = DEFAULT_SUBTRACTION_ETA,
+    eval_batch_size: int | None = None,
+    num_workers: int | None = None,
+    precision: str | None = None,
+    require_cache: bool = False,
+    reuse_existing_states: bool = True,
+    max_eval_rows: int | None = None,
+    output_path: str | Path | None = None,
+    device: str = "auto",
+    show_progress: bool = True,
+) -> Path:
+    """按阶段解耦导出 S0 (Stage 1)、K0/K1/K2 (Stage 2.2/2.3) 与 F (Stage 2.1) 的 [N, |V|] 余弦得分 .pt 文件。"""
+    ensure_default_environment()
+    if split not in {"val", "test"}:
+        raise ValueError(f"split 仅支持 'val' 或 'test'，当前为：{split!r}")
+
+    resolved = resolve_stage_checkpoints(
+        dataset,
+        seed=seed,
+        subject=subject,
+        num_subjects=num_subjects,
+        subjects=subjects,
+        exp_tag=exp_tag,
+        word_exp_tag=word_exp_tag,
+        context_exp_tag=context_exp_tag,
+        revision_exp_tag=revision_exp_tag,
+        word_checkpoint=word_checkpoint,
+        context_checkpoint=context_checkpoint,
+        revision_checkpoint=revision_checkpoint,
+        revision_stage=revision_stage,
+        config_path=config_path,
+        word_config=word_config,
+        context_config=context_config,
+        revision_config=revision_config,
+        eval_batch_size=eval_batch_size,
+        num_workers=num_workers,
+        precision=precision,
+        window_seconds=window_seconds,
+        window_start_offset_seconds=window_start_offset_seconds,
+    )
+    dataset = resolved["dataset"]
+    subset_spec = resolved["subset_spec"]
+    subset_tag = resolved["subset_tag"]
+    rev_cfg = resolved["rev_cfg"]
+    resolved_rev_stage = resolved["resolved_rev_stage"]
+    rev_tag = resolved["rev_tag"]
+    ctx_tag = resolved["ctx_tag"]
+    w_tag = resolved["w_tag"]
+    word_cfg_path = resolved["word_cfg_path"]
+    context_cfg_path = resolved["context_cfg_path"]
+    word_ckpt = resolved["word_checkpoint"]
+    ctx_ckpt = resolved["context_checkpoint"]
+    rev_ckpt = resolved["revision_checkpoint"]
+
+    if rev_ckpt is None and word_ckpt is None and ctx_ckpt is None:
+        raise FileNotFoundError(
+            f"未找到任何可用阶段检查点：Stage 2.2/2.3 ({resolved_rev_stage})、Stage 2.1 (context) 或 Stage 1 (word) "
+            f"（dataset={dataset}, subset={subset_tag}, seed={seed}）。"
+        )
+
+    bg_shifts = tuple(float(s) for s in background_shift_seconds)
+    ctrl_shift = float(control_shift_seconds)
+    eta_val = float(subtraction_eta)
+    language = "fr" if dataset == "pallier2025" else "zh"
+
+    if output_path is None:
+        base_out = (
+            results_root()
+            / dataset
+            / (rev_tag if rev_tag else "sequence_decoding")
+            / "s3_protocol"
+            / subset_tag
+            / f"seed-{int(seed):03d}"
+        )
+        out_file = base_out / f"s3_neural_scores_{split}.pt"
+    else:
+        out_file = Path(output_path).resolve()
+
+    checkpoint_provenance: dict[str, Any] = {
+        "word": str(word_ckpt) if word_ckpt is not None else "not_available",
+        "context": str(ctx_ckpt) if ctx_ckpt is not None else "not_available",
+        "revision": str(rev_ckpt) if rev_ckpt is not None else "not_available",
+        "revision_stage": (
+            resolved_rev_stage if rev_ckpt is not None else "not_available"
+        ),
+        "has_word_checkpoint": bool(word_ckpt is not None),
+        "has_context_checkpoint": bool(ctx_ckpt is not None),
+        "has_revision_checkpoint": bool(rev_ckpt is not None),
+    }
+
+    existing_payload: dict[str, Any] | None = None
+    word_hit = False
+    ctx_hit = False
+    rev_hit = False
+    if reuse_existing_states and out_file.is_file():
+        try:
+            cand_payload = load_neural_vocabulary_scores(out_file)
+            cand_cms = dict(cand_payload.get("cms_metadata") or {})
+            cms_ok = (
+                "subtraction_eta" not in cand_cms
+                or abs(float(cand_cms["subtraction_eta"]) - eta_val) <= 1e-6
+            ) and (
+                "control_shift_seconds" not in cand_cms
+                or abs(float(cand_cms["control_shift_seconds"]) - ctrl_shift)
+                <= 1e-6
+            )
+            if (
+                cand_payload.get("dataset") == dataset
+                and cand_payload.get("split") == split
+                and int(cand_payload.get("seed", -1)) == int(seed)
+                and cms_ok
+            ):
+                existing_payload = cand_payload
+                ex_prov = dict(
+                    cand_payload.get("checkpoint_provenance")
+                    or cand_payload.get("checkpoints")
+                    or {}
+                )
+                ex_clean = dict(cand_payload.get("clean_scores") or {})
+                ex_shifted = dict(cand_payload.get("shifted_scores") or {})
+                word_hit = (
+                    word_ckpt is not None
+                    and _same_checkpoint_path(ex_prov.get("word"), word_ckpt)
+                    and "S0" in ex_clean
+                    and "S0" in ex_shifted
+                )
+                ctx_hit = (
+                    ctx_ckpt is not None
+                    and _same_checkpoint_path(ex_prov.get("context"), ctx_ckpt)
+                    and "F" in ex_clean
+                    and "F" in ex_shifted
+                )
+                rev_hit = (
+                    rev_ckpt is not None
+                    and _same_checkpoint_path(ex_prov.get("revision"), rev_ckpt)
+                    and str(ex_prov.get("revision_stage") or resolved_rev_stage)
+                    == resolved_rev_stage
+                    and all(
+                        k in ex_clean and k in ex_shifted
+                        for k in ("K0", "K1", "K2")
+                    )
+                )
+        except Exception:
+            existing_payload = None
+
+    need_word = (word_ckpt is not None) and not word_hit
+    need_ctx = (ctx_ckpt is not None) and not ctx_hit
+    need_rev = (rev_ckpt is not None) and not rev_hit
+
+    started = time.perf_counter()
+
+    # 快速通道：当所有当前有效检查点均已在 out_file 中编码完成（如仅需剥离旧版伪造的 F 状态）时，
+    # 0 次 GPU 前向、无需解包原始信号缓存即可直接完成重构与更新。
+    if (
+        existing_payload is not None
+        and not need_word
+        and not need_ctx
+        and not need_rev
+    ):
+        ex_clean = dict(existing_payload.get("clean_scores") or {})
+        ex_shifted = dict(existing_payload.get("shifted_scores") or {})
+        ex_avail = dict(existing_payload.get("availability_masks") or {})
+        allowed_states: list[str] = []
+        if word_ckpt is not None and "S0" in ex_clean:
+            allowed_states.append("S0")
+        if rev_ckpt is not None:
+            for k_st in ("K0", "K1", "K2"):
+                if k_st in ex_clean:
+                    allowed_states.append(k_st)
+        if ctx_ckpt is not None and "F" in ex_clean:
+            allowed_states.append("F")
+
+        if allowed_states:
+            clean_scores = {s: ex_clean[s] for s in allowed_states}
+            shifted_scores = {s: ex_shifted[s] for s in allowed_states}
+            availability_masks = {
+                s: ex_avail[s] for s in allowed_states if s in ex_avail
+            }
+            updated_payload = dict(existing_payload)
+            updated_payload["states"] = list(allowed_states)
+            updated_payload["clean_scores"] = clean_scores
+            updated_payload["shifted_scores"] = shifted_scores
+            updated_payload["availability_masks"] = availability_masks
+            updated_payload["checkpoints"] = checkpoint_provenance
+            updated_payload["checkpoint_provenance"] = checkpoint_provenance
+            updated_payload["cms_metadata"] = {
+                "enabled": bool(bg_shifts) and abs(eta_val) > 1e-12,
+                "background_shift_seconds": list(bg_shifts),
+                "control_shift_seconds": ctrl_shift,
+                "subtraction_eta": eta_val,
+            }
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp_file = out_file.with_suffix(out_file.suffix + ".tmp")
+            torch.save(updated_payload, tmp_file)
+            tmp_file.replace(out_file)
+            sidecar = out_file.with_suffix(".json")
+            save_json(
+                sidecar,
+                {
+                    "status": "exported",
+                    "dataset": dataset,
+                    "language": language,
+                    "split": split,
+                    "seed": int(seed),
+                    "subset_tag": subset_tag,
+                    "events": len(updated_payload.get("event_ids") or []),
+                    "segments": len(updated_payload.get("segments") or []),
+                    "vocabulary_size": int(
+                        updated_payload.get("vocabulary_size")
+                        or len(updated_payload.get("vocabulary") or [])
+                    ),
+                    "in_vocabulary_rate": float(
+                        updated_payload.get("in_vocabulary_rate", 0.0)
+                    ),
+                    "states": list(allowed_states),
+                    "cms_metadata": updated_payload["cms_metadata"],
+                    "checkpoints": checkpoint_provenance,
+                    "checkpoint_provenance": checkpoint_provenance,
+                    "pt_file": str(out_file),
+                    "elapsed_seconds": round(
+                        time.perf_counter() - started, 3
+                    ),
+                },
+            )
+            return out_file
 
     if require_cache:
         verify_cache_ready(rev_cfg, splits=("train", split))
@@ -636,7 +1062,9 @@ def export_neural_vocabulary_scores(
                     cand_archive_dirs.append(Path(env_arch))
                 env_res = os.environ.get("BRAINDECODING_RESULTS_DIR", "").strip()
                 if env_res:
-                    cand_archive_dirs.append(Path(env_res).resolve().parent / "archives")
+                    cand_archive_dirs.append(
+                        Path(env_res).resolve().parent / "archives"
+                    )
                 for colab_arch in (
                     Path("/content/drive/MyDrive/BrainDecoding/archives"),
                     Path("/content/drive/MyDrive/BrainDecoding_Colab/archives"),
@@ -655,7 +1083,8 @@ def export_neural_vocabulary_scores(
                         )
                         unpack_cache(
                             archive=tar_cand,
-                            cache_dir=os.environ.get("BRAINDECODING_CACHE_DIR") or None,
+                            cache_dir=os.environ.get("BRAINDECODING_CACHE_DIR")
+                            or None,
                             modality=modality_key,
                             skip_existing=True,
                         )
@@ -704,155 +1133,137 @@ def export_neural_vocabulary_scores(
             f"数据集 {dataset} 在 split={split!r} 与受试者 {selected_subjects} 上的样本为空。"
         )
 
-    word_col = "normalized_word" if "normalized_word" in train_table.columns else "标准词"
+    word_col = (
+        "normalized_word"
+        if "normalized_word" in train_table.columns
+        else "标准词"
+    )
     vocabulary = sorted(set(train_table[word_col].astype(str).tolist()))
     if dataset == "pallier2025":
-        run_c = "运行编号" if "运行编号" in train_table.columns else "recording_id"
-        bids_c = "BIDS事件行号" if "BIDS事件行号" in train_table.columns else "event_index"
+        run_c = (
+            "运行编号" if "运行编号" in train_table.columns else "recording_id"
+        )
+        bids_c = (
+            "BIDS事件行号"
+            if "BIDS事件行号" in train_table.columns
+            else "event_index"
+        )
         dedup_train = (
             train_table.drop_duplicates([run_c, bids_c])
             if (run_c in train_table.columns and bids_c in train_table.columns)
             else train_table
         )
     else:
-        voice_c = "音频版本" if "音频版本" in train_table.columns else "voice_version"
-        src_w_c = "源词编号" if "源词编号" in train_table.columns else "source_word_id"
+        voice_c = (
+            "音频版本"
+            if "音频版本" in train_table.columns
+            else "voice_version"
+        )
+        src_w_c = (
+            "源词编号"
+            if "源词编号" in train_table.columns
+            else "source_word_id"
+        )
         dedup_train = (
             train_table.drop_duplicates([voice_c, src_w_c])
-            if (voice_c in train_table.columns and src_w_c in train_table.columns)
+            if (
+                voice_c in train_table.columns
+                and src_w_c in train_table.columns
+            )
             else train_table
         )
-    train_word_series = dedup_train[word_col].astype(str).value_counts().to_dict()
+    train_word_series = (
+        dedup_train[word_col].astype(str).value_counts().to_dict()
+    )
     vocabulary_train_counts = {
         str(w): int(train_word_series.get(str(w), 1)) for w in vocabulary
     }
     eval_ds = task.build_dataset(rev_cfg, eval_table)
 
     vocab_vectors = np.stack(
-        [np.asarray(eval_ds.embedding_map[w], dtype=np.float32) for w in vocabulary],
+        [
+            np.asarray(eval_ds.embedding_map[w], dtype=np.float32)
+            for w in vocabulary
+        ],
         axis=0,
     )
     vocab_tensor = _l2_normalize_tensor(torch.from_numpy(vocab_vectors))
 
-    resolved_rev_stage = initial_rev_stage
-    rev_ckpt = _locate_stage_checkpoint(
-        dataset,
-        resolved_rev_stage,
-        subset_tag,
-        seed,
-        exp_tag=rev_tag,
-        explicit_checkpoint=revision_checkpoint,
+    canonical_table = getattr(eval_ds, "table", eval_table)
+    ev_id_col = (
+        "event_id" if "event_id" in canonical_table.columns else "事件编号"
     )
-    if rev_ckpt is None and rev_stage_mode == "auto":
-        alt_rev_stage = (
-            "revision"
-            if resolved_rev_stage == "prefix_revision"
-            else "prefix_revision"
-        )
-        alt_ckpt = _locate_stage_checkpoint(
-            dataset,
-            alt_rev_stage,
-            subset_tag,
-            seed,
-            exp_tag=rev_tag,
-            explicit_checkpoint=None,
-        )
-        if alt_ckpt is not None:
-            resolved_rev_stage = alt_rev_stage
-            rev_ckpt = alt_ckpt
-            rev_cfg, _ = build_workflow_config(
-                dataset,
-                stage=alt_rev_stage,
-                seed=seed,
-                subject=subject,
-                num_subjects=num_subjects,
-                subjects=subjects,
-                eval_batch_size=eval_batch_size,
-                num_workers=num_workers,
-                precision=precision,
-                window_seconds=window_seconds,
-                window_start_offset_seconds=window_start_offset_seconds,
-                mode="train",
-                exp_tag=rev_tag,
-                word_exp_tag=w_tag,
-            )
-    warmstart_fallback = rev_cfg["training"].get("pretrained_brain_encoder_checkpoint")
-    word_ckpt = _locate_stage_checkpoint(
-        dataset,
-        "word",
-        subset_tag,
-        seed,
-        exp_tag=w_tag,
-        fallback_exp_tags=(rev_tag, ""),
-        explicit_checkpoint=word_checkpoint,
-        fallback_checkpoint=warmstart_fallback,
-    )
-    ctx_ckpt = _locate_stage_checkpoint(
-        dataset,
-        "context",
-        subset_tag,
-        seed,
-        exp_tag=ctx_tag,
-        fallback_exp_tags=(rev_tag, w_tag, ""),
-        explicit_checkpoint=context_checkpoint,
-    )
-    if ctx_ckpt is None and context_checkpoint is None:
-        ds_root = results_root() / dataset
-        if ds_root.is_dir():
-            for child in sorted(ds_root.iterdir()):
-                if not child.is_dir():
-                    continue
-                for mode in ("train", "smoke"):
-                    cand_dir = (
-                        child
-                        / "context_transformer"
-                        / subset_tag
-                        / mode
-                        / f"seed-{int(seed):03d}"
-                    )
-                    for name in ("best.ckpt", "best.pt", "last.ckpt"):
-                        cand_file = cand_dir / name
-                        if cand_file.is_file():
-                            ctx_ckpt = cand_file
-                            break
-                    if ctx_ckpt is not None:
-                        break
-                if ctx_ckpt is not None:
-                    break
-    if rev_ckpt is None and word_ckpt is None:
-        raise FileNotFoundError(
-            f"未找到 Stage 2.2/2.3 ({resolved_rev_stage}) 或 Stage 1 (word) 检查点（dataset={dataset}, subset={subset_tag}, seed={seed}）。"
-        )
+    event_ids: list[str] = [
+        str(e) for e in canonical_table[ev_id_col].astype(str).tolist()
+    ]
+    n_events = len(event_ids)
 
-    bg_shifts = tuple(float(s) for s in background_shift_seconds)
-    ctrl_shift = float(control_shift_seconds)
-    eta_val = float(subtraction_eta)
+    clean_scores: dict[str, torch.Tensor] = {}
+    shifted_scores: dict[str, torch.Tensor] = {}
+    availability_masks: dict[str, torch.Tensor] = {}
 
-    started = time.perf_counter()
+    ex_event_ids = (
+        [str(e) for e in (existing_payload.get("event_ids") or [])]
+        if existing_payload is not None
+        else []
+    )
+    can_reuse_tensors = (
+        existing_payload is not None
+        and ex_event_ids == event_ids
+        and list(existing_payload.get("vocabulary") or []) == vocabulary
+    )
+
+    # 1. Stage 2.2 / 2.3 (revision / prefix_revision) -> K0, K1, K2
     if rev_ckpt is not None:
-        rev_result = _encode_stage_with_shifts(
-            rev_cfg,
-            eval_table,
-            rev_ckpt,
-            stage=resolved_rev_stage,
-            split=split,
-            device=torch_device,
-            background_shift_seconds=bg_shifts,
-            control_shift_seconds=ctrl_shift,
-            subtraction_eta=eta_val,
-            show_progress=show_progress,
-        )
+        if can_reuse_tensors and rev_hit and existing_payload is not None:
+            ex_c = existing_payload["clean_scores"]
+            ex_s = existing_payload["shifted_scores"]
+            ex_a = existing_payload.get("availability_masks") or {}
+            for k_st in ("K0", "K1", "K2"):
+                clean_scores[k_st] = ex_c[k_st].cpu()
+                shifted_scores[k_st] = ex_s[k_st].cpu()
+                availability_masks[k_st] = (
+                    ex_a[k_st].cpu().bool()
+                    if k_st in ex_a
+                    else torch.ones(n_events, dtype=torch.bool)
+                )
+        else:
+            rev_result = _encode_stage_with_shifts(
+                rev_cfg,
+                eval_table,
+                rev_ckpt,
+                stage=resolved_rev_stage,
+                split=split,
+                device=torch_device,
+                background_shift_seconds=bg_shifts,
+                control_shift_seconds=ctrl_shift,
+                subtraction_eta=eta_val,
+                show_progress=show_progress,
+            )
+            if rev_result["event_ids"] != event_ids:
+                raise ValueError(
+                    f"Stage {resolved_rev_stage} 的编码事件顺序与标准事件表不一致。"
+                )
+            for k_st, emb in rev_result["clean_embeddings"].items():
+                clean_scores[k_st] = (emb.float() @ vocab_tensor.T).cpu()
+            for k_st, emb in rev_result["shifted_embeddings"].items():
+                shifted_scores[k_st] = (emb.float() @ vocab_tensor.T).cpu()
+            availability_masks.update(rev_result["availability_masks"])
 
-        event_ids = rev_result["event_ids"]
-        clean_embeddings: dict[str, torch.Tensor] = dict(rev_result["clean_embeddings"])
-        shifted_embeddings: dict[str, torch.Tensor] = dict(rev_result["shifted_embeddings"])
-        availability_masks: dict[str, torch.Tensor] = dict(rev_result["availability_masks"])
-        checkpoint_provenance: dict[str, str] = {
-            "revision": rev_result["checkpoint_path"],
-            "revision_stage": resolved_rev_stage,
-        }
-
-        if word_ckpt is not None:
+    # 2. Stage 1 (word) -> S0
+    if word_ckpt is not None:
+        if can_reuse_tensors and word_hit and existing_payload is not None:
+            ex_c = existing_payload["clean_scores"]
+            ex_s = existing_payload["shifted_scores"]
+            ex_a = existing_payload.get("availability_masks") or {}
+            clean_scores["S0"] = ex_c["S0"].cpu()
+            shifted_scores["S0"] = ex_s["S0"].cpu()
+            availability_masks["S0"] = (
+                ex_a["S0"].cpu().bool()
+                if "S0" in ex_a
+                else torch.ones(n_events, dtype=torch.bool)
+            )
+        else:
             word_cfg, _ = build_workflow_config(
                 dataset,
                 stage="word",
@@ -867,6 +1278,7 @@ def export_neural_vocabulary_scores(
                 window_start_offset_seconds=window_start_offset_seconds,
                 mode="train",
                 exp_tag=w_tag,
+                config_path=word_cfg_path,
             )
             word_res = _encode_stage_with_shifts(
                 word_cfg,
@@ -881,115 +1293,73 @@ def export_neural_vocabulary_scores(
                 show_progress=show_progress,
             )
             if word_res["event_ids"] != event_ids:
-                raise ValueError("Stage 1 (word) 与 Stage 2.2 (revision) 的编码事件顺序不一致。")
-            clean_embeddings.update(word_res["clean_embeddings"])
-            shifted_embeddings.update(word_res["shifted_embeddings"])
+                raise ValueError(
+                    "Stage 1 (word) 与标准事件表的编码事件顺序不一致。"
+                )
+            clean_scores["S0"] = (
+                word_res["clean_embeddings"]["S0"].float() @ vocab_tensor.T
+            ).cpu()
+            shifted_scores["S0"] = (
+                word_res["shifted_embeddings"]["S0"].float() @ vocab_tensor.T
+            ).cpu()
             availability_masks.update(word_res["availability_masks"])
-            checkpoint_provenance["word"] = word_res["checkpoint_path"]
-        else:
-            clean_embeddings["S0"] = clean_embeddings["K0"].clone()
-            shifted_embeddings["S0"] = shifted_embeddings["K0"].clone()
-            availability_masks["S0"] = availability_masks["K0"].clone()
-            checkpoint_provenance["word"] = "fallback_from_K0"
-    else:
-        assert word_ckpt is not None
-        word_cfg, _ = build_workflow_config(
-            dataset,
-            stage="word",
-            seed=seed,
-            subject=subject,
-            num_subjects=num_subjects,
-            subjects=subjects,
-            eval_batch_size=eval_batch_size,
-            num_workers=num_workers,
-            precision=precision,
-            window_seconds=window_seconds,
-            window_start_offset_seconds=window_start_offset_seconds,
-            mode="train",
-            exp_tag=w_tag,
-        )
-        word_res = _encode_stage_with_shifts(
-            word_cfg,
-            eval_table,
-            word_ckpt,
-            stage="word",
-            split=split,
-            device=torch_device,
-            background_shift_seconds=bg_shifts,
-            control_shift_seconds=ctrl_shift,
-            subtraction_eta=eta_val,
-            show_progress=show_progress,
-        )
-        event_ids = word_res["event_ids"]
-        clean_embeddings = dict(word_res["clean_embeddings"])
-        shifted_embeddings = dict(word_res["shifted_embeddings"])
-        availability_masks = dict(word_res["availability_masks"])
-        for h_state in ("K0", "K1", "K2"):
-            clean_embeddings[h_state] = clean_embeddings["S0"].clone()
-            shifted_embeddings[h_state] = shifted_embeddings["S0"].clone()
-            availability_masks[h_state] = availability_masks["S0"].clone()
-        checkpoint_provenance = {
-            "word": word_res["checkpoint_path"],
-            "revision": "fallback_from_word_S0",
-            "revision_stage": resolved_rev_stage,
-        }
 
+    # 3. Stage 2.1 (context) -> F
     if ctx_ckpt is not None:
-        ctx_cfg, _ = build_workflow_config(
-            dataset,
-            stage="context",
-            seed=seed,
-            subject=subject,
-            num_subjects=num_subjects,
-            subjects=subjects,
-            eval_batch_size=eval_batch_size,
-            num_workers=num_workers,
-            precision=precision,
-            window_seconds=window_seconds,
-            window_start_offset_seconds=window_start_offset_seconds,
-            mode="train",
-            exp_tag=ctx_tag,
-            word_exp_tag=w_tag,
-        )
-        ctx_res = _encode_stage_with_shifts(
-            ctx_cfg,
-            eval_table,
-            ctx_ckpt,
-            stage="context",
-            split=split,
-            device=torch_device,
-            background_shift_seconds=bg_shifts,
-            control_shift_seconds=ctrl_shift,
-            subtraction_eta=eta_val,
-            show_progress=show_progress,
-        )
-        if ctx_res["event_ids"] != event_ids:
-            raise ValueError("Stage 2.1 (context) 与 Stage 2.2 (revision) 的编码事件顺序不一致。")
-        clean_embeddings.update(ctx_res["clean_embeddings"])
-        shifted_embeddings.update(ctx_res["shifted_embeddings"])
-        availability_masks.update(ctx_res["availability_masks"])
-        checkpoint_provenance["context"] = ctx_res["checkpoint_path"]
-        checkpoint_provenance["has_context_checkpoint"] = True
-    else:
-        if "F" in clean_embeddings and "F" in shifted_embeddings:
-            checkpoint_provenance["context"] = (
-                f"full_sentence_transformer_from_{resolved_rev_stage}"
+        if can_reuse_tensors and ctx_hit and existing_payload is not None:
+            ex_c = existing_payload["clean_scores"]
+            ex_s = existing_payload["shifted_scores"]
+            ex_a = existing_payload.get("availability_masks") or {}
+            clean_scores["F"] = ex_c["F"].cpu()
+            shifted_scores["F"] = ex_s["F"].cpu()
+            availability_masks["F"] = (
+                ex_a["F"].cpu().bool()
+                if "F" in ex_a
+                else torch.ones(n_events, dtype=torch.bool)
             )
-            checkpoint_provenance["has_context_checkpoint"] = True
         else:
-            clean_embeddings["F"] = clean_embeddings["K2"].clone()
-            shifted_embeddings["F"] = shifted_embeddings["K2"].clone()
-            availability_masks["F"] = availability_masks["K2"].clone()
-            checkpoint_provenance["context"] = "fallback_from_K2"
-            checkpoint_provenance["has_context_checkpoint"] = True
+            ctx_cfg, _ = build_workflow_config(
+                dataset,
+                stage="context",
+                seed=seed,
+                subject=subject,
+                num_subjects=num_subjects,
+                subjects=subjects,
+                eval_batch_size=eval_batch_size,
+                num_workers=num_workers,
+                precision=precision,
+                window_seconds=window_seconds,
+                window_start_offset_seconds=window_start_offset_seconds,
+                mode="train",
+                exp_tag=ctx_tag,
+                word_exp_tag=w_tag,
+                config_path=context_cfg_path,
+            )
+            ctx_res = _encode_stage_with_shifts(
+                ctx_cfg,
+                eval_table,
+                ctx_ckpt,
+                stage="context",
+                split=split,
+                device=torch_device,
+                background_shift_seconds=bg_shifts,
+                control_shift_seconds=ctrl_shift,
+                subtraction_eta=eta_val,
+                show_progress=show_progress,
+            )
+            if ctx_res["event_ids"] != event_ids:
+                raise ValueError(
+                    "Stage 2.1 (context) 与标准事件表的编码事件顺序不一致。"
+                )
+            clean_scores["F"] = (
+                ctx_res["clean_embeddings"]["F"].float() @ vocab_tensor.T
+            ).cpu()
+            shifted_scores["F"] = (
+                ctx_res["shifted_embeddings"]["F"].float() @ vocab_tensor.T
+            ).cpu()
+            availability_masks.update(ctx_res["availability_masks"])
 
-    clean_scores: dict[str, torch.Tensor] = {}
-    shifted_scores: dict[str, torch.Tensor] = {}
-    for state in CANONICAL_STATES:
-        clean_scores[state] = (clean_embeddings[state].float() @ vocab_tensor.T).cpu()
-        shifted_scores[state] = (shifted_embeddings[state].float() @ vocab_tensor.T).cpu()
-
-    canonical_table = getattr(eval_ds, "table", eval_table)
+    active_states = [s for s in CANONICAL_STATES if s in clean_scores]
     segments = build_segment_inventory(dataset, canonical_table, vocabulary)
     eval_word_col = (
         "normalized_word"
@@ -1004,21 +1374,9 @@ def export_neural_vocabulary_scores(
     )
     ref_words = canonical_table[eval_word_col].astype(str).tolist()
     vocab_set = set(vocabulary)
-    in_vocab_mask = torch.tensor([w in vocab_set for w in ref_words], dtype=torch.bool)
-    language = "fr" if dataset == "pallier2025" else "zh"
-
-    if output_path is None:
-        base_out = (
-            results_root()
-            / dataset
-            / (rev_tag if rev_tag else "sequence_decoding")
-            / "s3_protocol"
-            / subset_tag
-            / f"seed-{int(seed):03d}"
-        )
-        out_file = base_out / f"s3_neural_scores_{split}.pt"
-    else:
-        out_file = Path(output_path).resolve()
+    in_vocab_mask = torch.tensor(
+        [w in vocab_set for w in ref_words], dtype=torch.bool
+    )
 
     out_file.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -1029,7 +1387,7 @@ def export_neural_vocabulary_scores(
         "split": split,
         "seed": int(seed),
         "subset": subset_spec,
-        "states": list(CANONICAL_STATES),
+        "states": list(active_states),
         "vocabulary": vocabulary,
         "vocabulary_size": len(vocabulary),
         "vocabulary_train_counts": vocabulary_train_counts,
@@ -1072,7 +1430,7 @@ def export_neural_vocabulary_scores(
             "segments": len(segments),
             "vocabulary_size": len(vocabulary),
             "in_vocabulary_rate": payload["in_vocabulary_rate"],
-            "states": list(CANONICAL_STATES),
+            "states": list(active_states),
             "cms_metadata": payload["cms_metadata"],
             "checkpoints": checkpoint_provenance,
             "checkpoint_provenance": checkpoint_provenance,

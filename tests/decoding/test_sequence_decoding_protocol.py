@@ -888,6 +888,255 @@ def test_vocabulary_frequency_order_and_scaling_sweep() -> None:
     assert "F_local" not in scaling_bundles["V=2"]["conditions"]
 
 
+def test_decoupled_stage_checkpoints_and_incremental_f_reuse(
+    tmp_path, monkeypatch
+) -> None:
+    """验证 S3 三阶段检查点严格解耦（Stage 1 -> S0, Stage 2.1 -> F, Stage 2.3 -> K0/K1/K2）与无 F/增量补 F 缓存复用。"""
+    import json
+    import scripts.decode_sentences as decode_cli
+    from braindecoding.decoding.neural_score_exporter import (
+        resolve_stage_checkpoints,
+    )
+
+    runs_root = tmp_path / "runs"
+    word_ckpt = runs_root / "pallier2025" / "tag_word" / "word" / "all-n10" / "seed-000" / "best.pt"
+    ctx_ckpt = runs_root / "pallier2025" / "tag_ctx" / "context" / "all-n10" / "seed-000" / "best.pt"
+    rev_ckpt = runs_root / "pallier2025" / "tag_rev" / "prefix_revision" / "all-n10" / "seed-000" / "best.pt"
+    for p in (word_ckpt, rev_ckpt):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"ckpt")
+
+    monkeypatch.setenv("BRAINDECODING_RESULTS_DIR", str(runs_root))
+    resolved_no_ctx = resolve_stage_checkpoints(
+        "pallier2025",
+        seed=0,
+        subject="all",
+        exp_tag="tag_rev",
+        word_exp_tag="tag_word",
+        context_exp_tag="tag_ctx",
+        revision_stage="prefix_revision",
+    )
+    assert resolved_no_ctx["word_checkpoint"] == word_ckpt
+    assert resolved_no_ctx["revision_checkpoint"] == rev_ckpt
+    assert resolved_no_ctx["context_checkpoint"] is None
+
+    ctx_ckpt.parent.mkdir(parents=True, exist_ok=True)
+    ctx_ckpt.write_bytes(b"ckpt")
+    resolved_with_ctx = resolve_stage_checkpoints(
+        "pallier2025",
+        seed=0,
+        subject="all",
+        exp_tag="tag_rev",
+        word_exp_tag="tag_word",
+        context_exp_tag="tag_ctx",
+        revision_stage="prefix_revision",
+    )
+    assert resolved_with_ctx["context_checkpoint"] == ctx_ckpt
+    ctx_ckpt.unlink()
+
+    # 验证无 Stage 2.1 (无 F) 时 calibrate -> decode -> evaluate 正常完成且不伪造 F，
+    # 随后补入真实 Stage 2.1 (F) 时增量复用已有 S0/K0/K1/K2 校准与解码结果
+    vocabulary, scorer, _ = _build_toy_french_scorer()
+    vocab_size = len(vocabulary)
+    n_events = 6
+    clean_no_f = {}
+    for s in ("S0", "K0", "K1", "K2"):
+        mat = torch.full((n_events, vocab_size), -1.0, dtype=torch.float32)
+        for idx in range(n_events):
+            mat[idx, idx % vocab_size] = 1.0
+        clean_no_f[s] = mat
+
+    segments = [
+        {
+            "segment_index": 0,
+            "group_id": "sub-01_run-06:0",
+            "material_id": "run-06:0",
+            "subject_id": "sub-01",
+            "recording_id": "run-06",
+            "scope": "run-06",
+            "block_id": "run-06|block-000",
+            "partition": "calibration",
+            "event_indices": [0, 1, 2],
+            "reference_words": [vocabulary[0], vocabulary[1], vocabulary[2]],
+            "in_vocabulary_mask": [True, True, True],
+        },
+        {
+            "segment_index": 1,
+            "group_id": "sub-01_run-06:1",
+            "material_id": "run-06:1",
+            "subject_id": "sub-01",
+            "recording_id": "run-06",
+            "scope": "run-06",
+            "block_id": "run-06|block-000",
+            "partition": "evaluation",
+            "event_indices": [3, 4, 5],
+            "reference_words": [vocabulary[3], vocabulary[4], vocabulary[5]],
+            "in_vocabulary_mask": [True, True, True],
+        },
+    ]
+
+    out_dir = tmp_path / "s3_inc_out"
+    seed_dir = out_dir / "seed-000"
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    val_pt = seed_dir / "neural_vocabulary_scores_val.pt"
+    test_pt = seed_dir / "neural_vocabulary_scores_test.pt"
+    cal_path = seed_dir / "calibration_hyperparameters_val.json"
+    dec_path = seed_dir / "sequence_decoding_test.json"
+
+    prov_no_f = {
+        "word": str(word_ckpt),
+        "context": "not_available",
+        "revision": str(rev_ckpt),
+        "revision_stage": "prefix_revision",
+    }
+    for pt_file, sp_name in ((val_pt, "val"), (test_pt, "test")):
+        torch.save(
+            {
+                "dataset": "pallier2025",
+                "language": "fr",
+                "split": sp_name,
+                "seed": 0,
+                "vocabulary": vocabulary,
+                "vocabulary_size": vocab_size,
+                "vocabulary_embeddings": torch.eye(vocab_size, 16),
+                "clean_scores": clean_no_f,
+                "shifted_scores": {k: v for k, v in clean_no_f.items() if k != "S0"},
+                "segments": segments,
+                "checkpoint_provenance": prov_no_f,
+                "cms_metadata": {"subtraction_eta": 0.0},
+            },
+            pt_file,
+        )
+
+    monkeypatch.setattr(
+        decode_cli,
+        "_load_or_init_language_scorer",
+        lambda *args, **kwargs: scorer,
+    )
+
+    for step_name in ("calibrate", "decode", "evaluate"):
+        args = decode_cli.build_parser().parse_args(
+            [
+                "--step",
+                step_name,
+                "--dataset",
+                "pallier2025",
+                "--split",
+                "test",
+                "--seed",
+                "0",
+                "--exp-tag",
+                "tag_rev",
+                "--word-exp-tag",
+                "tag_word",
+                "--context-exp-tag",
+                "tag_ctx",
+                "--output-dir",
+                str(seed_dir),
+                "--export-path",
+                str(test_pt),
+                "--calibration-path",
+                str(cal_path),
+                "--decoding-path",
+                str(dec_path),
+                "--vocab-sizes",
+                "3,6",
+                "--core-vocab-size",
+                "3",
+                "--no-plot",
+                "--no-progress",
+            ]
+        )
+        res = decode_cli.run_sequence_decoding_pipeline(args)
+        if step_name == "calibrate":
+            assert set(res["state_hyperparameters"].keys()) == {"S0", "K0", "K1", "K2"}
+        elif step_name == "decode":
+            saved_dec = json.loads(dec_path.read_text(encoding="utf-8"))
+            assert "F" not in saved_dec["decoded_bundles"]
+            assert saved_dec["f_condition_mode"] == "not_available"
+        elif step_name == "evaluate":
+            assert "F" not in res["conditions"]
+
+    # 现在补入 Stage 2.1 的 F 得分矩阵，验证 calibrate 与 decode 仅增量计算 F
+    ctx_ckpt.write_bytes(b"ckpt")
+    clean_with_f = dict(clean_no_f)
+    clean_with_f["F"] = clean_no_f["K2"].clone()
+    prov_with_f = {
+        "word": str(word_ckpt),
+        "context": str(ctx_ckpt),
+        "revision": str(rev_ckpt),
+        "revision_stage": "prefix_revision",
+    }
+    for pt_file, sp_name in ((val_pt, "val"), (test_pt, "test")):
+        torch.save(
+            {
+                "dataset": "pallier2025",
+                "language": "fr",
+                "split": sp_name,
+                "seed": 0,
+                "vocabulary": vocabulary,
+                "vocabulary_size": vocab_size,
+                "vocabulary_embeddings": torch.eye(vocab_size, 16),
+                "clean_scores": clean_with_f,
+                "shifted_scores": {k: v for k, v in clean_no_f.items() if k != "S0"},
+                "segments": segments,
+                "checkpoint_provenance": prov_with_f,
+                "cms_metadata": {"subtraction_eta": 0.0},
+            },
+            pt_file,
+        )
+
+    for step_name in ("calibrate", "decode", "evaluate"):
+        args = decode_cli.build_parser().parse_args(
+            [
+                "--step",
+                step_name,
+                "--dataset",
+                "pallier2025",
+                "--split",
+                "test",
+                "--seed",
+                "0",
+                "--exp-tag",
+                "tag_rev",
+                "--word-exp-tag",
+                "tag_word",
+                "--context-exp-tag",
+                "tag_ctx",
+                "--output-dir",
+                str(seed_dir),
+                "--export-path",
+                str(test_pt),
+                "--calibration-path",
+                str(cal_path),
+                "--decoding-path",
+                str(dec_path),
+                "--vocab-sizes",
+                "3,6",
+                "--core-vocab-size",
+                "3",
+                "--no-plot",
+                "--no-progress",
+            ]
+        )
+        res = decode_cli.run_sequence_decoding_pipeline(args)
+        if step_name == "calibrate":
+            assert set(res["state_hyperparameters"].keys()) == {
+                "S0",
+                "K0",
+                "K1",
+                "K2",
+                "F",
+            }
+        elif step_name == "decode":
+            saved_dec = json.loads(dec_path.read_text(encoding="utf-8"))
+            assert "F" in saved_dec["decoded_bundles"]
+            assert saved_dec["f_condition_mode"] == "F_full_context"
+        elif step_name == "evaluate":
+            assert "F" in res["conditions"]
+
+
+
 
 
 

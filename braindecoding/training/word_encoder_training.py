@@ -550,7 +550,6 @@ def encode_loader(
     relation_negative_scores = []
     revision_predictions = {}
     revision_availability_masks = {}
-    full_context_predictions = []
     relation_generator = torch.Generator(device="cpu")
     relation_generator.manual_seed(int(relation_seed))
     local_context_radius = int(getattr(model, "local_context_radius", 1))
@@ -599,17 +598,6 @@ def encode_loader(
                         ).append(batch_availability[delay].cpu())
                     maximum_delay = max(batch_revisions)
                     estimate = batch_revisions[maximum_delay]
-                    full_ctx_est = (
-                        model(meg, subject_indices, sentence_indices)
-                        if event_times is None
-                        else model(
-                            meg,
-                            subject_indices,
-                            sentence_indices,
-                            event_times=event_times,
-                        )
-                    )
-                    full_context_predictions.append(full_ctx_est.float().cpu())
                 elif evaluate_relation_auxiliary:
                     if not bool(
                         getattr(model, "relation_auxiliary_enabled", False)
@@ -674,8 +662,6 @@ def encode_loader(
             delay: torch.cat(values)
             for delay, values in revision_availability_masks.items()
         }
-    if full_context_predictions:
-        encoded["full_context_predictions"] = torch.cat(full_context_predictions)
     return encoded
 
 

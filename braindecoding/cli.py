@@ -1032,7 +1032,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_subject_subset_args(decode_cmd)
     decode_cmd.add_argument("--exp-tag", default=None, help="可选神经训练实验标签")
-    decode_cmd.add_argument("--word-exp-tag", default=None, help="可选阶段 1 实验标签")
+    decode_cmd.add_argument("--word-exp-tag", default=None, help="可选阶段 1 (Word-Only) 实验标签")
+    decode_cmd.add_argument("--context-exp-tag", default=None, help="可选阶段 2.1 (Full-Context) 实验标签")
+    decode_cmd.add_argument("--revision-exp-tag", default=None, help="可选阶段 2.2/2.3 (Rolling-K0/K1/K2) 实验标签")
+    decode_cmd.add_argument("--word-config", default=None, help="可选阶段 1 (Word-Only) 训练 YAML 配置文件")
+    decode_cmd.add_argument("--context-config", default=None, help="可选阶段 2.1 (Full-Context) 训练 YAML 配置文件")
+    decode_cmd.add_argument("--revision-config", default=None, help="可选阶段 2.2/2.3 (Rolling-K0/K1/K2) 训练 YAML 配置文件")
+    decode_cmd.add_argument("--word-checkpoint", default=None, help="可选显式指定阶段 1 (Word-Only) 检查点路径")
+    decode_cmd.add_argument("--context-checkpoint", default=None, help="可选显式指定阶段 2.1 (Full-Context) 检查点路径")
+    decode_cmd.add_argument("--revision-checkpoint", default=None, help="可选显式指定阶段 2.2/2.3 (Rolling-K0/K1/K2) 检查点路径")
     decode_cmd.add_argument(
         "--revision-stage",
         choices=("auto", "revision", "prefix_revision"),

@@ -439,3 +439,91 @@ def test_core_vocabulary_subsets_and_scaling_curve_export(tmp_path: Path) -> Non
     assert "68.33" in txt_content
     assert "100.00" in txt_content
 
+
+def test_multi_subject_group8_canonical_material_alignment_without_material_id() -> None:
+    """验证缺失 material_id 字段的旧解码记录中，k=1 (sub-01_run-06:i) 与 k>1 (k2::sub-01_run-06:i) 能100%对齐材料块。"""
+    from braindecoding.evaluation.sequence_decoding_evaluation import (
+        _compute_s3_paired_significance,
+        _extract_canonical_material_id,
+    )
+
+    assert _extract_canonical_material_id({"group_id": "sub-01_run-06:12"}) == "run-06:12"
+    assert _extract_canonical_material_id({"group_id": "k2::sub-01_run-06:12"}) == "run-06:12"
+    assert _extract_canonical_material_id({"group_id": "k10::sub-02_run-06:0"}) == "run-06:0"
+
+    # 构造 10 个测试材料：
+    # k=1 包含 sub-01 与 sub-02 两个被试（20 条记录），k=2 包含聚合后的 10 条记录，且均省略 material_id
+    k1_records = []
+    k2_records = []
+    for mat_idx in range(10):
+        ref_words = ["le", "petit", "prince", "parle"]
+        for sub_id in ("sub-01", "sub-02"):
+            k1_records.append(
+                {
+                    "segment_index": len(k1_records),
+                    "group_id": f"{sub_id}_run-06:{mat_idx}",
+                    "subject_id": sub_id,
+                    "reference_words": ref_words,
+                    "predicted_words": ["le", "prince", "parle", "petit"],
+                    "in_vocabulary_mask": [True, True, True, True],
+                }
+            )
+        k2_records.append(
+            {
+                "segment_index": mat_idx,
+                "group_id": f"k2::sub-01_run-06:{mat_idx}",
+                "subject_id": "multi_k2",
+                "reference_words": ref_words,
+                "predicted_words": ["le", "petit", "prince", "parle"],
+                "in_vocabulary_mask": [True, True, True, True],
+            }
+        )
+
+    s3_bundle = {"final_sentences": k1_records, "screen_histories": []}
+    ms_bundles = {
+        "k=2": {
+            "k_observations": 2,
+            "conditions": {
+                "S3_clean": {"final_sentences": k2_records},
+            },
+            "by_vocabulary_size": {
+                "V=250": {
+                    "vocabulary_size": 250,
+                    "conditions": {
+                        "S3_clean": {"final_sentences": k2_records},
+                    },
+                }
+            },
+        }
+    }
+    vs_bundles = {
+        "V=250": {
+            "vocabulary_size": 250,
+            "conditions": {
+                "S3_clean": {"final_sentences": k1_records},
+            },
+        }
+    }
+
+    res = _compute_s3_paired_significance(
+        {"S3_clean": s3_bundle},
+        vocabulary_scaling_bundles=vs_bundles,
+        multi_subject_bundles=ms_bundles,
+        language="fr",
+    )
+    group8_rows = [
+        r for r in res.values() if isinstance(r, dict) and int(r.get("group_id", 0)) == 8
+    ]
+    assert len(group8_rows) >= 2
+    for row in group8_rows:
+        assert row["blocks"] == 10
+        if row["metric"] == "Sent BLEU-1":
+            assert row["lhs_value"] == pytest.approx(100.0)
+            assert row["rhs_value"] == pytest.approx(100.0)
+            assert row["effect_pp"] == pytest.approx(0.0)
+        elif row["metric"] == "WER":
+            assert row["lhs_value"] == pytest.approx(0.0)
+            assert row["rhs_value"] == pytest.approx(50.0)
+            assert row["effect_pp"] == pytest.approx(-50.0)
+
+

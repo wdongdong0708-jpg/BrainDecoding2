@@ -124,7 +124,7 @@ def calibrate_state_hyperparameters(
     exported_val_payload: dict,
     scorer: CachedVocabularyLanguageScorer,
     *,
-    states: Sequence[str] = CANONICAL_STATES,
+    states: Sequence[str] | None = None,
     temperature_grid: Sequence[float] = DEFAULT_TEMPERATURE_GRID,
     language_weight_grid: Sequence[float] = DEFAULT_LANGUAGE_WEIGHT_GRID,
     beam_width: int = 5,
@@ -178,6 +178,18 @@ def calibrate_state_hyperparameters(
     lam_list = positive_lam_list if positive_lam_list else raw_lam_list
 
     clean_scores = exported_val_payload["clean_scores"]
+    if states is None or tuple(states) == CANONICAL_STATES:
+        states = tuple(
+            s for s in (states or CANONICAL_STATES) if s in clean_scores
+        )
+        if not states:
+            raise ValueError("导出的验证集得分 clean_scores 为空。")
+    else:
+        states = tuple(states)
+        for state in states:
+            if state not in clean_scores:
+                raise ValueError(f"导出的验证集得分缺少状态 {state!r}。")
+
     state_grids: dict[str, list[dict]] = {}
     unconstrained_best: dict[str, dict] = {}
     best_by_state_and_lambda: dict[str, dict[float, dict]] = {}
@@ -444,18 +456,6 @@ def calibrate_state_hyperparameters(
             selected_states["K0"] = best_triple[0]
             selected_states["K1"] = best_triple[1]
             selected_states["K2"] = best_triple[2]
-            ckpt_prov = dict(
-                exported_val_payload.get("checkpoint_provenance") or {}
-            )
-            if (
-                "F" in selected_states
-                and ckpt_prov.get("context")
-                in (None, "", "not_available", "fallback_from_revision_mature")
-            ):
-                selected_states["F"] = {
-                    **best_triple[2],
-                    "state": "F",
-                }
 
     monotonicity_satisfied = True
     if has_k012:
@@ -466,6 +466,11 @@ def calibrate_state_hyperparameters(
         )
 
     cms_meta = dict(exported_val_payload.get("cms_metadata") or {})
+    ckpt_prov = dict(
+        exported_val_payload.get("checkpoint_provenance")
+        or exported_val_payload.get("checkpoints")
+        or {}
+    )
     result = {
         "schema_version": 2,
         "protocol": "sequence_decoding_s3_calibration",
@@ -474,6 +479,7 @@ def calibrate_state_hyperparameters(
         "split": "val",
         "seed": exported_val_payload.get("seed", 0),
         "cms_eta": cms_meta.get("subtraction_eta"),
+        "checkpoint_provenance": ckpt_prov,
         "calibration_segments": len(cal_segments),
         "metric": metric_name,
         "temperature_grid": temp_list,

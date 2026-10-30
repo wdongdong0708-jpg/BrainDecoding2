@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 from collections import Counter, defaultdict
 from pathlib import Path
+import re
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -152,7 +153,7 @@ def compute_mean_wait_seconds(
 def _extract_canonical_material_id(
     rec: Mapping[str, Any], fallback_idx: int = 0
 ) -> str:
-    """提取跨受试者共享的规范材料段标识（剥离 sub-XX 前缀，保留 run-06:0 / chapter-02:0）。"""
+    """提取跨受试者共享的规范材料段标识（剥离 k*:: 与 sub-XX 前缀，保留 run-06:0 / chapter-02:0）。"""
     mat_id = str(rec.get("material_id") or "").strip()
     scope_id = str(rec.get("scope") or "").strip()
     if mat_id and scope_id and not mat_id.startswith(scope_id):
@@ -161,14 +162,25 @@ def _extract_canonical_material_id(
         return mat_id
     gid = str(rec.get("group_id") or "").strip()
     if gid:
-        parts = [p.strip() for p in gid.split(":") if p.strip()]
-        if len(parts) >= 2 and (
-            parts[0].lower().startswith("sub-")
-            or (parts[0].startswith("S") and parts[0][1:].isdigit())
-            or parts[0].isdigit()
-        ):
-            return ":".join(parts[1:])
-        return gid
+        gid_clean = re.sub(r"^k\d+::", "", gid, flags=re.IGNORECASE).strip()
+        gid_clean = re.sub(
+            r"^(?:sub-\d+|s\d+)(?:[_-]|:+)?",
+            "",
+            gid_clean,
+            flags=re.IGNORECASE,
+        ).strip()
+        parts = [p.strip() for p in gid_clean.split(":") if p.strip()]
+        if len(parts) >= 2 and parts[0].isdigit():
+            tail = ":".join(parts[1:])
+            return f"{scope_id}:{tail}" if scope_id else tail
+        if gid_clean:
+            if (
+                scope_id
+                and ":" not in gid_clean
+                and not gid_clean.startswith(scope_id)
+            ):
+                return f"{scope_id}:{gid_clean}"
+            return gid_clean
     ref = tuple(str(w) for w in (rec.get("reference_words") or ()))
     if ref:
         return f"{scope_id}:{'_'.join(ref[:6])}_{len(ref)}"
@@ -1166,6 +1178,10 @@ def _backfill_intermediate_and_shifted_bundles(
                     "segment_index": rec.get("segment_index", idx),
                     "group_id": rec.get("group_id", ""),
                     "subject_id": rec.get("subject_id", ""),
+                    "recording_id": rec.get("recording_id", ""),
+                    "scope": rec.get("scope", ""),
+                    "material_id": str(rec.get("material_id", "")),
+                    "block_id": rec.get("block_id", rec.get("scope", "")),
                     "reference_words": list(rec.get("reference_words", [])),
                     "predicted_words": list(init_k0),
                     "top5_words_per_pos": k0_top5,
@@ -1235,6 +1251,21 @@ def _backfill_intermediate_and_shifted_bundles(
                         ),
                         "subject_id": hist.get(
                             "subject_id", base_rec.get("subject_id", "")
+                        ),
+                        "recording_id": hist.get(
+                            "recording_id", base_rec.get("recording_id", "")
+                        ),
+                        "scope": hist.get(
+                            "scope", base_rec.get("scope", "")
+                        ),
+                        "material_id": str(
+                            hist.get(
+                                "material_id", base_rec.get("material_id", "")
+                            )
+                        ),
+                        "block_id": hist.get(
+                            "block_id",
+                            base_rec.get("block_id", base_rec.get("scope", "")),
                         ),
                         "reference_words": list(
                             hist.get(
@@ -1311,6 +1342,10 @@ def _backfill_intermediate_and_shifted_bundles(
                     "segment_index": rec.get("segment_index", idx),
                     "group_id": rec.get("group_id", ""),
                     "subject_id": rec.get("subject_id", ""),
+                    "recording_id": rec.get("recording_id", ""),
+                    "scope": rec.get("scope", ""),
+                    "material_id": str(rec.get("material_id", "")),
+                    "block_id": rec.get("block_id", rec.get("scope", "")),
                     "reference_words": list(rec.get("reference_words", [])),
                     "predicted_words": list(init_k0),
                     "top5_words_per_pos": k0_top5,

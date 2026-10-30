@@ -1703,6 +1703,7 @@ def _segment_record_base(seg: dict) -> dict:
         "subject_id": seg["subject_id"],
         "recording_id": seg["recording_id"],
         "scope": seg["scope"],
+        "material_id": str(seg.get("material_id", "")),
         "block_id": seg.get("block_id", seg["scope"]),
         "reference_words": list(seg["reference_words"]),
     }
@@ -2409,7 +2410,10 @@ def run_multi_subject_observation_sweep(
                 conds_full["S0"] = dict(single_subject_full_vocab_bundles["S0_clean"])
         else:
             full_jobs: dict[str, dict] = {}
-            if reuse_bundle is None:
+            has_s3_clean = all(
+                k in available_clean for k in ("K0", "K1", "K2")
+            )
+            if reuse_bundle is None and has_s3_clean:
                 full_jobs["S3_clean"] = {
                     "condition": condition,
                     "alignment": alignment,
@@ -2424,27 +2428,38 @@ def run_multi_subject_observation_sweep(
                     "alignment": "shifted",
                     "include_screen_history": False,
                 }
-            full_results = decode_dataset_segment_jobs(
-                agg_payload,
-                scorer,
-                hyperparameters,
-                full_jobs,
-                beam_width=beam_width,
-                candidate_top_k=candidate_top_k,
-                segment_batch_size=segment_batch_size,
-                max_segments=max_segments,
-                show_progress=show_progress,
-                progress_desc=(
-                    f"S3 Multi-Subject [k={k_int} (eff={k_eff}) | full vocab | "
-                    f"{len(full_jobs)} conditions batched]"
-                ),
+            full_results = (
+                decode_dataset_segment_jobs(
+                    agg_payload,
+                    scorer,
+                    hyperparameters,
+                    full_jobs,
+                    beam_width=beam_width,
+                    candidate_top_k=candidate_top_k,
+                    segment_batch_size=segment_batch_size,
+                    max_segments=max_segments,
+                    show_progress=show_progress,
+                    progress_desc=(
+                        f"S3 Multi-Subject [k={k_int} (eff={k_eff}) | full vocab | "
+                        f"{len(full_jobs)} conditions batched]"
+                    ),
+                )
+                if full_jobs
+                else {}
             )
-            bundle = (
-                reuse_bundle
-                if reuse_bundle is not None
-                else dict(full_results.pop("S3_clean"))
-            )
-            conds_full = {"S3_clean": dict(bundle)}
+            if reuse_bundle is not None:
+                bundle = reuse_bundle
+                conds_full = {"S3_clean": dict(bundle)}
+            elif "S3_clean" in full_results:
+                bundle = dict(full_results.pop("S3_clean"))
+                conds_full = {"S3_clean": dict(bundle)}
+            elif full_results:
+                first_cond_b = next(iter(full_results.values()))
+                bundle = dict(first_cond_b)
+                conds_full = {}
+            else:
+                bundle = {"segment_count": 0, "final_sentences": []}
+                conds_full = {}
             conds_full.update(full_results)
 
         by_vocab: dict[str, dict] = {}
@@ -2468,14 +2483,14 @@ def run_multi_subject_observation_sweep(
                 continue
 
             active_indices = freq_indices[:eff_v]
-            v_jobs: dict[str, dict] = {
-                "S3_clean": {
+            v_jobs: dict[str, dict] = {}
+            if all(k in available_clean for k in ("K0", "K1", "K2")):
+                v_jobs["S3_clean"] = {
                     "condition": "S3",
                     "alignment": "clean",
                     "include_screen_history": False,
                     "allowed_vocab_indices": active_indices,
                 }
-            }
             for st_key in ("S0", "K0"):
                 if st_key in available_clean:
                     v_jobs[st_key] = {
@@ -2490,20 +2505,24 @@ def run_multi_subject_observation_sweep(
                     "include_screen_history": False,
                     "allowed_vocab_indices": active_indices,
                 }
-            v_conds: dict[str, dict] = decode_dataset_segment_jobs(
-                agg_payload,
-                scorer,
-                hyperparameters,
-                v_jobs,
-                beam_width=beam_width,
-                candidate_top_k=candidate_top_k,
-                segment_batch_size=segment_batch_size,
-                max_segments=max_segments,
-                show_progress=show_progress,
-                progress_desc=(
-                    f"S3 Multi-Subject [k={k_int} (eff={k_eff}) | V={eff_v} | "
-                    f"{len(v_jobs)} conditions batched]"
-                ),
+            v_conds: dict[str, dict] = (
+                decode_dataset_segment_jobs(
+                    agg_payload,
+                    scorer,
+                    hyperparameters,
+                    v_jobs,
+                    beam_width=beam_width,
+                    candidate_top_k=candidate_top_k,
+                    segment_batch_size=segment_batch_size,
+                    max_segments=max_segments,
+                    show_progress=show_progress,
+                    progress_desc=(
+                        f"S3 Multi-Subject [k={k_int} (eff={k_eff}) | V={eff_v} | "
+                        f"{len(v_jobs)} conditions batched]"
+                    ),
+                )
+                if v_jobs
+                else {}
             )
             by_vocab[v_key] = {
                 "vocabulary_size": int(eff_v),
@@ -2662,7 +2681,18 @@ def run_vocabulary_scaling_sweep(
             if isinstance(existing_entry, dict)
             else {}
         )
-        required_keys = ["S3_clean", "S0", "K0", "S3_shifted_neg75s"]
+        has_s3_clean_scores = all(
+            k in available_clean for k in ("K0", "K1", "K2")
+        )
+        required_keys: list[str] = []
+        if has_s3_clean_scores:
+            required_keys.append("S3_clean")
+        if "S0" in available_clean:
+            required_keys.append("S0")
+        if "K0" in available_clean:
+            required_keys.append("K0")
+        if "K2" in available_shifted:
+            required_keys.append("S3_shifted_neg75s")
         if is_core_benchmark_scale or eff_n == full_v_size:
             if "K1" in available_clean:
                 required_keys.append("K1")
@@ -2677,7 +2707,11 @@ def run_vocabulary_scaling_sweep(
         if (
             eff_n == full_v_size
             and isinstance(full_vocab_bundles, dict)
-            and "S3_clean" in full_vocab_bundles
+            and (
+                not has_s3_clean_scores
+                or "S3_clean" in full_vocab_bundles
+            )
+            and bool(full_vocab_bundles)
         ):
             raw_reused: dict[str, dict] = dict(existing_conds)
             for k in (
@@ -2748,7 +2782,7 @@ def run_vocabulary_scaling_sweep(
             ("S0", "K0", "K1") if is_core_benchmark_scale else ("S0", "K0")
         )
         scale_jobs: dict[str, dict] = {}
-        if "S3_clean" not in cond_map:
+        if has_s3_clean_scores and "S3_clean" not in cond_map:
             scale_jobs["S3_clean"] = {
                 "condition": "S3",
                 "alignment": "clean",

@@ -2919,10 +2919,38 @@ def upgrade_and_refresh_saved_multi_seed_reports(
                         lang_name = str(raw_bundle.get("language") or prev_sum.get("language") or ("fr" if ds_name == "pallier2025" else "zh"))
                         decoded_map = dict(raw_bundle.get("decoded_bundles") or raw_bundle.get("conditions") or {})
                         decoded_map.pop("F_local", None)
-                        ms_map = dict(raw_bundle.get("multi_subject_bundles") or raw_bundle.get("multi_subject_sweep") or {})
-                        vs_map = dict(raw_bundle.get("vocabulary_scaling_bundles") or raw_bundle.get("vocabulary_scaling") or {})
-                        state_hp = raw_bundle.get("state_hyperparameters") or prev_sum.get("state_hyperparameters")
+                        raw_prov = dict(raw_bundle.get("checkpoint_provenance") or prev_sum.get("checkpoint_provenance") or {})
+                        ctx_prov_txt = str(raw_prov.get("context") or "").strip()
                         f_mode = raw_bundle.get("f_condition_mode") or prev_sum.get("f_condition_mode")
+                        fake_ctx = (
+                            ctx_prov_txt.startswith("full_sentence_transformer_from_")
+                            or ctx_prov_txt.startswith("fallback_from_")
+                            or str(f_mode or "") == "F_from_K2"
+                        )
+                        if fake_ctx:
+                            decoded_map.pop("F", None)
+                            decoded_map.pop("F_clean", None)
+                            f_mode = "not_available"
+                        ms_map = dict(raw_bundle.get("multi_subject_bundles") or raw_bundle.get("multi_subject_sweep") or {})
+                        raw_vs_map = dict(raw_bundle.get("vocabulary_scaling_bundles") or raw_bundle.get("vocabulary_scaling") or {})
+                        vs_map: dict[str, Any] = {}
+                        for sk, sb in raw_vs_map.items():
+                            if fake_ctx and isinstance(sb, Mapping):
+                                sb_copy = dict(sb)
+                                sb_conds = dict(sb_copy.get("conditions") or {})
+                                sb_conds.pop("F", None)
+                                sb_conds.pop("F_clean", None)
+                                sb_copy["conditions"] = sb_conds
+                                vs_map[sk] = sb_copy
+                            else:
+                                vs_map[sk] = sb
+                        state_hp_raw = raw_bundle.get("state_hyperparameters") or prev_sum.get("state_hyperparameters")
+                        if isinstance(state_hp_raw, Mapping):
+                            state_hp = dict(state_hp_raw)
+                            if fake_ctx:
+                                state_hp.pop("F", None)
+                        else:
+                            state_hp = None
                         exp_tag_val = raw_bundle.get("exp_tag") or prev_sum.get("exp_tag")
                         cms_eta_val = raw_bundle.get("cms_eta") if raw_bundle.get("cms_eta") is not None else prev_sum.get("cms_eta")
                         if decoded_map:

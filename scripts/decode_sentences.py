@@ -110,6 +110,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="可选阶段 1 (word) 实验标签（默认读取环境变量 BRAINDECODING_WORD_EXP_TAG）",
     )
     parser.add_argument(
+        "--context-exp-tag",
+        default=None,
+        help="可选阶段 2.1 (context) 实验标签（默认读取环境变量 BRAINDECODING_CONTEXT_EXP_TAG；填 off/disable 可禁用 Full-Context）",
+    )
+    parser.add_argument(
+        "--revision-exp-tag",
+        default=None,
+        help="可选阶段 2.2/2.3 (revision/prefix_revision) 实验标签（默认跟随 --exp-tag）",
+    )
+    parser.add_argument(
+        "--word-config",
+        default=None,
+        help="可选阶段 1 (word) 训练 YAML 配置文件路径",
+    )
+    parser.add_argument(
+        "--context-config",
+        default=None,
+        help="可选阶段 2.1 (context) 训练 YAML 配置文件路径",
+    )
+    parser.add_argument(
+        "--revision-config",
+        default=None,
+        help="可选阶段 2.2/2.3 (revision/prefix_revision) 训练 YAML 配置文件路径",
+    )
+    parser.add_argument(
+        "--word-checkpoint",
+        default=None,
+        help="可选显式指定阶段 1 (word) 检查点文件路径",
+    )
+    parser.add_argument(
+        "--context-checkpoint",
+        default=None,
+        help="可选显式指定阶段 2.1 (context) 检查点文件路径",
+    )
+    parser.add_argument(
+        "--revision-checkpoint",
+        default=None,
+        help="可选显式指定阶段 2.2/2.3 (revision/prefix_revision) 检查点文件路径",
+    )
+    parser.add_argument(
         "--revision-stage",
         choices=("auto", "revision", "prefix_revision"),
         default="auto",
@@ -466,6 +506,22 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         if getattr(args, "word_exp_tag", None) is not None
         else (os.environ.get("BRAINDECODING_WORD_EXP_TAG", "").strip() or yaml_word_exp_tag or None)
     )
+    context_exp_tag = (
+        getattr(args, "context_exp_tag", None)
+        if getattr(args, "context_exp_tag", None) is not None
+        else (os.environ.get("BRAINDECODING_CONTEXT_EXP_TAG", "").strip() or None)
+    )
+    revision_exp_tag = (
+        getattr(args, "revision_exp_tag", None)
+        if getattr(args, "revision_exp_tag", None) is not None
+        else exp_tag
+    )
+    word_config_arg = getattr(args, "word_config", None)
+    context_config_arg = getattr(args, "context_config", None)
+    revision_config_arg = getattr(args, "revision_config", None)
+    word_ckpt_arg = getattr(args, "word_checkpoint", None)
+    context_ckpt_arg = getattr(args, "context_checkpoint", None)
+    revision_ckpt_arg = getattr(args, "revision_checkpoint", None)
 
     top_k = int(
         args.top_k
@@ -600,8 +656,11 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     }
 
     from braindecoding.decoding.neural_score_exporter import (
+        _is_fake_provenance,
+        _same_checkpoint_path,
         export_neural_vocabulary_scores,
         load_neural_vocabulary_scores,
+        resolve_stage_checkpoints,
     )
     from braindecoding.decoding.rolling_beam_search import (
         decode_dataset_segment_jobs,
@@ -619,6 +678,27 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     force_rerun = bool(getattr(args, "force", False))
+    resolved_ckpts = resolve_stage_checkpoints(
+        args.dataset,
+        seed=args.seed,
+        subject=args.subject,
+        num_subjects=args.num_subjects,
+        subjects=args.subjects,
+        exp_tag=exp_tag,
+        word_exp_tag=word_exp_tag,
+        context_exp_tag=context_exp_tag,
+        revision_exp_tag=revision_exp_tag,
+        word_checkpoint=word_ckpt_arg,
+        context_checkpoint=context_ckpt_arg,
+        revision_checkpoint=revision_ckpt_arg,
+        revision_stage=effective_rev_stage,
+        config_path=training_cfg_path,
+        word_config=word_config_arg,
+        context_config=context_config_arg,
+        revision_config=revision_config_arg,
+        window_seconds=window_seconds,
+        window_start_offset_seconds=window_start_offset_seconds,
+    )
 
     def _run_export_for_split(target_split: str, target_out: Path) -> Path:
         return export_neural_vocabulary_scores(
@@ -630,13 +710,22 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             subjects=args.subjects,
             exp_tag=exp_tag,
             word_exp_tag=word_exp_tag,
+            context_exp_tag=context_exp_tag,
+            revision_exp_tag=revision_exp_tag,
+            word_checkpoint=word_ckpt_arg,
+            context_checkpoint=context_ckpt_arg,
+            revision_checkpoint=revision_ckpt_arg,
             revision_stage=effective_rev_stage,
             config_path=training_cfg_path,
+            word_config=word_config_arg,
+            context_config=context_config_arg,
+            revision_config=revision_config_arg,
             window_seconds=window_seconds,
             window_start_offset_seconds=window_start_offset_seconds,
             background_shift_seconds=cms_shifts,
             control_shift_seconds=control_shift,
             subtraction_eta=cms_eta,
+            reuse_existing_states=not force_rerun,
             output_path=target_out,
             device=args.device or "auto",
             show_progress=show_progress,
@@ -652,17 +741,51 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 or payload.get("checkpoints")
                 or {}
             )
+            clean_sc = dict(payload.get("clean_scores") or {})
+            for p_val in (
+                ckpt_prov.get("word"),
+                ckpt_prov.get("context"),
+                ckpt_prov.get("revision"),
+            ):
+                txt = str(p_val or "").strip()
+                if txt.startswith("fallback_from_") or txt.startswith(
+                    "full_sentence_transformer_from_"
+                ):
+                    return False
+
             saved_rev_stage = ckpt_prov.get("revision_stage")
             if (
                 effective_rev_stage in ("revision", "prefix_revision")
                 and saved_rev_stage
+                and saved_rev_stage != "not_available"
                 and saved_rev_stage != effective_rev_stage
             ):
                 return False
-            if ckpt_prov.get("context") in (None, "", "not_available"):
+
+            cur_rev = resolved_ckpts.get("revision_checkpoint")
+            cur_word = resolved_ckpts.get("word_checkpoint")
+            cur_ctx = resolved_ckpts.get("context_checkpoint")
+            if cur_rev is not None:
+                if not all(k in clean_sc for k in ("K0", "K1", "K2")):
+                    return False
+                if not _same_checkpoint_path(ckpt_prov.get("revision"), cur_rev):
+                    return False
+            if cur_word is not None:
+                if "S0" not in clean_sc:
+                    return False
+                if not _same_checkpoint_path(ckpt_prov.get("word"), cur_word):
+                    return False
+            if cur_ctx is not None:
+                if "F" not in clean_sc:
+                    return False
+                if not _same_checkpoint_path(ckpt_prov.get("context"), cur_ctx):
+                    return False
+            elif (
+                (cur_rev is not None or cur_word is not None)
+                and "F" in clean_sc
+            ):
                 return False
-            if "F" not in (payload.get("clean_scores") or {}):
-                return False
+
             cms_meta = dict(payload.get("cms_metadata") or {})
             if "subtraction_eta" not in cms_meta:
                 return True
@@ -672,13 +795,6 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
     export_was_regenerated = False
     if args.step in ("export", "all"):
-        if (
-            args.step == "all"
-            and args.split != "val"
-            and (force_rerun or not _export_matches_cms_eta(val_export_path, cms_eta))
-        ):
-            _run_export_for_split("val", val_export_path)
-            export_was_regenerated = True
         if (
             args.step == "all"
             and not force_rerun
@@ -746,13 +862,18 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             else bool(cal_cfg.get("shared_language_weight", False))
         )
 
-        reused_calibration: dict[str, Any] | None = None
-        if (
-            args.step == "all"
-            and not force_rerun
-            and not export_was_regenerated
-            and calibration_path.is_file()
-        ):
+        ref_prov: dict[str, Any] = {}
+        required_cal_states: tuple[str, ...] = ()
+        if "exported_payload" in locals() and isinstance(exported_payload, dict):
+            ref_prov = dict(exported_payload.get("checkpoint_provenance") or {})
+            ref_clean = dict(exported_payload.get("clean_scores") or {})
+            required_cal_states = tuple(
+                st for st in ("S0", "K0", "K1", "K2", "F") if st in ref_clean
+            )
+
+        reusable_cal_states: dict[str, dict[str, Any]] = {}
+        existing_cal_base: dict[str, Any] | None = None
+        if not force_rerun and calibration_path.is_file():
             try:
                 existing_cal = json.loads(
                     calibration_path.read_text(encoding="utf-8")
@@ -774,37 +895,117 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 eta_ok = saved_eta is None or (
                     abs(float(saved_eta) - float(cms_eta)) <= 1e-6
                 )
-                k2_lam_ok = (
-                    isinstance(existing_cal.get("states"), dict)
-                    and float(
-                        existing_cal["states"]
-                        .get("K2", {})
-                        .get("language_weight", 0.0)
-                    )
-                    >= min_lam_cfg - 1e-6
-                )
                 shared_mode_ok = (
                     bool(existing_cal.get("shared_language_weight", False))
                     == shared_lam_cfg
                 )
+                saved_states = existing_cal.get("states")
+                saved_cal_prov = dict(
+                    existing_cal.get("checkpoint_provenance") or {}
+                )
                 if (
-                    cal_stage_ok
-                    and saved_temps == expected_temps
+                    saved_temps == expected_temps
                     and eta_ok
-                    and k2_lam_ok
                     and shared_mode_ok
-                    and isinstance(existing_cal.get("states"), dict)
-                    and all(
-                        k in existing_cal["states"]
-                        for k in ("S0", "K0", "K1", "K2", "F")
-                    )
+                    and isinstance(saved_states, dict)
                 ):
-                    reused_calibration = existing_cal
-            except Exception:
-                reused_calibration = None
+                    existing_cal_base = existing_cal
+                    cur_w = ref_prov.get("word") or resolved_ckpts.get(
+                        "word_checkpoint"
+                    )
+                    saved_w = saved_cal_prov.get("word")
+                    if (
+                        "S0" in saved_states
+                        and isinstance(saved_states["S0"], dict)
+                        and not str(
+                            saved_states["S0"].get("note", "")
+                        ).startswith("fallback_from_")
+                        and not _is_fake_provenance(saved_w)
+                        and (
+                            not saved_w
+                            or not cur_w
+                            or str(cur_w) == "not_available"
+                            or _same_checkpoint_path(saved_w, cur_w)
+                        )
+                    ):
+                        reusable_cal_states["S0"] = dict(saved_states["S0"])
 
-        if reused_calibration is not None:
-            calibration_res = reused_calibration
+                    cur_r = ref_prov.get("revision") or resolved_ckpts.get(
+                        "revision_checkpoint"
+                    )
+                    saved_r = saved_cal_prov.get("revision")
+                    k2_lam_ok = (
+                        float(
+                            saved_states.get("K2", {}).get(
+                                "language_weight", 0.0
+                            )
+                        )
+                        >= min_lam_cfg - 1e-6
+                    )
+                    if (
+                        cal_stage_ok
+                        and k2_lam_ok
+                        and all(
+                            k in saved_states
+                            and isinstance(saved_states[k], dict)
+                            for k in ("K0", "K1", "K2")
+                        )
+                        and not _is_fake_provenance(saved_r)
+                        and (
+                            not saved_r
+                            or not cur_r
+                            or str(cur_r) == "not_available"
+                            or _same_checkpoint_path(saved_r, cur_r)
+                        )
+                    ):
+                        for k_st in ("K0", "K1", "K2"):
+                            reusable_cal_states[k_st] = dict(saved_states[k_st])
+
+                    cur_c = ref_prov.get("context") or resolved_ckpts.get(
+                        "context_checkpoint"
+                    )
+                    saved_c = saved_cal_prov.get("context")
+                    has_real_cur_c = bool(
+                        cur_c and str(cur_c) != "not_available"
+                    )
+                    ctx_prov_ok = (
+                        bool(saved_c)
+                        and not _is_fake_provenance(saved_c)
+                        and _same_checkpoint_path(saved_c, cur_c)
+                        if has_real_cur_c
+                        else not _is_fake_provenance(saved_c)
+                    )
+                    if (
+                        "F" in saved_states
+                        and isinstance(saved_states["F"], dict)
+                        and not str(
+                            saved_states["F"].get("note", "")
+                        ).startswith("fallback_from_")
+                        and ctx_prov_ok
+                    ):
+                        reusable_cal_states["F"] = dict(saved_states["F"])
+            except Exception:
+                reusable_cal_states = {}
+                existing_cal_base = None
+
+        if (
+            existing_cal_base is not None
+            and required_cal_states
+            and all(st in reusable_cal_states for st in required_cal_states)
+        ):
+            calibration_res = dict(existing_cal_base)
+            calibration_res["states"] = {
+                st: reusable_cal_states[st] for st in required_cal_states
+            }
+            if ref_prov:
+                calibration_res["checkpoint_provenance"] = dict(ref_prov)
+            try:
+                calibration_path.write_text(
+                    json.dumps(calibration_res, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
         else:
             cal_source_path = (
                 val_export_path
@@ -814,35 +1015,91 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             if force_rerun or not _export_matches_cms_eta(cal_source_path, cms_eta):
                 _run_export_for_split("val", cal_source_path)
             val_payload = load_neural_vocabulary_scores(cal_source_path)
-            scorer = _get_or_init_shared_scorer(list(val_payload["vocabulary"]))
-            calibration_res = calibrate_state_hyperparameters(
-                val_payload,
-                scorer,
-                temperature_grid=temp_grid,
-                language_weight_grid=lambda_grid,
-                beam_width=beam_width,
-                candidate_top_k=top_k,
-                segment_batch_size=segment_batch_size,
-                metric_name=str(cal_cfg.get("metric", "composite")),
-                enforce_monotonic_lambda=bool(
-                    cal_cfg.get("enforce_monotonic_lambda", True)
-                ),
-                shared_language_weight=shared_lam_cfg,
-                min_language_weight=min_lam_cfg,
-                use_calibration_partition=bool(
-                    cal_cfg.get("use_calibration_partition", True)
-                ),
-                max_calibration_segments=args.max_segments
-                or cal_cfg.get("max_calibration_segments", 64),
-                output_path=calibration_path,
-                show_progress=show_progress,
-            )
+            val_clean = dict(val_payload.get("clean_scores") or {})
             val_prov = dict(val_payload.get("checkpoint_provenance") or {})
+            if not required_cal_states:
+                required_cal_states = tuple(
+                    st for st in ("S0", "K0", "K1", "K2", "F") if st in val_clean
+                )
+            missing_cal_states = [
+                st
+                for st in required_cal_states
+                if st not in reusable_cal_states and st in val_clean
+            ]
+            if any(st in missing_cal_states for st in ("K0", "K1", "K2")) or (
+                shared_lam_cfg and missing_cal_states
+            ):
+                for k_st in ("K0", "K1", "K2"):
+                    if k_st in val_clean and k_st not in missing_cal_states:
+                        missing_cal_states.append(k_st)
+                if shared_lam_cfg:
+                    missing_cal_states = [
+                        st for st in required_cal_states if st in val_clean
+                    ]
+            states_to_run = tuple(
+                st for st in ("S0", "K0", "K1", "K2", "F") if st in missing_cal_states
+            )
+            if not states_to_run and existing_cal_base is not None:
+                calibration_res = dict(existing_cal_base)
+                calibration_res["states"] = {
+                    st: reusable_cal_states[st]
+                    for st in required_cal_states
+                    if st in reusable_cal_states
+                }
+            else:
+                scorer = _get_or_init_shared_scorer(
+                    list(val_payload["vocabulary"])
+                )
+                partial_res = calibrate_state_hyperparameters(
+                    val_payload,
+                    scorer,
+                    states=states_to_run if states_to_run else required_cal_states,
+                    temperature_grid=temp_grid,
+                    language_weight_grid=lambda_grid,
+                    beam_width=beam_width,
+                    candidate_top_k=top_k,
+                    segment_batch_size=segment_batch_size,
+                    metric_name=str(cal_cfg.get("metric", "composite")),
+                    enforce_monotonic_lambda=bool(
+                        cal_cfg.get("enforce_monotonic_lambda", True)
+                    ),
+                    shared_language_weight=shared_lam_cfg,
+                    min_language_weight=min_lam_cfg,
+                    use_calibration_partition=bool(
+                        cal_cfg.get("use_calibration_partition", True)
+                    ),
+                    max_calibration_segments=args.max_segments
+                    or cal_cfg.get("max_calibration_segments", 64),
+                    output_path=None,
+                    show_progress=show_progress,
+                )
+                merged_states: dict[str, Any] = {}
+                for st in required_cal_states:
+                    if st in partial_res.get("states", {}):
+                        merged_states[st] = partial_res["states"][st]
+                    elif st in reusable_cal_states:
+                        merged_states[st] = reusable_cal_states[st]
+                calibration_res = dict(partial_res)
+                calibration_res["states"] = merged_states
+                if existing_cal_base is not None and isinstance(
+                    existing_cal_base.get("grids"), dict
+                ):
+                    merged_grids = dict(existing_cal_base["grids"])
+                    merged_grids.update(partial_res.get("grids") or {})
+                    calibration_res["grids"] = {
+                        st: merged_grids[st]
+                        for st in required_cal_states
+                        if st in merged_grids
+                    }
+            calibration_res["checkpoint_provenance"] = (
+                dict(ref_prov) if ref_prov else dict(val_prov)
+            )
             calibration_res["revision_stage"] = str(
                 val_prov.get("revision_stage") or effective_rev_stage or ""
             )
             calibration_res["cms_eta"] = float(cms_eta)
             try:
+                calibration_path.parent.mkdir(parents=True, exist_ok=True)
                 calibration_path.write_text(
                     json.dumps(calibration_res, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
@@ -857,6 +1114,14 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             _run_export_for_split(args.split, export_path)
             export_was_regenerated = True
         split_payload = load_neural_vocabulary_scores(export_path)
+        available_clean = split_payload.get("clean_scores", {})
+        available_shifted = split_payload.get("shifted_scores", {})
+        ckpt_prov = dict(split_payload.get("checkpoint_provenance") or {})
+        has_real_context = "F" in available_clean and not _is_fake_provenance(
+            ckpt_prov.get("context")
+        )
+        has_s3_clean = all(k in available_clean for k in ("K0", "K1", "K2"))
+        f_mode = "F_full_context" if has_real_context else "not_available"
         if calibration_path.is_file():
             cal_json = json.loads(calibration_path.read_text(encoding="utf-8"))
             hyperparameters = cal_json
@@ -865,31 +1130,57 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 "states": {
                     s: {"temperature": 0.07, "language_weight": 0.15}
                     for s in ("S0", "K0", "K1", "K2", "F")
+                    if s in available_clean
                 }
             }
 
         decoded_bundles: dict[str, Any] = {}
         multi_subject_bundles: dict[str, Any] = {}
         vocabulary_scaling_bundles: dict[str, Any] = {}
-        available_clean = split_payload.get("clean_scores", {})
-        available_shifted = split_payload.get("shifted_scores", {})
-        ckpt_prov = dict(split_payload.get("checkpoint_provenance") or {})
-        has_real_context = "F" in available_clean
-        f_mode = "F_full_context" if has_real_context else "not_available"
         total_split_segs = len(split_payload.get("segments") or [])
         expected_seg_count = (
             min(total_split_segs, int(args.max_segments))
             if args.max_segments is not None
             else total_split_segs
         )
-        target_states_hp = hyperparameters.get("states", hyperparameters)
+        target_states_hp = dict(
+            hyperparameters.get("states", hyperparameters) or {}
+        )
+        if not has_real_context:
+            target_states_hp.pop("F", None)
 
-        if not force_rerun and not export_was_regenerated and decoding_path.is_file():
+        if not force_rerun and decoding_path.is_file():
             try:
                 existing_dec = json.loads(
                     decoding_path.read_text(encoding="utf-8")
                 )
-                existing_prov = dict(existing_dec.get("checkpoint_provenance") or {})
+                existing_prov = dict(
+                    existing_dec.get("checkpoint_provenance") or {}
+                )
+                saved_hp = dict(
+                    existing_dec.get("state_hyperparameters") or {}
+                )
+
+                def _hp_matches_state(st: str) -> bool:
+                    if st not in target_states_hp:
+                        return True
+                    return (
+                        isinstance(saved_hp.get(st), dict)
+                        and isinstance(target_states_hp.get(st), dict)
+                        and abs(
+                            float(saved_hp[st].get("temperature", -1.0))
+                            - float(target_states_hp[st].get("temperature", -2.0))
+                        )
+                        <= 1e-6
+                        and abs(
+                            float(saved_hp[st].get("language_weight", -1.0))
+                            - float(
+                                target_states_hp[st].get("language_weight", -2.0)
+                            )
+                        )
+                        <= 1e-6
+                    )
+
                 saved_dec_stage = existing_prov.get("revision_stage")
                 cur_dec_stage = ckpt_prov.get("revision_stage")
                 dec_stage_ok = (
@@ -899,54 +1190,104 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 )
                 saved_rev_ckpt = existing_prov.get("revision")
                 cur_rev_ckpt = ckpt_prov.get("revision")
-                dec_ckpt_ok = (
+                rev_ckpt_ok = not _is_fake_provenance(saved_rev_ckpt) and (
                     not saved_rev_ckpt
                     or not cur_rev_ckpt
-                    or str(saved_rev_ckpt) == str(cur_rev_ckpt)
+                    or str(cur_rev_ckpt) == "not_available"
+                    or _same_checkpoint_path(saved_rev_ckpt, cur_rev_ckpt)
                 )
-                saved_hp = existing_dec.get("state_hyperparameters") or {}
-                hp_matches = all(
-                    isinstance(saved_hp.get(st), dict)
-                    and isinstance(target_states_hp.get(st), dict)
-                    and abs(
-                        float(saved_hp[st].get("temperature", -1.0))
-                        - float(target_states_hp[st].get("temperature", -2.0))
+                rev_ok = bool(
+                    dec_stage_ok
+                    and rev_ckpt_ok
+                    and all(
+                        _hp_matches_state(st)
+                        for st in ("K0", "K1", "K2")
+                        if st in available_clean
                     )
-                    <= 1e-6
-                    and abs(
-                        float(saved_hp[st].get("language_weight", -1.0))
-                        - float(target_states_hp[st].get("language_weight", -2.0))
-                    )
-                    <= 1e-6
-                    for st in ("K0", "K1", "K2")
-                    if st in target_states_hp
                 )
+
+                saved_w_ckpt = existing_prov.get("word")
+                cur_w_ckpt = ckpt_prov.get("word")
+                word_ok = bool(
+                    "S0" in available_clean
+                    and not _is_fake_provenance(saved_w_ckpt)
+                    and (
+                        not saved_w_ckpt
+                        or not cur_w_ckpt
+                        or str(cur_w_ckpt) == "not_available"
+                        or _same_checkpoint_path(saved_w_ckpt, cur_w_ckpt)
+                    )
+                    and _hp_matches_state("S0")
+                )
+
+                saved_c_ckpt = existing_prov.get("context")
+                cur_c_ckpt = ckpt_prov.get("context")
+                has_real_cur_c = bool(
+                    cur_c_ckpt and str(cur_c_ckpt) != "not_available"
+                )
+                ctx_ckpt_ok = (
+                    bool(saved_c_ckpt)
+                    and not _is_fake_provenance(saved_c_ckpt)
+                    and _same_checkpoint_path(saved_c_ckpt, cur_c_ckpt)
+                    if has_real_cur_c
+                    else (
+                        not _is_fake_provenance(saved_c_ckpt)
+                        and str(existing_dec.get("f_condition_mode", ""))
+                        != "F_from_K2"
+                    )
+                )
+                ctx_ok = bool(
+                    has_real_context
+                    and ctx_ckpt_ok
+                    and _hp_matches_state("F")
+                )
+
+                def _cond_reusable(cond_name: str, cond_obj: Any) -> bool:
+                    if not isinstance(cond_obj, dict):
+                        return False
+                    if int(cond_obj.get("segment_count", -1)) != expected_seg_count:
+                        return False
+                    if cond_name == "F_local":
+                        return False
+                    if cond_name == "LM-Only":
+                        return True
+                    if cond_name in ("S0", "S0_clean"):
+                        return word_ok
+                    if cond_name in ("F", "F_clean"):
+                        return ctx_ok
+                    if cond_name in (
+                        "K0",
+                        "K1",
+                        "S3_clean",
+                        "K0_shifted_neg75s",
+                        "S3_shifted_neg75s",
+                    ):
+                        return rev_ok
+                    return False
+
                 if (
                     existing_dec.get("dataset") == args.dataset
                     and existing_dec.get("split") == args.split
                     and int(existing_dec.get("seed", -1)) == int(args.seed)
-                    and dec_stage_ok
-                    and dec_ckpt_ok
-                    and hp_matches
                 ):
                     for cond_k, cond_b in (
                         existing_dec.get("decoded_bundles") or {}
                     ).items():
-                        if cond_k == "F_local":
-                            continue
                         if (
                             cond_k == "S3_shifted_neg75s"
                             and isinstance(cond_b, dict)
                             and not cond_b.get("screen_histories")
                         ):
                             continue
-                        if (
-                            isinstance(cond_b, dict)
-                            and int(cond_b.get("segment_count", -1))
-                            == expected_seg_count
-                        ):
+                        if _cond_reusable(cond_k, cond_b):
                             decoded_bundles[cond_k] = cond_b
-                    if isinstance(existing_dec.get("multi_subject_bundles"), dict):
+                    if (
+                        rev_ok
+                        and (word_ok or "S0" not in available_clean)
+                        and isinstance(
+                            existing_dec.get("multi_subject_bundles"), dict
+                        )
+                    ):
                         multi_subject_bundles = dict(
                             existing_dec["multi_subject_bundles"]
                         )
@@ -956,17 +1297,17 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         if not isinstance(scale_b, dict):
                             continue
                         conds_b = scale_b.get("conditions")
-                        s3_b = (
-                            conds_b.get("S3_clean")
-                            if isinstance(conds_b, dict)
-                            else None
-                        )
-                        if (
-                            isinstance(s3_b, dict)
-                            and int(s3_b.get("segment_count", -1))
-                            == expected_seg_count
-                        ):
-                            vocabulary_scaling_bundles[str(scale_k)] = scale_b
+                        if not isinstance(conds_b, dict):
+                            continue
+                        filtered_conds = {
+                            ck: cb
+                            for ck, cb in conds_b.items()
+                            if _cond_reusable(ck, cb)
+                        }
+                        if filtered_conds:
+                            scale_copy = dict(scale_b)
+                            scale_copy["conditions"] = filtered_conds
+                            vocabulary_scaling_bundles[str(scale_k)] = scale_copy
             except Exception:
                 decoded_bundles = {}
                 multi_subject_bundles = {}
@@ -1027,13 +1368,13 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     "condition": baseline_mode,
                     "alignment": "clean",
                 }
-        if "S3_clean" not in decoded_bundles:
+        if has_s3_clean and "S3_clean" not in decoded_bundles:
             main_jobs["S3_clean"] = {"condition": "S3", "alignment": "clean"}
         if has_real_context and "F" in available_clean and "F" not in decoded_bundles:
             main_jobs["F"] = {"condition": "F", "alignment": "clean"}
         if "K0" in available_shifted and "K0_shifted_neg75s" not in decoded_bundles:
             main_jobs["K0_shifted_neg75s"] = {"condition": "K0", "alignment": "shifted"}
-        if "S3_shifted_neg75s" not in decoded_bundles:
+        if "K2" in available_shifted and "S3_shifted_neg75s" not in decoded_bundles:
             main_jobs["S3_shifted_neg75s"] = {
                 "condition": "S3",
                 "alignment": "shifted",
@@ -1077,11 +1418,19 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 if s_key not in vocabulary_scaling_bundles:
                     return True
                 conds = vocabulary_scaling_bundles[s_key].get("conditions") or {}
-                req = ["S3_clean", "S0", "K0", "S3_shifted_neg75s"]
+                req: list[str] = []
+                if has_s3_clean:
+                    req.append("S3_clean")
+                if "S0" in available_clean:
+                    req.append("S0")
+                if "K0" in available_clean:
+                    req.append("K0")
+                if "K2" in available_shifted:
+                    req.append("S3_shifted_neg75s")
                 if n_val <= max_core_v or n_val == full_vocab_len:
                     if "K1" in available_clean:
                         req.append("K1")
-                    if "F" in available_clean:
+                    if has_real_context and "F" in available_clean:
                         req.append("F")
                     if "K0" in available_shifted:
                         req.append("K0_shifted_neg75s")
@@ -1127,6 +1476,15 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         ]
 
         def _multi_subject_complete() -> bool:
+            req_ms: list[str] = []
+            if has_s3_clean:
+                req_ms.append("S3_clean")
+            if "S0" in available_clean:
+                req_ms.append("S0")
+            if "K0" in available_clean:
+                req_ms.append("K0")
+            if "K2" in available_shifted:
+                req_ms.append("S3_shifted_neg75s")
             for k_key in expected_k_keys:
                 if k_key not in multi_subject_bundles:
                     return False
@@ -1134,10 +1492,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 if not isinstance(ms_entry, dict):
                     return False
                 ms_conds = ms_entry.get("conditions") or {}
-                if not all(
-                    c_k in ms_conds
-                    for c_k in ("S3_clean", "S0", "K0", "S3_shifted_neg75s")
-                ):
+                if not all(c_k in ms_conds for c_k in req_ms):
                     return False
                 by_v = ms_entry.get("by_vocabulary_size")
                 if not isinstance(by_v, dict) or not by_v:
@@ -1193,26 +1548,50 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     "language", "fr" if args.dataset == "pallier2025" else "zh"
                 )
             )
+            bundle_prov = dict(bundle.get("checkpoint_provenance") or {})
+            bundle_f_mode = str(bundle.get("f_condition_mode") or "")
+            fake_ctx_in_bundle = (
+                _is_fake_provenance(bundle_prov.get("context"))
+                or bundle_f_mode == "F_from_K2"
+            )
             if "state_hyperparameters" not in results_summary and bundle.get(
                 "state_hyperparameters"
             ):
-                results_summary["state_hyperparameters"] = bundle[
-                    "state_hyperparameters"
-                ]
+                shp = dict(bundle["state_hyperparameters"])
+                if fake_ctx_in_bundle:
+                    shp.pop("F", None)
+                results_summary["state_hyperparameters"] = shp
             if "f_condition_mode" not in results_summary and bundle.get(
                 "f_condition_mode"
             ):
-                results_summary["f_condition_mode"] = bundle["f_condition_mode"]
+                results_summary["f_condition_mode"] = (
+                    "not_available"
+                    if fake_ctx_in_bundle
+                    else bundle["f_condition_mode"]
+                )
             if "decoding_path" not in results_summary:
                 results_summary["decoding_path"] = str(decoding_path)
             decoded_bundles_map = dict(bundle.get("decoded_bundles") or {})
             decoded_bundles_map.pop("F_local", None)
+            if fake_ctx_in_bundle:
+                decoded_bundles_map.pop("F", None)
+                decoded_bundles_map.pop("F_clean", None)
             multi_subject_bundles_map = dict(
                 bundle.get("multi_subject_bundles") or {}
             )
-            vocabulary_scaling_bundles_map = dict(
+            vocabulary_scaling_bundles_map = {}
+            for sk, sb in (
                 bundle.get("vocabulary_scaling_bundles") or {}
-            )
+            ).items():
+                if isinstance(sb, dict) and fake_ctx_in_bundle:
+                    sb_copy = dict(sb)
+                    sb_conds = dict(sb_copy.get("conditions") or {})
+                    sb_conds.pop("F", None)
+                    sb_conds.pop("F_clean", None)
+                    sb_copy["conditions"] = sb_conds
+                    vocabulary_scaling_bundles_map[sk] = sb_copy
+                else:
+                    vocabulary_scaling_bundles_map[sk] = sb
 
         word_embedding_map = None
         if not bool(args.no_bertscore) and (
