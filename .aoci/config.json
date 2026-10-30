@@ -173,6 +173,28 @@
         "created_by": "human",
         "order": 0,
         "enabled": true
+      },
+      {
+        "rule_id": "manifests-frozen-protocols",
+        "action": "observe",
+        "pattern": "data/manifests/**",
+        "pattern_kind": "glob",
+        "reason": "frozen protocol manifests are guarded by tests and AGENTS.md; keep out of whole-index to cut token cost",
+        "source": "user",
+        "created_by": "human",
+        "order": 10,
+        "enabled": true
+      },
+      {
+        "rule_id": "training-and-evaluation-configs",
+        "action": "observe",
+        "pattern": "configs/**",
+        "pattern_kind": "glob",
+        "reason": "yaml configs are read on demand; keep out of whole-index to cut token cost",
+        "source": "user",
+        "created_by": "human",
+        "order": 10,
+        "enabled": true
       }
     ]
   },

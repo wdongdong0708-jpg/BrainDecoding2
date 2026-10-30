@@ -15,14 +15,14 @@ language_model:
     - Qwen/Qwen3-4B-Base
   precision: bf16-mixed
   score_batch_size: 256
-  max_prefix_cache_states: 1024
+  max_prefix_cache_states: 2048
   context_tokens: 8192
 
 decoding:
   architecture: unified_left_to_right_beam_search_with_streaming_screen_audit
   beam_width: 5
   candidate_top_k: 20
-  segment_batch_size: 128
+  segment_batch_size: 192
   states:
     - S0
     - K0
@@ -107,8 +107,6 @@ evaluation:
     - 50
     - 100
     - 250
-    - 500
-    - 1000
     - 2020
   confidence_gate:
     enabled: true
