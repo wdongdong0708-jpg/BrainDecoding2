@@ -185,157 +185,184 @@ def calibrate_state_hyperparameters(
     batch_sz = max(1, int(segment_batch_size))
 
     total_grid_evals = len(states) * len(temp_list) * len(lam_list)
+
+    # ------------------------------------------------------------------
+    # 阶段 1：规划全部 (state, T_r, λ_r) 网格点（保留 α=T·λ 去重与 F≡K2 复用语义）
+    # ------------------------------------------------------------------
+    copy_from_k2_states: set[str] = set()
+    planned_rows: dict[str, list[tuple[float, float, float]]] = {}
+    decode_configs: list[tuple[str, float, float, float]] = []
+    lp_by_state_temp: dict[tuple[str, float], np.ndarray] = {}
+    zero_metrics_by_state: dict[str, dict[str, float]] = {}
+    seen_states: list[str] = []
+
+    for state in states:
+        if state not in clean_scores:
+            raise ValueError(f"导出的验证集得分缺少状态 {state!r}。")
+        raw_matrix = clean_scores[state]
+        if (
+            state == "F"
+            and "K2" in seen_states
+            and np.allclose(
+                np.asarray(raw_matrix, dtype=np.float32),
+                np.asarray(clean_scores["K2"], dtype=np.float32),
+                atol=1e-6,
+            )
+        ):
+            copy_from_k2_states.add(state)
+            seen_states.append(state)
+            continue
+        seen_states.append(state)
+
+        alpha_seen: set[float] = set()
+        # 当 λ_r == 0.0 时，Top-1 神经预测与温度 T_r 无关，只需计算一次
+        if 0.0 in lam_list:
+            lp_any = compute_neural_log_probabilities(
+                raw_matrix, temp_list[0], top_k=candidate_top_k
+            )
+            top1_idx = np.argmax(lp_any, axis=-1)
+            zero_preds = [
+                [vocabulary[int(top1_idx[i])] for i in seg["event_indices"]]
+                for seg in cal_segments
+            ]
+            zero_metrics_by_state[state] = _evaluate_decoded_segments(
+                cal_segments,
+                zero_preds,
+                language=language,
+                metric_name=metric_name,
+            )
+            alpha_seen.add(0.0)
+
+        rows_plan: list[tuple[float, float, float]] = []
+        for temp in temp_list:
+            lp_by_state_temp[(state, float(temp))] = compute_neural_log_probabilities(
+                raw_matrix, temp, top_k=candidate_top_k
+            )
+            for lam in lam_list:
+                alpha_key = round(float(temp) * float(lam), 9)
+                rows_plan.append((float(temp), float(lam), alpha_key))
+                if alpha_key not in alpha_seen:
+                    alpha_seen.add(alpha_key)
+                    decode_configs.append(
+                        (state, float(temp), float(lam), alpha_key)
+                    )
+        planned_rows[state] = rows_plan
+
+    # ------------------------------------------------------------------
+    # 阶段 2：将全部待解码网格点 × 校准句段合并为跨状态、逐句段 λ 的同步批量束搜索
+    #         （同一句段的不同网格点相邻排入同一批次，共享语言模型前缀 KV-Cache）
+    # ------------------------------------------------------------------
+    decode_items: list[tuple[int, int]] = [
+        (cfg_i, seg_i)
+        for seg_i in range(len(cal_segments))
+        for cfg_i in range(len(decode_configs))
+    ]
+    preds_by_cfg: list[list[list[str] | None]] = [
+        [None] * len(cal_segments) for _ in decode_configs
+    ]
     pbar = (
         tqdm(
-            total=total_grid_evals,
-            desc=f"S3 Calibrate [{len(cal_segments)} segs]",
-            unit="grid",
+            total=len(decode_items),
+            desc=(
+                f"S3 Calibrate [{len(cal_segments)} segs × "
+                f"{len(decode_configs)}/{total_grid_evals} grid]"
+            ),
+            unit="seg",
             leave=True,
         )
-        if show_progress
+        if show_progress and decode_items
         else None
     )
-
     try:
-        for state in states:
-            if state not in clean_scores:
-                raise ValueError(f"导出的验证集得分缺少状态 {state!r}。")
-            raw_matrix = clean_scores[state]
-            if (
-                state == "F"
-                and "K2" in state_grids
-                and np.allclose(
-                    np.asarray(raw_matrix, dtype=np.float32),
-                    np.asarray(clean_scores["K2"], dtype=np.float32),
-                    atol=1e-6,
-                )
-            ):
-                grid_rows = [
-                    {**row, "state": "F"} for row in state_grids["K2"]
-                ]
-                best_for_lam = {
-                    lam_k: {**row, "state": "F"}
-                    for lam_k, row in best_by_state_and_lambda["K2"].items()
-                }
-                temp_lam_map = {
-                    tl_k: {**row, "state": "F"}
-                    for tl_k, row in by_state_temp_lam["K2"].items()
-                }
-                state_grids["F"] = grid_rows
-                unconstrained_best["F"] = {
-                    **unconstrained_best["K2"],
-                    "state": "F",
-                }
-                best_by_state_and_lambda["F"] = best_for_lam
-                by_state_temp_lam["F"] = temp_lam_map
-                if pbar is not None:
-                    pbar.update(len(temp_list) * len(lam_list))
-                continue
-
-            grid_rows: list[dict] = []
-            best_for_lam: dict[float, dict] = {}
-            temp_lam_map: dict[tuple[float, float], dict] = {}
-            alpha_eval_cache: dict[float, dict[str, float]] = {}
-
-            # 当 λ_r == 0.0 时，Top-1 神经预测与温度 T_r 无关，只需计算一次
-            zero_lam_metrics: dict[str, float] | None = None
-            if 0.0 in lam_list:
-                lp_any = compute_neural_log_probabilities(
-                    raw_matrix, temp_list[0], top_k=candidate_top_k
-                )
-                top1_idx = np.argmax(lp_any, axis=-1)
-                zero_preds = [
-                    [vocabulary[int(top1_idx[i])] for i in seg["event_indices"]]
-                    for seg in cal_segments
-                ]
-                zero_lam_metrics = _evaluate_decoded_segments(
-                    cal_segments,
-                    zero_preds,
-                    language=language,
-                    metric_name=metric_name,
-                )
-                alpha_eval_cache[0.0] = zero_lam_metrics
-
-            for temp in temp_list:
-                lp_matrix = compute_neural_log_probabilities(
-                    raw_matrix, temp, top_k=candidate_top_k
-                )
-                for lam in lam_list:
-                    alpha_key = round(float(temp) * float(lam), 9)
-                    if alpha_key in alpha_eval_cache:
-                        eval_res = dict(alpha_eval_cache[alpha_key])
-                    else:
-                        preds: list[list[str]] = []
-                        for start_i in range(0, len(cal_segments), batch_sz):
-                            batch_segs = cal_segments[
-                                start_i : start_i + batch_sz
-                            ]
-                            batch_mats = [
-                                lp_matrix[seg["event_indices"]]
-                                for seg in batch_segs
-                            ]
-                            batch_decs = decode_segments_static_batched(
-                                batch_mats,
-                                vocabulary,
-                                scorer,
-                                language_weight=lam,
-                                beam_width=beam_width,
-                                candidate_top_k=candidate_top_k,
-                            )
-                            for dec in batch_decs:
-                                preds.append(dec["final_words"])
-                        eval_res = _evaluate_decoded_segments(
-                            cal_segments,
-                            preds,
-                            language=language,
-                            metric_name=metric_name,
-                        )
-                        alpha_eval_cache[alpha_key] = dict(eval_res)
-
-                    row = {
-                        "state": state,
-                        "temperature": float(temp),
-                        "language_weight": float(lam),
-                        **eval_res,
-                    }
-                    grid_rows.append(row)
-                    temp_lam_map[(float(temp), float(lam))] = row
-
-                    prev_best_lam = best_for_lam.get(float(lam))
-                    if prev_best_lam is None or (
-                        row["selection_score"],
-                        -row["temperature"],
-                    ) > (
-                        prev_best_lam["selection_score"],
-                        -prev_best_lam["temperature"],
-                    ):
-                        best_for_lam[float(lam)] = row
-
-                    if pbar is not None:
-                        pbar.set_postfix(
-                            state=state,
-                            T=f"{temp:.2f}",
-                            lam=f"{lam:.2f}",
-                            score=f"{eval_res['selection_score'] * 100:.1f}%",
-                        )
-                        pbar.update(1)
-
-            # 无约束最优：按 selection_score 降序，平局优先选择较小 language_weight 与较小锐利温度
-            winner = sorted(
-                grid_rows,
-                key=lambda item: (
-                    -round(item["selection_score"], 9),
-                    item["temperature"],
-                    item["language_weight"],
-                ),
-            )[0]
-            state_grids[state] = grid_rows
-            unconstrained_best[state] = dict(winner)
-            best_by_state_and_lambda[state] = best_for_lam
-            by_state_temp_lam[state] = temp_lam_map
+        for start_i in range(0, len(decode_items), batch_sz):
+            chunk = decode_items[start_i : start_i + batch_sz]
+            batch_mats = []
+            batch_lams = []
+            for cfg_i, seg_i in chunk:
+                state, temp, lam, _ = decode_configs[cfg_i]
+                lp_matrix = lp_by_state_temp[(state, temp)]
+                batch_mats.append(lp_matrix[cal_segments[seg_i]["event_indices"]])
+                batch_lams.append(lam)
+            batch_decs = decode_segments_static_batched(
+                batch_mats,
+                vocabulary,
+                scorer,
+                language_weight=batch_lams,
+                beam_width=beam_width,
+                candidate_top_k=candidate_top_k,
+            )
+            for (cfg_i, seg_i), dec in zip(chunk, batch_decs):
+                preds_by_cfg[cfg_i][seg_i] = list(dec["final_words"])
+            if pbar is not None:
+                pbar.update(len(chunk))
     finally:
         if pbar is not None:
             pbar.close()
+
+    eval_by_state_alpha: dict[tuple[str, float], dict[str, float]] = {}
+    for cfg_i, (state, _, _, alpha_key) in enumerate(decode_configs):
+        eval_by_state_alpha[(state, alpha_key)] = _evaluate_decoded_segments(
+            cal_segments,
+            [p if p is not None else [] for p in preds_by_cfg[cfg_i]],
+            language=language,
+            metric_name=metric_name,
+        )
+    for state, zero_metrics in zero_metrics_by_state.items():
+        eval_by_state_alpha[(state, 0.0)] = zero_metrics
+
+    # ------------------------------------------------------------------
+    # 阶段 3：按原网格顺序回填结果行与各状态最优（选择规则与逐点串行实现完全一致）
+    # ------------------------------------------------------------------
+    for state in states:
+        if state in copy_from_k2_states:
+            state_grids["F"] = [{**row, "state": "F"} for row in state_grids["K2"]]
+            unconstrained_best["F"] = {**unconstrained_best["K2"], "state": "F"}
+            best_by_state_and_lambda["F"] = {
+                lam_k: {**row, "state": "F"}
+                for lam_k, row in best_by_state_and_lambda["K2"].items()
+            }
+            by_state_temp_lam["F"] = {
+                tl_k: {**row, "state": "F"}
+                for tl_k, row in by_state_temp_lam["K2"].items()
+            }
+            continue
+
+        grid_rows: list[dict] = []
+        best_for_lam: dict[float, dict] = {}
+        temp_lam_map: dict[tuple[float, float], dict] = {}
+        for temp, lam, alpha_key in planned_rows[state]:
+            eval_res = dict(eval_by_state_alpha[(state, alpha_key)])
+            row = {
+                "state": state,
+                "temperature": float(temp),
+                "language_weight": float(lam),
+                **eval_res,
+            }
+            grid_rows.append(row)
+            temp_lam_map[(float(temp), float(lam))] = row
+            prev_best_lam = best_for_lam.get(float(lam))
+            if prev_best_lam is None or (
+                row["selection_score"],
+                -row["temperature"],
+            ) > (
+                prev_best_lam["selection_score"],
+                -prev_best_lam["temperature"],
+            ):
+                best_for_lam[float(lam)] = row
+
+        # 无约束最优：按 selection_score 降序，平局优先选择较小 language_weight 与较小锐利温度
+        winner = sorted(
+            grid_rows,
+            key=lambda item: (
+                -round(item["selection_score"], 9),
+                item["temperature"],
+                item["language_weight"],
+            ),
+        )[0]
+        state_grids[state] = grid_rows
+        unconstrained_best[state] = dict(winner)
+        best_by_state_and_lambda[state] = best_for_lam
+        by_state_temp_lam[state] = temp_lam_map
 
     selected_states: dict[str, dict] = {
         state: dict(unconstrained_best[state]) for state in states

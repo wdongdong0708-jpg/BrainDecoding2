@@ -604,6 +604,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         load_neural_vocabulary_scores,
     )
     from braindecoding.decoding.rolling_beam_search import (
+        decode_dataset_segment_jobs,
         decode_dataset_segments,
         run_multi_subject_observation_sweep,
         run_vocabulary_scaling_sweep,
@@ -1000,88 +1001,60 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             )
 
         any_main_decoded = False
-        for baseline_mode in ("LM-Only", "S0", "K0", "K1"):
-            if baseline_mode != "LM-Only" and baseline_mode not in available_clean:
-                continue
-            if baseline_mode in decoded_bundles:
-                continue
-            decoded_bundles[baseline_mode] = decode_dataset_segments(
+        if "LM-Only" not in decoded_bundles:
+            decoded_bundles["LM-Only"] = decode_dataset_segments(
                 split_payload,
                 _ensure_scorer(),
                 hyperparameters,
-                condition=baseline_mode,
+                condition="LM-Only",
                 alignment="clean",
                 beam_width=beam_width,
                 candidate_top_k=top_k,
                 segment_batch_size=segment_batch_size,
                 max_segments=args.max_segments,
                 show_progress=show_progress,
-                progress_desc=f"S3 Decode [{baseline_mode} | {args.split}]",
+                progress_desc=f"S3 Decode [LM-Only | {args.split}]",
             )
             any_main_decoded = True
 
+        # 全部神经解码条件合并为单次同步批量束搜索：静态条件（S0/K0/K1/F/Shifted-K0）
+        # 逐句段 λ 合并为一个批次，流式条件（Rolling-K2 / Shifted-K2）合并为一个批次，
+        # 同一句段的不同条件相邻排入同一批次以共享语言模型前缀 KV-Cache。
+        main_jobs: dict[str, dict] = {}
+        for baseline_mode in ("S0", "K0", "K1"):
+            if baseline_mode in available_clean and baseline_mode not in decoded_bundles:
+                main_jobs[baseline_mode] = {
+                    "condition": baseline_mode,
+                    "alignment": "clean",
+                }
         if "S3_clean" not in decoded_bundles:
-            decoded_bundles["S3_clean"] = decode_dataset_segments(
-                split_payload,
-                _ensure_scorer(),
-                hyperparameters,
-                condition="S3",
-                alignment="clean",
-                beam_width=beam_width,
-                candidate_top_k=top_k,
-                segment_batch_size=segment_batch_size,
-                max_segments=args.max_segments,
-                show_progress=show_progress,
-                progress_desc=f"S3 Decode [Rolling-K2 | {args.split}]",
-            )
-            any_main_decoded = True
-
+            main_jobs["S3_clean"] = {"condition": "S3", "alignment": "clean"}
         if has_real_context and "F" in available_clean and "F" not in decoded_bundles:
-            decoded_bundles["F"] = decode_dataset_segments(
-                split_payload,
-                _ensure_scorer(),
-                hyperparameters,
-                condition="F",
-                alignment="clean",
-                beam_width=beam_width,
-                candidate_top_k=top_k,
-                segment_batch_size=segment_batch_size,
-                max_segments=args.max_segments,
-                show_progress=show_progress,
-                progress_desc=f"S3 Decode [Full-Context | {args.split}]",
-            )
-            any_main_decoded = True
-
+            main_jobs["F"] = {"condition": "F", "alignment": "clean"}
         if "K0" in available_shifted and "K0_shifted_neg75s" not in decoded_bundles:
-            decoded_bundles["K0_shifted_neg75s"] = decode_dataset_segments(
-                split_payload,
-                _ensure_scorer(),
-                hyperparameters,
-                condition="K0",
-                alignment="shifted",
-                beam_width=beam_width,
-                candidate_top_k=top_k,
-                segment_batch_size=segment_batch_size,
-                max_segments=args.max_segments,
-                show_progress=show_progress,
-                progress_desc=f"S3 Decode [K0_shifted_-75s | {args.split}]",
-            )
-            any_main_decoded = True
-
+            main_jobs["K0_shifted_neg75s"] = {"condition": "K0", "alignment": "shifted"}
         if "S3_shifted_neg75s" not in decoded_bundles:
-            decoded_bundles["S3_shifted_neg75s"] = decode_dataset_segments(
-                split_payload,
-                _ensure_scorer(),
-                hyperparameters,
-                condition="S3",
-                alignment="shifted",
-                beam_width=beam_width,
-                candidate_top_k=top_k,
-                segment_batch_size=segment_batch_size,
-                max_segments=args.max_segments,
-                include_screen_history=True,
-                show_progress=show_progress,
-                progress_desc=f"S3 Decode [Shifted-K2 (-75s) | {args.split}]",
+            main_jobs["S3_shifted_neg75s"] = {
+                "condition": "S3",
+                "alignment": "shifted",
+                "include_screen_history": True,
+            }
+        if main_jobs:
+            decoded_bundles.update(
+                decode_dataset_segment_jobs(
+                    split_payload,
+                    _ensure_scorer(),
+                    hyperparameters,
+                    main_jobs,
+                    beam_width=beam_width,
+                    candidate_top_k=top_k,
+                    segment_batch_size=segment_batch_size,
+                    max_segments=args.max_segments,
+                    show_progress=show_progress,
+                    progress_desc=(
+                        f"S3 Decode [{len(main_jobs)} conditions batched | {args.split}]"
+                    ),
+                )
             )
             any_main_decoded = True
 

@@ -238,12 +238,84 @@ def _unstack_padded_kv_cache(
     return per_item
 
 
+def _fuse_kv_cache(past_key_values: object) -> torch.Tensor:
+    """将批量 past_key_values 融合为单块连续张量 [num_layers, 2, batch, heads, seq, dim]（单次 stack 内核）。"""
+    legacy = _to_legacy_kv_tuples(past_key_values)
+    num_layers = len(legacy)
+    flat = [tensor for layer in legacy for tensor in layer]
+    fused = torch.stack(flat, dim=0)
+    return fused.view(num_layers, 2, *fused.shape[1:])
+
+
+def _fused_kv_length(fused_kv: torch.Tensor) -> int:
+    """返回单样本融合 KV 张量 [num_layers, 2, heads, seq, dim] 的序列长度。"""
+    return int(fused_kv.shape[3])
+
+
+def _stack_fused_kv_caches(
+    fused_caches: Sequence[torch.Tensor],
+    reference_cache: object,
+) -> tuple[object, list[int], int]:
+    """将多个单样本融合 KV 张量左填充对齐为批量 Cache。
+
+    每个样本仅需 1 次 copy 内核（旧实现为 num_layers × 2 次 pad + cat），
+    对 Qwen3-8B（36 层）可将 KV 拼接内核调用数降低约 72 倍。
+    """
+    past_lengths = [_fused_kv_length(kv) for kv in fused_caches]
+    max_past_len = max(past_lengths)
+    first = fused_caches[0]
+    num_layers, two, num_heads, _, head_dim = first.shape
+    bsz = len(fused_caches)
+    if min(past_lengths) == max_past_len:
+        buffer = torch.stack(list(fused_caches), dim=2)
+    else:
+        buffer = first.new_zeros(
+            (num_layers, two, bsz, num_heads, max_past_len, head_dim)
+        )
+        for row_i, (kv, p_len) in enumerate(zip(fused_caches, past_lengths)):
+            buffer[:, :, row_i, :, max_past_len - p_len :, :].copy_(kv)
+    legacy = tuple(
+        (buffer[layer_idx, 0], buffer[layer_idx, 1])
+        for layer_idx in range(num_layers)
+    )
+    return (
+        _from_legacy_kv_tuples(legacy, reference_cache),
+        past_lengths,
+        max_past_len,
+    )
+
+
+def _unstack_fused_kv_caches(
+    batched_cache: object,
+    past_lengths: Sequence[int],
+    step_lengths: Sequence[int],
+    max_past_len: int,
+) -> list[torch.Tensor]:
+    """将批量前向后的 past_key_values 切回各样本真实长度的单块融合 KV 张量（每样本 1 次 stack 内核）。"""
+    legacy = _to_legacy_kv_tuples(batched_cache)
+    num_layers = len(legacy)
+    flat = [tensor for layer in legacy for tensor in layer]
+    per_item: list[torch.Tensor] = []
+    for item_idx, (p_len, s_len) in enumerate(zip(past_lengths, step_lengths)):
+        start_col = max_past_len - int(p_len)
+        end_col = max_past_len + int(s_len)
+        item = torch.stack(
+            [tensor[item_idx, :, start_col:end_col, :] for tensor in flat], dim=0
+        )
+        per_item.append(item.view(num_layers, 2, *item.shape[1:]))
+    return per_item
+
+
 @dataclass
 class PrefixCacheState:
-    """束搜索单个前缀束的语言模型增量缓存状态（支持按需惰性物化与跨步/跨搜索复用）。"""
+    """束搜索单个前缀束的语言模型增量缓存状态（支持按需惰性物化与跨步/跨搜索复用）。
+
+    `past_key_values` 以单块连续融合张量 [num_layers, 2, heads, seq, dim] 存储，
+    批量拼接/拆分时每个前缀仅需 1 次 GPU 内核调用。
+    """
 
     words: tuple[str, ...]
-    past_key_values: tuple[tuple[torch.Tensor, torch.Tensor], ...] | None
+    past_key_values: torch.Tensor | None
     last_log_probs: torch.Tensor | None
     token_length: int
     context_kind: str
@@ -437,13 +509,13 @@ class CachedVocabularyLanguageScorer:
             use_cache=True,
         )
         self._reference_cache_type = outputs.past_key_values
-        legacy_kv = _to_legacy_kv_tuples(outputs.past_key_values)
+        fused_kv = _fuse_kv_cache(outputs.past_key_values)[:, :, 0].contiguous()
         last_logits = outputs.logits[0, -1, :].float()
         last_log_probs = F_nn.log_softmax(last_logits, dim=-1)
         init_ctx = prefix_context_kind((), self.language)
         self._prompt_cache_state = PrefixCacheState(
             words=(),
-            past_key_values=legacy_kv,
+            past_key_values=fused_kv,
             last_log_probs=last_log_probs,
             token_length=len(self.prompt_ids),
             context_kind=init_ctx,
@@ -513,7 +585,7 @@ class CachedVocabularyLanguageScorer:
 
         unique_specs.sort(
             key=lambda item: (
-                int(item[1].past_key_values[0][0].shape[2]),
+                _fused_kv_length(item[1].past_key_values),
                 len(item[2]),
             )
         )
@@ -522,7 +594,7 @@ class CachedVocabularyLanguageScorer:
             batch = unique_specs[start : start + self.max_batch_size]
             bsz = len(batch)
             parent_kvs = [item[1].past_key_values for item in batch]
-            batched_kv, past_lengths, max_past_len = _stack_padded_kv_caches(
+            batched_kv, past_lengths, max_past_len = _stack_fused_kv_caches(
                 parent_kvs, self._reference_cache_type
             )
             step_lengths = [len(item[2]) for item in batch]
@@ -567,12 +639,13 @@ class CachedVocabularyLanguageScorer:
 
             outputs = self.model(**model_kwargs)
             self.stats["prefix_advance_batches"] += 1
-            unstacked_kvs = _unstack_padded_kv_cache(
+            unstacked_kvs = _unstack_fused_kv_caches(
                 outputs.past_key_values,
                 past_lengths,
                 step_lengths,
                 max_past_len,
             )
+            del batched_kv
             last_indices = torch.tensor(
                 [s_len - 1 for s_len in step_lengths],
                 dtype=torch.long,
@@ -580,17 +653,16 @@ class CachedVocabularyLanguageScorer:
             )
             batch_rows = torch.arange(bsz, dtype=torch.long, device=self.device)
             last_logits = outputs.logits[batch_rows, last_indices, :].float()
+            del outputs
             last_lps = F_nn.log_softmax(last_logits, dim=-1)
-            first_lps_gpu = torch.stack(
+            first_tok_index = torch.stack(
                 [
-                    last_lps[row_i].index_select(
-                        0,
-                        self.first_token_device_map[st_group[0].context_kind],
-                    )
-                    for row_i, (_, _, _, st_group) in enumerate(batch)
+                    self.first_token_device_map[st_group[0].context_kind]
+                    for (_, _, _, st_group) in batch
                 ],
                 dim=0,
             )
+            first_lps_gpu = torch.gather(last_lps, 1, first_tok_index)
             first_lps_batch_np = first_lps_gpu.detach().cpu().numpy()
 
             for row_i, (words_key, _, _, st_group) in enumerate(batch):
@@ -751,7 +823,7 @@ class CachedVocabularyLanguageScorer:
         multi_items = list(unique_step_groups.items())
         multi_items.sort(
             key=lambda item: (
-                int(item[1][0].past_key_values[0][0].shape[2]),
+                _fused_kv_length(item[1][0].past_key_values),
                 len(item[1][1]),
             )
         )
@@ -760,7 +832,7 @@ class CachedVocabularyLanguageScorer:
             batch_items = multi_items[start : start + self.max_batch_size]
             bsz = len(batch_items)
             batch_kvs = [item[1][0].past_key_values for item in batch_items]
-            batched_kv, past_lengths, max_past_len = _stack_padded_kv_caches(
+            batched_kv, past_lengths, max_past_len = _stack_fused_kv_caches(
                 batch_kvs, self._reference_cache_type
             )
             step_lengths = [len(item[1][1]) for item in batch_items]
@@ -805,24 +877,46 @@ class CachedVocabularyLanguageScorer:
 
             outputs = self.model(**model_kwargs)
             self.stats["incremental_forward_batches"] += 1
-            step_log_probs_cpu = (
-                F_nn.log_softmax(outputs.logits.float(), dim=-1)
-                .detach()
-                .cpu()
-                .numpy()
+            del batched_kv
+
+            # 仅在 GPU 上收集真正需要的后缀 Token 对数概率，避免将 [bsz, step, |Vocab|≈152k]
+            # 全量 float32 log-softmax 矩阵（单批可达数百 MB）拷回 CPU。
+            row_targets: list[list[tuple[int, tuple[int, ...]]]] = []
+            gather_rows: list[int] = []
+            gather_pos: list[int] = []
+            gather_tok: list[int] = []
+            for row_i, (_, (_, _, word_map)) in enumerate(batch_items):
+                targets_for_row: list[tuple[int, tuple[int, ...]]] = []
+                for word_idx, (tok_ids, _, _) in word_map.items():
+                    flat_offsets: list[int] = []
+                    for pos_idx, tok_id in enumerate(tok_ids[1:]):
+                        flat_offsets.append(len(gather_rows))
+                        gather_rows.append(row_i)
+                        gather_pos.append(pos_idx)
+                        gather_tok.append(int(tok_id))
+                    targets_for_row.append((word_idx, tuple(flat_offsets)))
+                row_targets.append(targets_for_row)
+
+            logits = outputs.logits
+            del outputs
+            rows_t = torch.tensor(gather_rows, dtype=torch.long, device=self.device)
+            pos_t = torch.tensor(gather_pos, dtype=torch.long, device=self.device)
+            tok_t = torch.tensor(gather_tok, dtype=torch.long, device=self.device)
+            selected_logits = logits[rows_t, pos_t, :].float()
+            del logits
+            gathered_lps = (
+                selected_logits.gather(1, tok_t.unsqueeze(1)).squeeze(1)
+                - torch.logsumexp(selected_logits, dim=-1)
             )
+            gathered_np = gathered_lps.detach().cpu().numpy().astype(np.float64)
 
             for row_i, ((words_key, _), (_, _, word_map)) in enumerate(
                 batch_items
             ):
                 bucket = self._get_transition_bucket(words_key)
-                row_lps = step_log_probs_cpu[row_i]
-                for word_idx, (tok_ids, first_lp, targets_list) in word_map.items():
-                    suffix_targets = tok_ids[1:]
-                    suf_lp_sum = sum(
-                        float(row_lps[pos_idx, tok_id])
-                        for pos_idx, tok_id in enumerate(suffix_targets)
-                    )
+                for word_idx, flat_offsets in row_targets[row_i]:
+                    _, first_lp, targets_list = word_map[word_idx]
+                    suf_lp_sum = sum(float(gathered_np[off]) for off in flat_offsets)
                     total_lp = first_lp + suf_lp_sum
                     bucket[word_idx] = total_lp
                     for beam_idx, pos in targets_list:

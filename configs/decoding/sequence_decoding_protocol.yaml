@@ -22,7 +22,7 @@ decoding:
   architecture: unified_left_to_right_beam_search_with_streaming_screen_audit
   beam_width: 5
   candidate_top_k: 20
-  segment_batch_size: 64
+  segment_batch_size: 128
   states:
     - S0
     - K0
