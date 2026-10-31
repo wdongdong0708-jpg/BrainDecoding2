@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 
 from braindecoding.evaluation.evaluation_exports import (
     export_common_mode_subtraction_tables_and_markdown,
+    export_cross_model_comparison_tables_and_markdown,
     export_multi_seed_tables_and_markdown,
     export_sequence_decoding_tables_and_markdown,
     export_stage_comparison_tables_and_markdown,
@@ -3223,6 +3224,20 @@ def render_saved_evaluation_report(
     protocol = str(payload.get("protocol", ""))
     exp_type = str(payload.get("experiment_type", ""))
     if (
+        status_str == "cross_model_paired_comparison_completed"
+        or src.name.startswith("multi_seed_cross_model_comparison_")
+        or ("models_summary" in payload and "hypothesis_tests" in payload)
+    ):
+        export_and_print_cross_model_comparison_report(
+            payload,
+            output_dir=src.parent,
+            split=str(payload.get("split", "test")),
+            verbose=verbose,
+            print_to_stdout=False,
+        )
+        return format_cross_model_comparison_report(payload, verbose=verbose)
+
+    if (
         status_str
         in (
             "multi_seed_evaluation_completed",
@@ -4505,9 +4520,355 @@ def print_multi_seed_evaluation_report(
     return rendered
 
 
+def format_cross_model_comparison_report(
+    comparison_payload: Mapping[str, Any],
+    *,
+    verbose: bool = False,
+) -> str:
+    """Format the 4-model comparison summary and 3 paired statistical hypothesis tests as a text report."""
+    dataset = str(comparison_payload.get("dataset", "pallier2025"))
+    split = str(comparison_payload.get("split", "test")).upper()
+    models_summary = list(comparison_payload.get("models_summary") or [])
+    paired_rows = list(comparison_payload.get("paired_tests_flat") or [])
+
+    wide_w = 136 if verbose else REPORT_WIDTH
+    banner = "=" * wide_w
+    rule = "-" * wide_w
+
+    lines: list[str] = [
+        banner,
+        f" [Cross-Model Comparison & Paired Statistical Tests] dataset={dataset} | split={split} | models={len(models_summary)}",
+        rule,
+        f" {'Model Variant':<36} | {'Ctrl':<11} | {'Wait':>6} | {'50w Clean10':>11} | {'50w Gap10':>11} | {'50w Clean1':>10} | {'Full Gap10':>10}",
+        rule,
+    ]
+    for m_rec in models_summary:
+        if not isinstance(m_rec, Mapping):
+            continue
+        m_map = m_rec.get("metrics") or {}
+        v50_10 = m_map.get("vocab50_macro_top10") or {}
+        v50_1 = m_map.get("vocab50_macro_top1") or {}
+        fv_10 = m_map.get("full_vocab_macro_top10") or {}
+        lbl = str(m_rec.get("short_label") or m_rec.get("label", "-"))[:36]
+        ctrl = str(m_rec.get("control_method", "raw"))[:11]
+        wait_s = f"{float(m_rec.get('lookahead_wait_seconds', 0.0)):.2f}s"
+        lines.append(
+            f" {lbl:<36} | {ctrl:<11} | {wait_s:>6} | "
+            f"{_fmt_mean_sd_pct(v50_10.get('mean_clean'), v50_10.get('std_clean'), 11)} | "
+            f"{_fmt_signed_mean_sd_pct(v50_10.get('mean_gap'), v50_10.get('std_gap'), 11)} | "
+            f"{_fmt_mean_sd_pct(v50_1.get('mean_clean'), v50_1.get('std_clean'), 10)} | "
+            f"{_fmt_signed_mean_sd_pct(fv_10.get('mean_gap'), fv_10.get('std_gap'), 10)}"
+        )
+    lines.extend(
+        [
+            rule,
+            " [Three Core Paired Statistical Hypothesis Tests (Δ = Model A - Model B)]",
+            rule,
+            f" {'Hypothesis / Metric':<44} | {'Quantity':<10} | {'Δ (A - B)':>13} | {'t-stat':>8} | {'Paired p-value':<16}",
+            rule,
+        ]
+    )
+    for r_test in paired_rows:
+        if not isinstance(r_test, Mapping):
+            continue
+        h_id = str(r_test.get("hypothesis_id", ""))
+        short_h = (
+            "H1 UnfCtx-Word"
+            if h_id.startswith("H1")
+            else ("H2 DebCtx-Word" if h_id.startswith("H2") else "H3 PrefRev-DebCtx")
+        )
+        m_lbl = f"{short_h}: {r_test.get('short_label', r_test.get('metric_key', ''))}"[:44]
+        q_lbl = str(r_test.get("quantity", "net_gap"))[:10]
+        is_r = bool(r_test.get("is_ratio", True))
+        if is_r:
+            d_str = _fmt_signed_mean_sd_pct(
+                r_test.get("delta_mean"), r_test.get("delta_std"), 13
+            )
+        else:
+            d_str = _fmt_mean_sd_num(
+                r_test.get("delta_mean"),
+                r_test.get("delta_std"),
+                13,
+                decimals=4,
+                signed=True,
+            )
+        t_str = f"{float(r_test.get('t_stat', 0.0)):+8.2f}"
+        p_str = str(r_test.get("p_str", "-"))[:16]
+        lines.append(
+            f" {m_lbl:<44} | {q_lbl:<10} | {d_str:>13} | {t_str:>8} | {p_str:<16}"
+        )
+    lines.append(banner)
+    return "\n".join(lines)
+
+
+def export_and_print_cross_model_comparison_report(
+    models_input: Mapping[str, Any] | Sequence[Any],
+    *,
+    output_dir: Path | str | Sequence[Path | str],
+    split: str = "test",
+    dataset: str | None = None,
+    control_methods: Mapping[str, str] | None = None,
+    verbose: bool = False,
+    print_to_stdout: bool = True,
+) -> dict[str, Any]:
+    """构建四模型联合对比与 3 处配对统计检验，并将 multi_seed_cross_model_comparison_{split}.{md,txt,json} 及 tables/*.csv 落盘。"""
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        build_cross_model_paired_comparison,
+    )
+
+    split_l = str(split or "test").strip().lower()
+    if (
+        isinstance(models_input, Mapping)
+        and str(models_input.get("status", "")) == "cross_model_paired_comparison_completed"
+    ):
+        comparison_payload = dict(models_input)
+    else:
+        comparison_payload = build_cross_model_paired_comparison(
+            models_input,
+            split=split_l,
+            dataset=dataset,
+            control_methods=control_methods,
+        )
+
+    out_dirs: list[Path] = []
+    if isinstance(output_dir, (str, Path)):
+        out_dirs.append(Path(str(output_dir)))
+    elif isinstance(output_dir, Sequence):
+        for d in output_dir:
+            if d is not None and str(d).strip():
+                p = Path(str(d))
+                if p not in out_dirs:
+                    out_dirs.append(p)
+
+    full_txt = format_cross_model_comparison_report(
+        comparison_payload, verbose=True
+    )
+    all_exports: dict[str, str] = {}
+    for target_d in out_dirs:
+        try:
+            target_d.mkdir(parents=True, exist_ok=True)
+            json_p = target_d / f"multi_seed_cross_model_comparison_{split_l}.json"
+            txt_p = target_d / f"multi_seed_cross_model_comparison_report_{split_l}.txt"
+            ex = export_cross_model_comparison_tables_and_markdown(
+                comparison_payload, target_d
+            )
+            comparison_payload["exports"] = ex
+            json_p.write_text(
+                json.dumps(comparison_payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            txt_p.write_text(full_txt + "\n", encoding="utf-8")
+            ex["cross_model_comparison_json"] = str(json_p)
+            ex["cross_model_comparison_txt"] = str(txt_p)
+            if not all_exports:
+                all_exports = dict(ex)
+        except OSError:
+            pass
+    comparison_payload["exports"] = all_exports
+
+    rendered = format_cross_model_comparison_report(
+        comparison_payload, verbose=verbose
+    )
+    if print_to_stdout:
+        print("\n" + rendered, flush=True)
+    return comparison_payload
+
+
+def resolve_and_export_cross_model_comparison(
+    dataset_root: Path | str,
+    *,
+    cross_model_specs: Mapping[str, Any] | None = None,
+    upgraded_summaries: Sequence[Mapping[str, Any]] | None = None,
+    output_dirs: Path | str | Sequence[Path | str] | None = None,
+    split: str = "test",
+    verbose: bool = False,
+    print_to_stdout: bool = True,
+) -> dict[str, Any] | None:
+    """在数据集实验根目录下自动发现或按显式配置定位 4 类模型报告，零开销生成 multi_seed_cross_model_comparison_{split}。"""
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        CROSS_MODEL_CANONICAL_SLOTS,
+        _canonicalize_cross_model_slot_key,
+        _is_debiased_summary,
+    )
+
+    ds_root = Path(str(dataset_root))
+    split_l = str(split or "test").strip().lower()
+
+    def _load_or_build_stage_summary(cand_path: Path) -> dict[str, Any] | None:
+        if cand_path.is_file():
+            try:
+                raw_d = json.loads(cand_path.read_text(encoding="utf-8"))
+                if isinstance(raw_d, Mapping):
+                    return _ensure_enriched_multi_seed_summary(
+                        raw_d,
+                        base_dir=cand_path.parent,
+                        split=split_l,
+                    )
+            except Exception:
+                return None
+        if not cand_path.is_dir():
+            return None
+        direct_ms = cand_path / f"multi_seed_evaluation_{split_l}.json"
+        if direct_ms.is_file():
+            return _load_or_build_stage_summary(direct_ms)
+        sub_ms = sorted(
+            cand_path.glob(f"*/multi_seed_evaluation_{split_l}.json"),
+            key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+            reverse=True,
+        )
+        if sub_ms:
+            return _load_or_build_stage_summary(sub_ms[0])
+        rglob_ms = sorted(
+            cand_path.rglob(f"multi_seed_evaluation_{split_l}.json"),
+            key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+            reverse=True,
+        )
+        if rglob_ms:
+            return _load_or_build_stage_summary(rglob_ms[0])
+        return None
+
+    slot_inputs: dict[str, dict[str, Any]] = {}
+
+    # 1. Resolve from explicit cross_model_specs if provided
+    if isinstance(cross_model_specs, Mapping):
+        for raw_k, spec_v in cross_model_specs.items():
+            canon_k = _canonicalize_cross_model_slot_key(str(raw_k))
+            if canon_k is None or spec_v is None:
+                continue
+            if isinstance(spec_v, (str, Path)):
+                p = Path(str(spec_v))
+                if not p.is_absolute() and ds_root.exists():
+                    p = ds_root / p
+                loaded_s = _load_or_build_stage_summary(p)
+                if loaded_s is not None:
+                    slot_inputs[canon_k] = {"summary": loaded_s}
+                continue
+            if not isinstance(spec_v, Mapping):
+                continue
+            if isinstance(spec_v.get("summary"), Mapping):
+                slot_inputs[canon_k] = dict(spec_v)
+                continue
+            explicit_p = spec_v.get("path")
+            if explicit_p:
+                p = Path(str(explicit_p))
+                if not p.is_absolute() and ds_root.exists():
+                    p = ds_root / p
+                loaded_s = _load_or_build_stage_summary(p)
+                if loaded_s is not None:
+                    ent = dict(spec_v)
+                    ent["summary"] = loaded_s
+                    slot_inputs[canon_k] = ent
+                    continue
+            tag_val = str(spec_v.get("exp_tag", "") or "").strip()
+            st_val = str(
+                spec_v.get(
+                    "stage",
+                    "word"
+                    if canon_k == "word_only"
+                    else ("prefix_revision" if canon_k == "prefix_revision" else "context"),
+                )
+            ).strip()
+            if ds_root.exists():
+                tag_clean = (
+                    ""
+                    if tag_val.lower() in ("", "default", "root", "none")
+                    else tag_val
+                )
+                cand_dir = (
+                    ds_root / tag_clean / st_val
+                    if tag_clean
+                    else ds_root / st_val
+                )
+                loaded_s = _load_or_build_stage_summary(cand_dir)
+                if loaded_s is not None:
+                    ent = dict(spec_v)
+                    ent["summary"] = loaded_s
+                    slot_inputs[canon_k] = ent
+
+    # 2. Fill any missing slots from upgraded_summaries and dataset_root scan
+    pool_summaries: list[dict[str, Any]] = []
+    seen_dirs: set[str] = set()
+    if upgraded_summaries:
+        for us in upgraded_summaries:
+            if isinstance(us, Mapping) and us.get("stage"):
+                od = str(us.get("output_dir", ""))
+                if od not in seen_dirs:
+                    if od:
+                        seen_dirs.add(od)
+                    pool_summaries.append(dict(us))
+    if ds_root.exists() and len(slot_inputs) < 4:
+        for ms_file in sorted(
+            ds_root.rglob(f"multi_seed_evaluation_{split_l}.json"),
+            key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+            reverse=True,
+        ):
+            parent_str = str(ms_file.parent.resolve())
+            if parent_str in seen_dirs:
+                continue
+            seen_dirs.add(parent_str)
+            loaded_s = _load_or_build_stage_summary(ms_file)
+            if loaded_s is not None and loaded_s.get("stage"):
+                pool_summaries.append(loaded_s)
+
+    for sum_cand in pool_summaries:
+        st = str(sum_cand.get("stage", "")).strip().lower()
+        if st == "word" and "word_only" not in slot_inputs:
+            slot_inputs["word_only"] = {"summary": sum_cand}
+        elif st == "prefix_revision" and "prefix_revision" not in slot_inputs:
+            slot_inputs["prefix_revision"] = {"summary": sum_cand}
+        elif st == "context":
+            if _is_debiased_summary(sum_cand):
+                if "context_debiased" not in slot_inputs:
+                    slot_inputs["context_debiased"] = {"summary": sum_cand}
+            else:
+                if "context_unfrozen" not in slot_inputs:
+                    slot_inputs["context_unfrozen"] = {"summary": sum_cand}
+
+    # Merge any control_method / label overrides from cross_model_specs into auto-filled slots
+    if isinstance(cross_model_specs, Mapping):
+        for raw_k, spec_v in cross_model_specs.items():
+            canon_k = _canonicalize_cross_model_slot_key(str(raw_k))
+            if canon_k in slot_inputs and isinstance(spec_v, Mapping):
+                for meta_field in (
+                    "control_method",
+                    "label",
+                    "mean_wait_seconds",
+                    "lookahead_wait_seconds",
+                ):
+                    if (
+                        spec_v.get(meta_field) is not None
+                        and slot_inputs[canon_k].get(meta_field) is None
+                    ):
+                        slot_inputs[canon_k][meta_field] = spec_v[meta_field]
+
+    if len(slot_inputs) < 2:
+        return None
+
+    target_out_dirs: list[Path] = []
+    if output_dirs is not None:
+        if isinstance(output_dirs, (str, Path)):
+            target_out_dirs.append(Path(str(output_dirs)))
+        elif isinstance(output_dirs, Sequence):
+            for d in output_dirs:
+                if d is not None and str(d).strip():
+                    target_out_dirs.append(Path(str(d)))
+    if not target_out_dirs and ds_root.exists():
+        target_out_dirs.append(ds_root)
+
+    return export_and_print_cross_model_comparison_report(
+        slot_inputs,
+        output_dir=target_out_dirs,
+        split=split_l,
+        verbose=verbose,
+        print_to_stdout=print_to_stdout,
+    )
+
+
 __all__ = [
     "REPORT_WIDTH",
+    "export_and_print_cross_model_comparison_report",
     "format_common_mode_subtraction_report",
+    "format_cross_model_comparison_report",
     "format_multi_seed_evaluation_report",
     "format_sequence_decoding_executive_summary",
     "format_sequence_decoding_report",
@@ -4522,5 +4883,6 @@ __all__ = [
     "print_subspace_coherence_debiasing_report",
     "print_word_evaluation_report",
     "render_saved_evaluation_report",
+    "resolve_and_export_cross_model_comparison",
     "upgrade_and_refresh_saved_multi_seed_reports",
 ]

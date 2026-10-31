@@ -5166,8 +5166,386 @@ def export_subspace_coherence_debiasing_tables_and_markdown(
     return exported
 
 
+def export_cross_model_comparison_tables_and_markdown(
+    comparison_payload: Mapping[str, Any],
+    output_dir: Path | str,
+) -> dict[str, str]:
+    """导出四模型联合对比与 3 处配对统计检验的独立 Markdown 报告及 CSV 表格（multi_seed_cross_model_comparison_{split}.md & tables/*.csv）。"""
+    out = Path(output_dir)
+    tables_dir = out / "tables"
+    tables_dir.mkdir(parents=True, exist_ok=True)
+    exported: dict[str, str] = {}
+
+    split = str(comparison_payload.get("split", "test")).strip().lower()
+    dataset = str(comparison_payload.get("dataset", "pallier2025"))
+    models_summary = list(comparison_payload.get("models_summary") or [])
+    hypothesis_tests = list(comparison_payload.get("hypothesis_tests") or [])
+    paired_tests_flat = list(comparison_payload.get("paired_tests_flat") or [])
+
+    # 1. Build CSV rows for Four-Model Summary
+    summary_csv_rows: list[dict[str, Any]] = []
+    for m_rec in models_summary:
+        if not isinstance(m_rec, Mapping):
+            continue
+        m_map = m_rec.get("metrics") or {}
+        v50_10 = m_map.get("vocab50_macro_top10") or {}
+        v50_1 = m_map.get("vocab50_macro_top1") or {}
+        v50_mic10 = m_map.get("vocab50_micro_top10") or {}
+        v50_mrr = m_map.get("vocab50_mrr") or {}
+        fv_10 = m_map.get("full_vocab_macro_top10") or {}
+        fv_1 = m_map.get("full_vocab_macro_top1") or {}
+        fv_mic10 = m_map.get("full_vocab_micro_top10") or {}
+        fv_mrr = m_map.get("full_vocab_mrr") or {}
+        summary_csv_rows.append(
+            {
+                "slot_key": str(m_rec.get("slot_key", "")),
+                "model_label": str(m_rec.get("label", "")),
+                "stage": str(m_rec.get("stage", "")),
+                "exp_tag": str(m_rec.get("exp_tag", "")),
+                "control_method": str(m_rec.get("control_method", "")),
+                "seed_count": int(m_rec.get("seed_count", 1)),
+                "mean_wait_seconds": _num(m_rec.get("mean_wait_seconds", 1.0), 2),
+                "lookahead_wait_seconds": _num(
+                    m_rec.get("lookahead_wait_seconds", 0.0), 2
+                ),
+                "wait_saving_vs_context_pct": _num(
+                    m_rec.get("wait_saving_vs_context_pct", 0.0), 2
+                ),
+                "lookahead_saving_vs_context_pct": _num(
+                    m_rec.get("lookahead_saving_vs_context_pct", 0.0), 2
+                ),
+                "mean_clean_vocab50_macro_top10_pct": _pct(v50_10.get("mean_clean", 0.0)),
+                "std_clean_vocab50_macro_top10_pct": _pct(v50_10.get("std_clean", 0.0)),
+                "mean_shifted_vocab50_macro_top10_pct": _pct(v50_10.get("mean_shifted", 0.0)),
+                "std_shifted_vocab50_macro_top10_pct": _pct(v50_10.get("std_shifted", 0.0)),
+                "p_shifted_vs_chance_vocab50_macro_top10": v50_10.get("p_shifted_vs_chance", ""),
+                "mean_gap_vocab50_macro_top10_pp": _pct(v50_10.get("mean_gap", 0.0)),
+                "std_gap_vocab50_macro_top10_pp": _pct(v50_10.get("std_gap", 0.0)),
+                "p_gap_vocab50_macro_top10": v50_10.get("p_gap", ""),
+                "mean_clean_vocab50_macro_top1_pct": _pct(v50_1.get("mean_clean", 0.0)),
+                "std_clean_vocab50_macro_top1_pct": _pct(v50_1.get("std_clean", 0.0)),
+                "mean_shifted_vocab50_macro_top1_pct": _pct(v50_1.get("mean_shifted", 0.0)),
+                "std_shifted_vocab50_macro_top1_pct": _pct(v50_1.get("std_shifted", 0.0)),
+                "mean_gap_vocab50_macro_top1_pp": _pct(v50_1.get("mean_gap", 0.0)),
+                "std_gap_vocab50_macro_top1_pp": _pct(v50_1.get("std_gap", 0.0)),
+                "p_gap_vocab50_macro_top1": v50_1.get("p_gap", ""),
+                "mean_clean_vocab50_micro_top10_pct": _pct(v50_mic10.get("mean_clean", 0.0)),
+                "std_clean_vocab50_micro_top10_pct": _pct(v50_mic10.get("std_clean", 0.0)),
+                "mean_clean_vocab50_mrr": _num(v50_mrr.get("mean_clean", 0.0), 4),
+                "std_clean_vocab50_mrr": _num(v50_mrr.get("std_clean", 0.0), 4),
+                "mean_clean_full_vocab_macro_top10_pct": _pct(fv_10.get("mean_clean", 0.0)),
+                "std_clean_full_vocab_macro_top10_pct": _pct(fv_10.get("std_clean", 0.0)),
+                "mean_shifted_full_vocab_macro_top10_pct": _pct(fv_10.get("mean_shifted", 0.0)),
+                "std_shifted_full_vocab_macro_top10_pct": _pct(fv_10.get("std_shifted", 0.0)),
+                "mean_gap_full_vocab_macro_top10_pp": _pct(fv_10.get("mean_gap", 0.0)),
+                "std_gap_full_vocab_macro_top10_pp": _pct(fv_10.get("std_gap", 0.0)),
+                "p_gap_full_vocab_macro_top10": fv_10.get("p_gap", ""),
+                "mean_clean_full_vocab_macro_top1_pct": _pct(fv_1.get("mean_clean", 0.0)),
+                "std_clean_full_vocab_macro_top1_pct": _pct(fv_1.get("std_clean", 0.0)),
+                "mean_shifted_full_vocab_macro_top1_pct": _pct(fv_1.get("mean_shifted", 0.0)),
+                "std_shifted_full_vocab_macro_top1_pct": _pct(fv_1.get("std_shifted", 0.0)),
+                "mean_gap_full_vocab_macro_top1_pp": _pct(fv_1.get("mean_gap", 0.0)),
+                "std_gap_full_vocab_macro_top1_pp": _pct(fv_1.get("std_gap", 0.0)),
+                "p_gap_full_vocab_macro_top1": fv_1.get("p_gap", ""),
+                "mean_clean_full_vocab_micro_top10_pct": _pct(fv_mic10.get("mean_clean", 0.0)),
+                "std_clean_full_vocab_micro_top10_pct": _pct(fv_mic10.get("std_clean", 0.0)),
+                "mean_clean_full_vocab_mrr": _num(fv_mrr.get("mean_clean", 0.0), 4),
+                "std_clean_full_vocab_mrr": _num(fv_mrr.get("std_clean", 0.0), 4),
+                "mean_gap_full_vocab_mrr": _num(fv_mrr.get("mean_gap", 0.0), 4),
+                "std_gap_full_vocab_mrr": _num(fv_mrr.get("std_gap", 0.0), 4),
+            }
+        )
+    if summary_csv_rows:
+        sum_csv_path = _write_csv_table(
+            tables_dir / f"multi_seed_cross_model_summary_{split}.csv",
+            list(summary_csv_rows[0].keys()),
+            summary_csv_rows,
+        )
+        exported["cross_model_summary_csv"] = str(sum_csv_path)
+
+    # 2. Build CSV rows for Paired Statistical Hypothesis Tests
+    paired_csv_rows: list[dict[str, Any]] = []
+    for r_test in paired_tests_flat:
+        if not isinstance(r_test, Mapping):
+            continue
+        is_r = bool(r_test.get("is_ratio", True))
+        paired_csv_rows.append(
+            {
+                "hypothesis_id": str(r_test.get("hypothesis_id", "")),
+                "hypothesis_title": str(r_test.get("hypothesis_title", "")),
+                "quantity": str(r_test.get("quantity", "")),
+                "quantity_label": str(r_test.get("quantity_label", "")),
+                "metric_key": str(r_test.get("metric_key", "")),
+                "metric_label": str(r_test.get("metric_label", "")),
+                "model_a_key": str(r_test.get("model_a_key", "")),
+                "model_a_label": str(r_test.get("model_a_label", "")),
+                "model_a_control": str(r_test.get("model_a_control", "")),
+                "model_a_mean": (
+                    _pct(r_test.get("model_a_mean", 0.0))
+                    if is_r
+                    else _num(r_test.get("model_a_mean", 0.0), 4)
+                ),
+                "model_a_std": (
+                    _pct(r_test.get("model_a_std", 0.0))
+                    if is_r
+                    else _num(r_test.get("model_a_std", 0.0), 4)
+                ),
+                "model_b_key": str(r_test.get("model_b_key", "")),
+                "model_b_label": str(r_test.get("model_b_label", "")),
+                "model_b_control": str(r_test.get("model_b_control", "")),
+                "model_b_mean": (
+                    _pct(r_test.get("model_b_mean", 0.0))
+                    if is_r
+                    else _num(r_test.get("model_b_mean", 0.0), 4)
+                ),
+                "model_b_std": (
+                    _pct(r_test.get("model_b_std", 0.0))
+                    if is_r
+                    else _num(r_test.get("model_b_std", 0.0), 4)
+                ),
+                "delta_mean": (
+                    _pct(r_test.get("delta_mean", 0.0))
+                    if is_r
+                    else _num(r_test.get("delta_mean", 0.0), 4)
+                ),
+                "delta_std": (
+                    _pct(r_test.get("delta_std", 0.0))
+                    if is_r
+                    else _num(r_test.get("delta_std", 0.0), 4)
+                ),
+                "t_stat": _num(r_test.get("t_stat", 0.0), 4),
+                "df": _num(r_test.get("df", 9.0), 1),
+                "p_value": r_test.get("p_value", 1.0),
+                "significance": str(r_test.get("significance", "ns")),
+                "p_str": str(r_test.get("p_str", "")),
+                "hypothesis_supported": bool(r_test.get("hypothesis_supported", True)),
+                "scientific_verdict": str(r_test.get("scientific_verdict", "")),
+            }
+        )
+    if paired_csv_rows:
+        tests_csv_path = _write_csv_table(
+            tables_dir / f"multi_seed_cross_model_paired_tests_{split}.csv",
+            list(paired_csv_rows[0].keys()),
+            paired_csv_rows,
+        )
+        exported["cross_model_paired_tests_csv"] = str(tests_csv_path)
+
+    # 3. Build Markdown Report: multi_seed_cross_model_comparison_{split}.md
+    md_lines: list[str] = [
+        f"# Cross-Model Retrieval, Debiasing & Paired Statistical Comparison ({split.upper()}, Mean ± SD)",
+        "",
+        f"- **Dataset**: `{dataset}` | **Split**: `{split}` | **Models Compared**: `{len(models_summary)}`",
+    ]
+    for idx_m, m_rec in enumerate(models_summary, start=1):
+        if not isinstance(m_rec, Mapping):
+            continue
+        md_lines.append(
+            f"- **Model {idx_m} (`{m_rec.get('slot_key')}`)**: **{m_rec.get('label')}** — "
+            f"`stage={m_rec.get('stage')}`, `control={m_rec.get('control_method')}`, "
+            f"`seeds={m_rec.get('seeds')}`, `exp_tag={m_rec.get('exp_tag') or 'default'}`"
+        )
+    md_lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## 1. Four-Model Retrieval, Debiasing & Waiting Time Summary (Mean ± SD)",
+            "",
+            "### 1A. 50-Word Frozen Benchmark & Input Latency Summary",
+            "",
+            "| Model Architecture | Stage | Control Method | Mean Wait (Lookahead) | 50w Clean Top-10 | 50w Control Top-10 (vs. Chance p) | 50w Net Gap Top-10 (Paired p) | 50w Clean Top-1 | 50w Control Top-1 | 50w Net Gap Top-1 (Paired p) | 50w Clean MRR |",
+            "| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for m_rec in models_summary:
+        if not isinstance(m_rec, Mapping):
+            continue
+        m_map = m_rec.get("metrics") or {}
+        v50_10 = m_map.get("vocab50_macro_top10") or {}
+        v50_1 = m_map.get("vocab50_macro_top1") or {}
+        v50_mrr = m_map.get("vocab50_mrr") or {}
+        wait_s = float(m_rec.get("mean_wait_seconds", 1.0))
+        look_s = float(m_rec.get("lookahead_wait_seconds", 0.0))
+        save_look = m_rec.get("lookahead_saving_vs_context_pct")
+        if save_look is not None and float(save_look) > 0.0:
+            wait_cell = f"`{wait_s:.2f}s` (`{look_s:.2f}s`, **-{float(save_look):.1f}%**)"
+        else:
+            wait_cell = f"`{wait_s:.2f}s` (`{look_s:.2f}s`)"
+        md_lines.append(
+            f"| **{m_rec.get('label')}** | `{m_rec.get('stage')}` | `{m_rec.get('control_method')}` | {wait_cell} | "
+            f"**{_fmt_mean_sd_md_pct(v50_10.get('mean_clean'), v50_10.get('std_clean'))}** | "
+            f"{_append_p_str(_fmt_mean_sd_md_pct(v50_10.get('mean_shifted'), v50_10.get('std_shifted')), v50_10.get('p_str_shifted_vs_chance'), prefix='vs. 20%: ')} | "
+            f"{_append_p_str(_fmt_mean_sd_md_pct(v50_10.get('mean_gap'), v50_10.get('std_gap'), signed=True, suffix=' pp'), v50_10.get('p_str_gap'), bold_val=True)} | "
+            f"**{_fmt_mean_sd_md_pct(v50_1.get('mean_clean'), v50_1.get('std_clean'))}** | "
+            f"{_fmt_mean_sd_md_pct(v50_1.get('mean_shifted'), v50_1.get('std_shifted'))} | "
+            f"{_append_p_str(_fmt_mean_sd_md_pct(v50_1.get('mean_gap'), v50_1.get('std_gap'), signed=True, suffix=' pp'), v50_1.get('p_str_gap'), bold_val=True)} | "
+            f"{_fmt_mean_sd_md_num(v50_mrr.get('mean_clean'), v50_mrr.get('std_clean'), digits=4)} |"
+        )
+
+    md_lines.extend(
+        [
+            "",
+            "### 1B. Full-Vocabulary (|V|=2020) Benchmark Summary",
+            "",
+            "| Model Architecture | Control Method | Full-Vocab Clean Word-Macro Top-10 | Full-Vocab Control Word-Macro Top-10 (vs. Chance p) | Full-Vocab Net Gap Word-Macro Top-10 (Paired p) | Full-Vocab Clean Word-Macro Top-1 | Full-Vocab Control Word-Macro Top-1 | Full-Vocab Net Gap Word-Macro Top-1 (Paired p) | Full-Vocab Clean Sample-Micro Top-10 | Full-Vocab Clean MRR |",
+            "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for m_rec in models_summary:
+        if not isinstance(m_rec, Mapping):
+            continue
+        m_map = m_rec.get("metrics") or {}
+        fv_10 = m_map.get("full_vocab_macro_top10") or {}
+        fv_1 = m_map.get("full_vocab_macro_top1") or {}
+        fv_mic10 = m_map.get("full_vocab_micro_top10") or {}
+        fv_mrr = m_map.get("full_vocab_mrr") or {}
+        md_lines.append(
+            f"| **{m_rec.get('label')}** | `{m_rec.get('control_method')}` | "
+            f"**{_fmt_mean_sd_md_pct(fv_10.get('mean_clean'), fv_10.get('std_clean'))}** | "
+            f"{_append_p_str(_fmt_mean_sd_md_pct(fv_10.get('mean_shifted'), fv_10.get('std_shifted')), fv_10.get('p_str_shifted_vs_chance'))} | "
+            f"{_append_p_str(_fmt_mean_sd_md_pct(fv_10.get('mean_gap'), fv_10.get('std_gap'), signed=True, suffix=' pp'), fv_10.get('p_str_gap'), bold_val=True)} | "
+            f"**{_fmt_mean_sd_md_pct(fv_1.get('mean_clean'), fv_1.get('std_clean'))}** | "
+            f"{_fmt_mean_sd_md_pct(fv_1.get('mean_shifted'), fv_1.get('std_shifted'))} | "
+            f"{_append_p_str(_fmt_mean_sd_md_pct(fv_1.get('mean_gap'), fv_1.get('std_gap'), signed=True, suffix=' pp'), fv_1.get('p_str_gap'), bold_val=True)} | "
+            f"{_fmt_mean_sd_md_pct(fv_mic10.get('mean_clean'), fv_mic10.get('std_clean'))} | "
+            f"{_fmt_mean_sd_md_num(fv_mrr.get('mean_clean'), fv_mrr.get('std_clean'), digits=4)} |"
+        )
+
+    md_lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "## 2. Three Key Paired Statistical Hypothesis Tests (Model A vs. Model B)",
+            "",
+            "### 2A. Unified Overview of the 3 Core Paired Hypothesis Tests",
+            "",
+            "| Hypothesis Comparison (A vs. B) | Target Quantity | Metric | Model A (Mean ± SD) | Model B (Mean ± SD) | Paired Difference Δ (A - B) | t-stat (df) | Paired p-value | Scientific Conclusion |",
+            "| :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | :--- |",
+        ]
+    )
+    for r_test in paired_tests_flat:
+        if not isinstance(r_test, Mapping):
+            continue
+        is_r = bool(r_test.get("is_ratio", True))
+        is_gap = str(r_test.get("quantity")) == "net_gap"
+        if is_r:
+            a_cell = _fmt_mean_sd_md_pct(
+                r_test.get("model_a_mean"),
+                r_test.get("model_a_std"),
+                signed=is_gap,
+                suffix=" pp" if is_gap else "%",
+            )
+            b_cell = _fmt_mean_sd_md_pct(
+                r_test.get("model_b_mean"),
+                r_test.get("model_b_std"),
+                signed=is_gap,
+                suffix=" pp" if is_gap else "%",
+            )
+            d_cell = _fmt_mean_sd_md_pct(
+                r_test.get("delta_mean"),
+                r_test.get("delta_std"),
+                signed=True,
+                suffix=" pp",
+            )
+        else:
+            a_cell = _fmt_mean_sd_md_num(
+                r_test.get("model_a_mean"),
+                r_test.get("model_a_std"),
+                digits=4,
+                signed=is_gap,
+            )
+            b_cell = _fmt_mean_sd_md_num(
+                r_test.get("model_b_mean"),
+                r_test.get("model_b_std"),
+                digits=4,
+                signed=is_gap,
+            )
+            d_cell = _fmt_mean_sd_md_num(
+                r_test.get("delta_mean"),
+                r_test.get("delta_std"),
+                digits=4,
+                signed=True,
+            )
+        t_cell = f"`t={float(r_test.get('t_stat', 0.0)):+.2f}` (`df={float(r_test.get('df', 9.0)):.0f}`)"
+        md_lines.append(
+            f"| **{r_test.get('hypothesis_title')}** | `{r_test.get('quantity_label')}` | **{r_test.get('metric_label')}** | "
+            f"{a_cell} | {b_cell} | **{d_cell}** | {t_cell} | **{r_test.get('p_str', '-')}** | {r_test.get('scientific_verdict', '')} |"
+        )
+
+    for idx_h, h_block in enumerate(hypothesis_tests, start=1):
+        if not isinstance(h_block, Mapping):
+            continue
+        md_lines.extend(
+            [
+                "",
+                f"### 2.{idx_h + 1} {h_block.get('title')}",
+                "",
+                f"> {h_block.get('description')}",
+                "",
+                "| Target Quantity | Metric | Model A (`control`) | Model B (`control`) | Paired Δ (A - B) | t-stat (df) | Paired p-value | Verdict |",
+                "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | :--- |",
+            ]
+        )
+        for r_test in h_block.get("rows") or []:
+            if not isinstance(r_test, Mapping):
+                continue
+            is_r = bool(r_test.get("is_ratio", True))
+            is_gap = str(r_test.get("quantity")) == "net_gap"
+            if is_r:
+                a_cell = _fmt_mean_sd_md_pct(
+                    r_test.get("model_a_mean"),
+                    r_test.get("model_a_std"),
+                    signed=is_gap,
+                    suffix=" pp" if is_gap else "%",
+                )
+                b_cell = _fmt_mean_sd_md_pct(
+                    r_test.get("model_b_mean"),
+                    r_test.get("model_b_std"),
+                    signed=is_gap,
+                    suffix=" pp" if is_gap else "%",
+                )
+                d_cell = _fmt_mean_sd_md_pct(
+                    r_test.get("delta_mean"),
+                    r_test.get("delta_std"),
+                    signed=True,
+                    suffix=" pp",
+                )
+            else:
+                a_cell = _fmt_mean_sd_md_num(
+                    r_test.get("model_a_mean"),
+                    r_test.get("model_a_std"),
+                    digits=4,
+                    signed=is_gap,
+                )
+                b_cell = _fmt_mean_sd_md_num(
+                    r_test.get("model_b_mean"),
+                    r_test.get("model_b_std"),
+                    digits=4,
+                    signed=is_gap,
+                )
+                d_cell = _fmt_mean_sd_md_num(
+                    r_test.get("delta_mean"),
+                    r_test.get("delta_std"),
+                    digits=4,
+                    signed=True,
+                )
+            t_cell = f"`t={float(r_test.get('t_stat', 0.0)):+.2f}` (`df={float(r_test.get('df', 9.0)):.0f}`)"
+            md_lines.append(
+                f"| `{r_test.get('quantity_label')}` | **{r_test.get('metric_label')}** | "
+                f"{a_cell} (`{r_test.get('model_a_control')}`) | {b_cell} (`{r_test.get('model_b_control')}`) | "
+                f"**{d_cell}** | {t_cell} | **{r_test.get('p_str', '-')}** | {r_test.get('scientific_verdict', '')} |"
+            )
+
+    md_path = out / f"multi_seed_cross_model_comparison_{split}.md"
+    md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+    exported["cross_model_comparison_md"] = str(md_path)
+    return exported
+
+
 __all__ = [
     "export_common_mode_subtraction_tables_and_markdown",
+    "export_cross_model_comparison_tables_and_markdown",
     "export_multi_seed_tables_and_markdown",
     "export_sequence_decoding_tables_and_markdown",
     "export_stage_comparison_tables_and_markdown",
