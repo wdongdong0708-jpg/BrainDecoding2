@@ -833,6 +833,13 @@ def _workflow_train(args, *, mode: str) -> int:
             shifts_per_step=getattr(args, "shifts_per_step", None),
             preextract_frozen_cnn=getattr(args, "preextract_frozen_cnn", None),
         )
+        if len(seed_list) > 1:
+            import gc
+            import torch
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
     return 0
 
 

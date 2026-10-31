@@ -2862,6 +2862,13 @@ def _evaluate_single_stage(
                     _summarize_shifted_conditions(clean_summary, cond_summaries)
                 )
 
+    ckpt_epoch = int(checkpoint.get("epoch", 0))
+    ckpt_selection = str(checkpoint.get("selection", "legacy50"))
+    del model, eval_loader, checkpoint
+    gc.collect()
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
     training_history = []
     summary_path = out / "training_summary.json"
     if summary_path.is_file():
@@ -2900,8 +2907,8 @@ def _evaluate_single_stage(
         "checkpoint": {
             "path": str(ckpt_file),
             "sha256": file_sha256(ckpt_file),
-            "epoch": int(checkpoint.get("epoch", 0)),
-            "selection": str(checkpoint.get("selection", "legacy50")),
+            "epoch": ckpt_epoch,
+            "selection": ckpt_selection,
         },
         "cache_verification": cache_verification,
         "metrics": metrics,
@@ -3068,7 +3075,7 @@ def _evaluate_single_stage(
     save_json(eval_json_path, eval_result)
     eval_result["evaluation_json"] = str(eval_json_path)
 
-    del model, eval_ds, eval_loader, checkpoint, encoded
+    del eval_ds, encoded
     gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -6702,6 +6709,9 @@ def run_evaluation_workflow(
                 _export_outer_multi_seed=False,
             )
             seed_results.append(res_i)
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         return summarize_multi_seed_evaluation(
             seed_results,
             split=split,

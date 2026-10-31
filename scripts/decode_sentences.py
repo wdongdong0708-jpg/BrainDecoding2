@@ -391,6 +391,11 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             per_seed_summaries[f"seed-{int(seed_val):03d}"] = (
                 run_sequence_decoding_pipeline(seed_args)
             )
+            active_scorer = shared_scorer_box.get("scorer")
+            if active_scorer is not None and hasattr(
+                active_scorer, "clear_gpu_prefix_cache"
+            ):
+                active_scorer.clear_gpu_prefix_cache()
         multi_seed_summary: dict[str, Any] = {}
         if args.step in ("evaluate", "all") and per_seed_summaries:
             from braindecoding.evaluation.sequence_decoding_evaluation import (
@@ -701,6 +706,13 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     def _run_export_for_split(target_split: str, target_out: Path) -> Path:
+        shared_box = getattr(args, "_shared_scorer_box", None)
+        if isinstance(shared_box, dict):
+            active_sc = shared_box.get("scorer")
+            if active_sc is not None and hasattr(
+                active_sc, "clear_gpu_prefix_cache"
+            ):
+                active_sc.clear_gpu_prefix_cache()
         return export_neural_vocabulary_scores(
             args.dataset,
             split=target_split,

@@ -130,6 +130,24 @@ def _wrap_progress(iterable, *, enabled=False, desc=None, total=None):
         return iterable, None
 
 
+def shutdown_dataloader_iterator(loader) -> None:
+    """显式关闭 DataLoader 内部的多进程迭代器与锁页内存线程，防止跨轮次/跨种子泄漏。"""
+    if loader is None:
+        return
+    iterator = getattr(loader, "_iterator", None)
+    if iterator is not None:
+        shutdown_fn = getattr(iterator, "_shutdown_workers", None)
+        if callable(shutdown_fn):
+            try:
+                shutdown_fn()
+            except Exception:
+                pass
+        try:
+            loader._iterator = None
+        except Exception:
+            pass
+
+
 def make_loader(
     dataset,
     training_config,
@@ -137,6 +155,7 @@ def make_loader(
     group_column="sentence_uid",
     *,
     batch_size=None,
+    persistent_workers=None,
 ):
     """按指定句组列构建保持现有批次语义的 DataLoader。"""
     if group_column not in dataset.table:
@@ -160,9 +179,15 @@ def make_loader(
         "pin_memory": torch.cuda.is_available(),
     }
     if num_workers > 0:
-        loader_kwargs["persistent_workers"] = bool(
-            training_config.get("persistent_workers", True)
-        )
+        if persistent_workers is not None:
+            use_persistent = bool(persistent_workers)
+        elif shuffle:
+            use_persistent = bool(
+                training_config.get("persistent_workers", True)
+            )
+        else:
+            use_persistent = False
+        loader_kwargs["persistent_workers"] = use_persistent
         loader_kwargs["prefetch_factor"] = int(
             training_config.get("prefetch_factor", 4)
         )
@@ -479,6 +504,8 @@ def train_one_epoch(
     finally:
         if pbar is not None:
             pbar.close()
+        if not bool(getattr(loader, "persistent_workers", False)):
+            shutdown_dataloader_iterator(loader)
     mean_loss = loss_sum / max(sample_count, 1)
     diagnostics = {
         "word_loss": word_loss_sum / max(sample_count, 1),
@@ -636,6 +663,8 @@ def encode_loader(
     finally:
         if pbar is not None:
             pbar.close()
+        if not bool(getattr(loader, "persistent_workers", False)):
+            shutdown_dataloader_iterator(loader)
     concatenated_internal_masks = torch.cat(internal_masks)
     encoded = {
         "predictions": torch.cat(predictions),

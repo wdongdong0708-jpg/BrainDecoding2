@@ -106,6 +106,7 @@ from braindecoding.training.word_encoder_training import (
     encode_loader,
     make_loader,
     resolve_amp_dtype,
+    shutdown_dataloader_iterator,
     train_one_epoch,
 )
 
@@ -1850,6 +1851,7 @@ def run_training_workflow(
         stale_epochs = int(ckpt.get("stale_epochs", 0))
         total_updates = int(ckpt.get("optimizer_updates", 0))
         resumed_from = str(resume_ckpt_path)
+        del ckpt
 
     torch.cuda.reset_peak_memory_stats(device)
     selection_metric = cfg["evaluation"]["selection_metric"]
@@ -2144,6 +2146,7 @@ def run_training_workflow(
                     save_checkpoint(out / "best_legacy50.pt", best_payload)
                 else:
                     save_checkpoint(out / "best_full_vocab.pt", best_payload)
+                del best_payload
 
         last_payload = {
             "format": "braindecoding_workflow_last_ckpt_v1",
@@ -2175,6 +2178,7 @@ def run_training_workflow(
             "test_evaluated": False,
         }
         save_checkpoint(out / "last.ckpt", last_payload)
+        del last_payload
 
         if improved_tags:
             status_str = f"* best({','.join(improved_tags)})"
@@ -2329,6 +2333,13 @@ def run_training_workflow(
             "output_dir": str(out),
         },
     )
+    shutdown_dataloader_iterator(train_loader)
+    shutdown_dataloader_iterator(val_loader)
+    if isinstance(preextracted_cache, dict):
+        for cache_val in list(preextracted_cache.values()):
+            if isinstance(cache_val, dict):
+                cache_val.clear()
+        preextracted_cache.clear()
     del (
         model,
         loss_module,
@@ -2343,5 +2354,10 @@ def run_training_workflow(
         centered_vocab_bank,
     )
     gc.collect()
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
     return summary

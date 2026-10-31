@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
+import gc
 import hashlib
 import json
 from pathlib import Path
@@ -133,7 +134,10 @@ def _from_legacy_kv_tuples(
     try:
         from transformers.cache_utils import DynamicCache
 
-        if isinstance(reference_cache, DynamicCache):
+        if isinstance(reference_cache, DynamicCache) or (
+            isinstance(reference_cache, type)
+            and issubclass(reference_cache, DynamicCache)
+        ):
             cache = DynamicCache()
             for layer_idx, (k_tensor, v_tensor) in enumerate(legacy_tuples):
                 cache.update(k_tensor, v_tensor, layer_idx)
@@ -321,6 +325,7 @@ class PrefixCacheState:
     context_kind: str
     parent_state: PrefixCacheState | None = None
     step_token_ids: tuple[int, ...] = ()
+    first_token_lps: np.ndarray | None = None
 
 
 
@@ -418,16 +423,16 @@ class CachedVocabularyLanguageScorer:
             ctx: tensor.to(self.device)
             for ctx, tensor in self.vocab_table.first_token_by_context.items()
         }
-        default_score_bsz = 256
-        default_prefix_states = 2048
+        default_score_bsz = 128
+        default_prefix_states = 1024
         if self.device.type == "cuda" and torch.cuda.is_available():
             try:
                 vram_bytes = int(
                     torch.cuda.get_device_properties(self.device).total_memory
                 )
                 if vram_bytes >= 50 * (1024**3):
-                    default_score_bsz = 512
-                    default_prefix_states = 4096
+                    default_score_bsz = 256
+                    default_prefix_states = 1536
             except Exception:
                 pass
         self.max_batch_size = int(
@@ -459,6 +464,17 @@ class CachedVocabularyLanguageScorer:
             "prefix_cache_hits": 0,
         }
 
+    def clear_gpu_prefix_cache(self) -> None:
+        """释放常驻 GPU 显存的前缀 KV-Cache 池（保留纯 CPU 的首 Token 向量与转移概率缓存供后续种子零开销复用）。"""
+        for st in self._prefix_state_cache.values():
+            st.past_key_values = None
+            st.last_log_probs = None
+        self._prefix_state_cache.clear()
+        self._prompt_cache_state = None
+        gc.collect()
+        if self.device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     def _cache_first_token_lps(
         self, words: tuple[str, ...], first_lps: np.ndarray
     ) -> None:
@@ -476,19 +492,29 @@ class CachedVocabularyLanguageScorer:
         cached = self._prefix_first_token_lps_cache.get(state.words)
         if cached is not None:
             self._prefix_first_token_lps_cache.move_to_end(state.words)
+            if state.first_token_lps is None:
+                state.first_token_lps = cached
             return cached
-        first_tok_ids = self.first_token_device_map[state.context_kind]
-        first_lps = (
-            state.last_log_probs.index_select(0, first_tok_ids)
-            .detach()
-            .cpu()
-            .numpy()
-        )
-        self._cache_first_token_lps(state.words, first_lps)
-        return first_lps
+        if state.first_token_lps is not None:
+            self._cache_first_token_lps(state.words, state.first_token_lps)
+            return state.first_token_lps
+        if state.last_log_probs is not None:
+            first_tok_ids = self.first_token_device_map[state.context_kind]
+            first_lps = (
+                state.last_log_probs.index_select(0, first_tok_ids)
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            state.first_token_lps = first_lps
+            state.last_log_probs = None
+            self._cache_first_token_lps(state.words, first_lps)
+            return first_lps
+        self._ensure_states_materialized([state])
+        return self._prefix_first_token_lps_cache[state.words]
 
     def _cache_prefix_state(self, state: PrefixCacheState) -> None:
-        if state.past_key_values is None or state.last_log_probs is None:
+        if state.past_key_values is None:
             return
         key = state.words
         self._prefix_state_cache[key] = state
@@ -512,7 +538,10 @@ class CachedVocabularyLanguageScorer:
     @torch.inference_mode()
     def init_prompt_state(self) -> PrefixCacheState:
         """编码初始语言提示词 Prompt，返回并缓存初始 PrefixCacheState。"""
-        if self._prompt_cache_state is not None:
+        if (
+            self._prompt_cache_state is not None
+            and self._prompt_cache_state.past_key_values is not None
+        ):
             return self._prompt_cache_state
 
         input_ids = torch.tensor(
@@ -522,19 +551,30 @@ class CachedVocabularyLanguageScorer:
             input_ids=input_ids,
             use_cache=True,
         )
-        self._reference_cache_type = outputs.past_key_values
+        self._reference_cache_type = (
+            tuple
+            if isinstance(outputs.past_key_values, tuple)
+            else type(outputs.past_key_values)
+        )
         fused_kv = _fuse_kv_cache(outputs.past_key_values)[:, :, 0].contiguous()
         last_logits = outputs.logits[0, -1, :].float()
-        last_log_probs = F_nn.log_softmax(last_logits, dim=-1)
+        del outputs
         init_ctx = prefix_context_kind((), self.language)
+        first_tok_ids = self.first_token_device_map[init_ctx]
+        first_lps_np = (
+            last_logits.index_select(0, first_tok_ids)
+            - torch.logsumexp(last_logits, dim=-1)
+        ).detach().cpu().numpy()
+        del last_logits
         self._prompt_cache_state = PrefixCacheState(
             words=(),
             past_key_values=fused_kv,
-            last_log_probs=last_log_probs,
+            last_log_probs=None,
             token_length=len(self.prompt_ids),
             context_kind=init_ctx,
+            first_token_lps=first_lps_np,
         )
-        self._extract_and_cache_first_token_lps(self._prompt_cache_state)
+        self._cache_first_token_lps((), first_lps_np)
         self._cache_prefix_state(self._prompt_cache_state)
         return self._prompt_cache_state
 
@@ -543,22 +583,30 @@ class CachedVocabularyLanguageScorer:
         self,
         states: Sequence[PrefixCacheState],
     ) -> None:
-        """按需批量物化惰性 PrefixCacheState 的 past_key_values 与 last_log_probs。"""
+        """按需批量物化惰性 PrefixCacheState 的 past_key_values 与首 Token 对数概率。"""
         pending_by_words: dict[tuple[str, ...], list[PrefixCacheState]] = (
             defaultdict(list)
         )
         for st in states:
-            if st.past_key_values is not None and st.last_log_probs is not None:
+            if st.past_key_values is not None and (
+                st.first_token_lps is not None
+                or st.words in self._prefix_first_token_lps_cache
+            ):
+                if st.first_token_lps is None:
+                    st.first_token_lps = self._prefix_first_token_lps_cache[
+                        st.words
+                    ]
                 continue
             cached = self._prefix_state_cache.get(st.words)
-            if (
-                cached is not None
-                and cached.past_key_values is not None
-                and cached.last_log_probs is not None
-            ):
+            if cached is not None and cached.past_key_values is not None:
                 self._prefix_state_cache.move_to_end(st.words)
                 st.past_key_values = cached.past_key_values
-                st.last_log_probs = cached.last_log_probs
+                st.first_token_lps = (
+                    cached.first_token_lps
+                    if cached.first_token_lps is not None
+                    else self._prefix_first_token_lps_cache.get(st.words)
+                )
+                st.last_log_probs = None
                 st.parent_state = None
                 st.step_token_ids = ()
                 self.stats["prefix_cache_hits"] += 1
@@ -592,7 +640,8 @@ class CachedVocabularyLanguageScorer:
             if not step_toks:
                 for target_st in st_group:
                     target_st.past_key_values = parent.past_key_values
-                    target_st.last_log_probs = parent.last_log_probs
+                    target_st.first_token_lps = parent.first_token_lps
+                    target_st.last_log_probs = None
                     target_st.parent_state = None
                 continue
             unique_specs.append((words_key, parent, step_toks, st_group))
@@ -668,7 +717,6 @@ class CachedVocabularyLanguageScorer:
             batch_rows = torch.arange(bsz, dtype=torch.long, device=self.device)
             last_logits = outputs.logits[batch_rows, last_indices, :].float()
             del outputs
-            last_lps = F_nn.log_softmax(last_logits, dim=-1)
             first_tok_index = torch.stack(
                 [
                     self.first_token_device_map[st_group[0].context_kind]
@@ -676,16 +724,21 @@ class CachedVocabularyLanguageScorer:
                 ],
                 dim=0,
             )
-            first_lps_gpu = torch.gather(last_lps, 1, first_tok_index)
+            first_lps_gpu = torch.gather(
+                last_logits, 1, first_tok_index
+            ) - torch.logsumexp(last_logits, dim=-1, keepdim=True)
+            del last_logits
             first_lps_batch_np = first_lps_gpu.detach().cpu().numpy()
+            del first_lps_gpu
 
             for row_i, (words_key, _, _, st_group) in enumerate(batch):
                 kv_i = unstacked_kvs[row_i]
-                lp_i = last_lps[row_i]
-                self._cache_first_token_lps(words_key, first_lps_batch_np[row_i])
+                first_lps_i = first_lps_batch_np[row_i]
+                self._cache_first_token_lps(words_key, first_lps_i)
                 for target_st in st_group:
                     target_st.past_key_values = kv_i
-                    target_st.last_log_probs = lp_i
+                    target_st.first_token_lps = first_lps_i
+                    target_st.last_log_probs = None
                     target_st.parent_state = None
                     target_st.step_token_ids = ()
                 self._cache_prefix_state(st_group[0])
@@ -944,17 +997,23 @@ class CachedVocabularyLanguageScorer:
         prefix_state: PrefixCacheState,
         top_k: int = 20,
     ) -> np.ndarray:
-        """供 LM-Only 基线使用：利用当前前缀的 last_log_probs 从闭集词表 V 中零开销筛选首 Token Top-M 候选并精排返回 Top-K 词索引。"""
-        self._ensure_states_materialized([prefix_state])
+        """供 LM-Only 基线使用：利用当前前缀的首 Token 对数概率从闭集词表 V 中零开销筛选首 Token Top-M 候选并精排返回 Top-K 词索引。"""
+        first_scores_np = self._extract_and_cache_first_token_lps(prefix_state)
         k = min(int(top_k), len(self.vocabulary))
         shortlist_m = min(max(k * 2, 40), len(self.vocabulary))
-        first_tok_ids = self.first_token_device_map[prefix_state.context_kind]
-        first_scores = prefix_state.last_log_probs.index_select(0, first_tok_ids)
-        _, top_m_indices = torch.topk(
-            first_scores, k=shortlist_m, largest=True, sorted=True
-        )
-        cand_list = top_m_indices.cpu().tolist()
-        exact_scores = self.score_candidates_with_cache([prefix_state], [cand_list])[0]
+        if shortlist_m < len(first_scores_np):
+            part_idx = np.argpartition(-first_scores_np, shortlist_m - 1)[
+                :shortlist_m
+            ]
+            top_m_indices = part_idx[
+                np.argsort(-first_scores_np[part_idx], kind="stable")
+            ]
+        else:
+            top_m_indices = np.argsort(-first_scores_np, kind="stable")
+        cand_list = top_m_indices.tolist()
+        exact_scores = self.score_candidates_with_cache(
+            [prefix_state], [cand_list]
+        )[0]
         order = np.argsort(-exact_scores, kind="stable")[:k]
         return np.asarray([cand_list[int(i)] for i in order], dtype=np.int64)
 
@@ -974,11 +1033,7 @@ class CachedVocabularyLanguageScorer:
             new_words = state.words + (word_str,)
 
             cached = self._prefix_state_cache.get(new_words)
-            if (
-                cached is not None
-                and cached.past_key_values is not None
-                and cached.last_log_probs is not None
-            ):
+            if cached is not None and cached.past_key_values is not None:
                 self._prefix_state_cache.move_to_end(new_words)
                 self.stats["prefix_cache_hits"] += 1
                 advanced_states.append(cached)
@@ -987,7 +1042,7 @@ class CachedVocabularyLanguageScorer:
             tok_ids = self.vocab_table.token_ids_for(w_id, state.context_kind)
             new_ctx = prefix_context_kind(new_words, self.language)
 
-            if state.past_key_values is not None and state.last_log_probs is not None:
+            if state.past_key_values is not None:
                 parent_ref = state
                 pending_tokens = tok_ids
             else:
@@ -995,7 +1050,6 @@ class CachedVocabularyLanguageScorer:
                 if (
                     cached_parent is not None
                     and cached_parent.past_key_values is not None
-                    and cached_parent.last_log_probs is not None
                 ):
                     parent_ref = cached_parent
                     pending_tokens = tok_ids
@@ -1012,6 +1066,9 @@ class CachedVocabularyLanguageScorer:
                     context_kind=new_ctx,
                     parent_state=parent_ref,
                     step_token_ids=pending_tokens,
+                    first_token_lps=self._prefix_first_token_lps_cache.get(
+                        new_words
+                    ),
                 )
             )
 

@@ -763,6 +763,18 @@ def _build_static_revision_eval_table(
     return table_by_delay
 
 
+def _alloc_padded_gpu_feature_matrix(
+    src_tensor: torch.Tensor, device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """在目标设备上单次分配带尾部零填充行的连续 float32 矩阵，返回 (零拷贝切片视图, 填充张量)。"""
+    n_rows, feat_dim = int(src_tensor.shape[0]), int(src_tensor.shape[1])
+    padded = torch.zeros(
+        (n_rows + 1, feat_dim), device=device, dtype=torch.float32
+    )
+    padded[:n_rows].copy_(src_tensor, non_blocking=False)
+    return padded[:n_rows], padded
+
+
 def _finalize_gpu_preextracted_bundle(
     model,
     train_ds,
@@ -776,23 +788,25 @@ def _finalize_gpu_preextracted_bundle(
     loaded_from_disk: bool,
     elapsed: float,
 ) -> dict:
-    """将预提取张量、尾部零填充视图及全数据集静态 GPU 窗口查表常驻于 GPU 显存。"""
+    """将预提取张量、尾部零填充视图及全数据集静态 GPU 窗口查表常驻于 GPU 显存（零冗余单份存储）。"""
     train_meta = _extract_static_dataset_metadata(train_ds, device)
     val_meta = _extract_static_dataset_metadata(val_ds, device)
 
-    train_clean_z = train_clean_z.to(device=device, dtype=torch.float32).contiguous()
-    val_clean_z = val_clean_z.to(device=device, dtype=torch.float32).contiguous()
-    train_shifted_z = {
-        float(k): v.to(device=device, dtype=torch.float32).contiguous()
-        for k, v in train_shifted_z.items()
-    }
-
-    train_clean_z_pad = F.pad(train_clean_z, (0, 0, 0, 1)).contiguous()
-    val_clean_z_pad = F.pad(val_clean_z, (0, 0, 0, 1)).contiguous()
-    train_shifted_z_pad = {
-        float(k): F.pad(v, (0, 0, 0, 1)).contiguous()
-        for k, v in train_shifted_z.items()
-    }
+    train_clean_z, train_clean_z_pad = _alloc_padded_gpu_feature_matrix(
+        train_clean_z, device
+    )
+    val_clean_z, val_clean_z_pad = _alloc_padded_gpu_feature_matrix(
+        val_clean_z, device
+    )
+    train_shifted_z_gpu: dict[float, torch.Tensor] = {}
+    train_shifted_z_pad: dict[float, torch.Tensor] = {}
+    for k in list(train_shifted_z.keys()):
+        v_src = train_shifted_z.pop(k)
+        v_unpad, v_pad = _alloc_padded_gpu_feature_matrix(v_src, device)
+        del v_src
+        train_shifted_z_gpu[float(k)] = v_unpad
+        train_shifted_z_pad[float(k)] = v_pad
+    train_shifted_z = train_shifted_z_gpu
 
     train_static_rev = _build_static_revision_train_table(
         model, train_meta["sentence_indices"], device
@@ -879,13 +893,18 @@ def preextract_frozen_cnn_features(
                     and len(saved["val_clean_z"]) == len(val_ds)
                 ):
                     elapsed = time.perf_counter() - t0
+                    t_clean = saved.pop("train_clean_z")
+                    t_shifted = saved.pop("train_shifted_z", None) or {}
+                    v_clean = saved.pop("val_clean_z")
+                    saved.clear()
+                    del saved
                     return _finalize_gpu_preextracted_bundle(
                         model,
                         train_ds,
                         val_ds,
-                        saved["train_clean_z"],
-                        saved.get("train_shifted_z") or {},
-                        saved["val_clean_z"],
+                        t_clean,
+                        t_shifted,
+                        v_clean,
                         device,
                         cache_file=cache_file,
                         loaded_from_disk=True,
@@ -1033,8 +1052,16 @@ def _apply_siamese_shared_dropout(
     p = float(getattr(dropout_module, "p", 0.0))
     if not dropout_module.training or p <= 0.0:
         return attn
-    if num_branches <= 1 or not synchronize_dropout_rng:
+    if not synchronize_dropout_rng:
         return dropout_module(attn)
+    if num_branches <= 1:
+        shared_mask = F.dropout(
+            torch.ones_like(attn),
+            p=p,
+            training=True,
+            inplace=False,
+        )
+        return attn * shared_mask
     branch_g = attn.shape[0] // num_branches
     reshaped = attn.view(num_branches, branch_g, *attn.shape[1:])
     shared_mask = F.dropout(
@@ -1054,7 +1081,7 @@ def _run_ff_with_shared_dropout(
     synchronize_dropout_rng: bool,
 ) -> torch.Tensor:
     """在前馈层中支持跨孪生分支共享 Dropout 掩码（当 ff_dropout=0 时零开销直通）。"""
-    if not block.training or num_branches <= 1 or not synchronize_dropout_rng:
+    if not block.training or not synchronize_dropout_rng:
         return block(x_norm)
     ff_seq = getattr(block, "ff", None)
     if ff_seq is None or not any(
@@ -1811,47 +1838,80 @@ def forward_revision_from_preextracted(
                     num_branches=2,
                     synchronize_dropout_rng=synchronize_dropout_rng,
                 )
+                del grad_padded
                 grad_norm = F.normalize(grad_out, dim=-1).view(2, q_len, -1)
+                del grad_out
                 y_clean = grad_norm[0]
                 y_shift_0 = grad_norm[1]
 
                 num_rest = num_shifts - 1
+                rest_branches = shifted_padded_list[1:]
+                max_seq_len = int(clean_padded.shape[1])
+                chunk_b = (
+                    2
+                    if (num_rest > 2 and num_rest * g_len * max_seq_len > 16384)
+                    else num_rest
+                )
                 with torch.no_grad():
-                    if synchronize_dropout_rng and cpu_rng_state is not None:
-                        with torch.random.fork_rng(devices=fork_devices):
-                            torch.set_rng_state(cpu_rng_state)
-                            if cuda_rng_state is not None:
-                                torch.cuda.set_rng_state(
-                                    cuda_rng_state, cuda_device
-                                )
-                            rest_out = _run_fast_padded_transformer(
-                                model.context_transformer,
-                                torch.cat(shifted_padded_list[1:], dim=0),
-                                mask_2d.repeat(num_rest, 1),
-                                causal_override=False,
-                                target_col_idx=target_col_idx.repeat(num_rest),
-                                target_group_idx=_repeat_target_group_idx(
-                                    base_target_group, num_rest, g_len
-                                ),
-                                num_branches=num_rest,
-                                synchronize_dropout_rng=synchronize_dropout_rng,
-                            )
-                    else:
-                        rest_out = _run_fast_padded_transformer(
-                            model.context_transformer,
-                            torch.cat(shifted_padded_list[1:], dim=0),
-                            mask_2d.repeat(num_rest, 1),
-                            causal_override=False,
-                            target_col_idx=target_col_idx.repeat(num_rest),
-                            target_group_idx=_repeat_target_group_idx(
-                                base_target_group, num_rest, g_len
-                            ),
-                            num_branches=num_rest,
-                            synchronize_dropout_rng=False,
+                    rest_norm_chunks: list[torch.Tensor] = []
+                    for c_start in range(0, num_rest, chunk_b):
+                        c_slice = rest_branches[c_start : c_start + chunk_b]
+                        c_num = len(c_slice)
+                        c_padded = (
+                            c_slice[0]
+                            if c_num == 1
+                            else torch.cat(c_slice, dim=0)
                         )
-                    rest_norm = F.normalize(rest_out, dim=-1).view(
-                        num_rest, q_len, -1
+                        c_mask = (
+                            mask_2d if c_num == 1 else mask_2d.repeat(c_num, 1)
+                        )
+                        c_tcol = (
+                            target_col_idx
+                            if c_num == 1
+                            else target_col_idx.repeat(c_num)
+                        )
+                        c_tgrp = _repeat_target_group_idx(
+                            base_target_group, c_num, g_len
+                        )
+                        if synchronize_dropout_rng and cpu_rng_state is not None:
+                            with torch.random.fork_rng(devices=fork_devices):
+                                torch.set_rng_state(cpu_rng_state)
+                                if cuda_rng_state is not None:
+                                    torch.cuda.set_rng_state(
+                                        cuda_rng_state, cuda_device
+                                    )
+                                c_out = _run_fast_padded_transformer(
+                                    model.context_transformer,
+                                    c_padded,
+                                    c_mask,
+                                    causal_override=False,
+                                    target_col_idx=c_tcol,
+                                    target_group_idx=c_tgrp,
+                                    num_branches=c_num,
+                                    synchronize_dropout_rng=synchronize_dropout_rng,
+                                )
+                        else:
+                            c_out = _run_fast_padded_transformer(
+                                model.context_transformer,
+                                c_padded,
+                                c_mask,
+                                causal_override=False,
+                                target_col_idx=c_tcol,
+                                target_group_idx=c_tgrp,
+                                num_branches=c_num,
+                                synchronize_dropout_rng=False,
+                            )
+                        del c_padded
+                        rest_norm_chunks.append(
+                            F.normalize(c_out, dim=-1).view(c_num, q_len, -1)
+                        )
+                        del c_out
+                    rest_norm = (
+                        rest_norm_chunks[0]
+                        if len(rest_norm_chunks) == 1
+                        else torch.cat(rest_norm_chunks, dim=0)
                     )
+                    del rest_norm_chunks
                     y_shift_mean_detached = (
                         y_shift_0.detach() + rest_norm.sum(dim=0)
                     ) / float(num_shifts)
@@ -2164,36 +2224,65 @@ def forward_context_from_preextracted(
                 grad_norm = F.normalize(
                     grad_encoded[:, row_to_group, row_to_col], dim=-1
                 )
+                del grad_encoded
                 y_clean = grad_norm[0]
                 y_shift_0 = grad_norm[1]
 
                 num_rest = num_shifts - 1
+                rest_branches = shifted_padded_list[1:]
+                chunk_b = (
+                    2
+                    if (num_rest > 2 and num_rest * g_len * max_len > 16384)
+                    else num_rest
+                )
                 with torch.no_grad():
-                    if synchronize_dropout_rng and cpu_rng_state is not None:
-                        with torch.random.fork_rng(devices=fork_devices):
-                            torch.set_rng_state(cpu_rng_state)
-                            if cuda_rng_state is not None:
-                                torch.cuda.set_rng_state(
-                                    cuda_rng_state, cuda_device
-                                )
-                            rest_encoded = _run_fast_padded_transformer(
+                    rest_norm_chunks: list[torch.Tensor] = []
+                    for c_start in range(0, num_rest, chunk_b):
+                        c_slice = rest_branches[c_start : c_start + chunk_b]
+                        c_num = len(c_slice)
+                        c_padded = (
+                            c_slice[0]
+                            if c_num == 1
+                            else torch.cat(c_slice, dim=0)
+                        )
+                        c_mask = (
+                            mask_2d if c_num == 1 else mask_2d.repeat(c_num, 1)
+                        )
+                        if synchronize_dropout_rng and cpu_rng_state is not None:
+                            with torch.random.fork_rng(devices=fork_devices):
+                                torch.set_rng_state(cpu_rng_state)
+                                if cuda_rng_state is not None:
+                                    torch.cuda.set_rng_state(
+                                        cuda_rng_state, cuda_device
+                                    )
+                                c_encoded = _run_fast_padded_transformer(
+                                    model.context_transformer,
+                                    c_padded,
+                                    c_mask,
+                                    num_branches=c_num,
+                                    synchronize_dropout_rng=synchronize_dropout_rng,
+                                ).view(c_num, g_len, max_len, -1)
+                        else:
+                            c_encoded = _run_fast_padded_transformer(
                                 model.context_transformer,
-                                torch.cat(shifted_padded_list[1:], dim=0),
-                                mask_2d.repeat(num_rest, 1),
-                                num_branches=num_rest,
-                                synchronize_dropout_rng=synchronize_dropout_rng,
-                            ).view(num_rest, g_len, max_len, -1)
-                    else:
-                        rest_encoded = _run_fast_padded_transformer(
-                            model.context_transformer,
-                            torch.cat(shifted_padded_list[1:], dim=0),
-                            mask_2d.repeat(num_rest, 1),
-                            num_branches=num_rest,
-                            synchronize_dropout_rng=False,
-                        ).view(num_rest, g_len, max_len, -1)
-                    rest_norm = F.normalize(
-                        rest_encoded[:, row_to_group, row_to_col], dim=-1
+                                c_padded,
+                                c_mask,
+                                num_branches=c_num,
+                                synchronize_dropout_rng=False,
+                            ).view(c_num, g_len, max_len, -1)
+                        del c_padded
+                        rest_norm_chunks.append(
+                            F.normalize(
+                                c_encoded[:, row_to_group, row_to_col], dim=-1
+                            )
+                        )
+                        del c_encoded
+                    rest_norm = (
+                        rest_norm_chunks[0]
+                        if len(rest_norm_chunks) == 1
+                        else torch.cat(rest_norm_chunks, dim=0)
                     )
+                    del rest_norm_chunks
                     y_shift_mean_detached = (
                         y_shift_0.detach() + rest_norm.sum(dim=0)
                     ) / float(num_shifts)
