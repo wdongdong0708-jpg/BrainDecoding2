@@ -4,9 +4,9 @@
 
 ---
 
-## 1. 仓库顶层架构规范（严格限定 6 个顶层目录）
+## 1. 仓库顶层架构规范（严格限定 5 个顶层目录）
 
-为保持仓库长期整洁、职责单一，全仓库顶层目录严格固定为以下 **6 个目录**（由 `tests/core/test_repository_conventions.py` 自动守卫）：
+为保持仓库长期整洁、职责单一，全仓库顶层目录严格固定为以下 **5 个目录**（由 `tests/core/test_repository_conventions.py` 自动守卫）：
 
 ```text
 BrainDecoding/
@@ -26,8 +26,7 @@ BrainDecoding/
 │   ├── manifests/              # 实验协议注册表 (protocol_index.yaml)、数据切分与产物哈希清单
 │   ├── results/                # 正式实验结果（studies/<study>/results.json 与 tables/exports/*.csv）
 │   └── cache/                  # 本地派生数据清单 (derived/) 与对齐产物缓存 (artifacts/)
-├── paper/                      # 论文 LaTeX 源码 (manuscript/) 与最终定稿图片 (figures/)
-├── scripts/                    # 命令行工具与论文出图脚本 (scripts/paper/)
+├── scripts/                    # 命令行工具与云端脚本 (scripts/colab/)
 └── tests/                      # 镜像源码结构的自动化单元测试与仓库规范守卫
     ├── core/                   # CLI、配置、协议清单与仓库规范守卫测试
     ├── data/                   # 数据层单元测试

@@ -119,7 +119,7 @@ Entry 的语义必须来自模型对真实证据的理解。不得仅依据路�
 
 ### 2. 目录边界与文件落盘规范（严防 JSON / Markdown 散落与文件夹膨胀）
 
-- **顶层目录严格锁定**：仓库仅保留 6 个核心业务顶层目录：`braindecoding/`、`configs/`、`data/`、`paper/`、`scripts/`、`tests/`。**严禁创建任何新的顶层文件夹**。
+- **顶层目录严格锁定**：仓库仅保留 5 个核心业务顶层目录：`braindecoding/`、`configs/`、`data/`、`scripts/`、`tests/`。**严禁创建任何新的顶层文件夹**。
 - **严禁散落生成 `.json` 与 `.md` 文件**：
   - 仓库根目录仅允许保留 `README.md` 与 `AGENTS.md`，严禁在根目录或 `braindecoding/`、`scripts/`、`tests/` 中新建零散的 `.md` 说明文档或 `.json` 结果文件。
   - **数据与产物唯一合法归属**：
@@ -127,7 +127,7 @@ Entry 的语义必须来自模型对真实证据的理解。不得仅依据路�
     - 正式实验结果与统计表导出 $\rightarrow$ `data/results/studies/` 与 `data/results/exports/`
     - 本地派生信号缓存与对齐产物 $\rightarrow$ `data/cache/`
     - 临时调试输出、运行日志与模型权重 $\rightarrow$ `outputs/`、`tmp/` 或 `.cache/`（均由 `.gitignore` 忽略，不入 Git）
-- **职责分层**：核心算法与业务逻辑必须写在 `braindecoding/{data,models,training,decoding,evaluation,tasks}/` 对应子包中；`scripts/` 仅保留薄层入口脚本与 `scripts/paper/`、`scripts/colab/` 专用脚本。
+- **职责分层**：核心算法与业务逻辑必须写在 `braindecoding/{data,models,training,decoding,evaluation,tasks}/` 对应子包中；`scripts/` 仅保留薄层入口脚本与 `scripts/colab/` 专用脚本。
 
 ### 3. 文件与符号命名规范（见名知意，禁止含糊缩写）
 

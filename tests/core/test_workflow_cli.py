@@ -1955,17 +1955,8 @@ def test_decoupled_evaluation_reporting_replotting_and_cli_report(
         format_word_evaluation_report,
         render_saved_evaluation_report,
     )
-    import scripts.generate_paper_assets as generate_paper_assets
 
-    # 1. Verify scripts/generate_paper_assets.py targets existing paper scripts
-    assert (PROJECT_ROOT / "scripts/paper/unify_manuscript_tables.py").is_file()
-    assert (PROJECT_ROOT / "scripts/paper/polish_main_assets.py").is_file()
-    gpa_src = Path(generate_paper_assets.__file__).read_text(encoding="utf-8")
-    assert "scripts/paper/unify_manuscript_tables.py" in gpa_src
-    assert "scripts/paper/polish_main_assets.py" in gpa_src
-    assert "_test_v2.py" not in gpa_src
-
-    # 2. Single-stage word evaluation JSON -> compact Executive Summary (<= 86 cols) & replot
+    # 1. Single-stage word evaluation JSON -> compact Executive Summary (<= 86 cols) & replot
     eval_dir = tmp_path / "pallier2025" / "revision" / "all" / "seed-000"
     eval_dir.mkdir(parents=True, exist_ok=True)
     eval_json = eval_dir / "evaluation_test.json"

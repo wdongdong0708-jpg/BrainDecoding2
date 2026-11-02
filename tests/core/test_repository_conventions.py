@@ -12,7 +12,6 @@ ALLOWED_TOP_LEVEL_DIRS = {
     "braindecoding",
     "configs",
     "data",
-    "paper",
     "scripts",
     "tests",
 }
