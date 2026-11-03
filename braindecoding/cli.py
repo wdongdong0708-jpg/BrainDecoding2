@@ -1068,6 +1068,11 @@ def build_parser() -> argparse.ArgumentParser:
     decode_cmd.add_argument("--min-sentence-length", type=int, default=None, help="流式滚动物理最小句长准入（R=2 时默认 L >= 2R + 1 = 5）")
     decode_cmd.add_argument("--max-segments", type=int, default=None, help="可选限制最大解码段落数")
     decode_cmd.add_argument("--output-dir", default=None, help="可选显式指定输出根目录")
+    decode_cmd.add_argument(
+        "--sequence-subdir",
+        default=None,
+        help="序列解码结果保存子目录名（默认：simple_sequence_decoding；不覆盖旧版 sequence_decoding，且自动只读复用 sequence_decoding 下的 .pt 得分矩阵与校准超参）",
+    )
     decode_cmd.add_argument("--export-path", default=None, help="可选显式指定神经词表得分 .pt 路径")
     decode_cmd.add_argument("--calibration-path", default=None, help="可选显式指定状态校准 JSON 路径")
     decode_cmd.add_argument("--decoding-path", default=None, help="可选显式指定解码输出 JSON 路径")

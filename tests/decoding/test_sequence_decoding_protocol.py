@@ -1290,3 +1290,123 @@ def test_mode_one_l5_sentence_matched_closed_set_protocol() -> None:
     )
 
 
+def test_simple_sequence_decoding_subdir_reuses_legacy_pts_without_overwriting(
+    tmp_path, monkeypatch
+) -> None:
+    """验证默认输出至 simple_sequence_decoding，且只读复用旧版 sequence_decoding 下的 .pt 矩阵而不覆盖旧结果。"""
+    import json
+    import scripts.decode_sentences as decode_cli
+
+    runs_root = tmp_path / "runs"
+    exp_tag = "siamese_debiased_tag"
+    monkeypatch.setenv("BRAINDECODING_RESULTS_DIR", str(runs_root))
+
+    paths = decode_cli.resolve_default_paths(
+        "pallier2025", "test", 0, exp_tag=exp_tag
+    )
+    assert paths["base_dir"].parent.name == "simple_sequence_decoding"
+    assert paths["legacy_base_dir"].parent.name == "sequence_decoding"
+
+    legacy_seed_dir = paths["legacy_base_dir"]
+    legacy_seed_dir.mkdir(parents=True, exist_ok=True)
+    old_report_sentinel = legacy_seed_dir / "s3_evaluation_summary_test.json"
+    old_report_sentinel.write_text('{"legacy": true}\n', encoding="utf-8")
+
+    vocabulary, scorer, _ = _build_toy_french_scorer()
+    vocab_size = len(vocabulary)
+    n_events = 10
+    clean_scores = {
+        s: torch.zeros((n_events, vocab_size), dtype=torch.float32)
+        for s in CANONICAL_STATES
+    }
+    segments = [
+        {
+            "segment_index": 0,
+            "group_id": "sub-01_run-06:0",
+            "material_id": "run-06:0",
+            "subject_id": "sub-01",
+            "recording_id": "run-06",
+            "scope": "run-06",
+            "block_id": "run-06|block-000",
+            "partition": "calibration",
+            "event_indices": [0, 1, 2, 3, 4],
+            "reference_words": ["le", "petit", "prince", "le", "petit"],
+            "in_vocabulary_mask": [True] * 5,
+        },
+        {
+            "segment_index": 1,
+            "group_id": "sub-01_run-06:1",
+            "material_id": "run-06:1",
+            "subject_id": "sub-01",
+            "recording_id": "run-06",
+            "scope": "run-06",
+            "block_id": "run-06|block-000",
+            "partition": "evaluation",
+            "event_indices": [5, 6, 7, 8, 9],
+            "reference_words": ["le", "petit", "prince", "l", "ami"],
+            "in_vocabulary_mask": [True] * 5,
+        },
+    ]
+    for sp_name, pt_p in (
+        ("val", paths["legacy_val_export_path"]),
+        ("test", paths["legacy_split_export_path"]),
+    ):
+        torch.save(
+            {
+                "dataset": "pallier2025",
+                "language": "fr",
+                "split": sp_name,
+                "seed": 0,
+                "vocabulary": vocabulary,
+                "vocabulary_size": vocab_size,
+                "vocabulary_embeddings": torch.eye(vocab_size, 16),
+                "clean_scores": clean_scores,
+                "shifted_scores": {k: v for k, v in clean_scores.items() if k != "S0"},
+                "segments": segments,
+                "checkpoint_provenance": {"revision_stage": "prefix_revision"},
+                "cms_metadata": {"subtraction_eta": 0.5},
+            },
+            pt_p,
+        )
+
+    monkeypatch.setattr(
+        decode_cli,
+        "_load_or_init_language_scorer",
+        lambda *args, **kwargs: scorer,
+    )
+    args = decode_cli.build_parser().parse_args(
+        [
+            "--step",
+            "all",
+            "--dataset",
+            "pallier2025",
+            "--split",
+            "test",
+            "--seed",
+            "0",
+            "--exp-tag",
+            exp_tag,
+            "--cms-eta",
+            "0.5",
+            "--vocab-sizes",
+            "3,full",
+            "--core-vocab-size",
+            "full",
+            "--min-sentence-length",
+            "5",
+            "--no-plot",
+            "--no-progress",
+        ]
+    )
+    res = decode_cli.run_sequence_decoding_pipeline(args)
+    assert Path(res["decoding_path"]).parent == paths["base_dir"]
+    assert (paths["base_dir"] / "sequence_decoding_test.json").is_file()
+    assert (
+        paths["base_dir"].parent / "multi_seed_sequence_decoding_test.json"
+    ).is_file()
+    assert json.loads(old_report_sentinel.read_text(encoding="utf-8")) == {
+        "legacy": True
+    }
+
+
+

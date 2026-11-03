@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-11-03T10:20:14Z",
+  "updated_at": "2026-11-03T12:56:49Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "140950bd1fdc593b626fa74d2be2b17b0e1140010927286728ca0b5fa792e706",
-      "size": 45734,
-      "normalized_sha256": "140950bd1fdc593b626fa74d2be2b17b0e1140010927286728ca0b5fa792e706"
+      "sha256": "15a206af32337849b115d9a6dbf987695a7d01d2a1d42fd14579a81ae08e175c",
+      "size": 45683,
+      "normalized_sha256": "15a206af32337849b115d9a6dbf987695a7d01d2a1d42fd14579a81ae08e175c"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "braindecoding/cli.py": {
       "role": "index",
-      "sha256": "16afb8e96ca1d163de1e918be13a9e9b360e697eca4743c1b291a835a7719a88",
-      "size": 49102,
-      "normalized_sha256": "16afb8e96ca1d163de1e918be13a9e9b360e697eca4743c1b291a835a7719a88"
+      "sha256": "e76c390ebd0744bb2e04a255b557e9185035b81555ec1a64e8c9b0e38532bb58",
+      "size": 49397,
+      "normalized_sha256": "e76c390ebd0744bb2e04a255b557e9185035b81555ec1a64e8c9b0e38532bb58"
     },
     "braindecoding/config.py": {
       "role": "index",
@@ -1048,9 +1048,9 @@
     },
     "scripts/colab/colab_gpu_evaluation.ipynb": {
       "role": "index",
-      "sha256": "37bbc15e2daff1874f15bd7853a30840b2d35bc23b434a4525ac6ba640dac0df",
-      "size": 48899,
-      "normalized_sha256": "37bbc15e2daff1874f15bd7853a30840b2d35bc23b434a4525ac6ba640dac0df"
+      "sha256": "5591f33dc6bae7e3299e6d815d80f2a466691948ef6a459e821ca962250891a5",
+      "size": 50285,
+      "normalized_sha256": "5591f33dc6bae7e3299e6d815d80f2a466691948ef6a459e821ca962250891a5"
     },
     "scripts/colab/colab_gpu_train.ipynb": {
       "role": "index",
@@ -1066,9 +1066,9 @@
     },
     "scripts/decode_sentences.py": {
       "role": "index",
-      "sha256": "e8de605325a641836627dab1062999cc1764ffa661920bc8af88f06b38079838",
-      "size": 76422,
-      "normalized_sha256": "e8de605325a641836627dab1062999cc1764ffa661920bc8af88f06b38079838"
+      "sha256": "9c57ca788ef9d6d76f84b177338c96ade5dc6668efb1153f63ee42f4483a3e59",
+      "size": 80705,
+      "normalized_sha256": "9c57ca788ef9d6d76f84b177338c96ade5dc6668efb1153f63ee42f4483a3e59"
     },
     "scripts/generate_paper_assets.py": {
       "role": "index",

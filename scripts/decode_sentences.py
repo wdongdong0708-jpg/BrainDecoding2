@@ -234,6 +234,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="可选显式指定输出根目录",
     )
     parser.add_argument(
+        "--sequence-subdir",
+        default=None,
+        help="序列解码结果保存子目录名（默认：simple_sequence_decoding；不覆盖旧版 sequence_decoding，且自动只读复用 sequence_decoding 下的 .pt 得分矩阵与校准超参）",
+    )
+    parser.add_argument(
         "--export-path",
         default=None,
         help="可选显式指定神经词表得分 .pt 文件路径",
@@ -294,6 +299,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+DEFAULT_SEQUENCE_SUBDIR = "simple_sequence_decoding"
+
+
 def resolve_default_paths(
     dataset: str,
     split: str,
@@ -301,15 +309,29 @@ def resolve_default_paths(
     *,
     output_dir: str | Path | None = None,
     exp_tag: str | None = None,
+    sequence_subdir: str | None = None,
 ) -> dict[str, Path]:
+    subdir_name = (
+        str(sequence_subdir).strip()
+        if sequence_subdir and str(sequence_subdir).strip()
+        else (
+            os.environ.get("BRAINDECODING_SEQUENCE_SUBDIR", "").strip()
+            or DEFAULT_SEQUENCE_SUBDIR
+        )
+    )
+    legacy_base_dir: Path | None = None
     if output_dir is not None:
         base_dir = Path(output_dir).resolve()
     else:
         root = results_root() / dataset
         if exp_tag and str(exp_tag).strip().lower() not in {"", "default", "root", "none"}:
             root = root / str(exp_tag).strip()
-        base_dir = (root / "sequence_decoding" / f"seed-{int(seed):03d}").resolve()
-    return {
+        base_dir = (root / subdir_name / f"seed-{int(seed):03d}").resolve()
+        if subdir_name != "sequence_decoding":
+            legacy_base_dir = (
+                root / "sequence_decoding" / f"seed-{int(seed):03d}"
+            ).resolve()
+    res: dict[str, Path] = {
         "base_dir": base_dir,
         "val_export_path": base_dir / "neural_vocabulary_scores_val.pt",
         "split_export_path": base_dir / f"neural_vocabulary_scores_{split}.pt",
@@ -317,6 +339,18 @@ def resolve_default_paths(
         "decoding_path": base_dir / f"sequence_decoding_{split}.json",
         "evaluation_dir": base_dir / f"evaluation_{split}",
     }
+    if legacy_base_dir is not None:
+        res["legacy_base_dir"] = legacy_base_dir
+        res["legacy_val_export_path"] = (
+            legacy_base_dir / "neural_vocabulary_scores_val.pt"
+        )
+        res["legacy_split_export_path"] = (
+            legacy_base_dir / f"neural_vocabulary_scores_{split}.pt"
+        )
+        res["legacy_calibration_path"] = (
+            legacy_base_dir / "state_hyperparameter_calibration.json"
+        )
+    return res
 
 
 def _load_or_init_language_scorer(
@@ -418,6 +452,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     seed_list[0],
                     output_dir=args.output_dir,
                     exp_tag=getattr(args, "exp_tag", None),
+                    sequence_subdir=getattr(args, "sequence_subdir", None),
                 )["base_dir"].parent
             )
             multi_seed_summary = summarize_and_export_multi_seed_sequence_decoding(
@@ -653,12 +688,19 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     show_progress = not bool(getattr(args, "no_progress", False))
     plot_enabled = not bool(getattr(args, "no_plot", False))
 
+    sequence_subdir = (
+        getattr(args, "sequence_subdir", None)
+        or os.environ.get("BRAINDECODING_SEQUENCE_SUBDIR", "").strip()
+        or dec_cfg.get("sequence_subdir")
+        or DEFAULT_SEQUENCE_SUBDIR
+    )
     paths = resolve_default_paths(
         args.dataset,
         args.split,
         args.seed,
         output_dir=args.output_dir,
         exp_tag=exp_tag,
+        sequence_subdir=sequence_subdir,
     )
     export_path = (
         Path(args.export_path).resolve()
@@ -675,6 +717,17 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         Path(args.decoding_path).resolve()
         if args.decoding_path
         else paths["decoding_path"]
+    )
+    legacy_split_export_path = (
+        paths.get("legacy_split_export_path") if not args.export_path else None
+    )
+    legacy_val_export_path = (
+        paths.get("legacy_val_export_path") if not args.export_path else None
+    )
+    legacy_calibration_path = (
+        paths.get("legacy_calibration_path")
+        if not args.calibration_path
+        else None
     )
 
     results_summary: dict[str, Any] = {
@@ -831,14 +884,31 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         except Exception:
             return False
 
+    def _resolve_reusable_export_pt(
+        primary_pt: Path, legacy_pt: Path | None
+    ) -> Path:
+        if _export_matches_cms_eta(primary_pt, cms_eta):
+            return primary_pt
+        if (
+            not force_rerun
+            and legacy_pt is not None
+            and _export_matches_cms_eta(legacy_pt, cms_eta)
+        ):
+            return legacy_pt
+        return primary_pt
+
     export_was_regenerated = False
     if args.step in ("export", "all"):
+        reusable_split_pt = _resolve_reusable_export_pt(
+            export_path, legacy_split_export_path
+        )
         if (
             args.step == "all"
             and not force_rerun
-            and _export_matches_cms_eta(export_path, cms_eta)
+            and _export_matches_cms_eta(reusable_split_pt, cms_eta)
         ):
-            out_pt = export_path
+            out_pt = reusable_split_pt
+            export_path = reusable_split_pt
         else:
             out_pt = _run_export_for_split(args.split, export_path)
             export_was_regenerated = True
@@ -911,10 +981,22 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
         reusable_cal_states: dict[str, dict[str, Any]] = {}
         existing_cal_base: dict[str, Any] | None = None
-        if not force_rerun and calibration_path.is_file():
+        cal_read_path = (
+            calibration_path
+            if calibration_path.is_file()
+            else (
+                legacy_calibration_path
+                if (
+                    legacy_calibration_path is not None
+                    and legacy_calibration_path.is_file()
+                )
+                else calibration_path
+            )
+        )
+        if not force_rerun and cal_read_path.is_file():
             try:
                 existing_cal = json.loads(
-                    calibration_path.read_text(encoding="utf-8")
+                    cal_read_path.read_text(encoding="utf-8")
                 )
                 saved_cal_stage = existing_cal.get("revision_stage")
                 cal_stage_ok = (
@@ -1038,6 +1120,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             if ref_prov:
                 calibration_res["checkpoint_provenance"] = dict(ref_prov)
             try:
+                calibration_path.parent.mkdir(parents=True, exist_ok=True)
                 calibration_path.write_text(
                     json.dumps(calibration_res, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8",
@@ -1045,13 +1128,17 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             except OSError:
                 pass
         else:
+            reusable_val_pt = _resolve_reusable_export_pt(
+                val_export_path, legacy_val_export_path
+            )
             cal_source_path = (
-                val_export_path
-                if (args.split != "val" or val_export_path.is_file())
+                reusable_val_pt
+                if (args.split != "val" or reusable_val_pt.is_file())
                 else export_path
             )
             if force_rerun or not _export_matches_cms_eta(cal_source_path, cms_eta):
-                _run_export_for_split("val", cal_source_path)
+                _run_export_for_split("val", val_export_path)
+                cal_source_path = val_export_path
             val_payload = load_neural_vocabulary_scores(cal_source_path)
             val_clean = dict(val_payload.get("clean_scores") or {})
             val_prov = dict(val_payload.get("checkpoint_provenance") or {})
@@ -1148,7 +1235,12 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         results_summary["state_hyperparameters"] = calibration_res["states"]
 
     if args.step in ("decode", "all"):
-        if not _export_matches_cms_eta(export_path, cms_eta):
+        reusable_split_pt = _resolve_reusable_export_pt(
+            export_path, legacy_split_export_path
+        )
+        if _export_matches_cms_eta(reusable_split_pt, cms_eta):
+            export_path = reusable_split_pt
+        else:
             _run_export_for_split(args.split, export_path)
             export_was_regenerated = True
         split_payload = load_neural_vocabulary_scores(export_path)
@@ -1162,6 +1254,14 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         f_mode = "F_full_context" if has_real_context else "not_available"
         if calibration_path.is_file():
             cal_json = json.loads(calibration_path.read_text(encoding="utf-8"))
+            hyperparameters = cal_json
+        elif (
+            legacy_calibration_path is not None
+            and legacy_calibration_path.is_file()
+        ):
+            cal_json = json.loads(
+                legacy_calibration_path.read_text(encoding="utf-8")
+            )
             hyperparameters = cal_json
         else:
             hyperparameters = {
@@ -1364,6 +1464,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     existing_dec.get("dataset") == args.dataset
                     and existing_dec.get("split") == args.split
                     and int(existing_dec.get("seed", -1)) == int(args.seed)
+                    and existing_dec.get("protocol_mode")
+                    == "l5_sentence_matched_closed_set"
+                    and int(existing_dec.get("min_sentence_length", -1))
+                    == int(eff_min_sentence_length)
                 ):
                     for cond_k, cond_b in (
                         existing_dec.get("decoded_bundles") or {}
@@ -1735,11 +1839,23 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     vocabulary_scaling_bundles_map[sk] = sb
 
         word_embedding_map = None
+        eval_pt_path = (
+            export_path
+            if export_path.is_file()
+            else (
+                legacy_split_export_path
+                if (
+                    legacy_split_export_path is not None
+                    and legacy_split_export_path.is_file()
+                )
+                else export_path
+            )
+        )
         if not bool(args.no_bertscore) and (
-            "split_payload" in locals() or export_path.is_file()
+            "split_payload" in locals() or eval_pt_path.is_file()
         ):
             if "split_payload" not in locals():
-                split_payload = load_neural_vocabulary_scores(export_path)
+                split_payload = load_neural_vocabulary_scores(eval_pt_path)
             vocab_list = list(split_payload.get("vocabulary") or [])
             vocab_embs = split_payload.get("vocabulary_embeddings")
             if vocab_embs is not None and len(vocab_list) == len(vocab_embs):
