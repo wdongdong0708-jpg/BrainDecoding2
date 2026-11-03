@@ -1409,4 +1409,67 @@ def test_simple_sequence_decoding_subdir_reuses_legacy_pts_without_overwriting(
     }
 
 
+def test_s3_paired_significance_uses_block_size_one_for_30_unique_sentences() -> None:
+    """验证 Module 5 在 30 个独立长句（如 V=131 闭集）下按 block_size=1 生成 30 个独立块而非合并为 6 块。"""
+    from braindecoding.evaluation.sequence_decoding_evaluation import (
+        _assign_material_blocks,
+        _block_stats_for_records,
+        _compute_s3_paired_significance,
+    )
+
+    k2_recs = []
+    k0_recs = []
+    for mat_idx in range(30):
+        for subj_idx in range(2):
+            ref = ["le", "petit", "prince", "parle", "bien"]
+            k2_recs.append(
+                {
+                    "segment_index": mat_idx * 2 + subj_idx,
+                    "group_id": f"sub-0{subj_idx + 1}_run-06:{mat_idx}",
+                    "material_id": f"run-06:{mat_idx}",
+                    "subject_id": f"sub-0{subj_idx + 1}",
+                    "scope": "run-06",
+                    "reference_words": ref,
+                    "predicted_words": ref,
+                    "in_vocabulary_mask": [True] * 5,
+                }
+            )
+            k0_recs.append(
+                {
+                    "segment_index": mat_idx * 2 + subj_idx,
+                    "group_id": f"sub-0{subj_idx + 1}_run-06:{mat_idx}",
+                    "material_id": f"run-06:{mat_idx}",
+                    "subject_id": f"sub-0{subj_idx + 1}",
+                    "scope": "run-06",
+                    "reference_words": ref,
+                    "predicted_words": ["le", "le", "le", "le", "le"],
+                    "in_vocabulary_mask": [True] * 5,
+                }
+            )
+
+    assigned = _assign_material_blocks(k2_recs)
+    assert len(set(assigned)) == 30
+
+    blocks_k2, _ = _block_stats_for_records(k2_recs, language="fr")
+    assert len(blocks_k2) == 30
+
+    sig = _compute_s3_paired_significance(
+        {
+            "S3_clean": {
+                "vocabulary_size": 131,
+                "final_sentences": k2_recs,
+            },
+            "K0": {
+                "vocabulary_size": 131,
+                "final_sentences": k0_recs,
+            },
+        },
+        language="fr",
+    )
+    v131_top1 = sig["g4_V131_all_in_vocab_top1"]
+    assert v131_top1["blocks"] == 30
+    assert v131_top1["p_two_sided"] < 0.001
+
+
+
 

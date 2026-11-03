@@ -190,9 +190,10 @@ def _extract_canonical_material_id(
 def _assign_material_blocks(
     records: Sequence[Mapping[str, Any]],
     *,
-    segments_per_block: int = 5,
+    segments_per_block: int = 1,
+    block_size: int | None = None,
 ) -> list[str]:
-    """按连续 5 个唯一材料段（跨被试对齐）成块分配 block_id；若子集材料段较少则自动退化为单材料段或单记录块以保证统计自由度。"""
+    """按独立材料长句（跨被试对齐，默认 block_size=1 即每个独立筛选长句为 1 个统计块）分配 block_id；若子集材料段过少则退化为单记录块以保证统计自由度。"""
     mat_ids = [
         _extract_canonical_material_id(rec, idx)
         for idx, rec in enumerate(records)
@@ -204,8 +205,11 @@ def _assign_material_blocks(
             mat_to_ord[m] = len(unique_mats)
             unique_mats.append(m)
     m_count = len(unique_mats)
-    if m_count >= segments_per_block * 6:
-        step = max(1, int(segments_per_block))
+    eff_block_size = (
+        int(block_size) if block_size is not None else int(segments_per_block)
+    )
+    step = max(1, eff_block_size)
+    if step > 1 and m_count >= step * 6:
         return [f"block_{mat_to_ord[m] // step:04d}" for m in mat_ids]
     if m_count >= 4:
         return [f"block_{mat_to_ord[m]:04d}" for m in mat_ids]
@@ -1883,9 +1887,15 @@ def _block_stats_for_records(
     *,
     language: str,
     mat_to_block: Mapping[str, str] | None = None,
+    segments_per_block: int = 1,
+    block_size: int | None = None,
 ) -> tuple[dict[str, dict[str, float]], dict[str, str]]:
-    """计算单个解码条件句段列表在每个材料块上的分子/分母汇总，供跨条件或跨 k 配对块检验精确对齐使用。"""
+    """计算单个解码条件句段列表在每个独立长句材料块（默认 block_size=1）上的分子/分母汇总，供跨条件或跨 k 配对块检验精确对齐使用。"""
     chinese = language == "zh"
+    eff_block_size = (
+        int(block_size) if block_size is not None else int(segments_per_block)
+    )
+    step = max(1, eff_block_size)
     if mat_to_block is None:
         mat_ids = [
             _extract_canonical_material_id(rec, idx)
@@ -1898,8 +1908,10 @@ def _block_stats_for_records(
                 m_ord[m] = len(unique_mats)
                 unique_mats.append(m)
         m_cnt = len(unique_mats)
-        if m_cnt >= 30:
-            resolved_map = {m: f"block_{m_ord[m] // 5:04d}" for m in unique_mats}
+        if step > 1 and m_cnt >= step * 6:
+            resolved_map = {
+                m: f"block_{m_ord[m] // step:04d}" for m in unique_mats
+            }
         elif m_cnt >= 4:
             resolved_map = {m: f"block_{m_ord[m]:04d}" for m in unique_mats}
         else:
@@ -1918,7 +1930,7 @@ def _block_stats_for_records(
             continue
         seg_len = len(ref)
         mat_id = _extract_canonical_material_id(rec, idx)
-        b_id = resolved_map.get(mat_id, f"block_{idx // 5:04d}")
+        b_id = resolved_map.get(mat_id, f"block_{idx // step:04d}")
         b = blocks.setdefault(
             b_id,
             {
@@ -2050,8 +2062,9 @@ def _compute_s3_paired_significance(
     language: str,
     vocabulary_scaling_bundles: Mapping[str, dict] | None = None,
     multi_subject_bundles: Mapping[str | int, dict] | None = None,
+    block_size: int = 1,
 ) -> dict[str, dict[str, Any]]:
-    """计算全部 8 组固定配对统计检验（按连续 5 个材料段成块、10,000 次分层块自举与双侧符号翻转检验 + Holm 多重比较校正）。"""
+    """计算全部 8 组固定配对统计检验（默认 block_size=1 按独立长句成块、10,000 次分层块自举与双侧符号翻转检验 + Holm 多重比较校正）。"""
     s3_bundle = expanded_bundles.get("S3_clean") or expanded_bundles.get("S3")
     if not s3_bundle or not s3_bundle.get("final_sentences"):
         return {}
@@ -2096,7 +2109,9 @@ def _compute_s3_paired_significance(
 
     # 兼容旧版 4 个核心键（Full Vocab All Segs）
     s3_blocks_full, full_mat_map = _block_stats_for_records(
-        s3_bundle.get("final_sentences") or [], language=language
+        s3_bundle.get("final_sentences") or [],
+        language=language,
+        block_size=block_size,
     )
     for other_key, label_prefix, key_prefix, base_seed in (
         ("K0", "Rolling-K2 vs Rolling-K0 (Revision Gain)", "s3_clean_vs_k0", 20261031),
@@ -2114,6 +2129,7 @@ def _compute_s3_paired_significance(
             other_b.get("final_sentences") or [],
             language=language,
             mat_to_block=full_mat_map,
+            block_size=block_size,
         )
         for m_label, m_suf, m_code, s_off in (
             ("BLEU-1 (%)", "bleu1", "sent_bleu1", 0),
@@ -2231,10 +2247,13 @@ def _compute_s3_paired_significance(
 
             # 若为受限词表（V=50 / V=250），同时检验 All Segs 与高覆盖核心子集（0% OOV 或 >=80%），主表展示以 All Segs（及核心子集补充）为准
             blocks_a_all, mat_map_all = _block_stats_for_records(
-                recs_a_all, language=language
+                recs_a_all, language=language, block_size=block_size
             )
             blocks_b_all, _ = _block_stats_for_records(
-                recs_b_all, language=language, mat_to_block=mat_map_all
+                recs_b_all,
+                language=language,
+                mat_to_block=mat_map_all,
+                block_size=block_size,
             )
             subset_label = (
                 "0% OOV / All Segs" if eff_v == full_v_size else "All Segs"
@@ -2293,10 +2312,13 @@ def _compute_s3_paired_significance(
                         )
                 if core_recs_a and len(core_recs_a) == len(core_recs_b):
                     ba_core, cmap_core = _block_stats_for_records(
-                        core_recs_a, language=language
+                        core_recs_a, language=language, block_size=block_size
                     )
                     bb_core, _ = _block_stats_for_records(
-                        core_recs_b, language=language, mat_to_block=cmap_core
+                        core_recs_b,
+                        language=language,
+                        mat_to_block=cmap_core,
+                        block_size=block_size,
                     )
                     for m_disp, m_code in metrics_spec:
                         seed_counter += 1
@@ -2337,10 +2359,15 @@ def _compute_s3_paired_significance(
         ):
             if not r_s3:
                 continue
-            b_s3, m_250 = _block_stats_for_records(r_s3, language=language)
+            b_s3, m_250 = _block_stats_for_records(
+                r_s3, language=language, block_size=block_size
+            )
             if r_s0 and len(r_s0) == len(r_s3):
                 b_s0, _ = _block_stats_for_records(
-                    r_s0, language=language, mat_to_block=m_250
+                    r_s0,
+                    language=language,
+                    mat_to_block=m_250,
+                    block_size=block_size,
                 )
                 seed_counter += 1
                 res_c_vs_s0 = _paired_test_from_block_maps(
@@ -2434,10 +2461,13 @@ def _compute_s3_paired_significance(
                 if not recs_k1_v or not recs_kt_v:
                     continue
                 b_k1, mat_map_k1 = _block_stats_for_records(
-                    recs_k1_v, language=language
+                    recs_k1_v, language=language, block_size=block_size
                 )
                 b_kt, _ = _block_stats_for_records(
-                    recs_kt_v, language=language, mat_to_block=mat_map_k1
+                    recs_kt_v,
+                    language=language,
+                    mat_to_block=mat_map_k1,
+                    block_size=block_size,
                 )
                 for m_disp, m_code in (
                     ("Sent BLEU-1", "sent_bleu1"),
