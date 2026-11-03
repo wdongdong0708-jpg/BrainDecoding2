@@ -9,6 +9,8 @@ _LAZY_SYMBOL_MODULES: dict[str, str] = {
     "STAGE_DISPLAY_NAMES": "evaluation_figures",
     "STAGE_SHORT_LABELS": "evaluation_figures",
     "apply_multi_seed_control_selection": "word_retrieval_evaluation",
+    "build_frequency_vocabulary": "vocabulary_coverage",
+    "build_l5_sentence_matched_vocabulary": "vocabulary_coverage",
     "evaluation_plot_context": "evaluation_figures",
     "export_common_mode_subtraction_tables_and_markdown": "evaluation_exports",
     "export_multi_seed_tables_and_markdown": "evaluation_exports",

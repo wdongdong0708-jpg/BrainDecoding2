@@ -1789,19 +1789,26 @@ def format_sequence_decoding_report(
     core_benchmarks = dict(report.get("core_vocabulary_benchmarks") or {})
     vocab_scaling = dict(report.get("vocabulary_scaling") or {})
     full_core = report.get("full_vocab_core_subsets") or {}
-    full_v_sz = int(
-        full_core.get("vocabulary_size")
-        or max(
-            (
-                int(str(k).lstrip("vV=_") or 0)
-                for k in list(vocab_scaling.keys()) + list(core_benchmarks.keys())
-                if str(k).lstrip("vV=_").isdigit()
-            ),
-            default=2020 if dataset == "pallier2025" else 2180,
+    full_v_sz = int(full_core.get("vocabulary_size") or 0)
+    if full_v_sz <= 0:
+        for entry in list(vocab_scaling.values()) + list(core_benchmarks.values()):
+            if isinstance(entry, Mapping) and entry.get("is_full_vocabulary"):
+                full_v_sz = int(entry.get("vocabulary_size") or 0)
+                if full_v_sz > 0:
+                    break
+    if full_v_sz <= 0:
+        full_v_sz = int(
+            max(
+                (
+                    int(str(k).lstrip("vV=_") or 0)
+                    for k in list(vocab_scaling.keys()) + list(core_benchmarks.keys())
+                    if str(k).lstrip("vV=_").isdigit()
+                ),
+                default=2020 if dataset == "pallier2025" else 2180,
+            )
         )
-    )
-    if full_v_sz <= 250:
-        full_v_sz = 2020 if dataset == "pallier2025" else 2180
+        if full_v_sz <= 250 and not full_core:
+            full_v_sz = 2020 if dataset == "pallier2025" else 2180
     full_v_key = f"V={full_v_sz}"
 
     if full_v_key not in core_benchmarks:
@@ -1845,7 +1852,13 @@ def format_sequence_decoding_report(
         n100 = int(c100_blk.get("segment_count", 0))
         n80 = int(c80_blk.get("segment_count", 0))
         nall = int(all_blk.get("segment_count", 0))
-        if v_sz < full_v_sz:
+        if n100 > 0 and n100 == nall:
+            conds_blk = c100_blk.get("conditions") or all_blk.get("conditions")
+            if isinstance(conds_blk, Mapping):
+                ordered_scale_blocks.append(
+                    (str(v_key), f"0% OOV (n={n100})", conds_blk)
+                )
+        elif v_sz < full_v_sz:
             if n100 > 0 and isinstance(c100_blk.get("conditions"), Mapping):
                 ordered_scale_blocks.append(
                     (str(v_key), f"0% OOV (n={n100})", c100_blk["conditions"])

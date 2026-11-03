@@ -1136,7 +1136,157 @@ def test_decoupled_stage_checkpoints_and_incremental_f_reuse(
             assert "F" in res["conditions"]
 
 
+def test_mode_one_l5_sentence_matched_closed_set_protocol() -> None:
+    """验证模式一（路径 B1）：L >= 5 训练可见长句的句表同源闭集词表构造、贪心集合覆盖与 100% 0% OOV 束搜索。"""
+    from braindecoding.decoding.rolling_beam_search import (
+        run_vocabulary_scaling_sweep,
+    )
+    from braindecoding.evaluation.vocabulary_coverage import (
+        build_l5_sentence_matched_vocabulary,
+    )
 
+    vocabulary, scorer, _ = _build_toy_french_scorer()
+    # 训练集词频：le(10) > petit(8) > prince(6) > l(5) > ami(4) > -t-il(2)
+    train_words = (
+        ["le"] * 10
+        + ["petit"] * 8
+        + ["prince"] * 6
+        + ["l"] * 5
+        + ["ami"] * 4
+        + ["-t-il"] * 2
+    )
+    # 测试片段：
+    # seg 0: L=3 (< 5，短残句，应被物理句长准入准则 L >= 5 剔除)
+    # seg 1: L=5，仅用 {"le", "petit", "prince"} 3 个词，训练可见
+    # seg 2: L=6，用 {"le", "petit", "prince", "l", "ami"} 5 个词，训练可见
+    # seg 3: L=5，含训练 OOV 词 "renard"，应被剔除
+    test_segments = [
+        ["le", "petit", "prince"],
+        ["le", "petit", "prince", "le", "petit"],
+        ["le", "petit", "prince", "l", "ami", "prince"],
+        ["le", "petit", "renard", "parle", "prince"],
+    ]
 
+    # 1. size="full"：构建句表同源基准全词表 V_full（仅含 seg 1 与 seg 2 的 5 个词，剔除训练陪跑词 "-t-il"）
+    v_full, cov_full = build_l5_sentence_matched_vocabulary(
+        train_words=train_words,
+        test_segments=test_segments,
+        size="full",
+        min_sentence_length=5,
+        pad_with_train_freq=False,
+    )
+    assert v_full == ["le", "petit", "prince", "l", "ami"]
+    assert "-t-il" not in v_full
+    assert cov_full == [1, 2]
+
+    # 2. size=3：贪心集合覆盖选出 {"le", "petit", "prince"}，覆盖 seg 1（5 词次 / 3 新词效率最高）
+    v_sub3, cov_sub3 = build_l5_sentence_matched_vocabulary(
+        train_words=train_words,
+        test_segments=test_segments,
+        size=3,
+        min_sentence_length=5,
+        pad_with_train_freq=False,
+    )
+    assert v_sub3 == ["le", "petit", "prince"]
+    assert cov_sub3 == [1]
+
+    # 3. size=6 (> |V_full|=5) 且 pad_with_train_freq=True：用训练高频词 "-t-il" 补齐至 6 词
+    v_pad6, cov_pad6 = build_l5_sentence_matched_vocabulary(
+        train_words=train_words,
+        test_segments=test_segments,
+        size=6,
+        min_sentence_length=5,
+        pad_with_train_freq=True,
+    )
+    assert len(v_pad6) == 6
+    assert "-t-il" in v_pad6
+    assert cov_pad6 == [1, 2]
+
+    # 4. 验证 run_vocabulary_scaling_sweep 在模式一下仅解码 L >= 5 且 100% 0% OOV 的片段，且 LM-Only 严格受限于子词表
+    vocab_size = len(vocabulary)
+    n_events = 14
+    clean_scores = {
+        s: torch.zeros((n_events, vocab_size), dtype=torch.float32)
+        for s in CANONICAL_STATES
+    }
+    exported_payload = {
+        "dataset": "pallier2025",
+        "language": "fr",
+        "split": "test",
+        "seed": 0,
+        "vocabulary": vocabulary,
+        "clean_scores": clean_scores,
+        "shifted_scores": {k: v for k, v in clean_scores.items() if k != "S0"},
+        "segments": [
+            {
+                "segment_index": 0,
+                "group_id": "sub-01_run-06:0",
+                "material_id": "run-06:0",
+                "subject_id": "sub-01",
+                "recording_id": "run-06",
+                "scope": "run-06",
+                "block_id": "run-06|block-000",
+                "partition": "evaluation",
+                "event_indices": [0, 1, 2],
+                "reference_words": test_segments[0],
+                "in_vocabulary_mask": [True, True, True],
+            },
+            {
+                "segment_index": 1,
+                "group_id": "sub-01_run-06:1",
+                "material_id": "run-06:1",
+                "subject_id": "sub-01",
+                "recording_id": "run-06",
+                "scope": "run-06",
+                "block_id": "run-06|block-000",
+                "partition": "evaluation",
+                "event_indices": [3, 4, 5, 6, 7],
+                "reference_words": test_segments[1],
+                "in_vocabulary_mask": [True] * 5,
+            },
+            {
+                "segment_index": 2,
+                "group_id": "sub-01_run-06:2",
+                "material_id": "run-06:2",
+                "subject_id": "sub-01",
+                "recording_id": "run-06",
+                "scope": "run-06",
+                "block_id": "run-06|block-000",
+                "partition": "evaluation",
+                "event_indices": [8, 9, 10, 11, 12, 13],
+                "reference_words": test_segments[2],
+                "in_vocabulary_mask": [True] * 6,
+            },
+        ],
+    }
+    state_hp = {
+        s: {"temperature": 0.1, "language_weight": 0.1}
+        for s in CANONICAL_STATES
+    }
+    sweep = run_vocabulary_scaling_sweep(
+        exported_payload,
+        scorer,
+        state_hp,
+        vocab_sizes=(3, "full"),
+        min_sentence_length=5,
+        beam_width=3,
+        candidate_top_k=6,
+        show_progress=False,
+    )
+    assert "V=3" in sweep
+    assert "V=5" in sweep
+    assert sweep["V=3"]["test_token_coverage_pct"] == 100.0
+    assert sweep["V=5"]["test_token_coverage_pct"] == 100.0
+    assert sweep["V=5"]["is_full_vocabulary"] is True
+    v3_sents = sweep["V=3"]["conditions"]["S3_clean"]["final_sentences"]
+    v3_lm_sents = sweep["V=3"]["conditions"]["LM-Only"]["final_sentences"]
+    v5_sents = sweep["V=5"]["conditions"]["S3_clean"]["final_sentences"]
+    assert [r["segment_index"] for r in v3_sents] == [1]
+    assert [r["segment_index"] for r in v5_sents] == [1, 2]
+    assert all(
+        w in {"le", "petit", "prince"}
+        for rec in v3_lm_sents
+        for w in rec["predicted_words"]
+    )
 
 

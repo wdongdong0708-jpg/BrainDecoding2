@@ -1718,6 +1718,7 @@ def decode_dataset_segment_jobs(
     beam_width: int = 5,
     candidate_top_k: int = 20,
     segment_batch_size: int = 32,
+    segment_indices: Sequence[int] | None = None,
     partition_filter: str | None = None,
     max_segments: int | None = None,
     show_progress: bool = False,
@@ -1727,7 +1728,7 @@ def decode_dataset_segment_jobs(
     """将多个解码作业（不同条件 / 对齐方式 / 受限词表）合并为同一批次同步束搜索。
 
     每个作业为字典：`condition`（S0/K0/K1/K2/F/S3/LM-Only）、`alignment`（clean/shifted）、
-    可选 `vocab_size_limit` / `allowed_vocab_indices` / `include_screen_history`。
+    可选 `vocab_size_limit` / `allowed_vocab_indices` / `segment_indices` / `include_screen_history`。
     - 静态作业（S0/K0/K1/K2/F 以及不记录屏幕轨迹的 S3 = 静态 K2）跨作业逐句段 λ 合并为一次
       `decode_segments_static_batched` 批处理；
     - 流式作业（记录屏幕轨迹的 S3）跨对齐方式合并为一次 `decode_segments_streaming_batched` 批处理；
@@ -1738,11 +1739,21 @@ def decode_dataset_segment_jobs(
     from tqdm.auto import tqdm
 
     vocabulary = list(exported_payload["vocabulary"])
-    segments = [
+    base_segments = [
         seg
         for seg in exported_payload["segments"]
         if partition_filter is None or seg.get("partition") == partition_filter
     ]
+    if segment_indices is not None:
+        allowed_seg_set = {int(i) for i in segment_indices}
+        segments = [
+            seg
+            for pos, seg in enumerate(base_segments)
+            if pos in allowed_seg_set
+            or int(seg.get("segment_index", -1)) in allowed_seg_set
+        ]
+    else:
+        segments = base_segments
     if max_segments is not None:
         segments = segments[: int(max_segments)]
     n_segs = len(segments)
@@ -1792,6 +1803,12 @@ def decode_dataset_segment_jobs(
         kind = "streaming" if is_streaming else (
             "static_s3" if cond_upper == "S3" else "static"
         )
+        job_seg_indices = job.get("segment_indices")
+        job_seg_set = (
+            {int(i) for i in job_seg_indices}
+            if job_seg_indices is not None
+            else None
+        )
         job_meta[job_key] = {
             "condition": condition,
             "alignment": alignment,
@@ -1814,6 +1831,12 @@ def decode_dataset_segment_jobs(
                     allowed_vocab_indices=active_idx,
                 )
             for seg_pos, seg in enumerate(segments):
+                if (
+                    job_seg_set is not None
+                    and seg_pos not in job_seg_set
+                    and int(seg.get("segment_index", -1)) not in job_seg_set
+                ):
+                    continue
                 ev = seg["event_indices"]
                 stream_items.append(
                     (
@@ -1834,6 +1857,12 @@ def decode_dataset_segment_jobs(
                 allowed_vocab_indices=active_idx,
             )
             for seg_pos, seg in enumerate(segments):
+                if (
+                    job_seg_set is not None
+                    and seg_pos not in job_seg_set
+                    and int(seg.get("segment_index", -1)) not in job_seg_set
+                ):
+                    continue
                 static_items.append(
                     (
                         seg_pos,
@@ -1993,21 +2022,25 @@ def decode_dataset_segment_jobs(
                 segment_batch_size=segment_batch_size,
                 vocab_size_limit=job.get("vocab_size_limit"),
                 allowed_vocab_indices=job.get("allowed_vocab_indices"),
+                segment_indices=job.get("segment_indices", segment_indices),
                 partition_filter=partition_filter,
                 max_segments=max_segments,
             )
             continue
         meta = job_meta[job_key]
         total_elapsed = float(meta["elapsed"])
+        valid_records = [r for r in meta["records"] if r is not None]
+        valid_screens = [s for s in meta["screens"] if s is not None]
+        job_n_segs = len(valid_records)
         results[job_key] = {
             "condition": meta["condition"],
             "alignment": meta["alignment"],
             "vocabulary_size": meta["vocabulary_size"],
-            "segment_count": n_segs,
+            "segment_count": job_n_segs,
             "total_elapsed_seconds": round(total_elapsed, 4),
-            "mean_seconds_per_segment": round(total_elapsed / max(1, n_segs), 4),
-            "final_sentences": [r for r in meta["records"] if r is not None],
-            "screen_histories": [s for s in meta["screens"] if s is not None],
+            "mean_seconds_per_segment": round(total_elapsed / max(1, job_n_segs), 4),
+            "final_sentences": valid_records,
+            "screen_histories": valid_screens,
         }
     return results
 
@@ -2030,6 +2063,7 @@ def decode_dataset_segments(
     segment_batch_size: int = 32,
     vocab_size_limit: int | None = None,
     allowed_vocab_indices: Sequence[int] | None = None,
+    segment_indices: Sequence[int] | None = None,
     partition_filter: str | None = None,
     max_segments: int | None = None,
     include_screen_history: bool = True,
@@ -2050,12 +2084,14 @@ def decode_dataset_segments(
                     "alignment": alignment,
                     "vocab_size_limit": vocab_size_limit,
                     "allowed_vocab_indices": allowed_vocab_indices,
+                    "segment_indices": segment_indices,
                     "include_screen_history": include_screen_history,
                 }
             },
             beam_width=beam_width,
             candidate_top_k=candidate_top_k,
             segment_batch_size=segment_batch_size,
+            segment_indices=segment_indices,
             partition_filter=partition_filter,
             max_segments=max_segments,
             show_progress=show_progress,
@@ -2077,11 +2113,21 @@ def decode_dataset_segments(
         else int(candidate_top_k)
     )
 
-    segments = [
+    base_segments = [
         seg
         for seg in exported_payload["segments"]
         if partition_filter is None or seg.get("partition") == partition_filter
     ]
+    if segment_indices is not None:
+        allowed_seg_set = {int(i) for i in segment_indices}
+        segments = [
+            seg
+            for pos, seg in enumerate(base_segments)
+            if pos in allowed_seg_set
+            or int(seg.get("segment_index", -1)) in allowed_seg_set
+        ]
+    else:
+        segments = base_segments
     if max_segments is not None:
         segments = segments[: int(max_segments)]
 
@@ -2121,7 +2167,7 @@ def decode_dataset_segments(
         if needed_lengths and len(vocabulary) > 0:
             max_lm_len = max(needed_lengths)
             vocab_tuple = tuple(str(w) for w in vocabulary)
-            vocab_size = len(vocab_tuple)
+            vocab_size = max(1, int(eff_vocab_size))
             uniform_lp = -float(np.log(vocab_size))
             lam = 1.0 if lm_weight <= 0 else float(lm_weight)
             b_width = max(1, int(beam_width))
@@ -2143,7 +2189,9 @@ def decode_dataset_segments(
                 beam_states = [b.cache_state for b in beams]
                 cand_lists = [
                     scorer.propose_top_k_from_language_model(
-                        b.cache_state, top_k=k_top
+                        b.cache_state,
+                        top_k=k_top,
+                        allowed_vocab_indices=active_vocab_indices,
                     ).tolist()
                     for b in beams
                 ]
@@ -2428,6 +2476,151 @@ def aggregate_multi_subject_payload(
     }
 
 
+def _is_full_vocab_scale_token(scale: Any) -> bool:
+    if scale is None:
+        return True
+    if isinstance(scale, str):
+        s = scale.strip().lower()
+        if s in ("full", "all", ""):
+            return True
+        if s.lstrip("-").isdigit():
+            return int(s) <= 0
+        return True
+    return int(scale) <= 0
+
+
+def _build_train_corpus_words_and_vocab_lookup(
+    exported_payload: dict,
+) -> tuple[list[str], dict[str, int]]:
+    from braindecoding.decoding.neural_score_exporter import (
+        resolve_vocabulary_frequency_order,
+    )
+
+    vocabulary = [str(w) for w in exported_payload.get("vocabulary") or []]
+    if not vocabulary:
+        return [], {}
+    _, _, full_counts = resolve_vocabulary_frequency_order(exported_payload)
+    word_to_vocab_idx: dict[str, int] = {}
+    for idx_v, w_v in enumerate(vocabulary):
+        norm_v = w_v.strip().lower()
+        if norm_v and norm_v not in word_to_vocab_idx:
+            word_to_vocab_idx[norm_v] = idx_v
+
+    has_zero_count = any(
+        int(full_counts.get(w_v, 0)) <= 0 for w_v in vocabulary
+    )
+    train_corpus_words: list[str] = []
+    for w_v in vocabulary:
+        norm_v = w_v.strip().lower()
+        if not norm_v:
+            continue
+        c_val = int(full_counts.get(w_v, 0))
+        c_eff = max(1, c_val + 1) if has_zero_count else max(1, c_val)
+        train_corpus_words.extend([norm_v] * c_eff)
+    return train_corpus_words, word_to_vocab_idx
+
+
+def _resolve_l5_closed_set_scales(
+    exported_payload: dict,
+    vocab_sizes: Sequence[int | str] | None,
+    *,
+    min_sentence_length: int = 5,
+    max_segments: int | None = None,
+) -> list[dict]:
+    from braindecoding.evaluation.vocabulary_coverage import (
+        build_l5_sentence_matched_vocabulary,
+    )
+
+    all_segments = list(exported_payload.get("segments") or [])
+    if not all_segments:
+        return []
+    train_corpus_words, word_to_vocab_idx = (
+        _build_train_corpus_words_and_vocab_lookup(exported_payload)
+    )
+    if not train_corpus_words:
+        return []
+    test_sentence_token_lists = [
+        [str(w) for w in (seg.get("reference_words") or [])]
+        for seg in all_segments
+    ]
+    eff_min_len = max(1, int(min_sentence_length))
+    full_words, full_covered_indices = build_l5_sentence_matched_vocabulary(
+        train_words=train_corpus_words,
+        test_segments=test_sentence_token_lists,
+        size="full",
+        min_sentence_length=eff_min_len,
+        pad_with_train_freq=False,
+    )
+    if not full_covered_indices and eff_min_len > 1:
+        eff_min_len = 1
+        full_words, full_covered_indices = build_l5_sentence_matched_vocabulary(
+            train_words=train_corpus_words,
+            test_segments=test_sentence_token_lists,
+            size="full",
+            min_sentence_length=eff_min_len,
+            pad_with_train_freq=False,
+        )
+    full_indices = [
+        word_to_vocab_idx[w] for w in full_words if w in word_to_vocab_idx
+    ]
+    full_v_len = len(full_indices)
+
+    raw_scales: list[int | str] = list(vocab_sizes or (50, 100, "full"))
+    if not any(_is_full_vocab_scale_token(s) for s in raw_scales):
+        raw_scales.append("full")
+
+    specs_by_size: dict[int, dict] = {}
+    for raw_s in raw_scales:
+        is_full = _is_full_vocab_scale_token(raw_s)
+        target_scale: int | str = (
+            "full"
+            if is_full
+            else int(raw_s.strip() if isinstance(raw_s, str) else raw_s)
+        )
+        pad_flag = False
+        if not is_full:
+            scale_int = int(target_scale)
+            pad_flag = scale_int == 250 or scale_int > full_v_len
+        vocab_words, covered_l5_seg_indices = (
+            build_l5_sentence_matched_vocabulary(
+                train_words=train_corpus_words,
+                test_segments=test_sentence_token_lists,
+                size=target_scale,
+                min_sentence_length=eff_min_len,
+                pad_with_train_freq=pad_flag,
+            )
+        )
+        if max_segments is not None:
+            covered_l5_seg_indices = covered_l5_seg_indices[
+                : int(max_segments)
+            ]
+        allowed_indices = [
+            word_to_vocab_idx[w] for w in vocab_words if w in word_to_vocab_idx
+        ]
+        eff_n = len(allowed_indices)
+        if eff_n <= 0:
+            continue
+        is_full_vocab = bool(
+            is_full or (eff_n == full_v_len and not pad_flag)
+        )
+        if eff_n in specs_by_size:
+            if is_full_vocab:
+                specs_by_size[eff_n]["is_full_vocabulary"] = True
+            continue
+        specs_by_size[eff_n] = {
+            "scale_key": f"V={eff_n}",
+            "requested_scale": target_scale,
+            "vocabulary_size": int(eff_n),
+            "is_full_vocabulary": is_full_vocab,
+            "allowed_vocab_indices": allowed_indices,
+            "vocab_words": vocab_words,
+            "segment_indices": covered_l5_seg_indices,
+            "min_sentence_length": int(eff_min_len),
+        }
+
+    return [specs_by_size[k] for k in sorted(specs_by_size.keys())]
+
+
 def run_multi_subject_observation_sweep(
     exported_payload: dict,
     scorer: CachedVocabularyLanguageScorer,
@@ -2435,7 +2628,8 @@ def run_multi_subject_observation_sweep(
     *,
     k_values: Sequence[int] = (1, 2, 5, 10),
     k_observations: Sequence[int] | None = None,
-    vocab_sizes: Sequence[int] | None = (50, 100, 250),
+    vocab_sizes: Sequence[int | str] | None = (50, 100, "full"),
+    min_sentence_length: int | None = None,
     condition: str = "S3",
     alignment: str = "clean",
     single_subject_s3_bundle: dict | None = None,
@@ -2447,7 +2641,7 @@ def run_multi_subject_observation_sweep(
     max_segments: int | None = None,
     show_progress: bool = False,
 ) -> dict[str, dict]:
-    """扫描 k in {1, 2, 5, 10} 跨受试者多观测神经聚合下的序列解码结果（同时支持全词库与 |V| in {50, 100, 250} 受限核心词表）。"""
+    """扫描 k in {1, 2, 5, 10} 跨受试者多观测神经聚合下的序列解码结果（同时支持全词库与 |V| in {50, 100, |V_full|} 受限核心词表）。"""
     from braindecoding.decoding.neural_score_exporter import (
         resolve_vocabulary_frequency_order,
     )
@@ -2463,6 +2657,247 @@ def run_multi_subject_observation_sweep(
     max_avail_k = max(1, len(all_subjects))
     vocabulary = [str(w) for w in exported_payload.get("vocabulary") or []]
     full_v_size = len(vocabulary)
+    use_l5_closed_set = min_sentence_length is not None or any(
+        _is_full_vocab_scale_token(v) for v in (vocab_sizes or ())
+    )
+
+    if use_l5_closed_set and full_v_size > 0:
+        eff_min_len = int(min_sentence_length) if min_sentence_length is not None else 5
+        bundles_by_k: dict[str, dict] = {}
+        seen_eff_k: dict[int, dict] = {}
+
+        for k_raw in active_k_values:
+            k_int = max(1, int(k_raw))
+            k_eff = min(k_int, max_avail_k)
+            if k_eff in seen_eff_k:
+                cached = dict(seen_eff_k[k_eff])
+                cached["k_observations"] = k_int
+                cached["effective_k_observations"] = k_eff
+                bundles_by_k[f"k={k_int}"] = cached
+                continue
+
+            agg_payload = (
+                exported_payload
+                if k_eff == 1
+                else aggregate_multi_subject_payload(exported_payload, k_eff)
+            )
+            available_clean = agg_payload.get("clean_scores") or {}
+            available_shifted = agg_payload.get("shifted_scores") or {}
+            scale_specs = _resolve_l5_closed_set_scales(
+                agg_payload,
+                vocab_sizes,
+                min_sentence_length=eff_min_len,
+                max_segments=max_segments,
+            )
+            full_spec = next(
+                (s for s in scale_specs if s["is_full_vocabulary"]),
+                scale_specs[-1] if scale_specs else None,
+            )
+            full_allowed_indices = (
+                full_spec["allowed_vocab_indices"] if full_spec else None
+            )
+            full_seg_indices = (
+                full_spec["segment_indices"] if full_spec else None
+            )
+            expected_full_segs = (
+                len(full_seg_indices)
+                if full_seg_indices is not None
+                else len(agg_payload.get("segments") or [])
+            )
+
+            reuse_bundle: dict | None = None
+            if (
+                k_int == 1
+                and isinstance(single_subject_s3_bundle, dict)
+                and int(single_subject_s3_bundle.get("segment_count", -1))
+                == expected_full_segs
+            ):
+                reuse_bundle = dict(single_subject_s3_bundle)
+            elif (
+                k_int == 1
+                and isinstance(single_subject_full_vocab_bundles, dict)
+                and isinstance(
+                    single_subject_full_vocab_bundles.get("S3_clean"), dict
+                )
+                and int(
+                    single_subject_full_vocab_bundles["S3_clean"].get(
+                        "segment_count", -1
+                    )
+                )
+                == expected_full_segs
+            ):
+                reuse_bundle = dict(
+                    single_subject_full_vocab_bundles["S3_clean"]
+                )
+
+            if (
+                k_int == 1
+                and isinstance(single_subject_full_vocab_bundles, dict)
+                and reuse_bundle is not None
+            ):
+                bundle = reuse_bundle
+                conds_full: dict[str, dict] = {"S3_clean": dict(bundle)}
+                for c_key in (
+                    "S0",
+                    "K0",
+                    "S3_shifted_neg75s",
+                    "F",
+                    "K1",
+                    "K0_shifted_neg75s",
+                ):
+                    if c_key in single_subject_full_vocab_bundles:
+                        conds_full[c_key] = dict(
+                            single_subject_full_vocab_bundles[c_key]
+                        )
+                if (
+                    "S0" not in conds_full
+                    and "S0_clean" in single_subject_full_vocab_bundles
+                ):
+                    conds_full["S0"] = dict(
+                        single_subject_full_vocab_bundles["S0_clean"]
+                    )
+            else:
+                full_jobs: dict[str, dict] = {}
+                has_s3_clean = all(
+                    k in available_clean for k in ("K0", "K1", "K2")
+                )
+                if reuse_bundle is None and has_s3_clean:
+                    full_jobs["S3_clean"] = {
+                        "condition": condition,
+                        "alignment": alignment,
+                        "include_screen_history": False,
+                        "allowed_vocab_indices": full_allowed_indices,
+                    }
+                for st_key in ("S0", "K0"):
+                    if st_key in available_clean:
+                        full_jobs[st_key] = {
+                            "condition": st_key,
+                            "alignment": "clean",
+                            "allowed_vocab_indices": full_allowed_indices,
+                        }
+                if "K2" in available_shifted:
+                    full_jobs["S3_shifted_neg75s"] = {
+                        "condition": "S3",
+                        "alignment": "shifted",
+                        "include_screen_history": False,
+                        "allowed_vocab_indices": full_allowed_indices,
+                    }
+                full_results = (
+                    decode_dataset_segment_jobs(
+                        agg_payload,
+                        scorer,
+                        hyperparameters,
+                        full_jobs,
+                        beam_width=beam_width,
+                        candidate_top_k=candidate_top_k,
+                        segment_batch_size=segment_batch_size,
+                        segment_indices=full_seg_indices,
+                        max_segments=max_segments,
+                        show_progress=show_progress,
+                        progress_desc=(
+                            f"S3 Multi-Subject [k={k_int} (eff={k_eff}) | full L>=5 vocab | "
+                            f"{len(full_jobs)} conditions batched]"
+                        ),
+                    )
+                    if full_jobs
+                    else {}
+                )
+                if reuse_bundle is not None:
+                    bundle = reuse_bundle
+                    conds_full = {"S3_clean": dict(bundle)}
+                elif "S3_clean" in full_results:
+                    bundle = dict(full_results.pop("S3_clean"))
+                    conds_full = {"S3_clean": dict(bundle)}
+                elif full_results:
+                    first_cond_b = next(iter(full_results.values()))
+                    bundle = dict(first_cond_b)
+                    conds_full = {}
+                else:
+                    bundle = {"segment_count": 0, "final_sentences": []}
+                    conds_full = {}
+                conds_full.update(full_results)
+
+            by_vocab: dict[str, dict] = {}
+            for spec in scale_specs:
+                eff_v = int(spec["vocabulary_size"])
+                v_key = spec["scale_key"]
+                if spec["is_full_vocabulary"]:
+                    by_vocab[v_key] = {
+                        "vocabulary_size": eff_v,
+                        "is_full_vocabulary": True,
+                        "conditions": dict(conds_full),
+                    }
+                    continue
+                if (
+                    k_eff == 1
+                    and isinstance(single_subject_vocab_scaling_bundles, dict)
+                    and v_key in single_subject_vocab_scaling_bundles
+                ):
+                    by_vocab[v_key] = dict(
+                        single_subject_vocab_scaling_bundles[v_key]
+                    )
+                    continue
+
+                active_indices = spec["allowed_vocab_indices"]
+                scale_seg_indices = spec["segment_indices"]
+                v_jobs: dict[str, dict] = {}
+                if all(k in available_clean for k in ("K0", "K1", "K2")):
+                    v_jobs["S3_clean"] = {
+                        "condition": "S3",
+                        "alignment": "clean",
+                        "include_screen_history": False,
+                        "allowed_vocab_indices": active_indices,
+                    }
+                for st_key in ("S0", "K0"):
+                    if st_key in available_clean:
+                        v_jobs[st_key] = {
+                            "condition": st_key,
+                            "alignment": "clean",
+                            "allowed_vocab_indices": active_indices,
+                        }
+                if "K2" in available_shifted:
+                    v_jobs["S3_shifted_neg75s"] = {
+                        "condition": "S3",
+                        "alignment": "shifted",
+                        "include_screen_history": False,
+                        "allowed_vocab_indices": active_indices,
+                    }
+                v_conds: dict[str, dict] = (
+                    decode_dataset_segment_jobs(
+                        agg_payload,
+                        scorer,
+                        hyperparameters,
+                        v_jobs,
+                        beam_width=beam_width,
+                        candidate_top_k=candidate_top_k,
+                        segment_batch_size=segment_batch_size,
+                        segment_indices=scale_seg_indices,
+                        max_segments=max_segments,
+                        show_progress=show_progress,
+                        progress_desc=(
+                            f"S3 Multi-Subject [k={k_int} (eff={k_eff}) | V={eff_v} | "
+                            f"{len(v_jobs)} conditions batched]"
+                        ),
+                    )
+                    if v_jobs
+                    else {}
+                )
+                by_vocab[v_key] = {
+                    "vocabulary_size": eff_v,
+                    "is_full_vocabulary": False,
+                    "conditions": v_conds,
+                }
+
+            bundle["k_observations"] = k_int
+            bundle["effective_k_observations"] = k_eff
+            bundle["conditions"] = conds_full
+            if by_vocab:
+                bundle["by_vocabulary_size"] = by_vocab
+            bundles_by_k[f"k={k_int}"] = bundle
+            seen_eff_k[k_eff] = bundle
+
+        return bundles_by_k
+
     freq_indices, _, _ = (
         resolve_vocabulary_frequency_order(exported_payload)
         if full_v_size > 0
@@ -2669,11 +3104,10 @@ def run_multi_subject_observation_sweep(
     return bundles_by_k
 
 
-DEFAULT_VOCABULARY_SCALING_SIZES: tuple[int, ...] = (
+DEFAULT_VOCABULARY_SCALING_SIZES: tuple[int | str, ...] = (
     50,
     100,
-    250,
-    2020,
+    "full",
 )
 
 
@@ -2682,8 +3116,9 @@ def run_vocabulary_scaling_sweep(
     scorer: CachedVocabularyLanguageScorer,
     hyperparameters: dict,
     *,
-    vocab_sizes: Sequence[int] = DEFAULT_VOCABULARY_SCALING_SIZES,
-    core_vocab_size: int = 250,
+    vocab_sizes: Sequence[int | str] = DEFAULT_VOCABULARY_SCALING_SIZES,
+    core_vocab_size: int | str | None = 250,
+    min_sentence_length: int | None = None,
     full_vocab_bundles: dict[str, dict] | None = None,
     existing_scaling_bundles: dict[str, dict] | None = None,
     beam_width: int = 5,
@@ -2693,7 +3128,7 @@ def run_vocabulary_scaling_sweep(
     show_progress: bool = False,
     on_scale_completed: Callable[[str, dict], None] | None = None,
 ) -> dict[str, dict]:
-    """按训练集词频降序截取前 N 个候选词（N in {50, 100, 250, 500, 1000, |V|}），零训练成本扫描多尺度词表统一束搜索解码表现。"""
+    """多尺度候选词表统一束搜索解码表现扫描（支持模式一 L>=5 句表同源闭集协议及传统词频截断）。"""
     from braindecoding.decoding.neural_score_exporter import (
         resolve_vocabulary_frequency_order,
     )
@@ -2705,6 +3140,254 @@ def run_vocabulary_scaling_sweep(
     full_v_size = len(vocabulary)
     if full_v_size == 0:
         return {}
+
+    use_l5_closed_set = min_sentence_length is not None or any(
+        _is_full_vocab_scale_token(v) for v in (vocab_sizes or ())
+    )
+    if use_l5_closed_set:
+        eff_min_len = int(min_sentence_length) if min_sentence_length is not None else 5
+        scale_specs = _resolve_l5_closed_set_scales(
+            exported_payload,
+            vocab_sizes,
+            min_sentence_length=eff_min_len,
+            max_segments=max_segments,
+        )
+        if not scale_specs:
+            return {}
+
+        available_clean = exported_payload.get("clean_scores") or {}
+        available_shifted = exported_payload.get("shifted_scores") or {}
+        has_s3_clean_scores = all(
+            k in available_clean for k in ("K0", "K1", "K2")
+        )
+
+        scaling_bundles: dict[str, dict] = {}
+        for spec in scale_specs:
+            eff_n = int(spec["vocabulary_size"])
+            scale_key = spec["scale_key"]
+            active_indices = spec["allowed_vocab_indices"]
+            seg_indices = spec["segment_indices"]
+            n_scale_segs = len(seg_indices)
+            is_full_vocab = bool(spec["is_full_vocabulary"])
+
+            existing_entry = (
+                existing_scaling_bundles.get(scale_key)
+                if isinstance(existing_scaling_bundles, dict)
+                else None
+            )
+            existing_conds: dict[str, dict] = {}
+            if isinstance(existing_entry, dict) and isinstance(
+                existing_entry.get("conditions"), dict
+            ):
+                for ck, cb in existing_entry["conditions"].items():
+                    if (
+                        isinstance(cb, dict)
+                        and int(cb.get("segment_count", -1)) == n_scale_segs
+                    ):
+                        existing_conds[ck] = cb
+
+            required_keys: list[str] = []
+            if has_s3_clean_scores:
+                required_keys.append("S3_clean")
+            if "S0" in available_clean:
+                required_keys.append("S0")
+            if "K0" in available_clean:
+                required_keys.append("K0")
+            if "K1" in available_clean:
+                required_keys.append("K1")
+            if "F" in available_clean:
+                required_keys.append("F")
+            if "K0" in available_shifted:
+                required_keys.append("K0_shifted_neg75s")
+            if "K2" in available_shifted:
+                required_keys.append("S3_shifted_neg75s")
+            required_keys.append("LM-Only")
+
+            if existing_conds and all(rk in existing_conds for rk in required_keys):
+                reused_conds = _backfill_intermediate_and_shifted_bundles(
+                    existing_conds
+                )
+                scale_entry = {
+                    "vocabulary_size": eff_n,
+                    "is_full_vocabulary": is_full_vocab,
+                    "protocol_mode": "l5_sentence_matched_closed_set",
+                    "min_sentence_length": int(spec["min_sentence_length"]),
+                    "test_token_coverage_pct": 100.0 if n_scale_segs > 0 else 0.0,
+                    "core_100pct_segment_count": n_scale_segs,
+                    "core_80pct_segment_count": n_scale_segs,
+                    "total_segment_count": n_scale_segs,
+                    "conditions": reused_conds,
+                }
+                scaling_bundles[scale_key] = scale_entry
+                if on_scale_completed is not None:
+                    on_scale_completed(scale_key, scale_entry)
+                continue
+
+            if (
+                is_full_vocab
+                and isinstance(full_vocab_bundles, dict)
+                and bool(full_vocab_bundles)
+                and (
+                    not has_s3_clean_scores
+                    or (
+                        isinstance(full_vocab_bundles.get("S3_clean"), dict)
+                        and int(
+                            full_vocab_bundles["S3_clean"].get(
+                                "segment_count", -1
+                            )
+                        )
+                        == n_scale_segs
+                    )
+                )
+            ):
+                raw_reused: dict[str, dict] = dict(existing_conds)
+                for k in (
+                    "S0",
+                    "S0_clean",
+                    "K0",
+                    "K1",
+                    "S3_clean",
+                    "F",
+                    "F_clean",
+                    "LM-Only",
+                    "K0_shifted_neg75s",
+                    "S3_shifted_neg75s",
+                ):
+                    if (
+                        k in full_vocab_bundles
+                        and isinstance(full_vocab_bundles[k], dict)
+                        and int(full_vocab_bundles[k].get("segment_count", -1))
+                        == n_scale_segs
+                    ):
+                        raw_reused[k] = full_vocab_bundles[k]
+                if "S0_clean" in raw_reused and "S0" not in raw_reused:
+                    raw_reused["S0"] = raw_reused["S0_clean"]
+                if "F_clean" in raw_reused and "F" not in raw_reused:
+                    raw_reused["F"] = raw_reused["F_clean"]
+                if "F" not in raw_reused and "F" in available_clean:
+                    raw_reused["F"] = decode_dataset_segments(
+                        exported_payload,
+                        scorer,
+                        hyperparameters,
+                        condition="F",
+                        alignment="clean",
+                        beam_width=beam_width,
+                        candidate_top_k=candidate_top_k,
+                        segment_batch_size=segment_batch_size,
+                        allowed_vocab_indices=active_indices,
+                        segment_indices=seg_indices,
+                        max_segments=max_segments,
+                        show_progress=show_progress,
+                        progress_desc=f"S3 VocabScale [V={eff_n} | Full-Context]",
+                    )
+                if "LM-Only" not in raw_reused:
+                    raw_reused["LM-Only"] = decode_dataset_segments(
+                        exported_payload,
+                        scorer,
+                        hyperparameters,
+                        condition="LM-Only",
+                        alignment="clean",
+                        beam_width=beam_width,
+                        candidate_top_k=candidate_top_k,
+                        segment_batch_size=segment_batch_size,
+                        allowed_vocab_indices=active_indices,
+                        segment_indices=seg_indices,
+                        max_segments=max_segments,
+                        show_progress=show_progress,
+                        progress_desc=f"S3 VocabScale [V={eff_n} | LM-Only]",
+                    )
+                reused_conds = _backfill_intermediate_and_shifted_bundles(
+                    raw_reused
+                )
+                scale_entry = {
+                    "vocabulary_size": eff_n,
+                    "is_full_vocabulary": True,
+                    "protocol_mode": "l5_sentence_matched_closed_set",
+                    "min_sentence_length": int(spec["min_sentence_length"]),
+                    "test_token_coverage_pct": 100.0 if n_scale_segs > 0 else 0.0,
+                    "core_100pct_segment_count": n_scale_segs,
+                    "core_80pct_segment_count": n_scale_segs,
+                    "total_segment_count": n_scale_segs,
+                    "conditions": reused_conds,
+                }
+                scaling_bundles[scale_key] = scale_entry
+                if on_scale_completed is not None:
+                    on_scale_completed(scale_key, scale_entry)
+                continue
+
+            cond_map: dict[str, dict] = dict(existing_conds)
+            scale_jobs: dict[str, dict] = {}
+            if has_s3_clean_scores and "S3_clean" not in cond_map:
+                scale_jobs["S3_clean"] = {
+                    "condition": "S3",
+                    "alignment": "clean",
+                    "include_screen_history": False,
+                }
+            for static_state in ("S0", "K0", "K1"):
+                if static_state in available_clean and static_state not in cond_map:
+                    scale_jobs[static_state] = {
+                        "condition": static_state,
+                        "alignment": "clean",
+                    }
+            if "F" in available_clean and "F" not in cond_map:
+                scale_jobs["F"] = {"condition": "F", "alignment": "clean"}
+            if "LM-Only" not in cond_map:
+                scale_jobs["LM-Only"] = {"condition": "LM-Only", "alignment": "clean"}
+            if "K0" in available_shifted and "K0_shifted_neg75s" not in cond_map:
+                scale_jobs["K0_shifted_neg75s"] = {
+                    "condition": "K0",
+                    "alignment": "shifted",
+                }
+            if "K2" in available_shifted and "S3_shifted_neg75s" not in cond_map:
+                scale_jobs["S3_shifted_neg75s"] = {
+                    "condition": "S3",
+                    "alignment": "shifted",
+                    "include_screen_history": False,
+                }
+            if scale_jobs:
+                for job in scale_jobs.values():
+                    job["allowed_vocab_indices"] = active_indices
+                cond_map.update(
+                    decode_dataset_segment_jobs(
+                        exported_payload,
+                        scorer,
+                        hyperparameters,
+                        scale_jobs,
+                        beam_width=beam_width,
+                        candidate_top_k=candidate_top_k,
+                        segment_batch_size=segment_batch_size,
+                        segment_indices=seg_indices,
+                        max_segments=max_segments,
+                        show_progress=show_progress,
+                        progress_desc=(
+                            f"S3 VocabScale [V={eff_n} (0% OOV L>={spec['min_sentence_length']}, n={n_scale_segs}) | "
+                            f"{len(scale_jobs)} conditions batched]"
+                        ),
+                    )
+                )
+
+            cond_map = _backfill_intermediate_and_shifted_bundles(cond_map)
+            scale_entry = {
+                "vocabulary_size": eff_n,
+                "is_full_vocabulary": is_full_vocab,
+                "protocol_mode": "l5_sentence_matched_closed_set",
+                "min_sentence_length": int(spec["min_sentence_length"]),
+                "test_token_coverage_pct": 100.0 if n_scale_segs > 0 else 0.0,
+                "core_100pct_segment_count": n_scale_segs,
+                "core_80pct_segment_count": n_scale_segs,
+                "total_segment_count": n_scale_segs,
+                "conditions": cond_map,
+            }
+            scaling_bundles[scale_key] = scale_entry
+            if on_scale_completed is not None:
+                on_scale_completed(scale_key, scale_entry)
+
+        ordered_result: dict[str, dict] = {}
+        for spec in scale_specs:
+            k_str = spec["scale_key"]
+            if k_str in scaling_bundles:
+                ordered_result[k_str] = scaling_bundles[k_str]
+        return ordered_result
 
     freq_indices, freq_words, _ = resolve_vocabulary_frequency_order(
         exported_payload

@@ -20,6 +20,8 @@ language_model:
 
 decoding:
   architecture: unified_left_to_right_beam_search_with_streaming_screen_audit
+  protocol_mode: l5_sentence_matched_closed_set
+  min_sentence_length: 5
   beam_width: 5
   candidate_top_k: 20
   segment_batch_size: 192
@@ -92,6 +94,7 @@ evaluation:
     - content_word_acc_pct
     - function_word_acc_pct
     - bertscore_f1_pct
+  min_sentence_length: 5
   multi_subject_observations:
     - 1
     - 2
@@ -100,18 +103,16 @@ evaluation:
   multi_subject_vocabulary_sizes:
     - 50
     - 100
-    - 250
-    - 2020
-  core_vocabulary_size: 250
+    - full
+  core_vocabulary_size: full
   core_vocabulary_sizes:
     - 50
     - 100
-    - 250
+    - full
   vocabulary_scaling_sizes:
     - 50
     - 100
-    - 250
-    - 2020
+    - full
   confidence_gate:
     enabled: true
     tau_min: 0.0

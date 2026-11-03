@@ -996,20 +996,49 @@ class CachedVocabularyLanguageScorer:
         self,
         prefix_state: PrefixCacheState,
         top_k: int = 20,
+        allowed_vocab_indices: Sequence[int] | None = None,
     ) -> np.ndarray:
         """供 LM-Only 基线使用：利用当前前缀的首 Token 对数概率从闭集词表 V 中零开销筛选首 Token Top-M 候选并精排返回 Top-K 词索引。"""
         first_scores_np = self._extract_and_cache_first_token_lps(prefix_state)
-        k = min(int(top_k), len(self.vocabulary))
-        shortlist_m = min(max(k * 2, 40), len(self.vocabulary))
-        if shortlist_m < len(first_scores_np):
-            part_idx = np.argpartition(-first_scores_np, shortlist_m - 1)[
-                :shortlist_m
-            ]
-            top_m_indices = part_idx[
-                np.argsort(-first_scores_np[part_idx], kind="stable")
-            ]
+        if allowed_vocab_indices is not None:
+            allowed_arr = np.asarray(
+                [
+                    int(i)
+                    for i in allowed_vocab_indices
+                    if 0 <= int(i) < len(self.vocabulary)
+                ],
+                dtype=np.int64,
+            )
+            if len(allowed_arr) == 0:
+                return np.asarray([], dtype=np.int64)
+            k = min(int(top_k), len(allowed_arr))
+            shortlist_m = min(max(k * 2, 40), len(allowed_arr))
+            allowed_scores = first_scores_np[allowed_arr]
+            if shortlist_m < len(allowed_scores):
+                part_idx = np.argpartition(-allowed_scores, shortlist_m - 1)[
+                    :shortlist_m
+                ]
+                top_m_indices = allowed_arr[
+                    part_idx[
+                        np.argsort(-allowed_scores[part_idx], kind="stable")
+                    ]
+                ]
+            else:
+                top_m_indices = allowed_arr[
+                    np.argsort(-allowed_scores, kind="stable")
+                ]
         else:
-            top_m_indices = np.argsort(-first_scores_np, kind="stable")
+            k = min(int(top_k), len(self.vocabulary))
+            shortlist_m = min(max(k * 2, 40), len(self.vocabulary))
+            if shortlist_m < len(first_scores_np):
+                part_idx = np.argpartition(-first_scores_np, shortlist_m - 1)[
+                    :shortlist_m
+                ]
+                top_m_indices = part_idx[
+                    np.argsort(-first_scores_np[part_idx], kind="stable")
+                ]
+            else:
+                top_m_indices = np.argsort(-first_scores_np, kind="stable")
         cand_list = top_m_indices.tolist()
         exact_scores = self.score_candidates_with_cache(
             [prefix_state], [cand_list]

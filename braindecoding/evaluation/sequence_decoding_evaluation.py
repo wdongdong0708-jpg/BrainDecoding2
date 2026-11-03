@@ -2141,13 +2141,14 @@ def _compute_s3_paired_significance(
             }
 
     # 8 组标准化配对统计检验（Module 5）
+    all_avail_scales = tuple(sorted(set(scale_conds_map.keys()) | {50, 100, 250, full_v_size}))
     group_specs: list[tuple[int, str, str, str, tuple[int, ...], tuple[tuple[str, str], ...]]] = [
         (
             1,
             "Rolling-K2 vs Word-Only",
             "S3_clean",
             "S0",
-            (50, 250, full_v_size),
+            all_avail_scales,
             (
                 ("Corpus BLEU-1", "corpus_bleu1"),
                 ("Sent BLEU-1", "sent_bleu1"),
@@ -2159,7 +2160,7 @@ def _compute_s3_paired_significance(
             "Rolling-K0 vs Word-Only",
             "K0",
             "S0",
-            (50, 250),
+            all_avail_scales,
             (
                 ("Corpus BLEU-1", "corpus_bleu1"),
                 ("In-Vocab Top-1", "in_vocab_top1"),
@@ -2170,7 +2171,7 @@ def _compute_s3_paired_significance(
             "Rolling-K2 vs Full-Context",
             "S3_clean",
             "F",
-            (50, 250),
+            all_avail_scales,
             (
                 ("Corpus BLEU-1", "corpus_bleu1"),
                 ("WER", "wer"),
@@ -2181,7 +2182,7 @@ def _compute_s3_paired_significance(
             "Rolling-K2 vs Rolling-K0 (Clean)",
             "S3_clean",
             "K0",
-            (50, 250, full_v_size),
+            all_avail_scales,
             (
                 ("Corpus BLEU-1", "corpus_bleu1"),
                 ("In-Vocab Top-1", "in_vocab_top1"),
@@ -2192,7 +2193,7 @@ def _compute_s3_paired_significance(
             "Shifted-K2 vs Shifted-K0 (-75s)",
             "S3_shifted_neg75s",
             "K0_shifted_neg75s",
-            (50, 250, full_v_size),
+            all_avail_scales,
             (
                 ("Corpus BLEU-1", "corpus_bleu1"),
                 ("Sent BLEU-1", "sent_bleu1"),
@@ -2203,7 +2204,7 @@ def _compute_s3_paired_significance(
             "Rolling-K2 vs Shifted-K2 (-75s)",
             "S3_clean",
             "S3_shifted_neg75s",
-            (50, 250, full_v_size),
+            all_avail_scales,
             (
                 ("Corpus BLEU-1", "corpus_bleu1"),
                 ("In-Vocab Top-1", "in_vocab_top1"),
@@ -2376,7 +2377,7 @@ def _compute_s3_paired_significance(
                 **res_c_vs_f,
             }
 
-    # Group 8: Multi-Subject k=5 / k=10 (and k=2) vs k=1 across |V| in {50, 100, 250, 2020}
+    # Group 8: Multi-Subject k=5 / k=10 (and k=2) vs k=1 across all available |V| scales
     if isinstance(multi_subject_bundles, Mapping) and multi_subject_bundles:
         k1_bundle = multi_subject_bundles.get("k=1") or multi_subject_bundles.get(1)
         for k_target in (2, 5, 10):
@@ -2386,7 +2387,17 @@ def _compute_s3_paired_significance(
             )
             if not isinstance(kt_bundle, Mapping):
                 continue
-            for v_target in (50, 100, 250, full_v_size):
+            by_v_t_keys = {
+                int(str(vk).lstrip("vV=_"))
+                for vk in (kt_bundle.get("by_vocabulary_size") or {}).keys()
+                if str(vk).lstrip("vV=_").isdigit()
+            }
+            g8_v_targets = sorted(
+                {50, 100, 250, full_v_size}
+                | set(scale_conds_map.keys())
+                | by_v_t_keys
+            )
+            for v_target in g8_v_targets:
                 v_key = f"V={v_target}"
                 # 提取 k=1 在 v_target 下的 S3_clean 句段
                 recs_k1_v: list[dict] = []
@@ -2485,8 +2496,8 @@ def evaluate_and_export_sequence_decoding(
     tau_grid: Sequence[float] = DEFAULT_TAU_GATE_GRID,
     multi_subject_bundles: Mapping[str | int, dict] | None = None,
     vocabulary_scaling_bundles: Mapping[str, dict] | None = None,
-    core_vocab_size: int = 250,
-    core_vocab_sizes: Sequence[int] = (50, 100, 250),
+    core_vocab_size: int | str = "full",
+    core_vocab_sizes: Sequence[int | str] = (50, 100, "full"),
     state_hyperparameters: Mapping[str, Any] | None = None,
     seed: int | None = None,
     exp_tag: str | None = None,
@@ -2627,9 +2638,27 @@ def evaluate_and_export_sequence_decoding(
             language=language,
             word_embedding_map=word_embedding_map,
         )
+
+        def _resolve_scale_int(val: Any) -> int:
+            if val is None:
+                return full_vocab_sz
+            if isinstance(val, str):
+                s = val.strip().lower()
+                if s in ("full", "all", "") or not s.lstrip("-").isdigit():
+                    return full_vocab_sz
+                v_i = int(s)
+                return full_vocab_sz if v_i <= 0 else v_i
+            v_i = int(val)
+            return full_vocab_sz if v_i <= 0 else v_i
+
         target_core_sizes = sorted(
-            {int(v) for v in (core_vocab_sizes or ()) if int(v) > 0}
-            | ({int(core_vocab_size)} if core_vocab_size else set())
+            {_resolve_scale_int(v) for v in (core_vocab_sizes or ())}
+            | ({_resolve_scale_int(core_vocab_size)} if core_vocab_size is not None else set())
+            | {
+                int(s_val["vocabulary_size"])
+                for s_val in vocabulary_scaling_summaries.values()
+                if isinstance(s_val, Mapping) and int(s_val.get("vocabulary_size", 0)) > 0
+            }
         )
         for v_sz in target_core_sizes:
             v_key = f"V={v_sz}"
@@ -2641,6 +2670,9 @@ def evaluate_and_export_sequence_decoding(
                 ):
                     v_bench = {
                         "vocabulary_size": int(v_sz),
+                        "is_full_vocabulary": bool(
+                            v_entry.get("is_full_vocabulary", v_sz == full_vocab_sz)
+                        ),
                         "subsets": scaled_sum["subsets"],
                     }
                 else:
@@ -2649,6 +2681,9 @@ def evaluate_and_export_sequence_decoding(
                         language=language,
                         word_embedding_map=word_embedding_map,
                         vocabulary_size=int(v_sz),
+                    )
+                    v_bench["is_full_vocabulary"] = bool(
+                        v_entry.get("is_full_vocabulary", v_sz == full_vocab_sz)
                     )
                 v_bench["test_token_coverage_pct"] = v_entry.get(
                     "test_token_coverage_pct"
@@ -2712,7 +2747,15 @@ def evaluate_and_export_sequence_decoding(
             }
 
     if core_vocabulary_benchmarks:
-        core_key = f"V={int(core_vocab_size)}"
+        if (
+            isinstance(core_vocab_size, str)
+            and core_vocab_size.strip().lower() in ("full", "all", "")
+        ) or core_vocab_size is None:
+            core_key = full_v_key
+        elif isinstance(core_vocab_size, str) and core_vocab_size.strip().lstrip("-").isdigit():
+            core_key = f"V={int(core_vocab_size.strip())}"
+        else:
+            core_key = f"V={int(core_vocab_size)}"
         if core_key in core_vocabulary_benchmarks:
             core_vocabulary_benchmark = core_vocabulary_benchmarks[core_key]
         else:

@@ -527,3 +527,107 @@ def test_multi_subject_group8_canonical_material_alignment_without_material_id()
             assert row["effect_pp"] == pytest.approx(-50.0)
 
 
+def test_mode_one_l5_closed_set_evaluation_and_single_0pct_oov_reporting(
+    tmp_path: Path,
+) -> None:
+    """验证模式一（路径 B1）下 |V| in {50, 100, |V_full|} (如 |V_full|=130 <= 250) 不被误改写为 2020，且报表每个词表尺度仅输出唯一 0% OOV 口径。"""
+    seg_records_full = [
+        {
+            "segment_index": 0,
+            "group_id": "sub-01_run-06:0",
+            "material_id": "run-06:0",
+            "subject_id": "sub-01",
+            "reference_words": ["le", "petit", "prince", "parle", "bien"],
+            "predicted_words": ["le", "petit", "prince", "parle", "tres"],
+            "in_vocabulary_mask": [True, True, True, True, True],
+        },
+        {
+            "segment_index": 1,
+            "group_id": "sub-01_run-06:1",
+            "material_id": "run-06:1",
+            "subject_id": "sub-01",
+            "reference_words": ["le", "renard", "regarde", "la", "rose"],
+            "predicted_words": ["le", "renard", "regarde", "le", "prince"],
+            "in_vocabulary_mask": [True, True, True, True, True],
+        },
+    ]
+    seg_records_50 = [
+        {
+            "segment_index": 0,
+            "group_id": "sub-01_run-06:0",
+            "material_id": "run-06:0",
+            "subject_id": "sub-01",
+            "reference_words": ["le", "petit", "prince", "parle", "bien"],
+            "predicted_words": ["le", "petit", "prince", "parle", "bien"],
+            "in_vocabulary_mask": [True, True, True, True, True],
+        }
+    ]
+
+    vocabulary_scaling_bundles = {
+        "V=50": {
+            "vocabulary_size": 50,
+            "is_full_vocabulary": False,
+            "test_token_coverage_pct": 100.0,
+            "conditions": {
+                "S3_clean": {"final_sentences": seg_records_50},
+            },
+        },
+        "V=100": {
+            "vocabulary_size": 100,
+            "is_full_vocabulary": False,
+            "test_token_coverage_pct": 100.0,
+            "conditions": {
+                "S3_clean": {"final_sentences": seg_records_full},
+            },
+        },
+        "V=130": {
+            "vocabulary_size": 130,
+            "is_full_vocabulary": True,
+            "test_token_coverage_pct": 100.0,
+            "conditions": {
+                "S3_clean": {"final_sentences": seg_records_full},
+            },
+        },
+    }
+
+    out_dir = tmp_path / "mode1_eval_out"
+    report = evaluate_and_export_sequence_decoding(
+        {"S3_clean": {"final_sentences": seg_records_full, "screen_histories": []}},
+        dataset="pallier2025",
+        language="fr",
+        split="test",
+        output_dir=out_dir,
+        vocabulary_scaling_bundles=vocabulary_scaling_bundles,
+        core_vocab_size="full",
+        core_vocab_sizes=(50, 100, "full"),
+        plot=False,
+    )
+
+    assert report["full_vocab_core_subsets"]["vocabulary_size"] == 130
+    assert set(report["core_vocabulary_benchmarks"].keys()) == {
+        "V=50",
+        "V=100",
+        "V=130",
+    }
+    assert "V=2020" not in report["core_vocabulary_benchmarks"]
+    assert "V=2020" not in report["vocabulary_scaling"]
+
+    txt_content = (out_dir / "s3_evaluation_report_test.txt").read_text(
+        encoding="utf-8"
+    )
+    md_content = (out_dir / "s3_evaluation_report_test.md").read_text(
+        encoding="utf-8"
+    )
+    cb_csv_content = (
+        out_dir / "tables" / "s3_core_vocabulary_benchmarks_test.csv"
+    ).read_text(encoding="utf-8-sig")
+
+    assert "V=130" in txt_content
+    assert "V=2020" not in txt_content
+    assert "0% OOV (n=1)" in txt_content
+    assert "0% OOV (n=2)" in txt_content
+    assert "All Segs (n=" not in txt_content
+    assert "All Segs (n=" not in md_content
+    assert "All Segs (n=" not in cb_csv_content
+
+
