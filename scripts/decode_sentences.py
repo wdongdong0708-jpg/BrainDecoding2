@@ -1719,20 +1719,34 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     }
                     | {int(expected_main_vocab_size)}
                 )
+                open_req_conds = ["LM-Only"]
+                if has_s3_clean:
+                    open_req_conds.append("S3_clean")
+                for st_k in ("S0", "K0", "K1"):
+                    if st_k in available_clean:
+                        open_req_conds.append(st_k)
+                if has_real_context and "F" in available_clean:
+                    open_req_conds.append("F")
+                if "K0" in available_shifted:
+                    open_req_conds.append("K0_shifted_neg75s")
+                if "K2" in available_shifted:
+                    open_req_conds.append("S3_shifted_neg75s")
                 needs_truncated_decode = not all(
                     f"V={v_n}" in vocabulary_scaling_bundles
-                    and isinstance(
-                        (vocabulary_scaling_bundles[f"V={v_n}"].get("conditions") or {}).get(
-                            "S3_clean"
-                        ),
-                        dict,
-                    )
-                    and int(
-                        vocabulary_scaling_bundles[f"V={v_n}"]["conditions"]["S3_clean"].get(
-                            "segment_count", -1
+                    and all(
+                        rk in (vocabulary_scaling_bundles[f"V={v_n}"].get("conditions") or {})
+                        and isinstance(
+                            vocabulary_scaling_bundles[f"V={v_n}"]["conditions"][rk],
+                            dict,
                         )
+                        and int(
+                            vocabulary_scaling_bundles[f"V={v_n}"]["conditions"][rk].get(
+                                "segment_count", -1
+                            )
+                        )
+                        == expected_seg_count
+                        for rk in open_req_conds
                     )
-                    == expected_seg_count
                     for v_n in open_sizes
                 )
             else:
