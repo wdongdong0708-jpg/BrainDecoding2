@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-11-09T17:30:13Z",
+  "updated_at": "2026-11-10T01:23:17Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "a22a47ff2a8bba3eb5005d5ac3d122d822ef46ccf58043134e291b02f8dcee10",
-      "size": 46459,
-      "normalized_sha256": "a22a47ff2a8bba3eb5005d5ac3d122d822ef46ccf58043134e291b02f8dcee10"
+      "sha256": "8aceb25b34ce87a054bd628b899c2fb793fcd55c825807403ffc3e75eb80ffd3",
+      "size": 46481,
+      "normalized_sha256": "8aceb25b34ce87a054bd628b899c2fb793fcd55c825807403ffc3e75eb80ffd3"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "braindecoding/cli.py": {
       "role": "index",
-      "sha256": "76ab3c79b712d69bb9de976e92876ca9ee09d7085a46ca833f567a6b7b0c5da1",
-      "size": 49894,
-      "normalized_sha256": "76ab3c79b712d69bb9de976e92876ca9ee09d7085a46ca833f567a6b7b0c5da1"
+      "sha256": "bd00ca9e53e73d54209d949fc7c0d0ec710d75397c45a1a072d85f2bc1410574",
+      "size": 53884,
+      "normalized_sha256": "bd00ca9e53e73d54209d949fc7c0d0ec710d75397c45a1a072d85f2bc1410574"
     },
     "braindecoding/config.py": {
       "role": "index",
@@ -1060,9 +1060,9 @@
     },
     "scripts/colab/colab_pallier2025_task_pipeline.ipynb": {
       "role": "index",
-      "sha256": "8e5669aaad6c1f582008b61fdd9c8b812b80e723a4a40cbfd015857069cb99c0",
-      "size": 28178,
-      "normalized_sha256": "8e5669aaad6c1f582008b61fdd9c8b812b80e723a4a40cbfd015857069cb99c0"
+      "sha256": "f095206ede1990429183ba9c5019ac18fdb77b61effb6641c977c54708183a64",
+      "size": 28520,
+      "normalized_sha256": "f095206ede1990429183ba9c5019ac18fdb77b61effb6641c977c54708183a64"
     },
     "scripts/colab_setup.py": {
       "role": "index",

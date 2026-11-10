@@ -3358,13 +3358,28 @@ def test_common_horizon_delay_subset_filter_and_cli_arg() -> None:
     )
     assert kept_ids == {"e0", "e1"}
 
-
-
-
-
-
-
-
-
+    parsed_report = parser.parse_args(
+        [
+            "report",
+            "--dataset",
+            "pallier2025",
+            "--exp-tag",
+            "lr4e-4_bs256",
+            "--stage",
+            "word",
+            "--seeds",
+            "0,1,2",
+            "--split",
+            "test",
+            "--word-exp-tag",
+            "lr4e-4_bs256",
+        ]
+    )
+    assert parsed_report.dataset == "pallier2025"
+    assert parsed_report.exp_tag == "lr4e-4_bs256"
+    assert parsed_report.stage == "word"
+    assert parsed_report.seed == [0, 1, 2]
+    assert parsed_report.split == "test"
+    assert parsed_report.word_exp_tag == "lr4e-4_bs256"
 
 

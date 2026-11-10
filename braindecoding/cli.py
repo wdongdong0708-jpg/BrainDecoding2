@@ -286,11 +286,72 @@ def _data_build(args) -> int:
 def _report(args) -> int:
     """只读取已保存评估 JSON/目录（0秒重打报表与重绘图表），或显示协议/历史运行报告。"""
     target_input = getattr(args, "input_path", None) or getattr(args, "experiment", None)
+    has_workflow_locator = any(
+        getattr(args, k, None) is not None
+        for k in ("dataset", "exp_tag", "stage", "config")
+    )
+    if target_input is None and has_workflow_locator:
+        from braindecoding.training.workflow_runner import (
+            build_workflow_config,
+            workflow_output_directory,
+        )
+
+        seed_list = _resolve_seed_list(args)
+        ds_arg = getattr(args, "dataset", None) or "pallier2025"
+        st_arg = getattr(args, "stage", None) or "word"
+        sp_arg = getattr(args, "split", None) or "test"
+        cfg, subset_spec = build_workflow_config(
+            ds_arg,
+            stage=st_arg,
+            seed=seed_list[0],
+            subject=getattr(args, "subject", "all"),
+            num_subjects=getattr(args, "num_subjects", None),
+            subjects=getattr(args, "subjects", None),
+            exp_tag=getattr(args, "exp_tag", None),
+            word_exp_tag=getattr(args, "word_exp_tag", None),
+            config_path=getattr(args, "config", None),
+        )
+        seed0_dir = workflow_output_directory(
+            subset_spec["dataset"],
+            cfg["workflow"]["stage"],
+            subset_spec["subset_tag"],
+            seed_list[0],
+            mode="train",
+            exp_tag=cfg["workflow"].get("exp_tag"),
+        )
+        outer_dir = seed0_dir.parent
+        multi_json = outer_dir / f"multi_seed_evaluation_{sp_arg}.json"
+        single_json = seed0_dir / f"evaluation_{sp_arg}.json"
+        if len(seed_list) == 1 and single_json.is_file() and not multi_json.is_file():
+            target_input = str(single_json)
+        elif multi_json.is_file():
+            target_input = str(multi_json)
+        elif outer_dir.is_dir():
+            from braindecoding.evaluation.evaluation_reporting import (
+                upgrade_and_refresh_saved_multi_seed_reports,
+            )
+
+            upgrade_and_refresh_saved_multi_seed_reports(
+                outer_dir,
+                split=sp_arg,
+                control_method=getattr(args, "control_method", None),
+                control_metric=getattr(args, "control_metric", None),
+                verbose=bool(getattr(args, "verbose", False)),
+                print_to_stdout=True,
+            )
+            return 0
+        else:
+            target_input = str(multi_json)
+
     if target_input is None:
-        raise ValueError("请通过 --input <path> 或位置参数指定评估 JSON 文件、运行目录或协议名称。")
+        raise ValueError("请通过 --input <path>、位置参数或 --dataset/--exp-tag/--stage 指定评估 JSON 文件、运行目录或协议名称。")
 
     candidate_path = Path(target_input)
-    if getattr(args, "input_path", None) is not None or candidate_path.exists():
+    if (
+        getattr(args, "input_path", None) is not None
+        or has_workflow_locator
+        or candidate_path.exists()
+    ):
         from braindecoding.evaluation.evaluation_figures import (
             replot_from_saved_json,
         )
@@ -1130,6 +1191,63 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="已保存评估 JSON 文件或运行目录路径（自动识别 5 种评估协议）",
     )
+    report.add_argument(
+        "--config",
+        "-c",
+        dest="config",
+        default=None,
+        help="可选：通过 YAML 配置文件定位运行目录与已保存评估报告",
+    )
+    report.add_argument(
+        "--dataset",
+        choices=("chineseeeg2_littleprince", "pallier2025"),
+        default=None,
+        help="可选：通过数据集名称定位已保存评估报告",
+    )
+    report.add_argument(
+        "--stage",
+        choices=(
+            "word",
+            "context",
+            "revision",
+            "prefix_revision",
+            "1",
+            "2.1",
+            "2.2",
+            "2.3",
+            "stage1",
+            "stage2.1",
+            "stage2.2",
+            "stage2.3",
+        ),
+        default=None,
+        help="可选：通过阶段名称定位已保存评估报告",
+    )
+    report.add_argument(
+        "--seed",
+        "--seeds",
+        dest="seed",
+        type=_parse_seed_argument,
+        default=0,
+        help="可选：随机种子（支持 0 或 0,1,2）",
+    )
+    report.add_argument(
+        "--split",
+        choices=("val", "test"),
+        default=None,
+        help="可选：数据集划分（val 或 test，默认 test）",
+    )
+    report.add_argument(
+        "--exp-tag",
+        default=None,
+        help="可选：超参数实验标签（定位 <results_dir>/<dataset>/<exp_tag>/<stage>/...）",
+    )
+    report.add_argument(
+        "--word-exp-tag",
+        default=None,
+        help="可选：阶段 1 (word) 实验标签",
+    )
+    _add_subject_subset_args(report)
     report.add_argument(
         "--verbose",
         "-v",
