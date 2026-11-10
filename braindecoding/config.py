@@ -73,6 +73,7 @@ _LEGACY_CONFIG_PATH_MAP: dict[str, str] = {
     "configs/word_decoding/pallier2025/sub01-10/main_context.yaml": "configs/word_decoding/pallier2025/all_subjects/main_context.yaml",
     "configs/word_decoding/pallier2025/sub01-10/main_context_warmstart.yaml": "configs/word_decoding/pallier2025/all_subjects/main_context_warmstart.yaml",
     "configs/word_decoding/pallier2025/rolling_revision/k2_d2.yaml": "configs/word_decoding/pallier2025/rolling_revision/local_window_revision.yaml",
+    "configs/controls/subspace_coherence/subspace_coherence_debiasing_control.yaml": "configs/controls/subspace_coherence_debiasing/subspace_coherence_debiasing_control.yaml",
 }
 
 
@@ -199,7 +200,20 @@ def _load_yaml_mapping(config_path, ancestors=()):
         return config
     parent_path = Path(expand_environment_variables(str(parent)))
     if not parent_path.is_absolute():
-        parent_path = config_path.parent / parent_path
+        candidate_parent = config_path.parent / parent_path
+        if candidate_parent.resolve().exists():
+            parent_path = candidate_parent
+        else:
+            fallback_training = PROJECT_ROOT / "configs" / "training" / parent_path
+            fallback_root = PROJECT_ROOT / normalize_project_relative(
+                str(parent).lstrip("./\\")
+            )
+            if fallback_training.resolve().exists():
+                parent_path = fallback_training
+            elif fallback_root.resolve().exists():
+                parent_path = fallback_root
+            else:
+                parent_path = candidate_parent
     parent_config = _load_yaml_mapping(parent_path, (*ancestors, config_path))
     return deep_merge(parent_config, config)
 
