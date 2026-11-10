@@ -738,6 +738,12 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
         help="显式指定多种子负对照汇总同时输出与选优的一个或多个主评估指标（支持逗号分隔多指标及 all，如 vocab50_macro_top10,vocab50_macro_top1,full_vocab_macro_top10,k2_vocab50_macro_top10）",
     )
     parser.add_argument(
+        "--common-horizon-delay",
+        type=int,
+        default=None,
+        help="可选：将评估事件严格过滤为在当前 runtime_context_uid（或 recording_id+context_id）内至少拥有 D 个未来词（例如 D=2 对齐 K2 视界 N=14,590 / 7,440 queries）的同交集子集，若已有 subspace .pt 缓存则 0 秒免前向重算并独立导出 common_subset_* 产物",
+    )
+    parser.add_argument(
         "--max-eval-rows",
         type=int,
         default=None,
@@ -895,6 +901,7 @@ def _workflow_eval(args) -> int:
         verbose=bool(getattr(args, "verbose", False)),
         control_method=getattr(args, "control_method", None),
         control_metric=getattr(args, "control_metric", None),
+        common_horizon_delay=getattr(args, "common_horizon_delay", None),
     )
     return 0
 

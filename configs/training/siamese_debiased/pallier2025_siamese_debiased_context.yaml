@@ -8,7 +8,7 @@ workflow:
   stage: context
   subject: all
   precision: bf16-mixed
-  window_seconds: 0.5
+  window_seconds: 1.0
   window_start_offset_seconds: 0.0
 
 training:
@@ -22,7 +22,8 @@ training:
 
 siamese_debiased:
   enabled: true
-  eta_train: 0.8
+  eta_0: 0.50
+  eta_train: 0.50
   lambda_null: 10.0
   shift_seconds: [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
   shifts_per_step: 6

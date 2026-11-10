@@ -2438,6 +2438,493 @@ def _summarize_shifted_conditions(
 summarize_shifted_conditions = _summarize_shifted_conditions
 
 
+def _slice_encoded_dict(encoded: dict, keep_mask_np: np.ndarray) -> dict:
+    """按布尔掩码 keep_mask_np 过滤已编码特征字典中的所有事件级张量与列表。"""
+    keep_mask_np = np.asarray(keep_mask_np, dtype=bool)
+    keep_mask_t = torch.from_numpy(keep_mask_np)
+    keep_list = keep_mask_np.tolist()
+    n_total = len(encoded["words"])
+    sliced: dict[str, object] = {
+        "predictions": encoded["predictions"][keep_mask_t],
+        "targets": encoded["targets"][keep_mask_t],
+        "words": [
+            str(w) for w, keep in zip(encoded["words"], keep_list) if keep
+        ],
+        "event_ids": [
+            str(eid)
+            for eid, keep in zip(encoded["event_ids"], keep_list)
+            if keep
+        ],
+    }
+    rec_ids = encoded.get("recording_ids")
+    if isinstance(rec_ids, Sequence) and len(rec_ids) == n_total:
+        sliced["recording_ids"] = [
+            str(rid) for rid, keep in zip(rec_ids, keep_list) if keep
+        ]
+    else:
+        sliced["recording_ids"] = list(rec_ids or ())
+    for mask_key in (
+        "local_context_internal_mask",
+        "three_state_internal_mask",
+    ):
+        t_val = encoded.get(mask_key)
+        if isinstance(t_val, torch.Tensor) and len(t_val) == n_total:
+            sliced[mask_key] = t_val[keep_mask_t]
+    if isinstance(encoded.get("revision_predictions"), dict):
+        sliced["revision_predictions"] = {
+            int(d): t[keep_mask_t]
+            for d, t in encoded["revision_predictions"].items()
+            if isinstance(t, torch.Tensor) and len(t) == n_total
+        }
+    if isinstance(encoded.get("revision_availability_masks"), dict):
+        sliced["revision_availability_masks"] = {
+            int(d): m[keep_mask_t]
+            for d, m in encoded["revision_availability_masks"].items()
+            if isinstance(m, torch.Tensor) and len(m) == n_total
+        }
+    return sliced
+
+
+def _build_common_horizon_event_filter(
+    cfg: dict,
+    *,
+    dataset: str,
+    split: str,
+    selected_subjects: Sequence[str],
+    common_horizon_delay: int,
+    fallback_eval_table=None,
+) -> tuple[set[str], dict[str, str]]:
+    """计算在同一语境分组内至少拥有 common_horizon_delay 个未来词的共同有效事件 ID 集合（如 Pallier2025 D=2 时 N=14,590, 50词查询=7,440）。"""
+    delay_int = max(0, int(common_horizon_delay))
+    kept_event_ids: set[str] = set()
+    event_id_to_block: dict[str, str] = {}
+
+    task = pallier_task if dataset == "pallier2025" else chinese_task
+    read_fn = task.dataset_module.load_event_table
+    source_df = None
+    try:
+        ev_path = cfg.get("cache", {}).get("event_table")
+        if ev_path is not None:
+            loaded_df = read_fn(
+                ev_path,
+                split=split,
+                subjects=selected_subjects,
+                trainable_only=True,
+            )
+            if len(loaded_df) > 0:
+                if (
+                    dataset == "pallier2025"
+                    and "runtime_context_uid" not in loaded_df.columns
+                    and hasattr(task.dataset_module, "add_runtime_context_uid")
+                ):
+                    loaded_df = task.dataset_module.add_runtime_context_uid(
+                        loaded_df
+                    )
+                source_df = loaded_df
+    except Exception:
+        source_df = None
+
+    if source_df is None and fallback_eval_table is not None:
+        if any(
+            col in fallback_eval_table.columns
+            for col in (
+                "runtime_context_uid",
+                "sentence_uid",
+                "context_id",
+                "上下文编号",
+            )
+        ):
+            source_df = fallback_eval_table.copy()
+            if (
+                dataset == "pallier2025"
+                and "runtime_context_uid" not in source_df.columns
+                and "recording_id" in source_df.columns
+                and "sentence_uid" in source_df.columns
+                and hasattr(task.dataset_module, "add_runtime_context_uid")
+            ):
+                source_df = task.dataset_module.add_runtime_context_uid(
+                    source_df
+                )
+
+    if source_df is not None and "event_id" in source_df.columns:
+        grp_col = next(
+            (
+                col
+                for col in (
+                    "runtime_context_uid",
+                    "sentence_uid",
+                    "context_id",
+                    "上下文编号",
+                    "recording_id",
+                    "记录编号",
+                )
+                if col in source_df.columns
+            ),
+            None,
+        )
+        blk_col = next(
+            (
+                col
+                for col in (
+                    "sentence_uid",
+                    "上下文编号",
+                    "context_id",
+                    "runtime_context_uid",
+                    "recording_id",
+                )
+                if col in source_df.columns
+            ),
+            grp_col,
+        )
+        if grp_col is not None:
+            for _, grp_df in source_df.groupby(grp_col, sort=False):
+                eids = grp_df["event_id"].astype(str).tolist()
+                blks = (
+                    grp_df[blk_col].astype(str).tolist()
+                    if blk_col is not None and blk_col in grp_df.columns
+                    else [str(grp_df[grp_col].iloc[0])] * len(eids)
+                )
+                n_grp = len(eids)
+                for pos, (eid, blk_val) in enumerate(zip(eids, blks)):
+                    event_id_to_block[eid] = blk_val
+                    if pos + delay_int < n_grp:
+                        kept_event_ids.add(eid)
+            if kept_event_ids:
+                return kept_event_ids, event_id_to_block
+
+    # Fallback: 从同数据集已有的 prefix_revision / revision 特征缓存 .pt 中直接提取 availability mask
+    from braindecoding.config import results_root
+
+    ds_root = results_root() / dataset
+    if ds_root.is_dir():
+        for rev_st in ("prefix_revision", "revision"):
+            for pt_cand in sorted(
+                ds_root.rglob(
+                    f"{rev_st}/**/exploratory/subspace_encoded_cache_{split}.pt"
+                ),
+                key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+                reverse=True,
+            ):
+                try:
+                    b_cand = torch.load(
+                        pt_cand, map_location="cpu", weights_only=False
+                    )
+                    c_enc = b_cand.get("clean_encoded") or {}
+                    masks = c_enc.get("revision_availability_masks") or {}
+                    mask_t = masks.get(delay_int)
+                    if mask_t is None and str(delay_int) in masks:
+                        mask_t = masks[str(delay_int)]
+                    eids = c_enc.get("event_ids") or []
+                    if (
+                        isinstance(mask_t, torch.Tensor)
+                        and len(eids) == len(mask_t)
+                    ):
+                        for eid, keep in zip(
+                            eids, mask_t.detach().cpu().tolist()
+                        ):
+                            if bool(keep):
+                                kept_event_ids.add(str(eid))
+                        if kept_event_ids:
+                            return kept_event_ids, event_id_to_block
+                except Exception:
+                    continue
+
+    raise RuntimeError(
+        f"无法构造数据集 {dataset} (split={split}, delay={delay_int}) 的共同有效事件掩码："
+        f"请确保已解包派生事件表缓存或同目录下存在 prefix_revision 特征缓存。"
+    )
+
+
+def _evaluate_common_horizon_subset_from_pt(
+    encoded_cache_pt: Path,
+    *,
+    cfg: dict,
+    subset_spec: dict,
+    control_spec: dict,
+    common_horizon_delay: int,
+    ckpt_file: Path | None,
+    output_dir: Path,
+    split: str,
+    verbose: bool = False,
+    print_report: bool = True,
+) -> dict:
+    """直接从已编码的 subspace_encoded_cache_{split}.pt 秒级过滤并评估 N=14,590 (D=2) 共同有效子集，不覆盖全量评估文件。"""
+    from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+        run_common_mode_subtraction_sweep,
+    )
+    from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+        _CachedEvalDatasetProxy,
+    )
+
+    cached_bundle = torch.load(
+        encoded_cache_pt, map_location="cpu", weights_only=False
+    )
+    dataset = str(subset_spec["dataset"])
+    stage = str(cfg["workflow"]["stage"])
+    resolved_exp_tag = str(
+        cached_bundle.get("exp_tag", cfg["workflow"].get("exp_tag", ""))
+    )
+    resolved_word_exp_tag = str(
+        cached_bundle.get(
+            "word_exp_tag",
+            cfg["workflow"].get("word_exp_tag", resolved_exp_tag),
+        )
+    )
+    tc = cfg["training"]
+    seed = int(cached_bundle.get("seed", tc["seed"]))
+    selected_subjects = cfg["dataset"]["subjects"]
+
+    kept_event_ids, event_id_to_block = _build_common_horizon_event_filter(
+        cfg,
+        dataset=dataset,
+        split=split,
+        selected_subjects=selected_subjects,
+        common_horizon_delay=int(common_horizon_delay),
+        fallback_eval_table=cached_bundle.get("eval_table"),
+    )
+
+    raw_clean = cached_bundle["clean_encoded"]
+    keep_mask_np = np.asarray(
+        [str(eid) in kept_event_ids for eid in raw_clean["event_ids"]],
+        dtype=bool,
+    )
+    if not keep_mask_np.any():
+        raise ValueError(
+            f"在 {encoded_cache_pt} 中应用 common_horizon_delay={common_horizon_delay} 后保留事件数为 0。"
+        )
+
+    clean_encoded = _slice_encoded_dict(raw_clean, keep_mask_np)
+    shifted_encoded_by_shift = [
+        (
+            float(sec),
+            str(k),
+            str(lbl),
+            _slice_encoded_dict(enc, keep_mask_np),
+        )
+        for sec, k, lbl, enc in (
+            cached_bundle.get("shifted_encoded_by_shift") or ()
+        )
+    ]
+
+    raw_table = cached_bundle["eval_table"].copy()
+    raw_table["_eid_str"] = raw_table["event_id"].astype(str)
+    dedup_table = raw_table.drop_duplicates(subset=["_eid_str"]).set_index(
+        "_eid_str"
+    )
+    eval_table_sub = dedup_table.reindex(clean_encoded["event_ids"]).reset_index(
+        drop=True
+    )
+    eval_table_sub["event_id"] = list(clean_encoded["event_ids"])
+    if (
+        event_id_to_block
+        and "sentence_uid" not in eval_table_sub.columns
+        and "上下文编号" not in eval_table_sub.columns
+    ):
+        eval_table_sub["sentence_uid"] = [
+            event_id_to_block.get(str(eid), f"blk-{idx // 8:04d}")
+            for idx, eid in enumerate(clean_encoded["event_ids"])
+        ]
+
+    eval_win_sec = float(
+        cached_bundle.get(
+            "window_seconds", cfg["dataset"].get("window_seconds", 1.0)
+        )
+    )
+    eval_win_samp = int(
+        cached_bundle.get("window_samples", round(eval_win_sec * 50.0))
+    )
+    eval_win_off = float(
+        cfg["dataset"].get("window_start_offset_seconds", 0.0)
+    )
+    proxy_ds = _CachedEvalDatasetProxy(
+        eval_table_sub,
+        cached_bundle["embedding_map"],
+        window_seconds=eval_win_sec,
+        window_samples=eval_win_samp,
+    )
+    vocabulary = [str(w) for w in cached_bundle["vocabulary"]]
+    vocab50 = [str(w) for w in cached_bundle["vocab50"]]
+
+    metrics = _compute_encoded_evaluation_metrics(
+        clean_encoded,
+        proxy_ds,
+        vocabulary,
+        vocab50,
+        cfg,
+        stage=stage,
+        split=split,
+    )
+
+    clean_summary = _extract_control_summary_row(
+        "clean_0s", "Clean (0s)", 0.0, metrics
+    )
+    negative_controls_result: dict[str, object] = {
+        "specification": control_spec,
+        "clean_reference": clean_summary,
+        "conditions": [],
+        "shifted_aggregate": {},
+    }
+    shifted_summaries: list[dict] = []
+    for shift_sec, cond_key, cond_label, shift_enc in shifted_encoded_by_shift:
+        shift_metrics = _compute_encoded_evaluation_metrics(
+            shift_enc,
+            proxy_ds,
+            vocabulary,
+            vocab50,
+            cfg,
+            stage=stage,
+            split=split,
+        )
+        summary_row = _extract_control_summary_row(
+            cond_key,
+            cond_label,
+            float(shift_sec),
+            shift_metrics,
+            clean_summary=clean_summary,
+        )
+        shifted_summaries.append(summary_row)
+        negative_controls_result["conditions"].append(
+            {
+                "key": cond_key,
+                "label": cond_label,
+                "control_type": "temporal_shift",
+                "shift_seconds": float(shift_sec),
+                "summary": summary_row,
+                "metrics": {
+                    "vocabulary_sweep": shift_metrics.get(
+                        "vocabulary_sweep", {}
+                    ),
+                    "revision_horizons": shift_metrics.get(
+                        "revision_horizons", {}
+                    ),
+                },
+            }
+        )
+    if shifted_summaries:
+        negative_controls_result["shifted_aggregate"] = (
+            _summarize_shifted_conditions(clean_summary, shifted_summaries)
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    exploratory_dir = output_dir / "exploratory"
+    exploratory_dir.mkdir(parents=True, exist_ok=True)
+
+    cms_cfg = control_spec.get("common_mode_subtraction") or {}
+    cms_sub_json_path: Path | None = None
+    cms_summary_meta: dict[str, object] = {}
+    if len(shifted_encoded_by_shift) >= 2:
+        cms_report = run_common_mode_subtraction_sweep(
+            dataset=dataset,
+            stage=stage,
+            split=split,
+            seed=seed,
+            exp_tag=resolved_exp_tag,
+            word_exp_tag=resolved_word_exp_tag,
+            clean_encoded=clean_encoded,
+            shifted_encoded_by_shift=shifted_encoded_by_shift,
+            eval_ds=proxy_ds,
+            shifted_ds_by_shift={},
+            vocabulary=vocabulary,
+            vocab50=vocab50,
+            cfg=cfg,
+            eta_values=cms_cfg.get("eta_values", (0.5, 0.8, 1.0)),
+            normalize_inputs=bool(
+                cms_cfg.get("normalize_before_subtraction", True)
+            ),
+            baseline_clean_summary=clean_summary,
+            baseline_condition_entries=negative_controls_result["conditions"],
+            baseline_shifted_aggregate=negative_controls_result[
+                "shifted_aggregate"
+            ],
+            compute_metrics_fn=_compute_encoded_evaluation_metrics,
+            extract_summary_row_fn=_extract_control_summary_row,
+            summarize_shifted_fn=_summarize_shifted_conditions,
+            output_dir=None,
+            plot=False,
+            print_report=print_report,
+        )
+        cms_sub_json_path = (
+            exploratory_dir
+            / f"common_mode_subtraction_common_subset_{split}.json"
+        )
+        save_json(cms_sub_json_path, cms_report)
+        cms_summary_meta = {
+            "eta_grid": cms_report["eta_grid"],
+            "best_eta_by_clean_vocab50_top10": cms_report[
+                "best_eta_by_clean_vocab50_top10"
+            ],
+            "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
+                "best_eta_by_clean_minus_shifted_vocab50_top10"
+            ],
+        }
+
+    ckpt_sha = str(
+        cached_bundle.get(
+            "checkpoint_sha256",
+            file_sha256(ckpt_file) if ckpt_file and ckpt_file.is_file() else "",
+        )
+    )
+    ckpt_epoch = 0
+    full_eval_json = output_dir / f"evaluation_{split}.json"
+    if full_eval_json.is_file():
+        try:
+            full_ev_d = json.loads(full_eval_json.read_text(encoding="utf-8"))
+            ckpt_epoch = int((full_ev_d.get("checkpoint") or {}).get("epoch", 0))
+        except Exception:
+            ckpt_epoch = 0
+
+    eval_result: dict[str, object] = {
+        "status": "evaluation_completed",
+        "dataset": dataset,
+        "stage": stage,
+        "exp_tag": resolved_exp_tag,
+        "word_exp_tag": resolved_word_exp_tag,
+        "stage_display_name": STAGE_DISPLAY_NAMES.get(stage, stage),
+        "split": split,
+        "seed": seed,
+        "common_horizon_delay": int(common_horizon_delay),
+        "precision": tc["precision"],
+        "window_seconds": eval_win_sec,
+        "window_samples": eval_win_samp,
+        "window_start_offset_seconds": eval_win_off,
+        "subset": subset_spec,
+        "checkpoint": {
+            "path": str(ckpt_file or (output_dir / "best.ckpt")),
+            "sha256": ckpt_sha,
+            "epoch": ckpt_epoch,
+            "selection": "common_horizon_subset",
+        },
+        "metrics": metrics,
+        "negative_controls": negative_controls_result,
+        "output_dir": str(output_dir),
+        "subspace_encoded_cache_pt": str(encoded_cache_pt),
+        "figures": {},
+    }
+    if cms_sub_json_path is not None:
+        eval_result["exploratory_common_mode_subtraction_json"] = str(
+            cms_sub_json_path
+        )
+        eval_result["exploratory_common_mode_subtraction_summary"] = (
+            cms_summary_meta
+        )
+
+    sub_out_dir = output_dir / "common_subset"
+    sub_out_dir.mkdir(parents=True, exist_ok=True)
+    print_word_evaluation_report(
+        eval_result,
+        verbose=verbose,
+        output_dir=sub_out_dir,
+        print_to_stdout=print_report,
+    )
+    eval_result["exported_files"] = export_word_evaluation_tables_and_markdown(
+        eval_result, sub_out_dir
+    )
+    eval_json_path = output_dir / f"evaluation_common_subset_{split}.json"
+    save_json(eval_json_path, eval_result)
+    eval_result["evaluation_json"] = str(eval_json_path)
+    return eval_result
+
+
 def _evaluate_single_stage(
     dataset: str | None = None,
     *,
@@ -2467,6 +2954,7 @@ def _evaluate_single_stage(
     max_eval_rows: int | None = None,
     verbose: bool = False,
     print_report: bool = True,
+    common_horizon_delay: int | None = None,
 ) -> dict:
     """对单个训练阶段（word / context / revision）执行验证集或测试集评估并生成图表。"""
     from braindecoding.training.workflow_runner import (
@@ -2578,6 +3066,59 @@ def _evaluate_single_stage(
             raise FileNotFoundError(
                 f"未找到阶段 {stage} ({STAGE_DISPLAY_NAMES.get(stage, stage)}) 的训练检查点：{searched_str}。"
                 f"请先完成该阶段的训练，或检查 EXP_TAG / WORD_EXP_TAG，或通过 --checkpoint 显式指定检查点路径。"
+            )
+
+    encoded_cache_pt = (
+        out / "exploratory" / f"subspace_encoded_cache_{split}.pt"
+    )
+    if (
+        common_horizon_delay is not None
+        and int(common_horizon_delay) > 0
+        and stage in ("word", "context")
+    ):
+        if not encoded_cache_pt.is_file():
+            _evaluate_single_stage(
+                dataset,
+                stage=stage,
+                seed=seed,
+                split=split,
+                subject=subject,
+                num_subjects=num_subjects,
+                subjects=subjects,
+                eval_batch_size=eval_batch_size,
+                num_workers=num_workers,
+                precision=precision,
+                window_seconds=window_seconds,
+                window_start_offset_seconds=window_start_offset_seconds,
+                require_cache=require_cache,
+                checkpoint_path=checkpoint_path,
+                output_dir=output_dir,
+                exp_tag=exp_tag,
+                word_exp_tag=word_exp_tag,
+                config_path=config_path,
+                control_config_path=control_config_path,
+                shift_seconds=shift_seconds,
+                zero_signal_control=zero_signal_control,
+                subtraction_etas=subtraction_etas,
+                plot=plot,
+                show_progress=show_progress,
+                max_eval_rows=max_eval_rows,
+                verbose=verbose,
+                print_report=False,
+                common_horizon_delay=None,
+            )
+        if encoded_cache_pt.is_file():
+            return _evaluate_common_horizon_subset_from_pt(
+                encoded_cache_pt,
+                cfg=cfg,
+                subset_spec=subset_spec,
+                control_spec=control_spec,
+                common_horizon_delay=int(common_horizon_delay),
+                ckpt_file=ckpt_file if ckpt_file.is_file() else None,
+                output_dir=out,
+                split=split,
+                verbose=verbose,
+                print_report=print_report,
             )
 
     if require_cache:
@@ -6483,6 +7024,8 @@ def _aggregate_single_stage_multi_seed(
         "subspace_debiasing_aggregate": subspace_aggregate,
         "negative_controls_aggregate": {"enabled": False},
     }
+    if first.get("common_horizon_delay") is not None:
+        summary_out["common_horizon_delay"] = int(first["common_horizon_delay"])
     return apply_multi_seed_control_selection(
         summary_out,
         control_method=control_method,
@@ -6500,6 +7043,7 @@ def summarize_multi_seed_evaluation(
     save_files: bool = True,
     control_method: str | Iterable[str] | None = None,
     control_metric: str | Iterable[str] | None = None,
+    common_horizon_delay: int | None = None,
     **_extra_kwargs,
 ) -> dict:
     """将多个随机种子（或单种子 n=1）的评估结果汇总为 Multi-Seed Summary JSON 与报表并落盘。"""
@@ -6509,6 +7053,13 @@ def summarize_multi_seed_evaluation(
         raise ValueError("seed_results 不能为空。")
     split = _infer_split_from_seed_results(seed_results, split)
     first = seed_results[0]
+    eff_common_delay = (
+        common_horizon_delay
+        if common_horizon_delay is not None
+        else first.get("common_horizon_delay")
+    )
+    has_common_subset = eff_common_delay is not None
+    subset_tag_suffix = "_common_subset" if has_common_subset else ""
     is_multi_stage = (
         "stages" in first and isinstance(first.get("stages"), dict)
     )
@@ -6569,11 +7120,22 @@ def summarize_multi_seed_evaluation(
             "seed_results": list(seed_results),
             "output_dir": str(target_dir),
         }
+        if has_common_subset:
+            summary["common_horizon_delay"] = int(eff_common_delay)
         if save_files:
             target_dir.mkdir(parents=True, exist_ok=True)
-            json_path = target_dir / f"multi_seed_stage_comparison_{split}.json"
+            json_path = (
+                target_dir
+                / f"multi_seed_stage_comparison{subset_tag_suffix}_{split}.json"
+            )
+            export_dir = (
+                target_dir / "common_subset"
+                if has_common_subset
+                else target_dir
+            )
+            export_dir.mkdir(parents=True, exist_ok=True)
             multi_exports = export_multi_seed_tables_and_markdown(
-                summary, target_dir
+                summary, export_dir
             )
             summary["exports"] = multi_exports
             save_json(json_path, summary)
@@ -6594,6 +7156,8 @@ def summarize_multi_seed_evaluation(
         control_method=control_method,
         control_metric=control_metric,
     )
+    if has_common_subset:
+        summary["common_horizon_delay"] = int(eff_common_delay)
     target_dir = (
         Path(output_dir).resolve()
         if output_dir is not None
@@ -6603,9 +7167,16 @@ def summarize_multi_seed_evaluation(
     summary["output_dir"] = str(target_dir)
     if save_files:
         target_dir.mkdir(parents=True, exist_ok=True)
-        json_path = target_dir / f"multi_seed_evaluation_{split}.json"
+        json_path = (
+            target_dir
+            / f"multi_seed_evaluation{subset_tag_suffix}_{split}.json"
+        )
+        export_dir = (
+            target_dir / "common_subset" if has_common_subset else target_dir
+        )
+        export_dir.mkdir(parents=True, exist_ok=True)
         multi_exports = export_multi_seed_tables_and_markdown(
-            summary, target_dir
+            summary, export_dir
         )
         summary["exports"] = multi_exports
         save_json(json_path, summary)
@@ -6647,6 +7218,7 @@ def run_evaluation_workflow(
     subtraction_etas: str | Iterable[float | int | str] | None = None,
     control_method: str | Iterable[str] | None = None,
     control_metric: str | Iterable[str] | None = None,
+    common_horizon_delay: int | None = None,
     all_stages: bool = False,
     plot: bool = True,
     show_progress: bool = True,
@@ -6701,6 +7273,7 @@ def run_evaluation_workflow(
                 subtraction_etas=subtraction_etas,
                 control_method=control_method,
                 control_metric=control_metric,
+                common_horizon_delay=common_horizon_delay,
                 all_stages=all_stages,
                 plot=plot,
                 show_progress=show_progress,
@@ -6720,6 +7293,7 @@ def run_evaluation_workflow(
             print_report=True,
             control_method=control_method,
             control_metric=control_metric,
+            common_horizon_delay=common_horizon_delay,
         )
 
     seed = int(seed_list[0])
@@ -6752,8 +7326,9 @@ def run_evaluation_workflow(
             max_eval_rows=max_eval_rows,
             verbose=verbose,
             print_report=True,
+            common_horizon_delay=common_horizon_delay,
         )
-        if plot:
+        if plot and common_horizon_delay is None:
             ds_name = single_res["dataset"]
             sub_tag = single_res["subset"]["subset_tag"]
             sd = single_res["seed"]
@@ -6863,6 +7438,7 @@ def run_evaluation_workflow(
                 print_report=True,
                 control_method=control_method,
                 control_metric=control_metric,
+                common_horizon_delay=common_horizon_delay,
             )
             single_res["outer_multi_seed_evaluation_json"] = str(
                 outer_summary.get("evaluation_json", "")
@@ -7027,6 +7603,7 @@ def run_evaluation_workflow(
             max_eval_rows=max_eval_rows,
             verbose=verbose,
             print_report=False,
+            common_horizon_delay=common_horizon_delay,
         )
 
     effective_summary_tag = (

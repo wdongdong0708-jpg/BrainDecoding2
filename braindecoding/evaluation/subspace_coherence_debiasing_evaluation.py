@@ -1236,7 +1236,21 @@ def save_subspace_encoded_cache(
             if window_samples is not None
             else int(getattr(eval_ds, "window_samples", 50))
         )
-        eval_table_minimal = eval_ds.table[["event_id", "subject_id"]].copy()
+        keep_table_cols = [
+            c
+            for c in (
+                "event_id",
+                "subject_id",
+                "recording_id",
+                "sentence_uid",
+                "runtime_context_uid",
+                "context_id",
+                "上下文编号",
+                "记录编号",
+            )
+            if c in eval_ds.table.columns
+        ]
+        eval_table_minimal = eval_ds.table[keep_table_cols].copy()
         all_needed_words = (
             set(str(w) for w in vocabulary)
             | set(str(w) for w in vocab50)

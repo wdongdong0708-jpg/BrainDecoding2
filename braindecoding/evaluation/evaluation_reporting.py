@@ -4488,15 +4488,17 @@ def print_multi_seed_evaluation_report(
     was_reaggregated = bool(enriched.pop("_was_reaggregated", False))
     split = str(enriched.get("split", "val")).lower()
     is_multi_stage = bool(enriched.get("stages_aggregate"))
+    has_common_subset = enriched.get("common_horizon_delay") is not None
+    subset_tag_suffix = "_common_subset" if has_common_subset else ""
     report_filename = (
-        f"multi_seed_stage_comparison_report_{split}.txt"
+        f"multi_seed_stage_comparison{subset_tag_suffix}_report_{split}.txt"
         if is_multi_stage
-        else f"multi_seed_evaluation_report_{split}.txt"
+        else f"multi_seed_evaluation{subset_tag_suffix}_report_{split}.txt"
     )
     json_filename = (
-        f"multi_seed_stage_comparison_{split}.json"
+        f"multi_seed_stage_comparison{subset_tag_suffix}_{split}.json"
         if is_multi_stage
-        else f"multi_seed_evaluation_{split}.json"
+        else f"multi_seed_evaluation{subset_tag_suffix}_{split}.json"
     )
     if target_dir:
         out_dir_path = Path(str(target_dir))
@@ -4519,7 +4521,13 @@ def print_multi_seed_evaluation_report(
                 control_metric=control_metric,
             )
             out_path.write_text(full_txt + "\n", encoding="utf-8")
-            export_multi_seed_tables_and_markdown(enriched, out_dir_path)
+            export_target = (
+                out_dir_path / "common_subset"
+                if has_common_subset
+                else out_dir_path
+            )
+            export_target.mkdir(parents=True, exist_ok=True)
+            export_multi_seed_tables_and_markdown(enriched, export_target)
         except OSError:
             pass
     rendered = format_multi_seed_evaluation_report(

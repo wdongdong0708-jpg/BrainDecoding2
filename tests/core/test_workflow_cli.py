@@ -3319,6 +3319,47 @@ def test_multi_seed_evaluation_full_reports_markdown_and_control_selection(tmp_p
     assert "stage1_word_tag/word" in err_msg
 
 
+def test_common_horizon_delay_subset_filter_and_cli_arg() -> None:
+    import pandas as pd
+    from braindecoding.cli import build_parser
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        _build_common_horizon_event_filter,
+    )
+
+    parser = build_parser()
+    parsed = parser.parse_args(
+        [
+            "eval-run",
+            "--dataset",
+            "pallier2025",
+            "--stage",
+            "word",
+            "--common-horizon-delay",
+            "2",
+        ]
+    )
+    assert parsed.common_horizon_delay == 2
+
+    df = pd.DataFrame(
+        {
+            "event_id": ["e0", "e1", "e2", "e3", "e4", "e5"],
+            "recording_id": ["r0", "r0", "r0", "r0", "r0", "r0"],
+            "context_id": ["s0", "s0", "s0", "s0", "s1", "s1"],
+            "normalized_word": ["le", "petit", "prince", "parle", "un", "mot"],
+        }
+    )
+    kept_ids, _ = _build_common_horizon_event_filter(
+        {},
+        dataset="custom_toy",
+        split="test",
+        selected_subjects=("sub-01",),
+        common_horizon_delay=2,
+        fallback_eval_table=df,
+    )
+    assert kept_ids == {"e0", "e1"}
+
+
+
 
 
 

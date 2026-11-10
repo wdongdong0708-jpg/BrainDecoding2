@@ -67,7 +67,7 @@ calibration:
 control:
   common_mode_subtraction:
     enabled: true
-    subtraction_eta: 0.0
+    subtraction_eta: 0.5
     background_shift_seconds:
       - -15.0
       - -30.0

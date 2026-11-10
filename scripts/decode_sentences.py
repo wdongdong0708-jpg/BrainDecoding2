@@ -331,6 +331,10 @@ def resolve_default_paths(
             legacy_base_dir = (
                 root / "sequence_decoding" / f"seed-{int(seed):03d}"
             ).resolve()
+        else:
+            legacy_base_dir = (
+                root / "simple_sequence_decoding" / f"seed-{int(seed):03d}"
+            ).resolve()
     res: dict[str, Path] = {
         "base_dir": base_dir,
         "val_export_path": base_dir / "neural_vocabulary_scores_val.pt",
@@ -644,16 +648,36 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     parsed.append(v_i)
         return tuple(parsed)
 
-    min_sentence_length = int(
-        args.min_sentence_length
-        if getattr(args, "min_sentence_length", None) is not None
-        else dec_cfg.get("min_sentence_length", eval_cfg.get("min_sentence_length", 5))
+    sequence_subdir = (
+        getattr(args, "sequence_subdir", None)
+        or os.environ.get("BRAINDECODING_SEQUENCE_SUBDIR", "").strip()
+        or dec_cfg.get("sequence_subdir")
+        or DEFAULT_SEQUENCE_SUBDIR
     )
+    raw_min_len_arg = getattr(args, "min_sentence_length", None)
+    is_open_segment_protocol = (
+        str(sequence_subdir).strip() == "sequence_decoding"
+        and raw_min_len_arg is None
+    ) or (raw_min_len_arg is not None and int(raw_min_len_arg) <= 0)
+    if is_open_segment_protocol:
+        min_sentence_length = 0
+    else:
+        min_sentence_length = int(
+            raw_min_len_arg
+            if raw_min_len_arg is not None
+            else dec_cfg.get(
+                "min_sentence_length", eval_cfg.get("min_sentence_length", 5)
+            )
+        )
     args.min_sentence_length = min_sentence_length
     raw_core_v = (
         args.core_vocab_size
         if getattr(args, "core_vocab_size", None) is not None
-        else eval_cfg.get("core_vocabulary_size", "full")
+        else (
+            250
+            if is_open_segment_protocol
+            else eval_cfg.get("core_vocabulary_size", "full")
+        )
     )
     if isinstance(raw_core_v, str) and raw_core_v.strip().lower() in ("full", "all", ""):
         core_vocab_size: int | str = "full"
@@ -662,19 +686,32 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     else:
         core_vocab_size = int(raw_core_v) if raw_core_v is not None else "full"
 
-    core_vocab_sizes = _parse_vocab_scale_list(
-        eval_cfg.get("core_vocabulary_sizes"), (50, 100, "full")
-    )
-    multi_subject_vocab_sizes = _parse_vocab_scale_list(
-        eval_cfg.get("multi_subject_vocabulary_sizes"), (50, 100, "full")
-    )
-    raw_vocab_sizes = getattr(args, "vocab_sizes", None)
-    if raw_vocab_sizes is not None:
-        vocab_sizes = _parse_vocab_scale_list(raw_vocab_sizes, ())
+    if is_open_segment_protocol:
+        core_vocab_sizes: tuple[int | str, ...] = (100, 250)
+        multi_subject_vocab_sizes: tuple[int | str, ...] = (100, 250)
+        raw_vocab_sizes = getattr(args, "vocab_sizes", None)
+        if raw_vocab_sizes is not None:
+            vocab_sizes = tuple(
+                x
+                for x in _parse_vocab_scale_list(raw_vocab_sizes, ())
+                if isinstance(x, int)
+            )
+        else:
+            vocab_sizes = (50, 100, 250, 500, 1000)
     else:
-        vocab_sizes = _parse_vocab_scale_list(
-            eval_cfg.get("vocabulary_scaling_sizes"), (50, 100, "full")
+        core_vocab_sizes = _parse_vocab_scale_list(
+            eval_cfg.get("core_vocabulary_sizes"), (50, 100, "full")
         )
+        multi_subject_vocab_sizes = _parse_vocab_scale_list(
+            eval_cfg.get("multi_subject_vocabulary_sizes"), (50, 100, "full")
+        )
+        raw_vocab_sizes = getattr(args, "vocab_sizes", None)
+        if raw_vocab_sizes is not None:
+            vocab_sizes = _parse_vocab_scale_list(raw_vocab_sizes, ())
+        else:
+            vocab_sizes = _parse_vocab_scale_list(
+                eval_cfg.get("vocabulary_scaling_sizes"), (50, 100, "full")
+            )
     window_seconds = (
         getattr(args, "window_seconds", None)
         if getattr(args, "window_seconds", None) is not None
@@ -688,12 +725,6 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     show_progress = not bool(getattr(args, "no_progress", False))
     plot_enabled = not bool(getattr(args, "no_plot", False))
 
-    sequence_subdir = (
-        getattr(args, "sequence_subdir", None)
-        or os.environ.get("BRAINDECODING_SEQUENCE_SUBDIR", "").strip()
-        or dec_cfg.get("sequence_subdir")
-        or DEFAULT_SEQUENCE_SUBDIR
-    )
     paths = resolve_default_paths(
         args.dataset,
         args.split,
@@ -880,7 +911,16 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             cms_meta = dict(payload.get("cms_metadata") or {})
             if "subtraction_eta" not in cms_meta:
                 return True
-            return abs(float(cms_meta["subtraction_eta"]) - float(expected_eta)) <= 1e-6
+            saved_eta = float(cms_meta["subtraction_eta"])
+            if abs(saved_eta - float(expected_eta)) <= 1e-6:
+                return True
+            if (
+                getattr(args, "cms_eta", None) is None
+                and not force_rerun
+                and saved_eta >= 0.0
+            ):
+                return True
+            return False
         except Exception:
             return False
 
@@ -1291,41 +1331,52 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             [str(w) for w in (seg.get("reference_words") or [])]
             for seg in raw_split_segments
         ]
-        eff_min_sentence_length = max(1, int(args.min_sentence_length))
-        vocab_scale: int | str = "full"
-        vocab_words, covered_l5_seg_indices = (
-            build_l5_sentence_matched_vocabulary(
-                train_words=train_corpus_words,
-                test_segments=test_sentence_token_lists,
-                size=vocab_scale,  # 支持 50, 100, "full" (约 130 词), 以及 250 (pad_with_train_freq=True)
-                min_sentence_length=args.min_sentence_length,  # 默认设为 5
-                pad_with_train_freq=(vocab_scale == 250),
+        if is_open_segment_protocol:
+            eff_min_sentence_length: int | None = None
+            covered_l5_seg_indices: list[int] | None = None
+            full_l5_vocab_indices: list[int] | None = None
+            expected_seg_count = (
+                min(len(raw_split_segments), int(args.max_segments))
+                if args.max_segments is not None
+                else len(raw_split_segments)
             )
-        )
-        if not covered_l5_seg_indices and test_sentence_token_lists:
-            eff_min_sentence_length = 1
+            expected_main_vocab_size = len(split_payload.get("vocabulary") or [])
+        else:
+            eff_min_sentence_length = max(1, int(args.min_sentence_length))
+            vocab_scale: int | str = "full"
             vocab_words, covered_l5_seg_indices = (
                 build_l5_sentence_matched_vocabulary(
                     train_words=train_corpus_words,
                     test_segments=test_sentence_token_lists,
-                    size="full",
-                    min_sentence_length=eff_min_sentence_length,
-                    pad_with_train_freq=False,
+                    size=vocab_scale,  # 支持 50, 100, "full" (约 130 词), 以及 250 (pad_with_train_freq=True)
+                    min_sentence_length=args.min_sentence_length,  # 默认设为 5
+                    pad_with_train_freq=(vocab_scale == 250),
                 )
             )
-        if args.max_segments is not None:
-            covered_l5_seg_indices = covered_l5_seg_indices[
-                : int(args.max_segments)
+            if not covered_l5_seg_indices and test_sentence_token_lists:
+                eff_min_sentence_length = 1
+                vocab_words, covered_l5_seg_indices = (
+                    build_l5_sentence_matched_vocabulary(
+                        train_words=train_corpus_words,
+                        test_segments=test_sentence_token_lists,
+                        size="full",
+                        min_sentence_length=eff_min_sentence_length,
+                        pad_with_train_freq=False,
+                    )
+                )
+            if args.max_segments is not None:
+                covered_l5_seg_indices = covered_l5_seg_indices[
+                    : int(args.max_segments)
+                ]
+            full_l5_vocab_indices = [
+                word_to_vocab_idx[w] for w in vocab_words if w in word_to_vocab_idx
             ]
-        full_l5_vocab_indices = [
-            word_to_vocab_idx[w] for w in vocab_words if w in word_to_vocab_idx
-        ]
-        expected_seg_count = len(covered_l5_seg_indices)
-        expected_main_vocab_size = (
-            len(full_l5_vocab_indices)
-            if full_l5_vocab_indices
-            else len(split_payload.get("vocabulary") or [])
-        )
+            expected_seg_count = len(covered_l5_seg_indices)
+            expected_main_vocab_size = (
+                len(full_l5_vocab_indices)
+                if full_l5_vocab_indices
+                else len(split_payload.get("vocabulary") or [])
+            )
         target_states_hp = dict(
             hyperparameters.get("states", hyperparameters) or {}
         )
@@ -1460,14 +1511,22 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         return rev_ok
                     return False
 
+                protocol_matches = (
+                    existing_dec.get("protocol_mode")
+                    != "l5_sentence_matched_closed_set"
+                    if is_open_segment_protocol
+                    else (
+                        existing_dec.get("protocol_mode")
+                        == "l5_sentence_matched_closed_set"
+                        and int(existing_dec.get("min_sentence_length", -1))
+                        == int(eff_min_sentence_length or 5)
+                    )
+                )
                 if (
                     existing_dec.get("dataset") == args.dataset
                     and existing_dec.get("split") == args.split
                     and int(existing_dec.get("seed", -1)) == int(args.seed)
-                    and existing_dec.get("protocol_mode")
-                    == "l5_sentence_matched_closed_set"
-                    and int(existing_dec.get("min_sentence_length", -1))
-                    == int(eff_min_sentence_length)
+                    and protocol_matches
                 ):
                     for cond_k, cond_b in (
                         existing_dec.get("decoded_bundles") or {}
@@ -1545,8 +1604,16 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 decoded_bundles.pop("F_clean", None)
             bundle_obj = {
                 "schema_version": "s3-decoding-bundle/v2",
-                "protocol_mode": "l5_sentence_matched_closed_set",
-                "min_sentence_length": int(eff_min_sentence_length),
+                "protocol_mode": (
+                    "open_segment_full_vocabulary"
+                    if is_open_segment_protocol
+                    else "l5_sentence_matched_closed_set"
+                ),
+                "min_sentence_length": (
+                    0
+                    if eff_min_sentence_length is None
+                    else int(eff_min_sentence_length)
+                ),
                 "dataset": args.dataset,
                 "split": args.split,
                 "seed": int(args.seed),
@@ -1564,7 +1631,6 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 encoding="utf-8",
             )
 
-        # 仅在 covered_l5_seg_indices（满足 L >= 5 且 100% 严格 0% OOV 的标准长句）上运行束搜索与指标汇总
         any_main_decoded = False
         if "LM-Only" not in decoded_bundles:
             decoded_bundles["LM-Only"] = decode_dataset_segments(
@@ -1644,45 +1710,71 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             _persist_decoding_bundle()
 
         if len(vocab_sizes) > 0:
-            scale_specs = _resolve_l5_closed_set_scales(
-                split_payload,
-                vocab_sizes,
-                min_sentence_length=eff_min_sentence_length,
-                max_segments=args.max_segments,
-            )
-
-            def _scale_spec_needs_decode(spec: dict[str, Any]) -> bool:
-                s_key = str(spec["scale_key"])
-                n_scale_segs = len(spec["segment_indices"])
-                if s_key not in vocabulary_scaling_bundles:
-                    return True
-                conds = vocabulary_scaling_bundles[s_key].get("conditions") or {}
-                req: list[str] = []
-                if has_s3_clean:
-                    req.append("S3_clean")
-                if "S0" in available_clean:
-                    req.append("S0")
-                if "K0" in available_clean:
-                    req.append("K0")
-                if "K1" in available_clean:
-                    req.append("K1")
-                if has_real_context and "F" in available_clean:
-                    req.append("F")
-                if "K0" in available_shifted:
-                    req.append("K0_shifted_neg75s")
-                if "K2" in available_shifted:
-                    req.append("S3_shifted_neg75s")
-                req.append("LM-Only")
-                return not all(
-                    r_k in conds
-                    and isinstance(conds[r_k], dict)
-                    and int(conds[r_k].get("segment_count", -1)) == n_scale_segs
-                    for r_k in req
+            if is_open_segment_protocol:
+                open_sizes = sorted(
+                    {
+                        min(int(v), int(expected_main_vocab_size))
+                        for v in vocab_sizes
+                        if isinstance(v, int) and int(v) > 0
+                    }
+                    | {int(expected_main_vocab_size)}
+                )
+                needs_truncated_decode = not all(
+                    f"V={v_n}" in vocabulary_scaling_bundles
+                    and isinstance(
+                        (vocabulary_scaling_bundles[f"V={v_n}"].get("conditions") or {}).get(
+                            "S3_clean"
+                        ),
+                        dict,
+                    )
+                    and int(
+                        vocabulary_scaling_bundles[f"V={v_n}"]["conditions"]["S3_clean"].get(
+                            "segment_count", -1
+                        )
+                    )
+                    == expected_seg_count
+                    for v_n in open_sizes
+                )
+            else:
+                scale_specs = _resolve_l5_closed_set_scales(
+                    split_payload,
+                    vocab_sizes,
+                    min_sentence_length=eff_min_sentence_length or 5,
+                    max_segments=args.max_segments,
                 )
 
-            needs_truncated_decode = any(
-                _scale_spec_needs_decode(spec) for spec in scale_specs
-            )
+                def _scale_spec_needs_decode(spec: dict[str, Any]) -> bool:
+                    s_key = str(spec["scale_key"])
+                    n_scale_segs = len(spec["segment_indices"])
+                    if s_key not in vocabulary_scaling_bundles:
+                        return True
+                    conds = vocabulary_scaling_bundles[s_key].get("conditions") or {}
+                    req: list[str] = []
+                    if has_s3_clean:
+                        req.append("S3_clean")
+                    if "S0" in available_clean:
+                        req.append("S0")
+                    if "K0" in available_clean:
+                        req.append("K0")
+                    if "K1" in available_clean:
+                        req.append("K1")
+                    if has_real_context and "F" in available_clean:
+                        req.append("F")
+                    if "K0" in available_shifted:
+                        req.append("K0_shifted_neg75s")
+                    if "K2" in available_shifted:
+                        req.append("S3_shifted_neg75s")
+                    req.append("LM-Only")
+                    return not all(
+                        r_k in conds
+                        and isinstance(conds[r_k], dict)
+                        and int(conds[r_k].get("segment_count", -1)) == n_scale_segs
+                        for r_k in req
+                    )
+
+                needs_truncated_decode = any(
+                    _scale_spec_needs_decode(spec) for spec in scale_specs
+                )
             active_scorer = _ensure_scorer() if needs_truncated_decode else scorer
 
             def _on_scale_completed(

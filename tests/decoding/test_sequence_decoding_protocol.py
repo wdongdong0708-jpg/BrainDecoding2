@@ -1471,5 +1471,123 @@ def test_s3_paired_significance_uses_block_size_one_for_30_unique_sentences() ->
     assert v131_top1["p_two_sided"] < 0.001
 
 
+def test_open_segment_sequence_decoding_reuses_simple_sequence_decoding_cache(
+    tmp_path, monkeypatch
+) -> None:
+    """验证 --sequence-subdir sequence_decoding 启用全词表开放句段协议，并双向复用 simple_sequence_decoding 下的 .pt 缓存。"""
+    import json
+    import scripts.decode_sentences as decode_cli
+
+    runs_root = tmp_path / "runs"
+    exp_tag = "2_siamese_prefix_tag"
+    monkeypatch.setenv("BRAINDECODING_RESULTS_DIR", str(runs_root))
+
+    paths = decode_cli.resolve_default_paths(
+        "pallier2025",
+        "test",
+        2,
+        exp_tag=exp_tag,
+        sequence_subdir="sequence_decoding",
+    )
+    assert paths["base_dir"].parent.name == "sequence_decoding"
+    assert paths["legacy_base_dir"].parent.name == "simple_sequence_decoding"
+
+    paths["legacy_base_dir"].mkdir(parents=True, exist_ok=True)
+    vocabulary, scorer, _ = _build_toy_french_scorer()
+    vocab_size = len(vocabulary)
+    # 包含 L=2 短句与 L=5 长句，开放句段协议应保留全部 2 个句段
+    segments = [
+        {
+            "segment_index": 0,
+            "group_id": "sub-01_run-06:0",
+            "material_id": "run-06:0",
+            "subject_id": "sub-01",
+            "recording_id": "run-06",
+            "scope": "run-06",
+            "block_id": "run-06|block-000",
+            "partition": "calibration",
+            "event_indices": [0, 1],
+            "reference_words": ["le", "petit"],
+            "in_vocabulary_mask": [True, True],
+        },
+        {
+            "segment_index": 1,
+            "group_id": "sub-01_run-06:1",
+            "material_id": "run-06:1",
+            "subject_id": "sub-01",
+            "recording_id": "run-06",
+            "scope": "run-06",
+            "block_id": "run-06|block-000",
+            "partition": "evaluation",
+            "event_indices": [2, 3, 4, 5, 6],
+            "reference_words": ["le", "petit", "prince", "l", "ami"],
+            "in_vocabulary_mask": [True] * 5,
+        },
+    ]
+    clean_scores = {
+        s: torch.zeros((7, vocab_size), dtype=torch.float32)
+        for s in CANONICAL_STATES
+    }
+    for sp_name, pt_p in (
+        ("val", paths["legacy_val_export_path"]),
+        ("test", paths["legacy_split_export_path"]),
+    ):
+        torch.save(
+            {
+                "dataset": "pallier2025",
+                "language": "fr",
+                "split": sp_name,
+                "seed": 2,
+                "vocabulary": vocabulary,
+                "vocabulary_size": vocab_size,
+                "vocabulary_embeddings": torch.eye(vocab_size, 16),
+                "clean_scores": clean_scores,
+                "shifted_scores": {k: v for k, v in clean_scores.items() if k != "S0"},
+                "segments": segments,
+                "checkpoint_provenance": {"revision_stage": "prefix_revision"},
+                "cms_metadata": {"subtraction_eta": 0.8},
+            },
+            pt_p,
+        )
+
+    monkeypatch.setattr(
+        decode_cli,
+        "_load_or_init_language_scorer",
+        lambda *args, **kwargs: scorer,
+    )
+    args = decode_cli.build_parser().parse_args(
+        [
+            "--step",
+            "all",
+            "--dataset",
+            "pallier2025",
+            "--split",
+            "test",
+            "--seed",
+            "2",
+            "--exp-tag",
+            exp_tag,
+            "--sequence-subdir",
+            "sequence_decoding",
+            "--vocab-sizes",
+            "3,6",
+            "--core-vocab-size",
+            "3",
+            "--no-plot",
+            "--no-progress",
+        ]
+    )
+    res = decode_cli.run_sequence_decoding_pipeline(args)
+    saved_dec = json.loads(
+        (paths["base_dir"] / "sequence_decoding_test.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert saved_dec["protocol_mode"] == "open_segment_full_vocabulary"
+    assert saved_dec["decoded_bundles"]["S3_clean"]["segment_count"] == 2
+    assert res["conditions"]["S3_clean"]["segment_count"] == 2
+
+
+
 
 
