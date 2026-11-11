@@ -11,6 +11,7 @@ from __future__ import annotations
 import gc
 import json
 import math
+import os
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
@@ -3073,6 +3074,43 @@ def _evaluate_common_horizon_subset_from_pt(
     return eval_result
 
 
+def _resolve_eval_subdir(eval_subdir: str | None) -> str:
+    """规范化评估产物隔离子目录名（为空表示沿用原训练目录）。"""
+    raw = (
+        str(eval_subdir).strip()
+        if eval_subdir is not None
+        else os.environ.get("BRAINDECODING_EVAL_SUBDIR", "").strip()
+    )
+    if raw.lower() in {"", "none", "null", "default"}:
+        return ""
+    cleaned = raw.strip("/\\")
+    if ".." in Path(cleaned).parts:
+        raise ValueError(f"非法的 eval_subdir（禁止包含 '..'）：{eval_subdir!r}")
+    return cleaned
+
+
+def _apply_eval_subdir_to_seed_dir(
+    seed_dir: Path,
+    eval_subdir: str | None,
+    *,
+    stage: str,
+) -> Path:
+    """只读保留原目录检查点，将单种子评估输出重定向至 <exp_root>/<eval_subdir>/<stage>/<subset>/<seed>。"""
+    sub = _resolve_eval_subdir(eval_subdir)
+    if not sub:
+        return seed_dir
+    resolved = seed_dir.resolve()
+    if len(resolved.parts) >= 3 and resolved.parent.parent.name == stage:
+        return (
+            resolved.parent.parent.parent
+            / sub
+            / stage
+            / resolved.parent.name
+            / resolved.name
+        )
+    return resolved / sub
+
+
 def _evaluate_single_stage(
     dataset: str | None = None,
     *,
@@ -3090,6 +3128,7 @@ def _evaluate_single_stage(
     require_cache: bool = False,
     checkpoint_path: str | Path | None = None,
     output_dir: str | Path | None = None,
+    eval_subdir: str | None = None,
     exp_tag: str | None = None,
     word_exp_tag: str | None = None,
     config_path: str | Path | None = None,
@@ -3226,6 +3265,10 @@ def _evaluate_single_stage(
                 f"请先完成该阶段的训练，或检查 EXP_TAG / WORD_EXP_TAG，或通过 --checkpoint 显式指定检查点路径。"
             )
 
+    if output_dir is None:
+        out = _apply_eval_subdir_to_seed_dir(out, eval_subdir, stage=stage)
+    out.mkdir(parents=True, exist_ok=True)
+
     encoded_cache_pt = (
         out / "exploratory" / f"subspace_encoded_cache_{split}.pt"
     )
@@ -3251,6 +3294,7 @@ def _evaluate_single_stage(
                 require_cache=require_cache,
                 checkpoint_path=checkpoint_path,
                 output_dir=output_dir,
+                eval_subdir=eval_subdir,
                 exp_tag=exp_tag,
                 word_exp_tag=word_exp_tag,
                 config_path=config_path,
@@ -7500,6 +7544,7 @@ def run_evaluation_workflow(
     require_cache: bool = False,
     checkpoint_path: str | Path | None = None,
     output_dir: str | Path | None = None,
+    eval_subdir: str | None = None,
     exp_tag: str | None = None,
     word_exp_tag: str | None = None,
     config_path: str | Path | None = None,
@@ -7559,6 +7604,7 @@ def run_evaluation_workflow(
                 require_cache=require_cache,
                 checkpoint_path=None,
                 output_dir=None,
+                eval_subdir=eval_subdir,
                 exp_tag=exp_tag,
                 word_exp_tag=word_exp_tag,
                 config_path=config_path,
@@ -7613,6 +7659,7 @@ def run_evaluation_workflow(
             require_cache=require_cache,
             checkpoint_path=checkpoint_path,
             output_dir=output_dir,
+            eval_subdir=eval_subdir,
             exp_tag=exp_tag,
             word_exp_tag=word_exp_tag,
             config_path=config_path,
@@ -7657,7 +7704,17 @@ def run_evaluation_workflow(
                         other_st == "word" and target_tag == ""
                     ),
                 )
-                other_eval_file = other_dir / f"evaluation_{split}.json"
+                isolated_other_file = (
+                    _apply_eval_subdir_to_seed_dir(
+                        other_dir, eval_subdir, stage=other_st
+                    )
+                    / f"evaluation_{split}.json"
+                )
+                other_eval_file = (
+                    isolated_other_file
+                    if isolated_other_file.is_file()
+                    else (other_dir / f"evaluation_{split}.json")
+                )
                 if not other_eval_file.is_file():
                     smoke_other = (
                         workflow_output_directory(
@@ -7864,17 +7921,22 @@ def run_evaluation_workflow(
             f"未找到数据集 {ds_name} (subset={sub_tag}, seed={sd}) 任何已训练阶段的检查点（如 {expected_dir / 'best.ckpt'}）。"
         )
 
+    resolved_eval_sub = _resolve_eval_subdir(eval_subdir)
     stage_results: dict[str, dict] = {}
     for st, st_tag, st_ignore_imp in available_stages:
         stage_out_dir = (
-            workflow_output_directory(
-                ds_name,
-                st,
-                sub_tag,
-                sd,
-                mode="train",
-                exp_tag="",
-                ignore_implicit_tag=True,
+            _apply_eval_subdir_to_seed_dir(
+                workflow_output_directory(
+                    ds_name,
+                    st,
+                    sub_tag,
+                    sd,
+                    mode="train",
+                    exp_tag="",
+                    ignore_implicit_tag=True,
+                ),
+                resolved_eval_sub,
+                stage=st,
             )
             if st_ignore_imp
             else None
@@ -7894,6 +7956,7 @@ def run_evaluation_workflow(
             window_start_offset_seconds=window_start_offset_seconds,
             require_cache=require_cache,
             output_dir=stage_out_dir,
+            eval_subdir=resolved_eval_sub,
             exp_tag=st_tag,
             word_exp_tag=word_exp_tag,
             config_path=None,
@@ -7921,6 +7984,8 @@ def run_evaluation_workflow(
     dataset_eval_root = base_root / ds_name
     if effective_summary_tag:
         dataset_eval_root = dataset_eval_root / effective_summary_tag
+    if resolved_eval_sub:
+        dataset_eval_root = dataset_eval_root / resolved_eval_sub
     comp_dir = (
         Path(output_dir).resolve()
         if output_dir is not None

@@ -6,6 +6,7 @@ import pytest
 import torch
 from torch.nn import functional as F
 
+from braindecoding.cli import build_parser
 from braindecoding.evaluation.common_mode_subtraction_evaluation import (
     apply_causal_ema_subtraction_to_encoded,
     apply_causal_ema_subtraction_to_tensors,
@@ -15,6 +16,9 @@ from braindecoding.evaluation.evaluation_reporting import (
     _auto_upgrade_seed_exploratory_files,
     _needs_exploratory_pt_upgrade,
     format_common_mode_subtraction_report,
+)
+from braindecoding.evaluation.word_retrieval_evaluation import (
+    _apply_eval_subdir_to_seed_dir,
 )
 
 
@@ -324,3 +328,49 @@ def test_causal_ema_sweep_supports_m_eval_zero_and_matches_clean_metrics(tmp_pat
     )
     assert after_bytes == before_bytes
     assert not (out_m4 / "exploratory" / "subspace_coherence_debiasing_val.json").exists()
+
+
+def test_eval_subdir_isolates_zero_retrain_audit_outputs_from_existing_runs(tmp_path: Path):
+    """验证 --eval-subdir 将零重训审计产物物理隔离到 <exp_tag>/<eval_subdir>/<stage>/<subset>/<seed>，原目录 0 字节写入。"""
+    orig_seed_dir = (
+        tmp_path
+        / "runs"
+        / "pallier2025"
+        / "2_lr4e-4_bs256_siamese"
+        / "prefix_revision"
+        / "all"
+        / "seed-000"
+    )
+    orig_seed_dir.mkdir(parents=True)
+
+    isolated = _apply_eval_subdir_to_seed_dir(
+        orig_seed_dir,
+        "causal_fast_audit",
+        stage="prefix_revision",
+    )
+    expected = (
+        tmp_path
+        / "runs"
+        / "pallier2025"
+        / "2_lr4e-4_bs256_siamese"
+        / "causal_fast_audit"
+        / "prefix_revision"
+        / "all"
+        / "seed-000"
+    ).resolve()
+    assert isolated == expected
+    assert _apply_eval_subdir_to_seed_dir(orig_seed_dir, None, stage="prefix_revision") == orig_seed_dir
+
+    parser = build_parser()
+    parsed = parser.parse_args(
+        [
+            "eval-run",
+            "--dataset",
+            "pallier2025",
+            "--stage",
+            "prefix_revision",
+            "--eval-subdir",
+            "causal_fast_audit",
+        ]
+    )
+    assert parsed.eval_subdir == "causal_fast_audit"

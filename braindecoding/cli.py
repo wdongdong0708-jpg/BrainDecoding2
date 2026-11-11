@@ -754,6 +754,11 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
         help="可选显式指定评估结果与图表输出目录",
     )
     parser.add_argument(
+        "--eval-subdir",
+        default=None,
+        help="可选评估产物隔离子目录名（如 causal_fast_audit）：只读加载原目录检查点，将评估 JSON/图表/缓存写入 <exp_tag>/<eval_subdir>/<stage>/...，避免覆盖已有结果",
+    )
+    parser.add_argument(
         "--exp-tag",
         default=None,
         help="可选超参数实验标签（如 lr1e-4_bs128），自动定位 <results_dir>/<dataset>/<exp_tag>/<stage>/...",
@@ -1007,6 +1012,7 @@ def _workflow_eval(args) -> int:
         require_cache=args.require_cache,
         checkpoint_path=args.checkpoint if len(seed_list) == 1 else None,
         output_dir=args.output_dir,
+        eval_subdir=getattr(args, "eval_subdir", None),
         exp_tag=getattr(args, "exp_tag", None),
         word_exp_tag=getattr(args, "word_exp_tag", None),
         config_path=args.config,
