@@ -3667,6 +3667,8 @@ def _evaluate_single_stage(
 
     training_history = []
     summary_path = out / "training_summary.json"
+    if not summary_path.is_file() and ckpt_file.parent.is_dir():
+        summary_path = ckpt_file.parent / "training_summary.json"
     if summary_path.is_file():
         try:
             summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
