@@ -892,13 +892,26 @@ def format_common_mode_subtraction_report(
     f_info = report.get("formula") or {}
     m_count = f_info.get("num_shifted_conditions_M", 6)
     loo_div = f_info.get("shifted_loo_divisor", 5)
+    is_causal_ema = (
+        str(report.get("cms_mode") or f_info.get("cms_mode") or "").lower()
+        == "causal_ema"
+    )
 
     banner = "=" * REPORT_WIDTH
     rule = "-" * REPORT_WIDTH
+    if is_causal_ema:
+        ema_alpha = float(f_info.get("ema_decay", 0.99))
+        mu0_src = str(f_info.get("mu0_source", "train"))
+        sh_mode = str(report.get("shift_mode") or f_info.get("shift_mode", "preroll"))
+        title_line = f"Causal EMA Common-Mode Subtraction | {dataset} | {stage} ({split.upper()}) | Seed: {seed}"
+        sub_line = f"EMA alpha={ema_alpha:g} | mu0={mu0_src} | ShiftMode={sh_mode} | Shifts: M={m_count}"
+    else:
+        title_line = f"LOO Common-Mode Subtraction | {dataset} | {stage} ({split.upper()}) | Seed: {seed}"
+        sub_line = f"Clean Div: 1/{m_count} historical shifts | Shifted LOO Div: 1/{loo_div} shifts"
     lines: list[str] = [
         banner,
-        f"LOO Common-Mode Subtraction | {dataset} | {stage} ({split.upper()}) | Seed: {seed}",
-        f"Clean Div: 1/{m_count} historical shifts | Shifted LOO Div: 1/{loo_div} shifts",
+        title_line,
+        sub_line,
         banner,
         "[1A] 50-Word Retrieval & Net Neural Gap by Weight η",
     ]
@@ -2351,6 +2364,17 @@ def _entry_needs_exploratory_pt_upgrade(entry_blk: Any) -> bool:
     return False
 
 
+def _is_causal_ema_cms_payload(payload_dict: Mapping[str, Any] | None) -> bool:
+    """Return True when a common-mode subtraction JSON payload comes from Causal EMA-CMS."""
+    if not isinstance(payload_dict, Mapping):
+        return False
+    return (
+        str(payload_dict.get("cms_mode", "")).strip().lower() == "causal_ema"
+        or str(payload_dict.get("experiment_type", "")).strip().lower()
+        == "causal_ema_common_mode_subtraction"
+    )
+
+
 def _needs_exploratory_pt_upgrade(
     payload_dict: Mapping[str, Any],
     *,
@@ -2360,6 +2384,8 @@ def _needs_exploratory_pt_upgrade(
     if not isinstance(payload_dict, Mapping):
         return True
     if is_cms:
+        if _is_causal_ema_cms_payload(payload_dict):
+            return False
         sweep_list = (
             payload_dict.get("sweep")
             or payload_dict.get("subtraction_sweep")
@@ -2398,20 +2424,40 @@ def _auto_upgrade_seed_exploratory_files(cdir: Path, split_l: str) -> None:
         cdir / "exploratory" / f"common_mode_subtraction_{split_l}.json"
     )
 
-    sub_raw: dict[str, Any] | None = None
-    need_sub_upgrade = not sub_json_cand.is_file()
-    if not need_sub_upgrade:
+    is_causal_cms = False
+    need_cms_upgrade = not cms_json_cand.is_file()
+    if not need_cms_upgrade:
         try:
-            loaded_sub = json.loads(sub_json_cand.read_text(encoding="utf-8"))
-            if isinstance(loaded_sub, Mapping):
-                sub_raw = dict(loaded_sub)
-                need_sub_upgrade = _needs_exploratory_pt_upgrade(
-                    sub_raw, is_cms=False
+            loaded_cms = json.loads(cms_json_cand.read_text(encoding="utf-8"))
+            if isinstance(loaded_cms, Mapping):
+                is_causal_cms = _is_causal_ema_cms_payload(loaded_cms)
+                need_cms_upgrade = (
+                    False
+                    if is_causal_cms
+                    else _needs_exploratory_pt_upgrade(loaded_cms, is_cms=True)
                 )
             else:
-                need_sub_upgrade = True
+                need_cms_upgrade = True
         except Exception:
-            need_sub_upgrade = True
+            need_cms_upgrade = True
+
+    sub_raw: dict[str, Any] | None = None
+    if is_causal_cms and not sub_json_cand.is_file():
+        need_sub_upgrade = False
+    else:
+        need_sub_upgrade = not sub_json_cand.is_file()
+        if not need_sub_upgrade:
+            try:
+                loaded_sub = json.loads(sub_json_cand.read_text(encoding="utf-8"))
+                if isinstance(loaded_sub, Mapping):
+                    sub_raw = dict(loaded_sub)
+                    need_sub_upgrade = _needs_exploratory_pt_upgrade(
+                        sub_raw, is_cms=False
+                    )
+                else:
+                    need_sub_upgrade = True
+            except Exception:
+                need_sub_upgrade = True
 
     if need_sub_upgrade and pt_cand.is_file():
         try:
@@ -2425,25 +2471,13 @@ def _auto_upgrade_seed_exploratory_files(cdir: Path, split_l: str) -> None:
                 plot=False,
                 print_report=False,
                 verbose=False,
+                update_common_mode_subtraction=not is_causal_cms,
             )
             need_sub_upgrade = False
         except Exception:
             pass
 
-    need_cms_upgrade = not cms_json_cand.is_file()
-    if not need_cms_upgrade:
-        try:
-            loaded_cms = json.loads(cms_json_cand.read_text(encoding="utf-8"))
-            if isinstance(loaded_cms, Mapping):
-                need_cms_upgrade = _needs_exploratory_pt_upgrade(
-                    loaded_cms, is_cms=True
-                )
-            else:
-                need_cms_upgrade = True
-        except Exception:
-            need_cms_upgrade = True
-
-    if need_cms_upgrade:
+    if need_cms_upgrade and not is_causal_cms:
         upgraded_cms = False
         if isinstance(sub_raw, Mapping) and not need_sub_upgrade:
             try:
@@ -3333,7 +3367,10 @@ def render_saved_evaluation_report(
             payload, verbose=verbose, output_dir=base_out
         )
 
-    if exp_type == "exploratory_leave_one_out_common_mode_subtraction" or (
+    if exp_type in (
+        "exploratory_leave_one_out_common_mode_subtraction",
+        "causal_ema_common_mode_subtraction",
+    ) or (
         "eta_grid" in payload and "sweep" in payload
     ):
         base_out = src.parent.parent if src.parent.name == "exploratory" else src.parent

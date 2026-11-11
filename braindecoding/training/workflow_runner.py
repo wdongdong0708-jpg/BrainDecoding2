@@ -603,11 +603,16 @@ def build_workflow_config(
     max_val_rows: int | None = None,
     config_path: str | Path | None = None,
     siamese_debiased: bool | None = None,
+    debias_mode: str | None = None,
+    shift_mode: str | None = None,
+    preroll_seconds: float | None = None,
     eta_train: float | None = None,
     eta_0: float | None = None,
     eta_delta: float | None = None,
     lambda_null: float | None = None,
+    lambda_delta: float | None = None,
     lambda_delta_null: float | None = None,
+    lambda_distill: float | None = None,
     beta_delta_cm: float | None = None,
     shifts_per_step: int | None = None,
     preextract_frozen_cnn: bool | None = None,
@@ -995,11 +1000,16 @@ def build_workflow_config(
     siamese_spec = resolve_siamese_debiased_config(
         cfg,
         siamese_debiased=False if ignore_implicit_siamese_on_word else siamese_debiased,
+        debias_mode=None if ignore_implicit_siamese_on_word else debias_mode,
+        shift_mode=None if ignore_implicit_siamese_on_word else shift_mode,
+        preroll_seconds=None if ignore_implicit_siamese_on_word else preroll_seconds,
         eta_train=None if ignore_implicit_siamese_on_word else eta_train,
         eta_0=None if ignore_implicit_siamese_on_word else eta_0,
         eta_delta=None if ignore_implicit_siamese_on_word else eta_delta,
         lambda_null=None if ignore_implicit_siamese_on_word else lambda_null,
+        lambda_delta=None if ignore_implicit_siamese_on_word else lambda_delta,
         lambda_delta_null=None if ignore_implicit_siamese_on_word else lambda_delta_null,
+        lambda_distill=None if ignore_implicit_siamese_on_word else lambda_distill,
         beta_delta_cm=None if ignore_implicit_siamese_on_word else beta_delta_cm,
         shifts_per_step=None if ignore_implicit_siamese_on_word else shifts_per_step,
         preextract_frozen_cnn=(
@@ -1012,6 +1022,25 @@ def build_workflow_config(
         raise ValueError(
             "孪生共模抵消与冻结 CNN 预提取仅适用于 context (Stage 2.1)、revision (Stage 2.2) 或 prefix_revision (Stage 2.3) 阶段。"
         )
+    if siamese_spec["enabled"] and siamese_spec.get("debias_mode") == "amortized_timing":
+        siamese_spec["preextract_frozen_cnn"] = True
+        cfg["model"]["temporal_bias_head"] = {
+            "enabled": True,
+            "eta": float(siamese_spec.get("eta_0", siamese_spec.get("eta_train", 0.50))),
+            "hidden_dimension": int(siamese_spec.get("temporal_bias_hidden_dim", 128)),
+            "window_seconds": float(window_info["window_seconds"]),
+        }
+    else:
+        cfg["model"].pop("temporal_bias_head", None)
+    if siamese_spec["enabled"] or shift_mode is not None:
+        cfg["dataset"]["shift_mode"] = str(
+            siamese_spec.get("shift_mode", "deterministic_circular")
+        )
+        cfg["dataset"]["preroll_seconds"] = float(
+            siamese_spec.get("preroll_seconds", 45.0)
+        )
+    elif preroll_seconds is not None:
+        cfg["dataset"]["preroll_seconds"] = float(preroll_seconds)
     if (
         siamese_spec["enabled"] or siamese_spec["preextract_frozen_cnn"]
     ) and stage in ("context", "revision", "prefix_revision"):
@@ -1660,11 +1689,16 @@ def run_training_workflow(
     show_progress: bool = True,
     config_path: str | Path | None = None,
     siamese_debiased: bool | None = None,
+    debias_mode: str | None = None,
+    shift_mode: str | None = None,
+    preroll_seconds: float | None = None,
     eta_train: float | None = None,
     eta_0: float | None = None,
     eta_delta: float | None = None,
     lambda_null: float | None = None,
+    lambda_delta: float | None = None,
     lambda_delta_null: float | None = None,
+    lambda_distill: float | None = None,
     beta_delta_cm: float | None = None,
     shifts_per_step: int | None = None,
     preextract_frozen_cnn: bool | None = None,
@@ -1694,11 +1728,16 @@ def run_training_workflow(
         max_val_rows=max_val_rows,
         config_path=config_path,
         siamese_debiased=siamese_debiased,
+        debias_mode=debias_mode,
+        shift_mode=shift_mode,
+        preroll_seconds=preroll_seconds,
         eta_train=eta_train,
         eta_0=eta_0,
         eta_delta=eta_delta,
         lambda_null=lambda_null,
+        lambda_delta=lambda_delta,
         lambda_delta_null=lambda_delta_null,
+        lambda_distill=lambda_distill,
         beta_delta_cm=beta_delta_cm,
         shifts_per_step=shifts_per_step,
         preextract_frozen_cnn=preextract_frozen_cnn,
@@ -1915,24 +1954,50 @@ def run_training_workflow(
         and (siamese_enabled or bool(siamese_spec.get("preextract_frozen_cnn", False)))
     )
     if siamese_enabled:
+        siam_mode = str(siamese_spec.get("debias_mode", "legacy_siamese"))
+        siam_shift_mode = str(
+            siamese_spec.get("shift_mode", "deterministic_circular")
+        )
         siam_eta0 = float(
             siamese_spec.get("eta_0", siamese_spec.get("eta_train", 0.8))
         )
         siam_eta_d = float(siamese_spec.get("eta_delta", 0.0))
         siam_lam = float(siamese_spec.get("lambda_null", 10.0))
-        siam_lam_d = float(siamese_spec.get("lambda_delta_null", 0.0))
+        siam_lam_d = float(
+            siamese_spec.get(
+                "lambda_delta", siamese_spec.get("lambda_delta_null", 0.0)
+            )
+        )
+        siam_lam_dist = float(siamese_spec.get("lambda_distill", 1.0))
         siam_beta_d = float(siamese_spec.get("beta_delta_cm", 6.0))
-        delta_msg = (
-            f"eta_delta={siam_eta_d:.2f}, lambda_delta_null={siam_lam_d:.2f}, beta_delta_cm={siam_beta_d:.2f}, "
-            if (siam_eta_d > 0.0 or siam_lam_d > 0.0 or siam_beta_d > 0.0)
-            else ""
-        )
-        print(
-            f" Siamese Deb : enabled (eta_0={siam_eta0:.2f}, lambda_null={siam_lam:.2f}, {delta_msg}"
-            f"M={int(siamese_spec.get('shifts_per_step', 2))}/{len(siamese_spec.get('shift_seconds', ()))} shifts, "
-            f"preextract_cnn={use_preextracted_cnn})",
-            flush=True,
-        )
+        if siam_mode == "null_space":
+            print(
+                f" Siamese Deb : enabled [mode=null_space, shift={siam_shift_mode}] "
+                f"(eta_train=0.00, lambda_null={siam_lam:.2f}, lambda_delta={siam_lam_d:.2f}, "
+                f"M={int(siamese_spec.get('shifts_per_step', 1))}/{len(siamese_spec.get('shift_seconds', ()))} shifts, "
+                f"preextract_cnn={use_preextracted_cnn})",
+                flush=True,
+            )
+        elif siam_mode == "amortized_timing":
+            print(
+                f" Siamese Deb : enabled [mode=amortized_timing, shift={siam_shift_mode}] "
+                f"(eta_train={siam_eta0:.2f}, lambda_distill={siam_lam_dist:.2f}, lambda_null={siam_lam:.2f}, "
+                f"lambda_delta={siam_lam_d:.2f}, M={int(siamese_spec.get('shifts_per_step', 1))}/{len(siamese_spec.get('shift_seconds', ()))} shifts, "
+                f"preextract_cnn={use_preextracted_cnn})",
+                flush=True,
+            )
+        else:
+            delta_msg = (
+                f"eta_delta={siam_eta_d:.2f}, lambda_delta_null={siam_lam_d:.2f}, beta_delta_cm={siam_beta_d:.2f}, "
+                if (siam_eta_d > 0.0 or siam_lam_d > 0.0 or siam_beta_d > 0.0)
+                else ""
+            )
+            print(
+                f" Siamese Deb : enabled (eta_0={siam_eta0:.2f}, lambda_null={siam_lam:.2f}, {delta_msg}"
+                f"M={int(siamese_spec.get('shifts_per_step', 2))}/{len(siamese_spec.get('shift_seconds', ()))} shifts, "
+                f"preextract_cnn={use_preextracted_cnn})",
+                flush=True,
+            )
     elif use_preextracted_cnn:
         print(
             " Pre-Extract : Frozen Stage-1 CNN feature cache enabled (Clean 0s)",
@@ -1968,6 +2033,10 @@ def run_training_workflow(
             shift_seconds=(
                 siamese_spec.get("shift_seconds", ()) if siamese_enabled else ()
             ),
+            shift_mode=str(
+                siamese_spec.get("shift_mode", "deterministic_circular")
+            ),
+            preroll_seconds=float(siamese_spec.get("preroll_seconds", 45.0)),
             device=device,
             batch_size=int(tc.get("eval_batch_size", tc["batch_size"])),
             amp=bool(tc.get("amp", True)),
@@ -1981,7 +2050,12 @@ def run_training_workflow(
         )
         if siamese_enabled and (
             float(siamese_spec.get("lambda_null", 0.0)) > 0.0
-            or float(siamese_spec.get("lambda_delta_null", 0.0)) > 0.0
+            or float(
+                siamese_spec.get(
+                    "lambda_delta", siamese_spec.get("lambda_delta_null", 0.0)
+                )
+            )
+            > 0.0
             or float(siamese_spec.get("beta_delta_cm", 0.0)) > 0.0
         ):
             centered_vocab_bank = build_centered_vocabulary_bank(
@@ -2188,21 +2262,29 @@ def run_training_workflow(
             status_str += " [frozen]"
         if siamese_enabled and isinstance(diagnostics, dict) and "shift_null_loss" in diagnostics:
             dn_val = float(diagnostics.get("delta_shift_null_loss", 0.0))
+            dist_val = float(diagnostics.get("distill_loss", 0.0))
+            parts = [
+                f"sig={float(diagnostics.get('siglip_loss', train_loss)):.3f}",
+                f"null={float(diagnostics.get('shift_null_loss', 0.0)):.4f}",
+            ]
+            if (
+                dist_val > 0.0
+                or str(siamese_spec.get("debias_mode", "")) == "amortized_timing"
+            ):
+                parts.append(f"dist={dist_val:.4f}")
             if (
                 dn_val > 0.0
-                or float(siamese_spec.get("lambda_delta_null", 0.0)) > 0.0
+                or float(
+                    siamese_spec.get(
+                        "lambda_delta",
+                        siamese_spec.get("lambda_delta_null", 0.0),
+                    )
+                )
+                > 0.0
                 or float(siamese_spec.get("beta_delta_cm", 0.0)) > 0.0
             ):
-                status_str += (
-                    f" [sig={float(diagnostics.get('siglip_loss', train_loss)):.3f},"
-                    f"null={float(diagnostics.get('shift_null_loss', 0.0)):.4f},"
-                    f"d_null={dn_val:.4f}]"
-                )
-            else:
-                status_str += (
-                    f" [sig={float(diagnostics.get('siglip_loss', train_loss)):.3f},"
-                    f"null={float(diagnostics.get('shift_null_loss', 0.0)):.4f}]"
-                )
+                parts.append(f"d_null={dn_val:.4f}")
+            status_str += f" [{','.join(parts)}]"
 
         epoch_col = f"{epoch + 1:02d}/{max_epochs:02d}"
         vram_col = f"{peak_alloc_mb:6.0f} / {peak_reserved_mb:5.0f} MB"
@@ -2213,6 +2295,89 @@ def run_training_workflow(
         )
         if stale_epochs >= patience:
             break
+
+    # 在最优检查点中持久化训练集全局均值向量 causal_cms_mu0，供在线 Causal EMA-CMS 零开销初始化 mu_0
+    if start_epoch < max_epochs and best_rows:
+        from braindecoding.training.siamese_debiased_training import (
+            compute_causal_cms_mu0_from_encoded,
+            encode_from_preextracted_cnn,
+        )
+
+        selection_files: dict[str, list[Path]] = {
+            "legacy50": [out / "best_legacy50.pt"]
+            + (
+                [out / "best.ckpt", out / "best.pt"]
+                if early_stop_target == "legacy50"
+                else []
+            ),
+            "full_vocab": [out / "best_full_vocab.pt"]
+            + (
+                [out / "best.ckpt", out / "best.pt"]
+                if early_stop_target == "full_vocab"
+                else []
+            ),
+        }
+        mu0_by_epoch: dict[int, dict] = {}
+        train_eval_loader = None
+        try:
+            for sel_key, paths in selection_files.items():
+                existing_paths = [p for p in paths if p.is_file()]
+                if not existing_paths:
+                    continue
+                ckpt_payload = load_checkpoint(existing_paths[0])
+                win_ep = int(ckpt_payload.get("epoch", -1))
+                if win_ep not in mu0_by_epoch:
+                    if train_eval_loader is None:
+                        eval_bs = int(
+                            tc.get("eval_batch_size", tc["batch_size"])
+                        )
+                        train_eval_loader, _ = make_loader(
+                            train_ds,
+                            tc,
+                            shuffle=False,
+                            group_column=group_column(cfg),
+                            batch_size=eval_bs,
+                        )
+                    model.load_state_dict(
+                        ckpt_payload["model_state"], strict=True
+                    )
+                    if preextracted_cache is not None:
+                        enc_train = encode_from_preextracted_cnn(
+                            model,
+                            train_eval_loader.batch_sampler,
+                            preextracted_cache["train_clean_z"],
+                            preextracted_cache["train_meta"],
+                            device,
+                            amp=bool(tc.get("amp", True)),
+                            amp_dtype=amp_dtype,
+                            show_progress=False,
+                        )
+                    else:
+                        enc_train = encode_loader(
+                            model,
+                            train_eval_loader,
+                            device,
+                            amp=bool(tc.get("amp", True)),
+                            amp_dtype=amp_dtype,
+                            show_progress=False,
+                        )
+                    mu0_by_epoch[win_ep] = compute_causal_cms_mu0_from_encoded(
+                        enc_train, source="train"
+                    )
+                    del enc_train
+                mu0_val = mu0_by_epoch[win_ep]
+                for target_p in existing_paths:
+                    target_payload = (
+                        ckpt_payload
+                        if target_p == existing_paths[0]
+                        else load_checkpoint(target_p)
+                    )
+                    target_payload["causal_cms_mu0"] = copy.deepcopy(mu0_val)
+                    save_checkpoint(target_p, target_payload)
+                del ckpt_payload
+        finally:
+            if train_eval_loader is not None:
+                shutdown_dataloader_iterator(train_eval_loader)
 
     peak_alloc_mb = float(
         torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0)

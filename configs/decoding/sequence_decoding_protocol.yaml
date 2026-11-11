@@ -67,6 +67,8 @@ calibration:
 control:
   common_mode_subtraction:
     enabled: true
+    mode: historical_shifts  # 'historical_shifts' (legacy 6x shift mean) or 'causal_ema' (M_eval=0 online causal EMA)
+    ema_decay: 0.99
     subtraction_eta: 0.5
     background_shift_seconds:
       - -15.0
@@ -77,6 +79,8 @@ control:
       - -120.0
   shifted_negative_control:
     control_type: unseen_historical_circular_shift
+    shift_mode: deterministic_circular  # 'deterministic_circular' (legacy) or 'preroll' (strictly causal zero-wrap Pre-Roll)
+    preroll_seconds: 45.0
     same_subject: true
     same_recording: true
     control_shift_seconds: -75.0

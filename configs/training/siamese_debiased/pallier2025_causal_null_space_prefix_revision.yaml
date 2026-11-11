@@ -1,0 +1,45 @@
+# Pallier2025 法语 MEG 阶段 2.3（全历史因果前缀滚动修订 [1..i, i+r]）：主推档位 A（纯因果 Pre-Roll + 维度平衡零空间正交惩罚 + 欧氏跨视界稳定）
+# 启动命令：
+#   python -u -m braindecoding train --config configs/training/siamese_debiased/pallier2025_causal_null_space_prefix_revision.yaml --require-cache --resume auto
+extends: ../pallier2025_prefix_revision.yaml
+
+workflow:
+  dataset: pallier2025
+  stage: prefix_revision
+  subject: all
+  precision: bf16-mixed
+  window_seconds: 1.0
+  window_start_offset_seconds: 0.0
+
+training:
+  epochs: 30
+  batch_size: 128
+  eval_batch_size: 512
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  patience: 6
+  early_stop_metric: full_vocab
+  freeze_brain_encoder_epochs: 30
+  preserve_complete_groups: true
+  revision_cutoff_policy: all
+
+siamese_debiased:
+  enabled: true
+  debias_mode: null_space
+  shift_mode: preroll
+  preroll_seconds: 45.0
+  # 近程因果历史错位池（同 session 漂移相干距离内）+ 单分支低开销采样（M=1）
+  shift_seconds: [-10.0, -20.0, -30.0, -40.0]
+  shifts_per_step: 1
+  # 档位 A 主干纯净无减法（无重缩放阻尼、无双 eta）
+  eta_0: 0.0
+  eta_train: 0.0
+  eta_delta: 0.0
+  # 维度平衡零空间正交惩罚 (D/|V|) * ||E_bar_V y_shift||_2^2 + 单一欧氏跨视界稳定项 ||y^(r,delta) - sg(y^(0,delta))||_2^2
+  lambda_null: 0.15
+  lambda_delta: 0.15
+  lambda_delta_null: 0.0
+  beta_delta_cm: 0.0
+  synchronize_dropout_rng: true
+  preextract_frozen_cnn: true
+  cache_preextracted_to_disk: true

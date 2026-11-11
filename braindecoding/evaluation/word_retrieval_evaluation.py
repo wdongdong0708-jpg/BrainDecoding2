@@ -1814,6 +1814,13 @@ def _parse_shift_seconds_list(
     parsed: list[float] = []
     seen: set[float] = set()
     for tok in tokens:
+        if isinstance(tok, str) and tok.strip().lower() in {
+            "none",
+            "off",
+            "empty",
+            "null",
+        }:
+            continue
         val = float(tok)
         if abs(val) <= 1e-9:
             continue
@@ -1839,10 +1846,17 @@ def _resolve_control_specification(
     shift_seconds: str | Iterable[float | int | str] | None = None,
     zero_signal_control: bool = False,
     subtraction_etas: str | Iterable[float | int | str] | None = None,
+    shift_mode: str | None = None,
+    preroll_seconds: float | None = None,
+    cms_mode: str | None = None,
+    cms_ema_decay: float | None = None,
 ) -> dict:
     """合并 CLI 参数、独立对照 YAML 配置（configs/controls/...）与主配置中的负对照设置。"""
     from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+        DEFAULT_CAUSAL_CMS_EMA_DECAY,
+        DEFAULT_CAUSAL_CMS_ETAS,
         DEFAULT_SUBTRACTION_ETAS,
+        normalize_cms_mode,
         parse_eta_values,
     )
 
@@ -1903,20 +1917,45 @@ def _resolve_control_specification(
             else {}
         )
     )
+    raw_cms_mode = (
+        cms_mode
+        if cms_mode is not None
+        else (
+            cms_raw.get("mode")
+            or merged_control.get("cms_mode")
+            or merged_eval.get("cms_mode")
+        )
+    )
+    resolved_cms_mode = normalize_cms_mode(
+        str(raw_cms_mode) if raw_cms_mode is not None else None,
+        default="leave_one_out",
+    )
     cms_enabled = (
         subtraction_etas is not None
+        or cms_mode is not None
         or bool(cms_raw.get("enabled", False))
         or str(merged_control.get("control_type", "")).strip().lower()
-        == "common_mode_subtraction"
+        in {"common_mode_subtraction", "causal_common_mode_subtraction"}
         or str(merged_eval.get("negative_control", "")).strip().lower()
-        == "common_mode_subtraction"
+        in {"common_mode_subtraction", "causal_common_mode_subtraction"}
+    )
+    default_etas = (
+        DEFAULT_CAUSAL_CMS_ETAS
+        if resolved_cms_mode == "causal_ema"
+        else DEFAULT_SUBTRACTION_ETAS
     )
     cms_etas = parse_eta_values(
         subtraction_etas
         if subtraction_etas is not None
-        else cms_raw.get("eta_values", DEFAULT_SUBTRACTION_ETAS)
+        else cms_raw.get("eta_values", default_etas),
+        default=default_etas,
     )
     cms_normalize = bool(cms_raw.get("normalize_before_subtraction", True))
+    resolved_ema_decay = float(
+        cms_ema_decay
+        if cms_ema_decay is not None
+        else cms_raw.get("ema_decay", DEFAULT_CAUSAL_CMS_EMA_DECAY)
+    )
 
     sub_raw = (
         merged_control.get("subspace_coherence_debiasing")
@@ -1954,10 +1993,42 @@ def _resolve_control_specification(
         shifts = _parse_shift_seconds_list(merged_control.get("shift_seconds"))
     elif "shift_seconds" in merged_eval:
         shifts = _parse_shift_seconds_list(merged_eval.get("shift_seconds"))
-    elif cms_enabled or sub_enabled:
+    elif sub_enabled or (cms_enabled and resolved_cms_mode != "causal_ema"):
         shifts = list(DEFAULT_CONTROL_SHIFTS_SECONDS)
     else:
         shifts = []
+
+    raw_shift_mode = (
+        shift_mode
+        if shift_mode is not None
+        else (
+            merged_control.get("shift_mode")
+            or merged_eval.get("shift_mode")
+            or (cfg.get("dataset") or {}).get("shift_mode")
+            or (
+                "preroll"
+                if resolved_cms_mode == "causal_ema"
+                else "deterministic_circular"
+            )
+        )
+    )
+    resolved_shift_mode = str(raw_shift_mode).strip().lower()
+    if resolved_shift_mode in {"pre_roll", "causal_preroll"}:
+        resolved_shift_mode = "preroll"
+    elif resolved_shift_mode in {"circular", ""}:
+        resolved_shift_mode = "deterministic_circular"
+
+    resolved_preroll_seconds = float(
+        preroll_seconds
+        if preroll_seconds is not None
+        else merged_control.get(
+            "preroll_seconds",
+            merged_eval.get(
+                "preroll_seconds",
+                (cfg.get("dataset") or {}).get("preroll_seconds", 45.0),
+            ),
+        )
+    )
 
     enable_zero = (
         bool(zero_signal_control)
@@ -1974,10 +2045,13 @@ def _resolve_control_specification(
             "control_type": "none",
             "config_path": None,
             "shift_seconds": [],
+            "shift_mode": resolved_shift_mode,
+            "preroll_seconds": resolved_preroll_seconds,
             "include_zero_signal": False,
             "common_mode_subtraction": {
                 "enabled": False,
-                "mode": "leave_one_out",
+                "mode": resolved_cms_mode,
+                "ema_decay": resolved_ema_decay,
                 "eta_values": [],
                 "normalize_before_subtraction": True,
             },
@@ -1996,15 +2070,19 @@ def _resolve_control_specification(
         "subspace_coherence_debiasing"
         if sub_enabled
         else (
-            "common_mode_subtraction"
-            if cms_enabled
+            "causal_common_mode_subtraction"
+            if (cms_enabled and resolved_cms_mode == "causal_ema")
             else (
-                "temporal_shift"
-                if shifts and not enable_zero
+                "common_mode_subtraction"
+                if cms_enabled
                 else (
-                    "zero_signal"
-                    if enable_zero and not shifts
-                    else "combined_control"
+                    "temporal_shift"
+                    if shifts and not enable_zero
+                    else (
+                        "zero_signal"
+                        if enable_zero and not shifts
+                        else "combined_control"
+                    )
                 )
             )
         )
@@ -2029,11 +2107,14 @@ def _resolve_control_specification(
         "description": str(merged_control.get("description", "")),
         "config_path": cfg_path_label,
         "shift_seconds": shifts,
-        "shift_mode": str(
-            merged_control.get("shift_mode", "deterministic_circular")
-        ),
+        "shift_mode": resolved_shift_mode,
+        "preroll_seconds": resolved_preroll_seconds,
         "same_subject": bool(merged_control.get("same_subject", True)),
-        "same_recording": bool(merged_control.get("same_recording", True)),
+        "same_recording": bool(
+            merged_control.get(
+                "same_recording", resolved_shift_mode != "preroll"
+            )
+        ),
         "non_overlapping_window": bool(
             merged_control.get("non_overlapping_window", True)
         ),
@@ -2043,7 +2124,8 @@ def _resolve_control_specification(
         "include_zero_signal": bool(enable_zero),
         "common_mode_subtraction": {
             "enabled": bool(cms_enabled),
-            "mode": str(cms_raw.get("mode", "leave_one_out")),
+            "mode": resolved_cms_mode,
+            "ema_decay": resolved_ema_decay,
             "eta_values": cms_etas,
             "normalize_before_subtraction": cms_normalize,
         },
@@ -2464,6 +2546,8 @@ def _slice_encoded_dict(encoded: dict, keep_mask_np: np.ndarray) -> dict:
     else:
         sliced["recording_ids"] = list(rec_ids or ())
     for mask_key in (
+        "subject_indices",
+        "sentence_indices",
         "local_context_internal_mask",
         "three_state_internal_mask",
     ):
@@ -2810,9 +2894,73 @@ def _evaluate_common_horizon_subset_from_pt(
     exploratory_dir.mkdir(parents=True, exist_ok=True)
 
     cms_cfg = control_spec.get("common_mode_subtraction") or {}
+    cms_mode_sub = str(cms_cfg.get("mode", "leave_one_out")).strip().lower()
     cms_sub_json_path: Path | None = None
     cms_summary_meta: dict[str, object] = {}
-    if len(shifted_encoded_by_shift) >= 2:
+    if cms_mode_sub == "causal_ema" and bool(cms_cfg.get("enabled", False)):
+        from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+            run_causal_ema_common_mode_subtraction_sweep,
+        )
+
+        mu0_sub = None
+        if ckpt_file is not None and ckpt_file.is_file():
+            try:
+                ckpt_d = load_checkpoint(ckpt_file, map_location="cpu")
+                mu0_sub = ckpt_d.get("causal_cms_mu0")
+                if isinstance(mu0_sub, Mapping) and "predictions" in mu0_sub:
+                    # Common-horizon subset slices the eval stream; mu0 global train vector remains unchanged
+                    mu0_sub = dict(mu0_sub)
+            except Exception:
+                mu0_sub = None
+        cms_report = run_causal_ema_common_mode_subtraction_sweep(
+            dataset=dataset,
+            stage=stage,
+            split=split,
+            seed=seed,
+            exp_tag=resolved_exp_tag,
+            word_exp_tag=resolved_word_exp_tag,
+            clean_encoded=clean_encoded,
+            shifted_encoded_by_shift=shifted_encoded_by_shift,
+            eval_ds=proxy_ds,
+            shifted_ds_by_shift={},
+            vocabulary=vocabulary,
+            vocab50=vocab50,
+            cfg=cfg,
+            mu0_payload=mu0_sub,
+            eta_values=cms_cfg.get("eta_values", (0.5,)),
+            ema_decay=float(cms_cfg.get("ema_decay", 0.99)),
+            shift_mode=str(control_spec.get("shift_mode", "preroll")),
+            normalize_inputs=bool(
+                cms_cfg.get("normalize_before_subtraction", True)
+            ),
+            baseline_clean_summary=clean_summary,
+            baseline_condition_entries=negative_controls_result["conditions"],
+            baseline_shifted_aggregate=negative_controls_result[
+                "shifted_aggregate"
+            ],
+            compute_metrics_fn=_compute_encoded_evaluation_metrics,
+            extract_summary_row_fn=_extract_control_summary_row,
+            summarize_shifted_fn=_summarize_shifted_conditions,
+            output_dir=None,
+            plot=False,
+            print_report=print_report,
+        )
+        cms_sub_json_path = (
+            exploratory_dir
+            / f"common_mode_subtraction_common_subset_{split}.json"
+        )
+        save_json(cms_sub_json_path, cms_report)
+        cms_summary_meta = {
+            "cms_mode": "causal_ema",
+            "eta_grid": cms_report["eta_grid"],
+            "best_eta_by_clean_vocab50_top10": cms_report[
+                "best_eta_by_clean_vocab50_top10"
+            ],
+            "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
+                "best_eta_by_clean_minus_shifted_vocab50_top10"
+            ],
+        }
+    elif len(shifted_encoded_by_shift) >= 2:
         cms_report = run_common_mode_subtraction_sweep(
             dataset=dataset,
             stage=stage,
@@ -2947,6 +3095,10 @@ def _evaluate_single_stage(
     config_path: str | Path | None = None,
     control_config_path: str | Path | None = None,
     shift_seconds: str | Iterable[float | int | str] | None = None,
+    shift_mode: str | None = None,
+    preroll_seconds: float | None = None,
+    cms_mode: str | None = None,
+    cms_ema_decay: float | None = None,
     zero_signal_control: bool = False,
     subtraction_etas: str | Iterable[float | int | str] | None = None,
     plot: bool = True,
@@ -2979,6 +3131,8 @@ def _evaluate_single_stage(
         precision=precision,
         window_seconds=window_seconds,
         window_start_offset_seconds=window_start_offset_seconds,
+        shift_mode=shift_mode,
+        preroll_seconds=preroll_seconds,
         mode="train",
         output_dir=output_dir,
         exp_tag=exp_tag,
@@ -2991,6 +3145,10 @@ def _evaluate_single_stage(
         shift_seconds=shift_seconds,
         zero_signal_control=zero_signal_control,
         subtraction_etas=subtraction_etas,
+        shift_mode=shift_mode,
+        preroll_seconds=preroll_seconds,
+        cms_mode=cms_mode,
+        cms_ema_decay=cms_ema_decay,
     )
     dataset = subset_spec["dataset"]
     stage = cfg["workflow"]["stage"]
@@ -3098,6 +3256,10 @@ def _evaluate_single_stage(
                 config_path=config_path,
                 control_config_path=control_config_path,
                 shift_seconds=shift_seconds,
+                shift_mode=shift_mode,
+                preroll_seconds=preroll_seconds,
+                cms_mode=cms_mode,
+                cms_ema_decay=cms_ema_decay,
                 zero_signal_control=zero_signal_control,
                 subtraction_etas=subtraction_etas,
                 plot=plot,
@@ -3263,6 +3425,11 @@ def _evaluate_single_stage(
     }
     cms_cfg = control_spec.get("common_mode_subtraction") or {}
     cms_enabled = bool(cms_cfg.get("enabled", False))
+    cms_mode_str = str(cms_cfg.get("mode", "leave_one_out")).strip().lower()
+    ctrl_shift_mode = str(
+        control_spec.get("shift_mode", "deterministic_circular")
+    )
+    ctrl_preroll_seconds = float(control_spec.get("preroll_seconds", 45.0))
     sub_cfg = control_spec.get("subspace_coherence_debiasing") or {}
     sub_enabled = bool(sub_cfg.get("enabled", False))
     keep_shifted_encoded = (
@@ -3279,7 +3446,14 @@ def _evaluate_single_stage(
         for shift_sec in control_spec["shift_seconds"]:
             cond_key, cond_label = _format_shift_label(float(shift_sec))
             shift_ds = build_fn(
-                cfg, eval_table, temporal_shift_seconds=float(shift_sec)
+                cfg,
+                eval_table,
+                temporal_shift_seconds=float(shift_sec),
+                shift_mode=ctrl_shift_mode,
+                preroll_seconds=ctrl_preroll_seconds,
+                preroll_source_table=(
+                    train_table if ctrl_shift_mode == "preroll" else None
+                ),
             )
             shift_loader, _ = make_loader(
                 shift_ds,
@@ -3403,6 +3577,43 @@ def _evaluate_single_stage(
                     _summarize_shifted_conditions(clean_summary, cond_summaries)
                 )
 
+    mu0_payload = checkpoint.get("causal_cms_mu0")
+    if (
+        cms_enabled
+        and cms_mode_str == "causal_ema"
+        and not isinstance(mu0_payload, (Mapping, torch.Tensor))
+    ):
+        from braindecoding.training.siamese_debiased_training import (
+            compute_causal_cms_mu0_from_encoded,
+        )
+
+        mu0_train_table = (
+            limit_rows(train_table, int(max_eval_rows))
+            if max_eval_rows is not None
+            else train_table
+        )
+        train_mu0_ds = build_fn(cfg, mu0_train_table)
+        train_mu0_loader, _ = make_loader(
+            train_mu0_ds,
+            tc,
+            shuffle=False,
+            group_column=grp_col,
+            batch_size=eval_bs,
+        )
+        train_mu0_enc = encode_loader(
+            model,
+            train_mu0_loader,
+            device,
+            amp=amp_enabled,
+            amp_dtype=amp_dtype,
+            show_progress=show_progress,
+            progress_desc=f"Eval [{stage} | train mu_0 calibration]",
+        )
+        mu0_payload = compute_causal_cms_mu0_from_encoded(
+            train_mu0_enc, source="train_readonly_fallback"
+        )
+        del train_mu0_ds, train_mu0_loader, train_mu0_enc
+
     ckpt_epoch = int(checkpoint.get("epoch", 0))
     ckpt_selection = str(checkpoint.get("selection", "legacy50"))
     del model, eval_loader, checkpoint
@@ -3472,7 +3683,6 @@ def _evaluate_single_stage(
 
     if len(shifted_encoded_by_shift) >= 2:
         from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
-            run_subspace_coherence_debiasing_sweep,
             save_subspace_encoded_cache,
         )
 
@@ -3495,119 +3705,176 @@ def _evaluate_single_stage(
         if saved_cache_pt is not None:
             eval_result["subspace_encoded_cache_pt"] = str(saved_cache_pt)
 
-        if cms_enabled:
-            from braindecoding.evaluation.common_mode_subtraction_evaluation import (
-                run_common_mode_subtraction_sweep,
-            )
+    if cms_enabled and cms_mode_str == "causal_ema":
+        from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+            run_causal_ema_common_mode_subtraction_sweep,
+        )
 
-            cms_report = run_common_mode_subtraction_sweep(
-                dataset=dataset,
-                stage=stage,
-                split=split,
-                seed=seed,
-                exp_tag=resolved_exp_tag,
-                word_exp_tag=resolved_word_exp_tag,
-                clean_encoded=encoded,
-                shifted_encoded_by_shift=shifted_encoded_by_shift,
-                eval_ds=eval_ds,
-                shifted_ds_by_shift=shifted_ds_by_shift,
-                vocabulary=vocabulary,
-                vocab50=vocab50,
-                cfg=cfg,
-                eta_values=cms_cfg.get("eta_values", (0.5, 0.8, 1.0)),
-                normalize_inputs=bool(
-                    cms_cfg.get("normalize_before_subtraction", True)
-                ),
-                baseline_clean_summary=negative_controls_result[
-                    "clean_reference"
-                ],
-                baseline_condition_entries=negative_controls_result[
-                    "conditions"
-                ],
-                baseline_shifted_aggregate=negative_controls_result[
-                    "shifted_aggregate"
-                ],
-                compute_metrics_fn=_compute_encoded_evaluation_metrics,
-                extract_summary_row_fn=_extract_control_summary_row,
-                summarize_shifted_fn=_summarize_shifted_conditions,
-                output_dir=out,
-                plot=plot,
-                print_report=print_report,
-            )
-            eval_result["exploratory_common_mode_subtraction_json"] = (
-                cms_report.get("exploratory_json")
-            )
-            eval_result["exploratory_common_mode_subtraction_summary"] = {
-                "eta_grid": cms_report["eta_grid"],
-                "best_eta_by_clean_vocab50_top10": cms_report[
-                    "best_eta_by_clean_vocab50_top10"
-                ],
-                "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
-                    "best_eta_by_clean_minus_shifted_vocab50_top10"
-                ],
-            }
-            eval_result["figures"].update(cms_report.get("figures", {}))
+        cms_report = run_causal_ema_common_mode_subtraction_sweep(
+            dataset=dataset,
+            stage=stage,
+            split=split,
+            seed=seed,
+            exp_tag=resolved_exp_tag,
+            word_exp_tag=resolved_word_exp_tag,
+            clean_encoded=encoded,
+            shifted_encoded_by_shift=shifted_encoded_by_shift,
+            eval_ds=eval_ds,
+            shifted_ds_by_shift=shifted_ds_by_shift,
+            vocabulary=vocabulary,
+            vocab50=vocab50,
+            cfg=cfg,
+            mu0_payload=mu0_payload,
+            eta_values=cms_cfg.get("eta_values", (0.5,)),
+            ema_decay=float(cms_cfg.get("ema_decay", 0.99)),
+            shift_mode=ctrl_shift_mode,
+            normalize_inputs=bool(
+                cms_cfg.get("normalize_before_subtraction", True)
+            ),
+            baseline_clean_summary=negative_controls_result["clean_reference"],
+            baseline_condition_entries=negative_controls_result["conditions"],
+            baseline_shifted_aggregate=negative_controls_result[
+                "shifted_aggregate"
+            ],
+            compute_metrics_fn=_compute_encoded_evaluation_metrics,
+            extract_summary_row_fn=_extract_control_summary_row,
+            summarize_shifted_fn=_summarize_shifted_conditions,
+            output_dir=out,
+            plot=plot,
+            print_report=print_report,
+        )
+        eval_result["exploratory_common_mode_subtraction_json"] = (
+            cms_report.get("exploratory_json")
+        )
+        eval_result["exploratory_common_mode_subtraction_summary"] = {
+            "cms_mode": "causal_ema",
+            "ema_decay": float(cms_cfg.get("ema_decay", 0.99)),
+            "eta_grid": cms_report["eta_grid"],
+            "best_eta_by_clean_vocab50_top10": cms_report[
+                "best_eta_by_clean_vocab50_top10"
+            ],
+            "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
+                "best_eta_by_clean_minus_shifted_vocab50_top10"
+            ],
+        }
+        eval_result["figures"].update(cms_report.get("figures", {}))
+    elif cms_enabled and len(shifted_encoded_by_shift) >= 2:
+        from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+            run_common_mode_subtraction_sweep,
+        )
 
-        if sub_enabled:
-            gate_raw = sub_cfg.get("use_coherence_gate", "both")
-            if isinstance(gate_raw, bool):
-                gate_modes = [False, True]
+        cms_report = run_common_mode_subtraction_sweep(
+            dataset=dataset,
+            stage=stage,
+            split=split,
+            seed=seed,
+            exp_tag=resolved_exp_tag,
+            word_exp_tag=resolved_word_exp_tag,
+            clean_encoded=encoded,
+            shifted_encoded_by_shift=shifted_encoded_by_shift,
+            eval_ds=eval_ds,
+            shifted_ds_by_shift=shifted_ds_by_shift,
+            vocabulary=vocabulary,
+            vocab50=vocab50,
+            cfg=cfg,
+            eta_values=cms_cfg.get("eta_values", (0.5, 0.8, 1.0)),
+            normalize_inputs=bool(
+                cms_cfg.get("normalize_before_subtraction", True)
+            ),
+            baseline_clean_summary=negative_controls_result[
+                "clean_reference"
+            ],
+            baseline_condition_entries=negative_controls_result[
+                "conditions"
+            ],
+            baseline_shifted_aggregate=negative_controls_result[
+                "shifted_aggregate"
+            ],
+            compute_metrics_fn=_compute_encoded_evaluation_metrics,
+            extract_summary_row_fn=_extract_control_summary_row,
+            summarize_shifted_fn=_summarize_shifted_conditions,
+            output_dir=out,
+            plot=plot,
+            print_report=print_report,
+        )
+        eval_result["exploratory_common_mode_subtraction_json"] = (
+            cms_report.get("exploratory_json")
+        )
+        eval_result["exploratory_common_mode_subtraction_summary"] = {
+            "eta_grid": cms_report["eta_grid"],
+            "best_eta_by_clean_vocab50_top10": cms_report[
+                "best_eta_by_clean_vocab50_top10"
+            ],
+            "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
+                "best_eta_by_clean_minus_shifted_vocab50_top10"
+            ],
+        }
+        eval_result["figures"].update(cms_report.get("figures", {}))
+
+    if sub_enabled and len(shifted_encoded_by_shift) >= 2:
+        from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+            run_subspace_coherence_debiasing_sweep,
+        )
+
+        gate_raw = sub_cfg.get("use_coherence_gate", "both")
+        if isinstance(gate_raw, bool):
+            gate_modes = [False, True]
+        else:
+            g_str = str(gate_raw).strip().lower()
+            if g_str in {"true", "on", "1", "yes"}:
+                gate_modes = [True]
+            elif g_str in {"false", "off", "0", "no"}:
+                gate_modes = [False]
             else:
-                g_str = str(gate_raw).strip().lower()
-                if g_str in {"true", "on", "1", "yes"}:
-                    gate_modes = [True]
-                elif g_str in {"false", "off", "0", "no"}:
-                    gate_modes = [False]
-                else:
-                    gate_modes = [False, True]
+                gate_modes = [False, True]
 
-            sub_report = run_subspace_coherence_debiasing_sweep(
-                dataset=dataset,
-                stage=stage,
-                split=split,
-                seed=seed,
-                exp_tag=resolved_exp_tag,
-                word_exp_tag=resolved_word_exp_tag,
-                clean_encoded=encoded,
-                shifted_encoded_by_shift=shifted_encoded_by_shift,
-                eval_ds=eval_ds,
-                vocabulary=vocabulary,
-                vocab50=vocab50,
-                eta_values=sub_cfg.get("eta_values", (0.8, 1.0, 1.2)),
-                rank_k_values=sub_cfg.get("rank_k_values", (8, 12, 16, 24)),
-                coherence_gate_modes=gate_modes,
-                full_loo_etas=sub_cfg.get(
-                    "full_loo_eta_values", (0.5, 0.8, 1.0)
-                ),
-                center_svd=bool(sub_cfg.get("center_svd", True)),
-                coherence_low=float(sub_cfg.get("coherence_low", 0.35)),
-                coherence_high=float(sub_cfg.get("coherence_high", 0.65)),
-                gate_min=float(sub_cfg.get("gate_min", 0.2)),
-                gate_max=float(sub_cfg.get("gate_max", 1.2)),
-                normalize_inputs=bool(
-                    sub_cfg.get("normalize_before_subtraction", True)
-                ),
-                output_dir=out,
-                plot=plot,
-                print_report=print_report,
-                verbose=verbose,
-            )
-            eval_result["exploratory_subspace_coherence_debiasing_json"] = (
-                sub_report.get("exploratory_json")
-            )
-            eval_result["exploratory_subspace_coherence_debiasing_summary"] = {
-                "grid": sub_report.get("grid"),
-                "best_by_net_gap_vocab50": (
-                    sub_report.get("best_by_net_gap_vocab50") or {}
-                ).get("label"),
-                "best_by_clean_preservation_vocab50": (
-                    sub_report.get("best_by_clean_preservation_vocab50") or {}
-                ).get("label"),
-            }
-            eval_result["figures"].update(sub_report.get("figures", {}))
+        sub_report = run_subspace_coherence_debiasing_sweep(
+            dataset=dataset,
+            stage=stage,
+            split=split,
+            seed=seed,
+            exp_tag=resolved_exp_tag,
+            word_exp_tag=resolved_word_exp_tag,
+            clean_encoded=encoded,
+            shifted_encoded_by_shift=shifted_encoded_by_shift,
+            eval_ds=eval_ds,
+            vocabulary=vocabulary,
+            vocab50=vocab50,
+            eta_values=sub_cfg.get("eta_values", (0.8, 1.0, 1.2)),
+            rank_k_values=sub_cfg.get("rank_k_values", (8, 12, 16, 24)),
+            coherence_gate_modes=gate_modes,
+            full_loo_etas=sub_cfg.get(
+                "full_loo_eta_values", (0.5, 0.8, 1.0)
+            ),
+            center_svd=bool(sub_cfg.get("center_svd", True)),
+            coherence_low=float(sub_cfg.get("coherence_low", 0.35)),
+            coherence_high=float(sub_cfg.get("coherence_high", 0.65)),
+            gate_min=float(sub_cfg.get("gate_min", 0.2)),
+            gate_max=float(sub_cfg.get("gate_max", 1.2)),
+            normalize_inputs=bool(
+                sub_cfg.get("normalize_before_subtraction", True)
+            ),
+            output_dir=out,
+            plot=plot,
+            print_report=print_report,
+            verbose=verbose,
+        )
+        eval_result["exploratory_subspace_coherence_debiasing_json"] = (
+            sub_report.get("exploratory_json")
+        )
+        eval_result["exploratory_subspace_coherence_debiasing_summary"] = {
+            "grid": sub_report.get("grid"),
+            "best_by_net_gap_vocab50": (
+                sub_report.get("best_by_net_gap_vocab50") or {}
+            ).get("label"),
+            "best_by_clean_preservation_vocab50": (
+                sub_report.get("best_by_clean_preservation_vocab50") or {}
+            ).get("label"),
+        }
+        eval_result["figures"].update(sub_report.get("figures", {}))
 
-        shifted_encoded_by_shift.clear()
-        shifted_ds_by_shift.clear()
+    shifted_encoded_by_shift.clear()
+    shifted_ds_by_shift.clear()
 
     eval_result["exported_files"] = export_word_evaluation_tables_and_markdown(
         eval_result, out
@@ -4069,7 +4336,10 @@ def _aggregate_control_entries_across_seeds(
         if isinstance(ent, dict)
         and isinstance(ent.get("clean_reference"), dict)
         and isinstance(ent.get("shifted_aggregate"), dict)
-        and ent.get("shifted_aggregate")
+        and (
+            bool(ent.get("shifted_aggregate"))
+            or control_type == "causal_common_mode_subtraction"
+        )
     ]
     if not valid:
         return {"enabled": False, "method_id": method_id, "label": method_label}
@@ -6754,19 +7024,27 @@ def _aggregate_single_stage_multi_seed(
 
     cms_aggregate: dict[str, object] = {"enabled": False}
     if cms_reports_by_seed:
-        first_sweep = _normalize_cms_sweep_dict(
-            cms_reports_by_seed[0][1].get("sweep")
+        first_cms_rep = cms_reports_by_seed[0][1]
+        is_causal_cms = (
+            str(first_cms_rep.get("cms_mode") or "").strip().lower()
+            == "causal_ema"
+            or str(first_cms_rep.get("experiment_type") or "").strip().lower()
+            == "causal_ema_common_mode_subtraction"
         )
+        first_sweep = _normalize_cms_sweep_dict(first_cms_rep.get("sweep"))
         cms_methods: dict[str, dict] = {}
         for eta_key, first_eta_ent in first_sweep.items():
             eta_val = float(first_eta_ent.get("eta", 0.0))
             eta_round = round(eta_val, 6)
-            m_id = "raw" if abs(eta_val) <= 1e-9 else f"cms:eta={eta_val:g}"
-            m_lbl = (
-                "Raw Baseline (eta=0.0)"
-                if abs(eta_val) <= 1e-9
-                else f"LOO Common-Mode Subtraction (eta={eta_val:g})"
-            )
+            if abs(eta_val) <= 1e-9:
+                m_id = "raw"
+                m_lbl = "Raw Baseline (eta=0.0)"
+            elif is_causal_cms:
+                m_id = f"causal_cms:eta={eta_val:g}"
+                m_lbl = f"Causal EMA-CMS (eta={eta_val:g})"
+            else:
+                m_id = f"cms:eta={eta_val:g}"
+                m_lbl = f"LOO Common-Mode Subtraction (eta={eta_val:g})"
             eta_seed_entries: list[tuple[int, dict]] = []
             for sd, c_rep in cms_reports_by_seed:
                 sw_i = _normalize_cms_sweep_dict(c_rep.get("sweep"))
@@ -6775,9 +7053,14 @@ def _aggregate_single_stage_multi_seed(
                     c_ref_i = ent_i.get("clean_reference") or {}
                     s_agg_i = ent_i.get("shifted_aggregate") or {}
                     if (
-                        c_ref_i.get("full_vocab_word_macro_top10") is None
-                        or s_agg_i.get("mean_full_vocab_word_macro_top10") is None
-                    ) and (sd, eta_round) in sub_full_loo_by_seed_and_eta:
+                        not is_causal_cms
+                        and (
+                            c_ref_i.get("full_vocab_word_macro_top10") is None
+                            or s_agg_i.get("mean_full_vocab_word_macro_top10")
+                            is None
+                        )
+                        and (sd, eta_round) in sub_full_loo_by_seed_and_eta
+                    ):
                         ent_i = sub_full_loo_by_seed_and_eta[(sd, eta_round)]
                     if abs(eta_val) <= 1e-9:
                         _repair_control_entry_clean_ref(
@@ -6791,7 +7074,11 @@ def _aggregate_single_stage_multi_seed(
                 eta_seed_entries,
                 method_id=m_id,
                 method_label=m_lbl,
-                control_type="common_mode_subtraction",
+                control_type=(
+                    "causal_common_mode_subtraction"
+                    if is_causal_cms
+                    else "common_mode_subtraction"
+                ),
                 eta=eta_val,
                 baseline_raw_agg=raw_nc_agg,
                 **ctrl_common_kwargs,
@@ -6800,6 +7087,9 @@ def _aggregate_single_stage_multi_seed(
                 cms_methods[eta_key] = agg_eta
                 if abs(eta_val) > 1e-9:
                     methods_map[m_id] = agg_eta
+                    alias_id = f"cms:eta={eta_val:g}"
+                    if is_causal_cms and alias_id not in methods_map:
+                        methods_map[alias_id] = agg_eta
                 elif (
                     "raw" not in methods_map
                     or agg_eta.get("mean_shifted_full_vocab_word_macro_top10")
@@ -6810,9 +7100,10 @@ def _aggregate_single_stage_multi_seed(
         if cms_methods:
             cms_aggregate = {
                 "enabled": True,
+                "cms_mode": "causal_ema" if is_causal_cms else "leave_one_out",
                 "seed_count": len(cms_reports_by_seed),
                 "eta_grid": list(
-                    cms_reports_by_seed[0][1].get("eta_grid")
+                    first_cms_rep.get("eta_grid")
                     or [float(m.get("eta", 0.0)) for m in cms_methods.values()]
                 ),
                 "methods": cms_methods,
@@ -7214,6 +7505,10 @@ def run_evaluation_workflow(
     config_path: str | Path | None = None,
     control_config_path: str | Path | None = None,
     shift_seconds: str | Iterable[float | int | str] | None = None,
+    shift_mode: str | None = None,
+    preroll_seconds: float | None = None,
+    cms_mode: str | None = None,
+    cms_ema_decay: float | None = None,
     zero_signal_control: bool = False,
     subtraction_etas: str | Iterable[float | int | str] | None = None,
     control_method: str | Iterable[str] | None = None,
@@ -7269,6 +7564,10 @@ def run_evaluation_workflow(
                 config_path=config_path,
                 control_config_path=control_config_path,
                 shift_seconds=shift_seconds,
+                shift_mode=shift_mode,
+                preroll_seconds=preroll_seconds,
+                cms_mode=cms_mode,
+                cms_ema_decay=cms_ema_decay,
                 zero_signal_control=zero_signal_control,
                 subtraction_etas=subtraction_etas,
                 control_method=control_method,
@@ -7319,6 +7618,10 @@ def run_evaluation_workflow(
             config_path=config_path,
             control_config_path=control_config_path,
             shift_seconds=shift_seconds,
+            shift_mode=shift_mode,
+            preroll_seconds=preroll_seconds,
+            cms_mode=cms_mode,
+            cms_ema_decay=cms_ema_decay,
             zero_signal_control=zero_signal_control,
             subtraction_etas=subtraction_etas,
             plot=plot,
@@ -7596,6 +7899,10 @@ def run_evaluation_workflow(
             config_path=None,
             control_config_path=effective_control_config_path,
             shift_seconds=shift_seconds,
+            shift_mode=shift_mode,
+            preroll_seconds=preroll_seconds,
+            cms_mode=cms_mode,
+            cms_ema_decay=cms_ema_decay,
             zero_signal_control=zero_signal_control,
             subtraction_etas=subtraction_etas,
             plot=plot,

@@ -193,7 +193,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--cms-eta",
         type=float,
         default=None,
-        help="可选覆写历史因果共模扣除系数 eta（默认：0.0）",
+        help="可选覆写共模扣除系数 eta（默认：从协议 YAML 读取 0.5；amortized_timing 默认 0.0）",
+    )
+    parser.add_argument(
+        "--cms-mode",
+        choices=("historical_shifts", "leave_one_out", "causal_ema"),
+        default=None,
+        help="可选覆写 S3 共模扣除模式：historical_shifts（6 窗口历史错位）或 causal_ema（严格在线因果 EMA，0 次额外错位前向）",
+    )
+    parser.add_argument(
+        "--cms-ema-decay",
+        type=float,
+        default=None,
+        help="因果 EMA 共模扣除的指数衰减率 alpha（默认：0.99）",
+    )
+    parser.add_argument(
+        "--shift-mode",
+        choices=("deterministic_circular", "preroll"),
+        default=None,
+        help="可选覆写负对照与错位窗口采样模式：deterministic_circular 或 preroll（只读 train 尾部校准缓冲区）",
+    )
+    parser.add_argument(
+        "--preroll-seconds",
+        type=float,
+        default=None,
+        help="Pre-Roll 因果校准缓冲区秒数（默认：45.0，负对照 -75s 时自动扩容）",
     )
     parser.add_argument(
         "--control-shift-seconds",
@@ -512,6 +536,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     yaml_word_exp_tag: str | None = None
     yaml_win_sec: float | None = None
     yaml_win_off: float | None = None
+    yaml_shift_mode: str | None = None
+    yaml_preroll_seconds: float | None = None
+    yaml_debias_mode: str | None = None
+    yaml_s3_cms_eta: float | None = None
     if isinstance(training_yaml, dict):
         from braindecoding.training.workflow_runner import (
             _infer_dataset_and_stage_from_yaml,
@@ -525,6 +553,11 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         wf_b = training_yaml.get("workflow") if isinstance(training_yaml.get("workflow"), dict) else {}
         exp_b = training_yaml.get("experiment") if isinstance(training_yaml.get("experiment"), dict) else {}
         ds_b = training_yaml.get("dataset") if isinstance(training_yaml.get("dataset"), dict) else {}
+        siam_b = (
+            training_yaml.get("siamese_debiased")
+            if isinstance(training_yaml.get("siamese_debiased"), dict)
+            else {}
+        )
         yaml_exp_tag = wf_b.get("exp_tag") or exp_b.get("exp_tag")
         yaml_word_exp_tag = wf_b.get("word_exp_tag") or exp_b.get("word_exp_tag")
         raw_w = wf_b.get("window_seconds") if wf_b.get("window_seconds") is not None else ds_b.get("window_seconds")
@@ -537,6 +570,29 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             yaml_win_sec = float(raw_w)
         if raw_o is not None:
             yaml_win_off = float(raw_o)
+        raw_sm = (
+            wf_b.get("shift_mode")
+            or ds_b.get("shift_mode")
+            or siam_b.get("shift_mode")
+        )
+        if raw_sm is not None and str(raw_sm).strip():
+            yaml_shift_mode = str(raw_sm).strip().lower()
+        raw_pr = (
+            wf_b.get("preroll_seconds")
+            if wf_b.get("preroll_seconds") is not None
+            else (
+                ds_b.get("preroll_seconds")
+                if ds_b.get("preroll_seconds") is not None
+                else siam_b.get("preroll_seconds")
+            )
+        )
+        if raw_pr is not None:
+            yaml_preroll_seconds = float(raw_pr)
+        raw_dm = wf_b.get("debias_mode") or siam_b.get("debias_mode")
+        if raw_dm is not None and str(raw_dm).strip():
+            yaml_debias_mode = str(raw_dm).strip().lower()
+        if siam_b.get("s3_cms_eta") is not None:
+            yaml_s3_cms_eta = float(siam_b["s3_cms_eta"])
 
     dec_cfg = dict(protocol_cfg.get("decoding") or {})
     cal_cfg = dict(protocol_cfg.get("calibration") or {})
@@ -581,11 +637,63 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         args.beam_width if args.beam_width is not None else dec_cfg.get("beam_width", 5)
     )
     segment_batch_size = int(dec_cfg.get("segment_batch_size", 32))
-    cms_eta = float(
-        args.cms_eta
-        if args.cms_eta is not None
-        else cms_cfg.get("subtraction_eta", ctrl_cfg.get("common_mode_subtraction_eta", 0.0))
+    raw_shift_mode_arg = getattr(args, "shift_mode", None)
+    if raw_shift_mode_arg is not None and str(raw_shift_mode_arg).strip():
+        shift_mode = str(raw_shift_mode_arg).strip().lower()
+    elif yaml_shift_mode is not None:
+        shift_mode = yaml_shift_mode
+    else:
+        shift_mode = str(
+            shift_ctrl_cfg.get(
+                "shift_mode",
+                cms_cfg.get("shift_mode", "deterministic_circular"),
+            )
+            or "deterministic_circular"
+        ).strip().lower()
+
+    raw_preroll_arg = getattr(args, "preroll_seconds", None)
+    if raw_preroll_arg is not None:
+        preroll_seconds = float(raw_preroll_arg)
+    elif yaml_preroll_seconds is not None:
+        preroll_seconds = float(yaml_preroll_seconds)
+    else:
+        preroll_seconds = float(
+            shift_ctrl_cfg.get(
+                "preroll_seconds", cms_cfg.get("preroll_seconds", 45.0)
+            )
+        )
+
+    raw_cms_mode_arg = getattr(args, "cms_mode", None)
+    if raw_cms_mode_arg is not None and str(raw_cms_mode_arg).strip():
+        raw_cm_str = str(raw_cms_mode_arg).strip().lower()
+    elif shift_mode == "preroll" or yaml_debias_mode in {"null_space", "amortized_timing"}:
+        raw_cm_str = "causal_ema"
+    else:
+        raw_cm_str = str(cms_cfg.get("mode", "historical_shifts") or "historical_shifts").strip().lower()
+    cms_mode = (
+        "causal_ema"
+        if raw_cm_str in {"causal_ema", "causal", "ema", "online_ema"}
+        else "historical_shifts"
     )
+    raw_cms_decay_arg = getattr(args, "cms_ema_decay", None)
+    cms_ema_decay = float(
+        raw_cms_decay_arg
+        if raw_cms_decay_arg is not None
+        else cms_cfg.get("ema_decay", 0.99)
+    )
+
+    if args.cms_eta is not None:
+        cms_eta = float(args.cms_eta)
+    elif yaml_s3_cms_eta is not None:
+        cms_eta = float(yaml_s3_cms_eta)
+    elif yaml_debias_mode == "amortized_timing":
+        cms_eta = 0.0
+    else:
+        cms_eta = float(
+            cms_cfg.get(
+                "subtraction_eta", ctrl_cfg.get("common_mode_subtraction_eta", 0.0)
+            )
+        )
     cms_shifts = tuple(
         float(s)
         for s in cms_cfg.get(
@@ -768,10 +876,15 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         "seed": int(args.seed),
         "exp_tag": exp_tag,
         "cms_eta": cms_eta,
+        "cms_mode": cms_mode,
+        "cms_ema_decay": cms_ema_decay,
+        "shift_mode": shift_mode,
     }
 
     from braindecoding.decoding.neural_score_exporter import (
         _is_fake_provenance,
+        _normalize_s3_cms_mode,
+        _normalize_s3_shift_mode,
         _same_checkpoint_path,
         export_neural_vocabulary_scores,
         load_neural_vocabulary_scores,
@@ -847,6 +960,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             background_shift_seconds=cms_shifts,
             control_shift_seconds=control_shift,
             subtraction_eta=cms_eta,
+            cms_mode=cms_mode,
+            cms_ema_decay=cms_ema_decay,
+            shift_mode=shift_mode,
+            preroll_seconds=preroll_seconds,
             reuse_existing_states=not force_rerun,
             output_path=target_out,
             device=args.device or "auto",
@@ -909,6 +1026,26 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 return False
 
             cms_meta = dict(payload.get("cms_metadata") or {})
+            saved_cms_mode = _normalize_s3_cms_mode(cms_meta.get("mode"))
+            saved_shift_mode = _normalize_s3_shift_mode(
+                cms_meta.get("shift_mode")
+            )
+            norm_req_shift_mode = _normalize_s3_shift_mode(shift_mode)
+            if saved_shift_mode != norm_req_shift_mode:
+                return False
+            saved_eta_raw = float(cms_meta.get("subtraction_eta", 0.0))
+            if (
+                abs(float(expected_eta)) > 1e-12 or abs(saved_eta_raw) > 1e-12
+            ) and saved_cms_mode != cms_mode:
+                return False
+            if (
+                cms_mode == "causal_ema"
+                and abs(float(expected_eta)) > 1e-12
+                and "ema_decay" in cms_meta
+                and abs(float(cms_meta["ema_decay"]) - float(cms_ema_decay))
+                > 1e-6
+            ):
+                return False
             if "subtraction_eta" not in cms_meta:
                 return True
             saved_eta = float(cms_meta["subtraction_eta"])
@@ -1055,6 +1192,13 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 eta_ok = saved_eta is None or (
                     abs(float(saved_eta) - float(cms_eta)) <= 1e-6
                 )
+                saved_cal_cms_mode = _normalize_s3_cms_mode(
+                    existing_cal.get("cms_mode")
+                )
+                cms_mode_ok = (
+                    abs(float(cms_eta)) <= 1e-12
+                    and (saved_eta is None or abs(float(saved_eta)) <= 1e-12)
+                ) or (saved_cal_cms_mode == cms_mode)
                 shared_mode_ok = (
                     bool(existing_cal.get("shared_language_weight", False))
                     == shared_lam_cfg
@@ -1066,6 +1210,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 if (
                     saved_temps == expected_temps
                     and eta_ok
+                    and cms_mode_ok
                     and shared_mode_ok
                     and isinstance(saved_states, dict)
                 ):
@@ -1263,6 +1408,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 val_prov.get("revision_stage") or effective_rev_stage or ""
             )
             calibration_res["cms_eta"] = float(cms_eta)
+            calibration_res["cms_mode"] = str(cms_mode)
             try:
                 calibration_path.parent.mkdir(parents=True, exist_ok=True)
                 calibration_path.write_text(

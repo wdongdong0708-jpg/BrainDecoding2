@@ -46,6 +46,67 @@ DEFAULT_SIAMESE_SHIFT_SECONDS: tuple[float, ...] = (
     -90.0,
     -120.0,
 )
+DEFAULT_CAUSAL_PREROLL_SHIFT_SECONDS: tuple[float, ...] = (
+    -10.0,
+    -20.0,
+    -30.0,
+    -40.0,
+)
+VALID_DEBIAS_MODES: tuple[str, ...] = (
+    "null_space",
+    "amortized_timing",
+    "legacy_siamese",
+)
+VALID_SHIFT_MODES: tuple[str, ...] = (
+    "deterministic_circular",
+    "preroll",
+)
+
+
+def _normalize_debias_mode(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    token = str(raw).strip().lower()
+    if not token or token in {"auto", "none", "default"}:
+        return None
+    alias_map = {
+        "null_space": "null_space",
+        "causal_null_space": "null_space",
+        "null": "null_space",
+        "tier_a": "null_space",
+        "amortized_timing": "amortized_timing",
+        "amortized": "amortized_timing",
+        "temporal_bias_head": "amortized_timing",
+        "tier_b": "amortized_timing",
+        "legacy_siamese": "legacy_siamese",
+        "legacy": "legacy_siamese",
+        "differential_cms": "legacy_siamese",
+    }
+    if token not in alias_map:
+        raise ValueError(
+            f"不支持的 debias_mode={raw!r}，可选：{VALID_DEBIAS_MODES}"
+        )
+    return alias_map[token]
+
+
+def _normalize_shift_mode(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    token = str(raw).strip().lower()
+    if not token or token in {"auto", "none", "default"}:
+        return None
+    alias_map = {
+        "preroll": "preroll",
+        "pre_roll": "preroll",
+        "causal_preroll": "preroll",
+        "deterministic_circular": "deterministic_circular",
+        "circular": "deterministic_circular",
+    }
+    if token not in alias_map:
+        raise ValueError(
+            f"不支持的 shift_mode={raw!r}，可选：{VALID_SHIFT_MODES}"
+        )
+    return alias_map[token]
 
 
 def _parse_shift_list(
@@ -85,15 +146,21 @@ def resolve_siamese_debiased_config(
     cfg: dict,
     *,
     siamese_debiased: bool | None = None,
+    debias_mode: str | None = None,
+    shift_mode: str | None = None,
+    preroll_seconds: float | None = None,
     eta_train: float | None = None,
     eta_0: float | None = None,
     eta_delta: float | None = None,
     lambda_null: float | None = None,
+    lambda_delta: float | None = None,
     lambda_delta_null: float | None = None,
+    lambda_distill: float | None = None,
     beta_delta_cm: float | None = None,
     shifts_per_step: int | None = None,
     shift_seconds: str | Iterable[float | int | str] | None = None,
     preextract_frozen_cnn: bool | None = None,
+    temporal_bias_hidden_dim: int | None = None,
 ) -> dict:
     """合并 YAML `siamese_debiased` 配置块、环境变量与 CLI 参数。"""
     raw_block = (
@@ -101,22 +168,47 @@ def resolve_siamese_debiased_config(
         if isinstance(cfg.get("siamese_debiased"), dict)
         else {}
     )
+    ds_block = (
+        cfg.get("dataset") if isinstance(cfg.get("dataset"), dict) else {}
+    )
     tc = cfg.get("training", {}) if isinstance(cfg.get("training"), dict) else {}
 
     env_enabled = _parse_bool_env("BRAINDECODING_SIAMESE_DEBIASED")
     env_preextract = _parse_bool_env("BRAINDECODING_PREEXTRACT_FROZEN_CNN")
+    env_debias_mode = os.environ.get("BRAINDECODING_DEBIAS_MODE", "").strip()
+    env_shift_mode = os.environ.get("BRAINDECODING_SHIFT_MODE", "").strip()
+    env_preroll = os.environ.get("BRAINDECODING_PREROLL_SECONDS", "").strip()
     env_eta = (
         os.environ.get("BRAINDECODING_ETA_0", "").strip()
         or os.environ.get("BRAINDECODING_ETA_TRAIN", "").strip()
     )
     env_eta_delta = os.environ.get("BRAINDECODING_ETA_DELTA", "").strip()
     env_lambda = os.environ.get("BRAINDECODING_LAMBDA_NULL", "").strip()
-    env_lambda_delta = os.environ.get("BRAINDECODING_LAMBDA_DELTA_NULL", "").strip()
+    env_lambda_delta = (
+        os.environ.get("BRAINDECODING_LAMBDA_DELTA", "").strip()
+        or os.environ.get("BRAINDECODING_LAMBDA_DELTA_NULL", "").strip()
+    )
+    env_lambda_distill = os.environ.get("BRAINDECODING_LAMBDA_DISTILL", "").strip()
     env_beta_delta_cm = os.environ.get("BRAINDECODING_BETA_DELTA_CM", "").strip()
     env_m = os.environ.get("BRAINDECODING_SHIFTS_PER_STEP", "").strip()
     env_shifts = os.environ.get("BRAINDECODING_TRAIN_SHIFT_SECONDS", "").strip()
 
+    explicit_debias_mode = (
+        _normalize_debias_mode(debias_mode)
+        or _normalize_debias_mode(env_debias_mode)
+        or _normalize_debias_mode(raw_block.get("debias_mode"))
+    )
+    explicit_shift_mode = (
+        _normalize_shift_mode(shift_mode)
+        or _normalize_shift_mode(env_shift_mode)
+        or _normalize_shift_mode(raw_block.get("shift_mode"))
+        or _normalize_shift_mode(ds_block.get("shift_mode"))
+    )
+
     explicit_eta = eta_0 if eta_0 is not None else eta_train
+    explicit_lambda_delta = (
+        lambda_delta if lambda_delta is not None else lambda_delta_null
+    )
     enabled = (
         bool(siamese_debiased)
         if siamese_debiased is not None
@@ -127,23 +219,34 @@ def resolve_siamese_debiased_config(
         )
     )
     if (
-        explicit_eta is not None
+        explicit_debias_mode is not None
+        or explicit_eta is not None
         or env_eta
         or eta_delta is not None
         or env_eta_delta
         or lambda_null is not None
         or env_lambda
-        or lambda_delta_null is not None
+        or explicit_lambda_delta is not None
         or env_lambda_delta
+        or lambda_distill is not None
+        or env_lambda_distill
     ):
-        # 显式传入了去偏或零化正则超参时自动启用孪生去偏
+        # 显式传入了去偏模式或正则超参时自动启用孪生去偏
         if siamese_debiased is not False and env_enabled is not False:
             enabled = True
 
+    resolved_debias_mode = explicit_debias_mode or "legacy_siamese"
+    is_causal_tier = resolved_debias_mode in {"null_space", "amortized_timing"}
+
+    default_eta_by_mode = (
+        0.0
+        if resolved_debias_mode == "null_space"
+        else (0.50 if resolved_debias_mode == "amortized_timing" else 0.8)
+    )
     yaml_eta_default = (
         raw_block["eta_0"]
         if "eta_0" in raw_block and raw_block["eta_0"] is not None
-        else raw_block.get("eta_train", 0.8)
+        else raw_block.get("eta_train", default_eta_by_mode)
     )
     resolved_eta = float(
         explicit_eta
@@ -155,10 +258,14 @@ def resolve_siamese_debiased_config(
         if "eta_delta" in raw_block and raw_block["eta_delta"] is not None
         else raw_block.get("eta_delta_train", 0.0)
     )
-    resolved_eta_delta = float(
-        eta_delta
-        if eta_delta is not None
-        else (float(env_eta_delta) if env_eta_delta else yaml_eta_delta_default)
+    resolved_eta_delta = (
+        0.0
+        if is_causal_tier and eta_delta is None and not env_eta_delta and "eta_delta" not in raw_block
+        else float(
+            eta_delta
+            if eta_delta is not None
+            else (float(env_eta_delta) if env_eta_delta else yaml_eta_delta_default)
+        )
     )
     resolved_lambda = float(
         lambda_null
@@ -169,19 +276,37 @@ def resolve_siamese_debiased_config(
             else raw_block.get("lambda_null", 10.0)
         )
     )
+    default_lambda_delta = 2.0 if is_causal_tier else 0.0
+    yaml_lambda_delta_default = (
+        raw_block["lambda_delta"]
+        if "lambda_delta" in raw_block and raw_block["lambda_delta"] is not None
+        else raw_block.get("lambda_delta_null", default_lambda_delta)
+    )
     resolved_lambda_delta = float(
-        lambda_delta_null
-        if lambda_delta_null is not None
+        explicit_lambda_delta
+        if explicit_lambda_delta is not None
         else (
             float(env_lambda_delta)
             if env_lambda_delta
-            else raw_block.get("lambda_delta_null", 0.0)
+            else yaml_lambda_delta_default
+        )
+    )
+    resolved_lambda_distill = float(
+        lambda_distill
+        if lambda_distill is not None
+        else (
+            float(env_lambda_distill)
+            if env_lambda_distill
+            else raw_block.get(
+                "lambda_distill",
+                1.0 if resolved_debias_mode == "amortized_timing" else 0.0,
+            )
         )
     )
     yaml_beta_delta_default = (
         raw_block["beta_delta_cm"]
         if "beta_delta_cm" in raw_block and raw_block["beta_delta_cm"] is not None
-        else raw_block.get("beta_delta", 6.0)
+        else raw_block.get("beta_delta", 0.0 if is_causal_tier else 6.0)
     )
     resolved_beta_delta_cm = float(
         beta_delta_cm
@@ -192,19 +317,48 @@ def resolve_siamese_debiased_config(
             else yaml_beta_delta_default
         )
     )
+    resolved_shift_mode = explicit_shift_mode or (
+        "preroll" if is_causal_tier else "deterministic_circular"
+    )
+    resolved_preroll_seconds = float(
+        preroll_seconds
+        if preroll_seconds is not None
+        else (
+            float(env_preroll)
+            if env_preroll
+            else raw_block.get(
+                "preroll_seconds", ds_block.get("preroll_seconds", 45.0)
+            )
+        )
+    )
+    default_shift_pool = (
+        DEFAULT_CAUSAL_PREROLL_SHIFT_SECONDS
+        if is_causal_tier or resolved_shift_mode == "preroll"
+        else DEFAULT_SIAMESE_SHIFT_SECONDS
+    )
     resolved_shifts = _parse_shift_list(
         shift_seconds
         if shift_seconds is not None
         else (
             env_shifts
             if env_shifts
-            else raw_block.get("shift_seconds", DEFAULT_SIAMESE_SHIFT_SECONDS)
+            else raw_block.get("shift_seconds", default_shift_pool)
         )
     )
     if enabled and not resolved_shifts:
         raise ValueError("启用 siamese_debiased 时至少需要 1 个非零 shift_seconds。")
+    if resolved_shift_mode == "preroll":
+        for sh in resolved_shifts:
+            if sh > 0.0:
+                raise ValueError(
+                    f"shift_mode='preroll' 要求严格过去移位 (shift_seconds < 0)，收到 {sh}。"
+                )
 
-    default_m = min(2, len(resolved_shifts)) if resolved_shifts else 2
+    default_m = (
+        1
+        if is_causal_tier
+        else (min(2, len(resolved_shifts)) if resolved_shifts else 2)
+    )
     resolved_m = int(
         shifts_per_step
         if shifts_per_step is not None
@@ -231,17 +385,28 @@ def resolve_siamese_debiased_config(
             )
         )
     )
+    resolved_hidden_dim = int(
+        temporal_bias_hidden_dim
+        if temporal_bias_hidden_dim is not None
+        else raw_block.get("temporal_bias_hidden_dim", 128)
+    )
     sync_rng = bool(raw_block.get("synchronize_dropout_rng", True))
     cache_to_disk = bool(raw_block.get("cache_preextracted_to_disk", True))
 
     return {
         "enabled": bool(enabled),
+        "debias_mode": resolved_debias_mode,
+        "shift_mode": resolved_shift_mode,
+        "preroll_seconds": resolved_preroll_seconds,
         "eta_0": resolved_eta,
         "eta_train": resolved_eta,
         "eta_delta": resolved_eta_delta,
         "lambda_null": resolved_lambda,
+        "lambda_delta": resolved_lambda_delta,
         "lambda_delta_null": resolved_lambda_delta,
+        "lambda_distill": resolved_lambda_distill,
         "beta_delta_cm": resolved_beta_delta_cm,
+        "temporal_bias_hidden_dim": resolved_hidden_dim,
         "shift_seconds": resolved_shifts,
         "shifts_per_step": int(resolved_m),
         "synchronize_dropout_rng": sync_rng,
@@ -395,6 +560,96 @@ def compute_delta_shift_null_loss(
     return loss_delta_vocab
 
 
+def compute_scaled_shift_null_loss(
+    y_shift_mean: torch.Tensor,
+    centered_vocab_bank: torch.Tensor,
+    *,
+    y_shift_branches: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """维度平衡词表零空间锚定惩罚：(D / |V|) * || E_bar_V * y^(r, delta) ||_2^2。
+
+    使得跨语种不同词表大小（法语 |V|=2020、中文 |V|=2180）拥有严格相同的 O(1) 梯度尺度。
+    当 M > 1 时逐分支独立惩罚，并通过直通均值估计保持分支 0 的无稀释无偏梯度。
+    """
+    if y_shift_mean.numel() == 0:
+        return y_shift_mean.new_zeros(())
+    bank = centered_vocab_bank.to(
+        device=y_shift_mean.device, dtype=torch.float32
+    )
+    dim_scale = float(bank.shape[1])
+
+    if y_shift_branches is not None and y_shift_branches.numel() > 0:
+        y_br = y_shift_branches.float()
+        num_branches = int(y_br.shape[0])
+        if (
+            num_branches > 1
+            and y_br.requires_grad
+            and not y_shift_branches.is_leaf
+        ):
+            proj_det = torch.matmul(y_br.detach(), bank.t())
+            loss_det = (proj_det * proj_det).mean(dim=-1).mean() * dim_scale
+            proj_0 = torch.matmul(y_br[0], bank.t())
+            loss_0 = (proj_0 * proj_0).mean(dim=-1).mean() * dim_scale
+            return loss_det + (loss_0 - loss_0.detach())
+        proj = torch.matmul(y_br, bank.t())
+        return (proj * proj).mean(dim=-1).mean() * dim_scale
+
+    queries = y_shift_mean.float()
+    projections = queries @ bank.t()
+    return (projections * projections).mean(dim=-1).mean() * dim_scale
+
+
+def compute_euclidean_cross_horizon_loss(
+    y_shift_r_mean: torch.Tensor,
+    y_shift_k0_mean: torch.Tensor,
+    *,
+    y_shift_r_branches: torch.Tensor | None = None,
+    y_shift_k0_branches: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """极简欧氏跨视界平滑惩罚：|| y_i^(r, delta) - sg(y_i^(0, delta)) ||_2^2 (r > 0)。
+
+    对单位球面向量天然满足 ||y^(r) - y^(0)||_2^2 = 2 * (1 - cos(y^(r), y^(0))) in [0, 4]，
+    同时解析上界约束余弦旋转跳变与中心化词表投影跳变，无需双超参。
+    """
+    if y_shift_r_mean.numel() == 0 or y_shift_k0_mean.numel() == 0:
+        return y_shift_r_mean.new_zeros(())
+    if (
+        y_shift_r_branches is not None
+        and y_shift_k0_branches is not None
+        and y_shift_r_branches.numel() > 0
+        and y_shift_r_branches.shape == y_shift_k0_branches.shape
+    ):
+        y_sh_r = y_shift_r_branches.float()
+        y_sh_k0_det = y_shift_k0_branches.detach().float()
+        num_branches = int(y_sh_r.shape[0])
+        if (
+            num_branches > 1
+            and y_sh_r.requires_grad
+            and not y_shift_r_branches.is_leaf
+        ):
+            diff_det = y_sh_r.detach() - y_sh_k0_det
+            loss_det = (diff_det * diff_det).sum(dim=-1).mean()
+            diff_0 = y_sh_r[0] - y_sh_k0_det[0]
+            loss_0 = (diff_0 * diff_0).sum(dim=-1).mean()
+            return loss_det + (loss_0 - loss_0.detach())
+        diff = y_sh_r - y_sh_k0_det
+        return (diff * diff).sum(dim=-1).mean()
+
+    diff = y_shift_r_mean.float() - y_shift_k0_mean.detach().float()
+    return (diff * diff).sum(dim=-1).mean()
+
+
+def compute_temporal_bias_distillation_loss(
+    b_pred: torch.Tensor,
+    y_shift_target: torch.Tensor,
+) -> torch.Tensor:
+    """档位 B 纯时序几何头 MSE 蒸馏损失：|| b_psi(Delta_tau_{0:i+r})_i - sg(y_i^(r, delta)) ||_2^2。"""
+    if b_pred.numel() == 0 or y_shift_target.numel() == 0:
+        return b_pred.new_zeros(())
+    diff = b_pred.float() - y_shift_target.detach().float()
+    return (diff * diff).sum(dim=-1).mean()
+
+
 def compute_norm_damped_debiased_embedding(
     y_clean: torch.Tensor,
     y_shift_mean: torch.Tensor,
@@ -465,6 +720,8 @@ def _extract_single_dataset_cnn_embeddings(
     amp: bool = True,
     amp_dtype: torch.dtype = torch.bfloat16,
     temporal_shift_seconds: float = 0.0,
+    shift_mode: str = "deterministic_circular",
+    preroll_seconds: float = 45.0,
     show_progress: bool = True,
     progress_desc: str = "Pre-extract CNN",
 ) -> torch.Tensor:
@@ -472,14 +729,31 @@ def _extract_single_dataset_cnn_embeddings(
     model.brain_encoder.eval()
     orig_shift_sec = getattr(dataset_obj, "temporal_shift_seconds", 0.0)
     orig_shift_samp = getattr(dataset_obj, "temporal_shift_samples", 0)
+    orig_shift_mode = getattr(dataset_obj, "shift_mode", "deterministic_circular")
+    orig_preroll_sec = getattr(dataset_obj, "preroll_seconds", 45.0)
     sr_hz = float(getattr(dataset_obj, "sampling_rate_hz", 50.0))
+    norm_mode = _normalize_shift_mode(shift_mode) or "deterministic_circular"
 
     try:
+        if hasattr(dataset_obj, "shift_mode"):
+            dataset_obj.shift_mode = norm_mode
+        if hasattr(dataset_obj, "preroll_seconds"):
+            dataset_obj.preroll_seconds = float(preroll_seconds)
         if hasattr(dataset_obj, "temporal_shift_seconds"):
             dataset_obj.temporal_shift_seconds = float(temporal_shift_seconds)
         if hasattr(dataset_obj, "temporal_shift_samples"):
             dataset_obj.temporal_shift_samples = int(
                 round(float(temporal_shift_seconds) * sr_hz)
+            )
+        if (
+            abs(float(temporal_shift_seconds)) > 1e-9
+            and norm_mode == "preroll"
+            and hasattr(dataset_obj, "ensure_preroll_buffers")
+        ):
+            dataset_obj.ensure_preroll_buffers(
+                float(temporal_shift_seconds),
+                shift_mode="preroll",
+                preroll_seconds=float(preroll_seconds),
             )
 
         loader = DataLoader(
@@ -525,6 +799,10 @@ def _extract_single_dataset_cnn_embeddings(
             dataset_obj.temporal_shift_seconds = orig_shift_sec
         if hasattr(dataset_obj, "temporal_shift_samples"):
             dataset_obj.temporal_shift_samples = orig_shift_samp
+        if hasattr(dataset_obj, "shift_mode"):
+            dataset_obj.shift_mode = orig_shift_mode
+        if hasattr(dataset_obj, "preroll_seconds"):
+            dataset_obj.preroll_seconds = orig_preroll_sec
 
     return torch.cat(chunks, dim=0)
 
@@ -533,7 +811,8 @@ def _extract_static_dataset_metadata(
     dataset_obj,
     device: torch.device,
 ) -> dict:
-    """提取 Dataset 行级静态张量（目标词嵌入、受试者索引、句组索引等），免除训练期逐样本查表。"""
+    """提取 Dataset 行级静态张量（目标词嵌入、受试者索引、句组索引、词起始秒数等），免除训练期逐样本查表。"""
+    onset_seconds: torch.Tensor
     if hasattr(dataset_obj, "_words") and hasattr(
         dataset_obj, "_embedding_tensors"
     ):
@@ -556,11 +835,28 @@ def _extract_static_dataset_metadata(
                 for idx in range(len(dataset_obj))
             ]
         )
+        if hasattr(dataset_obj, "_onset_second_tensors"):
+            onset_seconds = dataset_obj._onset_second_tensors.to(
+                device=device, dtype=torch.float32
+            )
+        elif hasattr(dataset_obj, "_onset_seconds"):
+            onset_seconds = torch.from_numpy(
+                np.asarray(dataset_obj._onset_seconds, dtype=np.float32)
+            ).to(device=device, dtype=torch.float32)
+        elif hasattr(dataset_obj, "table") and "onset_seconds" in dataset_obj.table.columns:
+            onset_seconds = torch.from_numpy(
+                dataset_obj.table["onset_seconds"].to_numpy(dtype=np.float32)
+            ).to(device=device, dtype=torch.float32)
+        else:
+            onset_seconds = torch.arange(
+                len(words), device=device, dtype=torch.float32
+            ) * 0.35
     else:
         words = []
         target_list = []
         subj_list = []
         sent_list = []
+        onset_list = []
         event_ids = []
         recording_ids = []
         for idx in range(len(dataset_obj)):
@@ -569,6 +865,12 @@ def _extract_static_dataset_metadata(
             target_list.append(sample["text_embedding"].float())
             subj_list.append(int(sample["subject_index"]))
             sent_list.append(int(sample["sentence_index"]))
+            onset_val = sample.get("onset_seconds")
+            onset_list.append(
+                float(onset_val.item() if isinstance(onset_val, torch.Tensor) else onset_val)
+                if onset_val is not None
+                else float(idx) * 0.35
+            )
             event_ids.append(str(sample["event_id"]))
             recording_ids.append(str(sample.get("recording_id", "")))
         targets = torch.stack(target_list, dim=0).to(
@@ -580,11 +882,15 @@ def _extract_static_dataset_metadata(
         sentence_indices = torch.as_tensor(
             sent_list, device=device, dtype=torch.long
         )
+        onset_seconds = torch.as_tensor(
+            onset_list, device=device, dtype=torch.float32
+        )
 
     return {
         "targets": targets,
         "subject_indices": subject_indices,
         "sentence_indices": sentence_indices,
+        "onset_seconds": onset_seconds,
         "words": words,
         "event_ids": event_ids,
         "recording_ids": recording_ids,
@@ -601,7 +907,10 @@ def _preextracted_cache_path(
     shift_seconds: list[float],
     train_len: int,
     val_len: int,
+    shift_mode: str = "deterministic_circular",
+    preroll_seconds: float = 45.0,
 ) -> Path:
+    norm_mode = _normalize_shift_mode(shift_mode) or "deterministic_circular"
     sig_payload = {
         "version": "preextracted_frozen_cnn_v1",
         "dataset": str(dataset),
@@ -615,6 +924,9 @@ def _preextracted_cache_path(
         "train_len": int(train_len),
         "val_len": int(val_len),
     }
+    if norm_mode != "deterministic_circular" and shift_seconds:
+        sig_payload["shift_mode"] = norm_mode
+        sig_payload["preroll_seconds"] = round(float(preroll_seconds), 4)
     digest = hashlib.sha256(
         json.dumps(sig_payload, sort_keys=True).encode("utf-8")
     ).hexdigest()[:16]
@@ -859,6 +1171,8 @@ def preextract_frozen_cnn_features(
     window_seconds: float,
     window_start_offset_seconds: float = 0.0,
     shift_seconds: Iterable[float] = (),
+    shift_mode: str = "deterministic_circular",
+    preroll_seconds: float = 45.0,
     device: torch.device,
     batch_size: int = 512,
     amp: bool = True,
@@ -868,6 +1182,8 @@ def preextract_frozen_cnn_features(
 ) -> dict:
     """一次性提取（或从本地缓存秒级加载）训练集 Clean + Shifted 与验证集 Clean 的冻结 Stage-1 CNN 特征。"""
     shifts = [float(s) for s in shift_seconds]
+    norm_shift_mode = _normalize_shift_mode(shift_mode) or "deterministic_circular"
+    eff_preroll = float(preroll_seconds)
     cache_file: Path | None = None
     if cache_to_disk and word_ckpt_sha256:
         cache_file = _preextracted_cache_path(
@@ -879,6 +1195,8 @@ def preextract_frozen_cnn_features(
             shift_seconds=shifts,
             train_len=len(train_ds),
             val_len=len(val_ds),
+            shift_mode=norm_shift_mode,
+            preroll_seconds=eff_preroll,
         )
         if cache_file.is_file():
             t0 = time.perf_counter()
@@ -914,53 +1232,152 @@ def preextract_frozen_cnn_features(
                 pass
 
     t0 = time.perf_counter()
+    donor_train_clean: torch.Tensor | None = None
+    donor_val_clean: torch.Tensor | None = None
+    donor_shifted: dict[float, torch.Tensor] = {}
+    if cache_to_disk and word_ckpt_sha256:
+        donor_candidates = [
+            (
+                _preextracted_cache_path(
+                    dataset=dataset,
+                    subset_tag=subset_tag,
+                    word_ckpt_sha256=word_ckpt_sha256,
+                    window_seconds=window_seconds,
+                    window_start_offset_seconds=window_start_offset_seconds,
+                    shift_seconds=list(DEFAULT_CAUSAL_PREROLL_SHIFT_SECONDS),
+                    train_len=len(train_ds),
+                    val_len=len(val_ds),
+                    shift_mode=norm_shift_mode,
+                    preroll_seconds=eff_preroll,
+                ),
+                norm_shift_mode,
+            ),
+            (
+                _preextracted_cache_path(
+                    dataset=dataset,
+                    subset_tag=subset_tag,
+                    word_ckpt_sha256=word_ckpt_sha256,
+                    window_seconds=window_seconds,
+                    window_start_offset_seconds=window_start_offset_seconds,
+                    shift_seconds=list(DEFAULT_SIAMESE_SHIFT_SECONDS),
+                    train_len=len(train_ds),
+                    val_len=len(val_ds),
+                    shift_mode="deterministic_circular",
+                ),
+                "deterministic_circular",
+            ),
+            (
+                _preextracted_cache_path(
+                    dataset=dataset,
+                    subset_tag=subset_tag,
+                    word_ckpt_sha256=word_ckpt_sha256,
+                    window_seconds=window_seconds,
+                    window_start_offset_seconds=window_start_offset_seconds,
+                    shift_seconds=[],
+                    train_len=len(train_ds),
+                    val_len=len(val_ds),
+                    shift_mode="deterministic_circular",
+                ),
+                "deterministic_circular",
+            ),
+        ]
+        for donor_path, donor_mode in donor_candidates:
+            if cache_file is not None and donor_path == cache_file:
+                continue
+            if not donor_path.is_file():
+                continue
+            try:
+                donor = torch.load(
+                    donor_path, map_location="cpu", weights_only=False
+                )
+                if (
+                    isinstance(donor, dict)
+                    and donor.get("train_clean_z") is not None
+                    and len(donor["train_clean_z"]) == len(train_ds)
+                    and len(donor["val_clean_z"]) == len(val_ds)
+                ):
+                    if donor_train_clean is None:
+                        donor_train_clean = donor["train_clean_z"].float()
+                        donor_val_clean = donor["val_clean_z"].float()
+                    if donor_mode == norm_shift_mode and isinstance(
+                        donor.get("train_shifted_z"), dict
+                    ):
+                        for sk, sv in donor["train_shifted_z"].items():
+                            if len(sv) == len(train_ds) and float(sk) not in donor_shifted:
+                                donor_shifted[float(sk)] = sv.float()
+            except Exception:
+                continue
+
     print(
         f" [Pre-Extract Cache] Pre-extracting frozen Stage-1 CNN features "
-        f"(Clean 0s + {len(shifts)} shifted conditions, window={window_seconds:.2f}s)...",
+        f"(Clean 0s + {len(shifts)} shifted conditions [{norm_shift_mode}], window={window_seconds:.2f}s)...",
         flush=True,
     )
-    train_clean_cpu = _extract_single_dataset_cnn_embeddings(
-        model,
-        train_ds,
-        device=device,
-        batch_size=batch_size,
-        amp=amp,
-        amp_dtype=amp_dtype,
-        temporal_shift_seconds=0.0,
-        show_progress=show_progress,
-        progress_desc="Pre-extract [Train | Clean 0s]",
-    )
-    val_clean_cpu = _extract_single_dataset_cnn_embeddings(
-        model,
-        val_ds,
-        device=device,
-        batch_size=batch_size,
-        amp=amp,
-        amp_dtype=amp_dtype,
-        temporal_shift_seconds=0.0,
-        show_progress=show_progress,
-        progress_desc="Pre-extract [Val   | Clean 0s]",
-    )
-    train_shifted_cpu: dict[float, torch.Tensor] = {}
-    for shift_sec in shifts:
-        shift_label = f"{shift_sec:+.0f}s" if abs(shift_sec - round(shift_sec)) < 1e-6 else f"{shift_sec:+.1f}s"
-        train_shifted_cpu[float(shift_sec)] = _extract_single_dataset_cnn_embeddings(
+    if donor_train_clean is not None and donor_val_clean is not None:
+        train_clean_cpu = donor_train_clean
+        val_clean_cpu = donor_val_clean
+        print(
+            " [Pre-Extract Cache] Reused Clean 0s (Train & Val) from matching Stage-1 cache.",
+            flush=True,
+        )
+    else:
+        train_clean_cpu = _extract_single_dataset_cnn_embeddings(
             model,
             train_ds,
             device=device,
             batch_size=batch_size,
             amp=amp,
             amp_dtype=amp_dtype,
-            temporal_shift_seconds=float(shift_sec),
+            temporal_shift_seconds=0.0,
+            shift_mode=norm_shift_mode,
+            preroll_seconds=eff_preroll,
             show_progress=show_progress,
-            progress_desc=f"Pre-extract [Train | Shift {shift_label}]",
+            progress_desc="Pre-extract [Train | Clean 0s]",
         )
+        val_clean_cpu = _extract_single_dataset_cnn_embeddings(
+            model,
+            val_ds,
+            device=device,
+            batch_size=batch_size,
+            amp=amp,
+            amp_dtype=amp_dtype,
+            temporal_shift_seconds=0.0,
+            shift_mode=norm_shift_mode,
+            preroll_seconds=eff_preroll,
+            show_progress=show_progress,
+            progress_desc="Pre-extract [Val   | Clean 0s]",
+        )
+
+    train_shifted_cpu: dict[float, torch.Tensor] = {}
+    for shift_sec in shifts:
+        f_sec = float(shift_sec)
+        if f_sec in donor_shifted:
+            train_shifted_cpu[f_sec] = donor_shifted.pop(f_sec)
+            continue
+        shift_label = f"{shift_sec:+.0f}s" if abs(shift_sec - round(shift_sec)) < 1e-6 else f"{shift_sec:+.1f}s"
+        train_shifted_cpu[f_sec] = _extract_single_dataset_cnn_embeddings(
+            model,
+            train_ds,
+            device=device,
+            batch_size=batch_size,
+            amp=amp,
+            amp_dtype=amp_dtype,
+            temporal_shift_seconds=f_sec,
+            shift_mode=norm_shift_mode,
+            preroll_seconds=eff_preroll,
+            show_progress=show_progress,
+            progress_desc=f"Pre-extract [Train | Shift {shift_label} ({norm_shift_mode})]",
+        )
+    donor_shifted.clear()
 
     if cache_file is not None:
         try:
             tmp_file = cache_file.with_suffix(".pt.tmp")
             torch.save(
                 {
+                    "word_ckpt_sha256": str(word_ckpt_sha256),
+                    "shift_mode": norm_shift_mode,
+                    "preroll_seconds": eff_preroll,
                     "train_clean_z": train_clean_cpu.to(dtype=torch.bfloat16),
                     "val_clean_z": val_clean_cpu.to(dtype=torch.bfloat16),
                     "train_shifted_z": {
@@ -2430,9 +2847,23 @@ def train_one_epoch_siamese_debiased(
     )
 
     siamese_enabled = bool(siamese_config.get("enabled", False))
+    debias_mode = (
+        _normalize_debias_mode(siamese_config.get("debias_mode"))
+        or "legacy_siamese"
+    )
+    shift_mode = (
+        _normalize_shift_mode(siamese_config.get("shift_mode"))
+        or "deterministic_circular"
+    )
+    is_causal_tier = debias_mode in {"null_space", "amortized_timing"}
+    default_eta = (
+        0.0
+        if debias_mode == "null_space"
+        else (0.50 if debias_mode == "amortized_timing" else 0.8)
+    )
     eta_0 = float(
         siamese_config.get(
-            "eta_0", siamese_config.get("eta_train", 0.8)
+            "eta_0", siamese_config.get("eta_train", default_eta)
         )
     )
     eta_train = eta_0
@@ -2442,9 +2873,23 @@ def train_one_epoch_siamese_debiased(
         )
     )
     lambda_null = float(siamese_config.get("lambda_null", 10.0))
-    lambda_delta_null = float(siamese_config.get("lambda_delta_null", 0.0))
-    beta_delta_cm = float(siamese_config.get("beta_delta_cm", 0.50))
-    shifts_per_step = int(siamese_config.get("shifts_per_step", 2))
+    lambda_delta_null = float(
+        siamese_config.get(
+            "lambda_delta", siamese_config.get("lambda_delta_null", 0.0)
+        )
+    )
+    lambda_delta = lambda_delta_null
+    lambda_distill = float(
+        siamese_config.get(
+            "lambda_distill", 1.0 if debias_mode == "amortized_timing" else 0.0
+        )
+    )
+    beta_delta_cm = float(
+        siamese_config.get("beta_delta_cm", 0.0 if is_causal_tier else 0.50)
+    )
+    shifts_per_step = int(
+        siamese_config.get("shifts_per_step", 1 if is_causal_tier else 2)
+    )
     sync_rng = bool(siamese_config.get("synchronize_dropout_rng", True))
 
     train_clean_z: torch.Tensor = preextracted_cache["train_clean_z"]
@@ -2464,7 +2909,10 @@ def train_one_epoch_siamese_debiased(
         )
     if (
         siamese_enabled
-        and (lambda_null > 0.0 or lambda_delta_null > 0.0)
+        and (
+            lambda_null > 0.0
+            or (not is_causal_tier and lambda_delta_null > 0.0)
+        )
         and centered_vocab_bank is None
     ):
         raise ValueError(
@@ -2474,6 +2922,17 @@ def train_one_epoch_siamese_debiased(
     train_meta = preextracted_cache["train_meta"]
     targets_all: torch.Tensor = train_meta["targets"]
     sentence_indices_all: torch.Tensor = train_meta["sentence_indices"]
+    onset_seconds_all: torch.Tensor | None = train_meta.get("onset_seconds")
+    if siamese_enabled and debias_mode == "amortized_timing":
+        if getattr(model, "temporal_bias_head", None) is None:
+            raise ValueError(
+                "debias_mode='amortized_timing' 要求模型已挂载 model.temporal_bias_head。"
+            )
+        if onset_seconds_all is None:
+            raise ValueError(
+                "debias_mode='amortized_timing' 要求 train_meta 包含 onset_seconds。"
+            )
+        model.temporal_bias_eta = float(eta_0)
     static_rev_table: dict[str, torch.Tensor] | None = preextracted_cache.get(
         "train_static_revision_table"
     )
@@ -2509,6 +2968,7 @@ def train_one_epoch_siamese_debiased(
     siglip_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
     null_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
     delta_null_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
+    distill_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
     sample_count = 0
     optimizer_updates = 0
     batches_seen = 0
@@ -2529,15 +2989,24 @@ def train_one_epoch_siamese_debiased(
         d: torch.zeros((), device=device, dtype=torch.long) for d in horizons
     }
     max_horizon = max(horizons, default=0)
-    compute_null_grad = bool(
-        siamese_enabled
-        and (
-            lambda_null > 0.0
-            or lambda_delta_null > 0.0
-            or beta_delta_cm > 0.0
+    if is_causal_tier:
+        compute_null_grad = bool(
+            siamese_enabled
+            and (
+                (lambda_null > 0.0 and centered_vocab_bank is not None)
+                or lambda_delta > 0.0
+            )
         )
-        and centered_vocab_bank is not None
-    )
+    else:
+        compute_null_grad = bool(
+            siamese_enabled
+            and (
+                lambda_null > 0.0
+                or lambda_delta_null > 0.0
+                or beta_delta_cm > 0.0
+            )
+            and centered_vocab_bank is not None
+        )
 
     current_lr = (
         float(optimizer.param_groups[0].get("lr", 0.0))
@@ -2548,7 +3017,7 @@ def train_one_epoch_siamese_debiased(
     iterable, pbar = _wrap_progress(
         batch_sampler,
         enabled=show_progress,
-        desc=progress_desc or f"Epoch {int(epoch_index) + 1:02d} [siamese]",
+        desc=progress_desc or f"Epoch {int(epoch_index) + 1:02d} [{debias_mode}]",
         total=total_batches,
     )
 
@@ -2660,6 +3129,7 @@ def train_one_epoch_siamese_debiased(
                     k0_has_row: torch.Tensor | None = None
                     k0_shift_mean_by_row: torch.Tensor | None = None
                     k0_shift_branches_by_row: torch.Tensor | None = None
+                    b_pred_all: torch.Tensor | None = None
                     if siamese_enabled and y_shift_mean is not None:
                         k0_mask = revision_delays == 0
                         k0_has_row = torch.zeros(
@@ -2693,19 +3163,49 @@ def train_one_epoch_siamese_debiased(
                                 k0_shift_branches_by_row[:, k0_rows, :] = (
                                     y_shift_branches[:, k0_mask, :].detach()
                                 )
-                        y_shift_k0_all = torch.where(
-                            k0_has_row[revision_rows].unsqueeze(-1),
-                            k0_shift_mean_by_row[revision_rows],
-                            y_shift_mean.detach(),
-                        )
-                        # 前缀解耦差分共模扣除（eta_0 + eta_delta）+ 雅可比模长阻尼重缩放（Norm-Damped Detach）
-                        y_tilde = compute_norm_damped_rolling_debiased_embedding(
-                            y_clean,
-                            y_shift_mean,
-                            eta_0,
-                            y_shift_k0=y_shift_k0_all,
-                            eta_delta=eta_delta,
-                        )
+
+                        if debias_mode == "null_space":
+                            if eta_0 > 0.0:
+                                y_tilde = F.normalize(
+                                    y_clean - eta_0 * y_shift_mean.detach(),
+                                    dim=-1,
+                                )
+                            else:
+                                y_tilde = y_clean
+                        elif debias_mode == "amortized_timing":
+                            assert onset_seconds_all is not None
+                            batch_onset_seconds = onset_seconds_all[idx_tensor]
+                            b_pred_all = model.temporal_bias_head.predict_queries(
+                                batch_onset_seconds,
+                                batch_sentence_indices,
+                                revision_rows,
+                                revision_delays,
+                            )
+                            if eta_0 > 0.0:
+                                y_tilde = F.normalize(
+                                    y_clean
+                                    - eta_0
+                                    * b_pred_all.detach().to(
+                                        dtype=y_clean.dtype
+                                    ),
+                                    dim=-1,
+                                )
+                            else:
+                                y_tilde = y_clean
+                        else:
+                            y_shift_k0_all = torch.where(
+                                k0_has_row[revision_rows].unsqueeze(-1),
+                                k0_shift_mean_by_row[revision_rows],
+                                y_shift_mean.detach(),
+                            )
+                            # 前缀解耦差分共模扣除（eta_0 + eta_delta）+ 雅可比模长阻尼重缩放（Norm-Damped Detach）
+                            y_tilde = compute_norm_damped_rolling_debiased_embedding(
+                                y_clean,
+                                y_shift_mean,
+                                eta_0,
+                                y_shift_k0=y_shift_k0_all,
+                                eta_delta=eta_delta,
+                            )
                     else:
                         y_tilde = y_clean
 
@@ -2713,6 +3213,7 @@ def train_one_epoch_siamese_debiased(
                     horizon_siglip_losses = []
                     horizon_null_losses = []
                     horizon_delta_null_losses = []
+                    horizon_distill_losses = []
                     skip_empty_check = (
                         use_static_rev_table and bs_len > max_horizon * 2
                     )
@@ -2727,74 +3228,150 @@ def train_one_epoch_siamese_debiased(
                             batch_targets,
                             rows_r,
                         )
-                        if (
-                            compute_null_grad
-                            and y_shift_mean is not None
-                            and lambda_null > 0.0
-                        ):
-                            d_null = compute_shift_null_loss(
-                                y_shift_mean[delay_mask], centered_vocab_bank
-                            )
-                        else:
-                            d_null = d_siglip * 0.0
-                        if (
-                            compute_null_grad
-                            and y_shift_mean is not None
-                            and int(delay) > 0
-                            and (
-                                lambda_delta_null > 0.0 or beta_delta_cm > 0.0
-                            )
-                            and k0_has_row is not None
-                            and k0_shift_mean_by_row is not None
-                            and bool(k0_has_row[rows_r].any())
-                        ):
-                            valid_k0_r = k0_has_row[rows_r]
-                            y_shift_r_m = y_shift_mean[delay_mask][valid_k0_r]
-                            y_shift_k0_m = k0_shift_mean_by_row[
-                                rows_r[valid_k0_r]
-                            ]
-                            y_shift_r_br = (
-                                y_shift_branches[:, delay_mask, :][
-                                    :, valid_k0_r, :
+                        if is_causal_tier:
+                            if (
+                                compute_null_grad
+                                and y_shift_mean is not None
+                                and lambda_null > 0.0
+                                and centered_vocab_bank is not None
+                            ):
+                                d_null = compute_scaled_shift_null_loss(
+                                    y_shift_mean[delay_mask],
+                                    centered_vocab_bank,
+                                    y_shift_branches=(
+                                        y_shift_branches[:, delay_mask, :]
+                                        if y_shift_branches is not None
+                                        else None
+                                    ),
+                                )
+                            else:
+                                d_null = d_siglip * 0.0
+                            if (
+                                compute_null_grad
+                                and y_shift_mean is not None
+                                and int(delay) > 0
+                                and lambda_delta > 0.0
+                                and k0_has_row is not None
+                                and k0_shift_mean_by_row is not None
+                                and bool(k0_has_row[rows_r].any())
+                            ):
+                                valid_k0_r = k0_has_row[rows_r]
+                                y_shift_r_m = y_shift_mean[delay_mask][valid_k0_r]
+                                y_shift_k0_m = k0_shift_mean_by_row[
+                                    rows_r[valid_k0_r]
                                 ]
-                                if y_shift_branches is not None
-                                else None
-                            )
-                            y_shift_k0_br = (
-                                k0_shift_branches_by_row[
-                                    :, rows_r[valid_k0_r], :
-                                ]
-                                if k0_shift_branches_by_row is not None
-                                else None
-                            )
-                            d_delta_vocab, d_delta_cm = (
-                                compute_delta_shift_null_loss(
+                                y_shift_r_br = (
+                                    y_shift_branches[:, delay_mask, :][
+                                        :, valid_k0_r, :
+                                    ]
+                                    if y_shift_branches is not None
+                                    else None
+                                )
+                                y_shift_k0_br = (
+                                    k0_shift_branches_by_row[
+                                        :, rows_r[valid_k0_r], :
+                                    ]
+                                    if k0_shift_branches_by_row is not None
+                                    else None
+                                )
+                                d_delta_null = compute_euclidean_cross_horizon_loss(
                                     y_shift_r_m,
                                     y_shift_k0_m,
-                                    centered_vocab_bank,
-                                    beta_delta_cm=beta_delta_cm,
                                     y_shift_r_branches=y_shift_r_br,
                                     y_shift_k0_branches=y_shift_k0_br,
-                                    return_components=True,
                                 )
-                            )
-                            d_delta_null = d_delta_cm + d_delta_vocab
-                            d_delta_weighted = (
-                                lambda_delta_null * d_delta_vocab
-                                + beta_delta_cm * d_delta_cm
-                            )
+                                d_delta_weighted = lambda_delta * d_delta_null
+                            else:
+                                d_delta_null = d_siglip * 0.0
+                                d_delta_weighted = d_siglip * 0.0
+                            if (
+                                debias_mode == "amortized_timing"
+                                and b_pred_all is not None
+                                and y_shift_mean is not None
+                                and lambda_distill > 0.0
+                            ):
+                                d_distill = compute_temporal_bias_distillation_loss(
+                                    b_pred_all[delay_mask],
+                                    y_shift_mean[delay_mask],
+                                )
+                                d_distill_weighted = lambda_distill * d_distill
+                            else:
+                                d_distill = d_siglip * 0.0
+                                d_distill_weighted = d_siglip * 0.0
                         else:
-                            d_delta_null = d_siglip * 0.0
-                            d_delta_weighted = d_siglip * 0.0
+                            d_distill = d_siglip * 0.0
+                            d_distill_weighted = d_siglip * 0.0
+                            if (
+                                compute_null_grad
+                                and y_shift_mean is not None
+                                and lambda_null > 0.0
+                            ):
+                                d_null = compute_shift_null_loss(
+                                    y_shift_mean[delay_mask], centered_vocab_bank
+                                )
+                            else:
+                                d_null = d_siglip * 0.0
+                            if (
+                                compute_null_grad
+                                and y_shift_mean is not None
+                                and int(delay) > 0
+                                and (
+                                    lambda_delta_null > 0.0 or beta_delta_cm > 0.0
+                                )
+                                and k0_has_row is not None
+                                and k0_shift_mean_by_row is not None
+                                and bool(k0_has_row[rows_r].any())
+                            ):
+                                valid_k0_r = k0_has_row[rows_r]
+                                y_shift_r_m = y_shift_mean[delay_mask][valid_k0_r]
+                                y_shift_k0_m = k0_shift_mean_by_row[
+                                    rows_r[valid_k0_r]
+                                ]
+                                y_shift_r_br = (
+                                    y_shift_branches[:, delay_mask, :][
+                                        :, valid_k0_r, :
+                                    ]
+                                    if y_shift_branches is not None
+                                    else None
+                                )
+                                y_shift_k0_br = (
+                                    k0_shift_branches_by_row[
+                                        :, rows_r[valid_k0_r], :
+                                    ]
+                                    if k0_shift_branches_by_row is not None
+                                    else None
+                                )
+                                d_delta_vocab, d_delta_cm = (
+                                    compute_delta_shift_null_loss(
+                                        y_shift_r_m,
+                                        y_shift_k0_m,
+                                        centered_vocab_bank,
+                                        beta_delta_cm=beta_delta_cm,
+                                        y_shift_r_branches=y_shift_r_br,
+                                        y_shift_k0_branches=y_shift_k0_br,
+                                        return_components=True,
+                                    )
+                                )
+                                d_delta_null = d_delta_cm + d_delta_vocab
+                                d_delta_weighted = (
+                                    lambda_delta_null * d_delta_vocab
+                                    + beta_delta_cm * d_delta_cm
+                                )
+                            else:
+                                d_delta_null = d_siglip * 0.0
+                                d_delta_weighted = d_siglip * 0.0
+
                         d_total = (
                             d_siglip
                             + lambda_null * d_null
                             + d_delta_weighted
+                            + d_distill_weighted
                         )
                         horizon_total_losses.append(d_total)
                         horizon_siglip_losses.append(d_siglip.detach())
                         horizon_null_losses.append(d_null.detach())
                         horizon_delta_null_losses.append(d_delta_null.detach())
+                        horizon_distill_losses.append(d_distill.detach())
 
                         delay_counts_gpu[delay] += d_count_t
                         delay_siglip_sums_gpu[delay] += d_siglip.detach().to(
@@ -2816,6 +3393,7 @@ def train_one_epoch_siamese_debiased(
                     batch_delta_null_t = torch.stack(
                         horizon_delta_null_losses
                     ).mean()
+                    batch_distill_t = torch.stack(horizon_distill_losses).mean()
                     revision_supervision_count += int(y_tilde.shape[0])
                 else:
                     y_clean, y_shift_mean = forward_context_from_preextracted(
@@ -2826,11 +3404,40 @@ def train_one_epoch_siamese_debiased(
                         synchronize_dropout_rng=sync_rng,
                         compute_null_grad=compute_null_grad,
                     )
+                    b_ctx_pred: torch.Tensor | None = None
                     if siamese_enabled and y_shift_mean is not None:
-                        # 雅可比模长阻尼重缩放（Norm-Damped Detach）
-                        y_tilde = compute_norm_damped_debiased_embedding(
-                            y_clean, y_shift_mean, eta_train
-                        )
+                        if debias_mode == "null_space":
+                            if eta_train > 0.0:
+                                y_tilde = F.normalize(
+                                    y_clean - eta_train * y_shift_mean.detach(),
+                                    dim=-1,
+                                )
+                            else:
+                                y_tilde = y_clean
+                        elif debias_mode == "amortized_timing":
+                            assert onset_seconds_all is not None
+                            batch_onset_seconds = onset_seconds_all[idx_tensor]
+                            b_ctx_pred = (
+                                model.temporal_bias_head.predict_group_revisions(
+                                    batch_onset_seconds,
+                                    batch_sentence_indices,
+                                    (0,),
+                                )[0]
+                            )
+                            if eta_train > 0.0:
+                                y_tilde = F.normalize(
+                                    y_clean
+                                    - eta_train
+                                    * b_ctx_pred.detach().to(dtype=y_clean.dtype),
+                                    dim=-1,
+                                )
+                            else:
+                                y_tilde = y_clean
+                        else:
+                            # 雅可比模长阻尼重缩放（Norm-Damped Detach）
+                            y_tilde = compute_norm_damped_debiased_embedding(
+                                y_clean, y_shift_mean, eta_train
+                            )
                     else:
                         y_tilde = y_clean
                     d_siglip = loss_module(y_tilde, batch_targets)
@@ -2838,16 +3445,39 @@ def train_one_epoch_siamese_debiased(
                         compute_null_grad
                         and y_shift_mean is not None
                         and lambda_null > 0.0
+                        and centered_vocab_bank is not None
                     ):
-                        d_null = compute_shift_null_loss(
-                            y_shift_mean, centered_vocab_bank
+                        d_null = (
+                            compute_scaled_shift_null_loss(
+                                y_shift_mean, centered_vocab_bank
+                            )
+                            if is_causal_tier
+                            else compute_shift_null_loss(
+                                y_shift_mean, centered_vocab_bank
+                            )
                         )
                     else:
                         d_null = d_siglip * 0.0
-                    loss = d_siglip + lambda_null * d_null
+                    if (
+                        debias_mode == "amortized_timing"
+                        and b_ctx_pred is not None
+                        and y_shift_mean is not None
+                        and lambda_distill > 0.0
+                    ):
+                        d_distill = compute_temporal_bias_distillation_loss(
+                            b_ctx_pred, y_shift_mean
+                        )
+                    else:
+                        d_distill = d_siglip * 0.0
+                    loss = (
+                        d_siglip
+                        + lambda_null * d_null
+                        + lambda_distill * d_distill
+                    )
                     batch_siglip_t = d_siglip.detach()
                     batch_null_t = d_null.detach()
                     batch_delta_null_t = d_null.detach() * 0.0
+                    batch_distill_t = d_distill.detach()
 
             scaler.scale(loss).backward()
             max_grad_norm = float(training_config.get("max_grad_norm", 0.0))
@@ -2874,6 +3504,9 @@ def train_one_epoch_siamese_debiased(
             null_loss_gpu += batch_null_t.to(dtype=torch.float64) * bs_len
             delta_null_loss_gpu += (
                 batch_delta_null_t.to(dtype=torch.float64) * bs_len
+            )
+            distill_loss_gpu += (
+                batch_distill_t.to(dtype=torch.float64) * bs_len
             )
             sample_count += bs_len
 
@@ -2915,6 +3548,7 @@ def train_one_epoch_siamese_debiased(
     siglip_loss_sum = float(siglip_loss_gpu.item())
     null_loss_sum = float(null_loss_gpu.item())
     delta_null_loss_sum = float(delta_null_loss_gpu.item())
+    distill_loss_sum = float(distill_loss_gpu.item())
     revision_delay_counts = {
         d: int(delay_counts_gpu[d].item()) for d in horizons
     }
@@ -2932,12 +3566,16 @@ def train_one_epoch_siamese_debiased(
     }
     diagnostics = {
         "mode": "siamese_debiased" if siamese_enabled else "preextracted_frozen_cnn",
+        "debias_mode": debias_mode if siamese_enabled else "none",
+        "shift_mode": shift_mode,
         "siamese_debiased_enabled": siamese_enabled,
         "eta_0": eta_0 if siamese_enabled else 0.0,
         "eta_train": eta_train if siamese_enabled else 0.0,
         "eta_delta": eta_delta if siamese_enabled else 0.0,
         "lambda_null": lambda_null if siamese_enabled else 0.0,
+        "lambda_delta": lambda_delta if siamese_enabled else 0.0,
         "lambda_delta_null": lambda_delta_null if siamese_enabled else 0.0,
+        "lambda_distill": lambda_distill if siamese_enabled else 0.0,
         "beta_delta_cm": beta_delta_cm if siamese_enabled else 0.0,
         "shifts_per_step": shifts_per_step if siamese_enabled else 0,
         "word_loss": float(siglip_loss_sum / denom),
@@ -2949,6 +3587,12 @@ def train_one_epoch_siamese_debiased(
         "delta_shift_null_loss": float(delta_null_loss_sum / denom),
         "weighted_delta_shift_null_loss": float(
             (lambda_delta_null * delta_null_loss_sum) / denom
+        )
+        if siamese_enabled
+        else 0.0,
+        "distill_loss": float(distill_loss_sum / denom),
+        "weighted_distill_loss": float(
+            (lambda_distill * distill_loss_sum) / denom
         )
         if siamese_enabled
         else 0.0,
@@ -2992,6 +3636,39 @@ def train_one_epoch_siamese_debiased(
 
 
 @torch.inference_mode()
+def compute_causal_cms_mu0_from_encoded(
+    encoded: dict,
+    *,
+    source: str = "train",
+) -> dict:
+    """从训练集或校准集编码字典计算在线 Causal EMA-CMS 初始状态向量 mu_0。"""
+    preds = encoded["predictions"].detach().float()
+    mu0_pred = preds.mean(dim=0).cpu()
+    rev_mu0: dict[int, torch.Tensor] = {}
+    rev_preds = encoded.get("revision_predictions")
+    rev_masks = encoded.get("revision_availability_masks") or {}
+    if isinstance(rev_preds, dict):
+        for delay, mat in sorted(rev_preds.items()):
+            d_int = int(delay)
+            mat_f = mat.detach().float()
+            mask = rev_masks.get(delay)
+            if mask is None:
+                mask = rev_masks.get(d_int)
+            if mask is not None and bool(mask.any()):
+                valid_mat = mat_f[mask.to(device=mat_f.device, dtype=torch.bool)]
+                rev_mu0[d_int] = valid_mat.mean(dim=0).cpu()
+            else:
+                rev_mu0[d_int] = mat_f.mean(dim=0).cpu()
+    return {
+        "version": "causal_cms_mu0_v1",
+        "source": str(source),
+        "event_count": int(len(preds)),
+        "predictions": mu0_pred,
+        "revision_predictions": rev_mu0,
+    }
+
+
+@torch.inference_mode()
 def encode_from_preextracted_cnn(
     model,
     batch_sampler,
@@ -3023,6 +3700,12 @@ def encode_from_preextracted_cnn(
     targets_all: torch.Tensor = meta["targets"]
     subject_indices_all: torch.Tensor = meta["subject_indices"]
     sentence_indices_all: torch.Tensor = meta["sentence_indices"]
+    onset_seconds_all: torch.Tensor | None = meta.get("onset_seconds")
+    has_temporal_bias_head = bool(
+        getattr(model, "temporal_bias_head", None) is not None
+        and float(getattr(model, "temporal_bias_eta", 0.0)) > 0.0
+        and onset_seconds_all is not None
+    )
     words_all: list[str] = meta["words"]
     event_ids_all: list[str] = meta["event_ids"]
     recording_ids_all: list[str] = meta.get(
@@ -3137,6 +3820,24 @@ def encode_from_preextracted_cnn(
                             model, z_batch, sent_batch
                         )
                         masks = model.revision_availability_masks(sent_batch)
+                    if has_temporal_bias_head and onset_seconds_all is not None:
+                        onset_batch = onset_seconds_all[idx_tensor]
+                        b_by_delay = (
+                            model.temporal_bias_head.predict_group_revisions(
+                                onset_batch, sent_batch, horizons
+                            )
+                        )
+                        eta_b = float(model.temporal_bias_eta)
+                        for d in horizons:
+                            d_int = int(d)
+                            delayed[d_int] = F.normalize(
+                                delayed[d_int]
+                                - eta_b
+                                * b_by_delay[d_int].to(
+                                    dtype=delayed[d_int].dtype
+                                ),
+                                dim=-1,
+                            )
                     maximum_delay = max(delayed)
                     out_batch = delayed[maximum_delay]
                 else:
@@ -3148,6 +3849,17 @@ def encode_from_preextracted_cnn(
                         shifted_z_batches=None,
                         synchronize_dropout_rng=False,
                     )
+                    if has_temporal_bias_head and onset_seconds_all is not None:
+                        onset_batch = onset_seconds_all[idx_tensor]
+                        b_0 = model.temporal_bias_head.predict_group_revisions(
+                            onset_batch, sent_batch, (0,)
+                        )[0]
+                        out_batch = F.normalize(
+                            out_batch
+                            - float(model.temporal_bias_eta)
+                            * b_0.to(dtype=out_batch.dtype),
+                            dim=-1,
+                        )
 
             predictions.append(out_batch.float().cpu())
             targets.append(t_batch.float().cpu())

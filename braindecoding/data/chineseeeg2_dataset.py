@@ -1203,6 +1203,75 @@ def _打开处理后记录(path: str):
     return np.load(path, mmap_mode="r")
 
 
+VALID_TEMPORAL_SHIFT_MODES = ("deterministic_circular", "preroll")
+DEFAULT_PREROLL_SECONDS = 45.0
+
+
+@lru_cache(maxsize=8)
+def _cached_chineseeeg2_train_recordings(
+    events_csv_path: str, mtime_ns: int
+) -> tuple[tuple[str, str, str], ...]:
+    """缓存读取 ChineseEEG2 events.csv 中 train 划分的可训练 (subject_id, recording_id, vhdr_relpath)。"""
+    del mtime_ns
+    df = restore_event_table_columns(pd.read_csv(events_csv_path, low_memory=False))
+    trainable_mask = df["is_trainable"].map(解析布尔值)
+    train_df = df[df["split"].astype(str).eq("train") & trainable_mask]
+    dedup = (
+        train_df[["subject_id", "recording_id", "vhdr_relpath"]]
+        .drop_duplicates()
+        .sort_values(["subject_id", "recording_id", "vhdr_relpath"], kind="mergesort")
+    )
+    return tuple(
+        (str(subj), str(rec_id), str(rel))
+        for subj, rec_id, rel in dedup.itertuples(index=False, name=None)
+    )
+
+
+def _concat_readonly_tail_from_eeg_signals(
+    signal_paths: list[Path] | tuple[Path, ...],
+    *,
+    required_samples: int,
+    channel_count: int,
+    subject_id: str,
+    max_samples_by_path: dict[Path, int] | None = None,
+) -> np.ndarray:
+    """从同被试 train 连续脑电记录末尾截取只读 Pre-Roll 校准缓冲 [C, required_samples]。"""
+    if required_samples <= 0:
+        raise ValueError(f"ChineseEEG2 Pre-Roll 采样点数必须为正整数：{required_samples}")
+    chunks_rev: list[np.ndarray] = []
+    remaining = int(required_samples)
+    for sig_path in reversed(signal_paths):
+        arr = _打开处理后记录(str(sig_path))
+        if arr.ndim != 2 or int(arr.shape[0]) != int(channel_count):
+            raise ValueError(
+                f"ChineseEEG2 Pre-Roll 信号维度异常：{sig_path} shape={getattr(arr, 'shape', None)}"
+            )
+        avail = int(arr.shape[1])
+        if max_samples_by_path and sig_path in max_samples_by_path:
+            avail = min(avail, max(0, int(max_samples_by_path[sig_path])))
+        if avail <= 0:
+            continue
+        take = min(remaining, avail)
+        chunks_rev.append(np.array(arr[:, avail - take : avail], dtype=np.float32, copy=True))
+        remaining -= take
+        if remaining <= 0:
+            break
+    if remaining > 0:
+        collected = int(required_samples) - remaining
+        raise ValueError(
+            f"ChineseEEG2 受试者 {subject_id} 的 train 划分记录总长度 ({collected}) "
+            f"不足以构建所需 Pre-Roll 校准缓冲 ({required_samples} 采样点)。"
+        )
+    if len(chunks_rev) == 1:
+        buffer = chunks_rev[0]
+    else:
+        buffer = np.concatenate(list(reversed(chunks_rev)), axis=1).astype(
+            np.float32, copy=False
+        )
+    buffer.setflags(write=False)
+    return buffer
+
+
 class ChineseEEG2LittlePrinceWordDataset(Dataset):
     """将词起点后的固定脑电窗口与冻结文本向量配对。"""
 
@@ -1215,6 +1284,11 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
         text_embedding_config,
         zero_eeg=False,
         temporal_shift_seconds: float = 0.0,
+        *,
+        shift_mode: str | None = None,
+        preroll_seconds: float | None = None,
+        preroll_source_table: pd.DataFrame | None = None,
+        preroll_buffers: dict[str, np.ndarray] | None = None,
     ):
         self.table = event_table.reset_index(drop=True).copy()
         self.dataset_config = dict(dataset_config)
@@ -1311,6 +1385,29 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
         self.temporal_shift_samples = int(
             round(self.temporal_shift_seconds * self.sampling_rate_hz)
         )
+        resolved_shift_mode = str(
+            shift_mode
+            if shift_mode is not None
+            else self.dataset_config.get("shift_mode", "deterministic_circular")
+        ).strip().lower()
+        if resolved_shift_mode not in VALID_TEMPORAL_SHIFT_MODES:
+            raise ValueError(
+                f"ChineseEEG2 shift_mode 无效：{resolved_shift_mode!r}，可选 {VALID_TEMPORAL_SHIFT_MODES}"
+            )
+        self.shift_mode = resolved_shift_mode
+        self.preroll_seconds = float(
+            preroll_seconds
+            if preroll_seconds is not None
+            else self.dataset_config.get("preroll_seconds", DEFAULT_PREROLL_SECONDS)
+        )
+        if self.preroll_seconds <= 0.0:
+            raise ValueError(
+                f"ChineseEEG2 preroll_seconds 必须为正数：{self.preroll_seconds}"
+            )
+        if self.shift_mode == "preroll" and self.temporal_shift_samples > 0:
+            raise ValueError(
+                "ChineseEEG2 Pre-Roll 因果移位模式仅允许严格过去移位 (temporal_shift_seconds <= 0)。"
+            )
 
         self.subject_ids = tuple(sorted(str(value) for value in self.dataset_config["subjects"]))
         self.subject_to_index = {
@@ -1344,6 +1441,27 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
         )
         if self._window_offset_samples != 0:
             self._window_starts = self._window_starts + self._window_offset_samples
+        if "onset_seconds" in self.table.columns:
+            self._onset_seconds = self.table["onset_seconds"].to_numpy(
+                dtype=np.float64, copy=True
+            )
+        elif "开始时间" in self.table.columns:
+            self._onset_seconds = self.table["开始时间"].to_numpy(
+                dtype=np.float64, copy=True
+            )
+        elif "aligned_start_seconds" in self.table.columns:
+            self._onset_seconds = self.table["aligned_start_seconds"].to_numpy(
+                dtype=np.float64, copy=True
+            )
+        elif "window_start_seconds" in self.table.columns:
+            self._onset_seconds = self.table["window_start_seconds"].to_numpy(
+                dtype=np.float64, copy=True
+            )
+        else:
+            self._onset_seconds = (
+                self._window_starts.astype(np.float64) / float(self.sampling_rate_hz)
+            )
+        self.table["onset_seconds"] = self._onset_seconds
         self._embedding_tensors = {
             word: torch.from_numpy(np.array(vec, dtype=np.float32, copy=True))
             for word, vec in self.embedding_map.items()
@@ -1360,6 +1478,239 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
         )
         self._sentence_index_tensors = torch.as_tensor(
             self.sentence_indices, dtype=torch.long
+        )
+        self._onset_second_tensors = torch.as_tensor(
+            self._onset_seconds, dtype=torch.float32
+        )
+        self._preroll_by_recording: dict[str, np.ndarray] = {}
+        self._default_preroll_buffer: np.ndarray | None = None
+        self._dataset_root_path = root
+        self._preroll_source_table = preroll_source_table
+        self._explicit_preroll_buffers = preroll_buffers
+        if (
+            not self.zero_eeg
+            and self.shift_mode == "preroll"
+            and self.temporal_shift_samples < 0
+        ):
+            self._init_preroll_buffers(
+                root=root,
+                preroll_source_table=preroll_source_table,
+                preroll_buffers=preroll_buffers,
+            )
+
+    def ensure_preroll_buffers(
+        self,
+        shift_seconds: float | None = None,
+        *,
+        shift_mode: str | None = None,
+        preroll_seconds: float | None = None,
+    ) -> None:
+        """动态切换至 Pre-Roll 模式或扩展过去移位幅度时，按需初始化或扩容只读前置校准缓冲。"""
+        if shift_mode is not None:
+            mode_norm = str(shift_mode).strip().lower()
+            if mode_norm not in VALID_TEMPORAL_SHIFT_MODES:
+                raise ValueError(f"ChineseEEG2 shift_mode 无效：{mode_norm!r}")
+            self.shift_mode = mode_norm
+        if preroll_seconds is not None:
+            self.preroll_seconds = float(preroll_seconds)
+        if shift_seconds is not None:
+            self.temporal_shift_seconds = float(shift_seconds)
+            self.temporal_shift_samples = int(
+                round(self.temporal_shift_seconds * self.sampling_rate_hz)
+            )
+        if self.zero_eeg or self.shift_mode != "preroll" or self.temporal_shift_samples == 0:
+            return
+        if self.temporal_shift_samples > 0:
+            raise ValueError(
+                "ChineseEEG2 Pre-Roll 因果移位模式仅允许严格过去移位 (temporal_shift_seconds <= 0)。"
+            )
+        required_samples = max(
+            int(round(self.preroll_seconds * self.sampling_rate_hz)),
+            abs(int(self.temporal_shift_samples)) + int(self.window_samples),
+        )
+        if self._preroll_by_recording and all(
+            int(buf.shape[1]) >= required_samples
+            for buf in self._preroll_by_recording.values()
+        ):
+            return
+        self._init_preroll_buffers(
+            root=getattr(self, "_dataset_root_path", Path(self.dataset_config["root"])),
+            preroll_source_table=getattr(self, "_preroll_source_table", None),
+            preroll_buffers=getattr(self, "_explicit_preroll_buffers", None),
+        )
+
+    def _init_preroll_buffers(
+        self,
+        *,
+        root: Path,
+        preroll_source_table: pd.DataFrame | None = None,
+        preroll_buffers: dict[str, np.ndarray] | None = None,
+    ) -> None:
+        required_samples = max(
+            int(round(self.preroll_seconds * self.sampling_rate_hz)),
+            abs(int(self.temporal_shift_samples)) + int(self.window_samples),
+        )
+        observed_pairs = list(
+            self.table[["subject_id", "recording_id"]]
+            .drop_duplicates()
+            .itertuples(index=False, name=None)
+        )
+        if preroll_buffers is not None:
+            for subj_raw, rec_raw in observed_pairs:
+                subj = str(subj_raw)
+                rec_id = str(rec_raw)
+                buf = preroll_buffers.get(rec_id)
+                if buf is None:
+                    buf = preroll_buffers.get(subj)
+                if buf is None:
+                    raise ValueError(
+                        f"ChineseEEG2 preroll_buffers 缺少受试者 {subj} (recording={rec_id}) 的前置校准信号。"
+                    )
+                arr = np.asarray(buf, dtype=np.float32)
+                if arr.ndim != 2 or int(arr.shape[0]) != int(self.channel_count):
+                    raise ValueError(
+                        f"ChineseEEG2 preroll_buffers[{subj}] 形状无效：{arr.shape}"
+                    )
+                if int(arr.shape[1]) < required_samples:
+                    raise ValueError(
+                        f"ChineseEEG2 preroll_buffers[{subj}] 长度 ({arr.shape[1]}) 小于所需采样点 ({required_samples})。"
+                    )
+                sliced = np.array(arr[:, -required_samples:], dtype=np.float32, copy=True)
+                sliced.setflags(write=False)
+                self._preroll_by_recording[rec_id] = sliced
+            return
+
+        train_rows: list[tuple[str, str, str]] = []
+        shared_rec_max_train_end: dict[str, int] = {}
+        if preroll_source_table is not None:
+            src_df = restore_event_table_columns(preroll_source_table)
+            trainable_mask = (
+                src_df["is_trainable"].map(解析布尔值)
+                if "is_trainable" in src_df.columns
+                else pd.Series(True, index=src_df.index)
+            )
+            mask = src_df["split"].astype(str).eq("train") & trainable_mask
+            dedup = (
+                src_df.loc[mask, ["subject_id", "recording_id", "vhdr_relpath"]]
+                .drop_duplicates()
+                .sort_values(["subject_id", "recording_id", "vhdr_relpath"], kind="mergesort")
+            )
+            train_rows = [
+                (str(s), str(r), str(u))
+                for s, r, u in dedup.itertuples(index=False, name=None)
+            ]
+            non_train_mask = (~src_df["split"].astype(str).eq("train")) & trainable_mask
+            shared_recs = set(src_df.loc[mask, "recording_id"].astype(str)) & set(
+                src_df.loc[non_train_mask, "recording_id"].astype(str)
+            )
+            if shared_recs and "window_start_target_sample" in src_df.columns:
+                for s_rec in shared_recs:
+                    rec_rows = src_df[
+                        src_df["recording_id"].astype(str).eq(s_rec) & trainable_mask
+                    ]
+                    tr_starts = rec_rows.loc[
+                        rec_rows["split"].astype(str).eq("train"),
+                        "window_start_target_sample",
+                    ].astype(int)
+                    ntr_starts = rec_rows.loc[
+                        ~rec_rows["split"].astype(str).eq("train"),
+                        "window_start_target_sample",
+                    ].astype(int)
+                    max_tr_stop = int(tr_starts.max()) + int(self._window_offset_samples) + int(self.window_samples)
+                    min_ntr_start = int(ntr_starts.min()) + int(self._window_offset_samples)
+                    shared_rec_max_train_end[s_rec] = max(0, min(max_tr_stop, min_ntr_start))
+        else:
+            candidate_csv = self.dataset_config.get("event_table_path")
+            if candidate_csv:
+                csv_path = Path(candidate_csv)
+            else:
+                csv_path = self.eeg_cache_dir.parent.parent / "events" / "events.csv"
+            if csv_path.is_file():
+                train_rows = list(
+                    _cached_chineseeeg2_train_recordings(
+                        str(csv_path.resolve()), csv_path.stat().st_mtime_ns
+                    )
+                )
+            elif "split" in self.table.columns:
+                mask = self.table["split"].astype(str).eq("train")
+                dedup = (
+                    self.table.loc[mask, ["subject_id", "recording_id", "vhdr_relpath"]]
+                    .drop_duplicates()
+                    .sort_values(["subject_id", "recording_id", "vhdr_relpath"], kind="mergesort")
+                )
+                train_rows = [
+                    (str(s), str(r), str(u))
+                    for s, r, u in dedup.itertuples(index=False, name=None)
+                ]
+
+        by_subject: dict[str, list[tuple[str, Path]]] = {}
+        max_samples_by_path: dict[Path, int] = {}
+        for subj, rec_id, rel_path in train_rows:
+            sig_path: Path | None = None
+            if rel_path in self.recording_cache_paths and Path(self.recording_cache_paths[rel_path]).is_file():
+                sig_path = Path(self.recording_cache_paths[rel_path])
+            else:
+                located = 定位缓存记录(root / rel_path, self.dataset_config, self.eeg_cache_dir)
+                if located is not None:
+                    sig_path = located[0]
+            if sig_path is not None:
+                by_subject.setdefault(subj, []).append((rec_id, sig_path))
+                if rec_id in shared_rec_max_train_end:
+                    max_samples_by_path[sig_path] = shared_rec_max_train_end[rec_id]
+
+        primary_cache: dict[str, tuple[str, np.ndarray]] = {}
+        alt_cache: dict[str, np.ndarray] = {}
+        for subj_raw, rec_raw in observed_pairs:
+            subj = str(subj_raw)
+            rec_id = str(rec_raw)
+            records = by_subject.get(subj, [])
+            if not records:
+                raise ValueError(
+                    f"ChineseEEG2 Pre-Roll 模式未找到受试者 {subj} 的 train 划分校准信号。"
+                )
+            if subj not in primary_cache:
+                last_rec_id = records[-1][0]
+                primary_buf = _concat_readonly_tail_from_eeg_signals(
+                    [p for _, p in records],
+                    required_samples=required_samples,
+                    channel_count=self.channel_count,
+                    subject_id=subj,
+                    max_samples_by_path=max_samples_by_path or None,
+                )
+                primary_cache[subj] = (last_rec_id, primary_buf)
+            last_rec_id, primary_buf = primary_cache[subj]
+            if rec_id == last_rec_id and rec_id not in shared_rec_max_train_end:
+                if len(records) >= 2:
+                    if subj not in alt_cache:
+                        alt_cache[subj] = _concat_readonly_tail_from_eeg_signals(
+                            [p for _, p in records[:-1]],
+                            required_samples=required_samples,
+                            channel_count=self.channel_count,
+                            subject_id=subj,
+                            max_samples_by_path=max_samples_by_path or None,
+                        )
+                    self._preroll_by_recording[rec_id] = alt_cache[subj]
+                else:
+                    raise ValueError(
+                        f"ChineseEEG2 受试者 {subj} 仅有一条未截断 train 记录 ({rec_id})，"
+                        "Pre-Roll 模式禁止使用同一记录末尾环绕充当校准缓冲。"
+                    )
+            else:
+                self._preroll_by_recording[rec_id] = primary_buf
+
+    def _get_preroll_for_index(self, idx: int) -> np.ndarray:
+        preroll_map = getattr(self, "_preroll_by_recording", None)
+        if preroll_map:
+            rec_ids = getattr(self, "_recording_ids", None)
+            if rec_ids is not None:
+                buf = preroll_map.get(rec_ids[idx])
+                if buf is not None:
+                    return buf
+        default_buf = getattr(self, "_default_preroll_buffer", None)
+        if default_buf is not None:
+            return default_buf
+        raise RuntimeError(
+            f"ChineseEEG2 Pre-Roll 校准缓冲未初始化 (index={idx})。"
         )
 
     def __len__(self):
@@ -1388,7 +1739,43 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
                 )
             start = max(0, min(start, int(recording.shape[1]) - self.window_samples))
             stop = start + self.window_samples
-        if self.temporal_shift_samples != 0:
+        effective_shift_mode = getattr(self, "shift_mode", "deterministic_circular")
+        if self.temporal_shift_samples == 0:
+            window = np.array(recording[:, start:stop], dtype=np.float32, copy=True)
+        elif effective_shift_mode == "preroll":
+            if self.temporal_shift_samples > 0:
+                raise ValueError(
+                    "ChineseEEG2 Pre-Roll 因果移位模式仅允许严格过去移位 (temporal_shift_seconds <= 0)。"
+                )
+            raw_start = start + int(self.temporal_shift_samples)
+            win_len = int(self.window_samples)
+            if raw_start >= 0:
+                window = np.array(
+                    recording[:, raw_start : raw_start + win_len],
+                    dtype=np.float32,
+                    copy=True,
+                )
+            else:
+                preroll = self._get_preroll_for_index(idx)
+                buf_len = int(preroll.shape[1])
+                buf_start = buf_len + raw_start
+                if buf_start < 0:
+                    raise IndexError(
+                        f"ChineseEEG2 Pre-Roll 缓冲区长度不足：raw_start={raw_start}, buf_len={buf_len}"
+                    )
+                if raw_start + win_len <= 0:
+                    window = np.array(
+                        preroll[:, buf_start : buf_start + win_len],
+                        dtype=np.float32,
+                        copy=True,
+                    )
+                else:
+                    left_len = -raw_start
+                    right_len = win_len - left_len
+                    window = np.empty((self.channel_count, win_len), dtype=np.float32)
+                    window[:, :left_len] = preroll[:, buf_start:buf_len]
+                    window[:, left_len:] = recording[:, :right_len]
+        else:
             valid_span = int(recording.shape[1]) - self.window_samples + 1
             if valid_span <= 2 * self.window_samples:
                 raise ValueError(
@@ -1404,10 +1791,12 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
                 shifted_start = (shifted_start + step) % valid_span
             start = int(shifted_start)
             stop = start + self.window_samples
-        window = np.array(recording[:, start:stop], dtype=np.float32, copy=True)
+            window = np.array(recording[:, start:stop], dtype=np.float32, copy=True)
         if self.clamp is not None:
             np.clip(window, -float(self.clamp), float(self.clamp), out=window)
         return window
+
+    read_eeg = 读取脑电
 
     def __getitem__(self, index):
         idx = int(index)
@@ -1417,6 +1806,7 @@ class ChineseEEG2LittlePrinceWordDataset(Dataset):
             "text_embedding": self._embedding_tensors[word],
             "subject_index": self._subject_index_tensors[idx],
             "sentence_index": self._sentence_index_tensors[idx],
+            "onset_seconds": self._onset_second_tensors[idx],
             "word": word,
             "event_id": self._event_ids[idx],
             "recording_id": self._recording_ids[idx],

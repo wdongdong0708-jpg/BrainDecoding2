@@ -608,6 +608,24 @@ def _add_training_workflow_args(
         help="启用孪生共模抵消（Siamese Common-Mode Rejection）+ 错位零化正则（Shift-Null Regularization）与冻结 CNN 特征预提取极速训练",
     )
     parser.add_argument(
+        "--debias-mode",
+        choices=("null_space", "amortized_timing", "legacy_siamese"),
+        default=None,
+        help="统一因果去偏训练模式：null_space（档位 A：零空间能量惩罚 + 跨视界欧氏稳定）、amortized_timing（档位 B：零神经输入摊销式时序偏置头蒸馏）或 legacy_siamese（旧版双 eta 孪生扣除）",
+    )
+    parser.add_argument(
+        "--shift-mode",
+        choices=("preroll", "deterministic_circular"),
+        default=None,
+        help="时间错位采样模式：preroll（受试者只读 train 尾部因果校准缓冲区，严格零回绕）或 deterministic_circular（旧版记录内圆周移位）",
+    )
+    parser.add_argument(
+        "--preroll-seconds",
+        type=float,
+        default=None,
+        help="Pre-Roll 因果校准缓冲区秒数（默认：45.0）",
+    )
+    parser.add_argument(
         "--eta-train",
         "--eta-0",
         dest="eta_train",
@@ -627,13 +645,25 @@ def _add_training_workflow_args(
         "--lambda-null",
         type=float,
         default=None,
-        help="静态错位零化正则系数 lambda_null（如 10.0；传入时自动启用孪生去偏训练）",
+        help="错位词表零空间正则系数 lambda_null（null_space 推荐 0.15，legacy_siamese 推荐 10.0）",
+    )
+    parser.add_argument(
+        "--lambda-delta",
+        type=float,
+        default=None,
+        help="欧氏跨视界错位稳定项系数 lambda_delta（null_space 推荐 0.15）",
     )
     parser.add_argument(
         "--lambda-delta-null",
         type=float,
         default=None,
         help="跨状态错位跳变零化正则系数 lambda_delta_null（如 15.0；专门锁死 K0->K1/K2 接入未来窗口引入的错位跳变）",
+    )
+    parser.add_argument(
+        "--lambda-distill",
+        type=float,
+        default=None,
+        help="摊销式时序偏置头蒸馏系数 lambda_distill（amortized_timing 默认 1.0）",
     )
     parser.add_argument(
         "--beta-delta-cm",
@@ -647,13 +677,13 @@ def _add_training_workflow_args(
         "--shifts-per-step",
         type=int,
         default=None,
-        help="每个训练步从 6 个时间错位中随机抽取的同构错位分支数量 M（如 2 或 6）",
+        help="每个训练步从错位池中随机抽取的同构错位分支数量 M（如 1、2 或 6）",
     )
     parser.add_argument(
         "--preextract-frozen-cnn",
         action="store_true",
         default=None,
-        help="在 Stage 2.1/2.2 冻结 CNN 训练启动前一次性预提取并缓存 Stage-1 CNN 特征，将单轮训练提速 5-8 倍",
+        help="在 Stage 2.1/2.2/2.3 冻结 CNN 训练启动前一次性预提取并缓存 Stage-1 CNN 特征，将单轮训练提速 5-8 倍",
     )
 
 
@@ -776,7 +806,19 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--shift-seconds",
         default=None,
-        help="可选逗号分隔的时间错位秒数列表（如 -15,-30,-45,-60,-90,-120），以真实错位脑磁/脑电信号作为词级检索负对照",
+        help="可选逗号分隔的时间错位秒数列表（如 -10,-20,-30,-40 或 none/off 表示 M_eval=0），以错位信号作为词级检索负对照",
+    )
+    parser.add_argument(
+        "--shift-mode",
+        choices=("preroll", "deterministic_circular"),
+        default=None,
+        help="时间错位负对照采样模式：preroll（受试者只读 train 尾部校准缓冲区，严格零回绕）或 deterministic_circular",
+    )
+    parser.add_argument(
+        "--preroll-seconds",
+        type=float,
+        default=None,
+        help="Pre-Roll 因果校准缓冲区秒数（默认：45.0）",
     )
     parser.add_argument(
         "--zero-signal-control",
@@ -786,7 +828,19 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--subtraction-etas",
         default=None,
-        help="探索性留一法共模扣除（Leave-One-Out Common-Mode Subtraction）权重列表（如 0.5,0.8,1.0），自动在 1 Clean + 6 Shifted 预测向量上扣除共模时序偏置",
+        help="共模扣除（Common-Mode Subtraction）权重列表（如 0.5 或 0.5,0.8,1.0）",
+    )
+    parser.add_argument(
+        "--cms-mode",
+        choices=("leave_one_out", "causal_ema"),
+        default=None,
+        help="共模扣除模式：causal_ema（严格在线因果 EMA，支持 M_eval=0 单遍前向）或 leave_one_out（留一法 6 错位背景）",
+    )
+    parser.add_argument(
+        "--cms-ema-decay",
+        type=float,
+        default=None,
+        help="因果 EMA 共模扣除的指数衰减率 alpha（默认：0.99）",
     )
     parser.add_argument(
         "--control-method",
@@ -892,10 +946,15 @@ def _workflow_train(args, *, mode: str) -> int:
             show_progress=not bool(getattr(args, "no_progress", False)),
             config_path=args.config,
             siamese_debiased=getattr(args, "siamese_debiased", None),
+            debias_mode=getattr(args, "debias_mode", None),
+            shift_mode=getattr(args, "shift_mode", None),
+            preroll_seconds=getattr(args, "preroll_seconds", None),
             eta_train=getattr(args, "eta_train", None),
             eta_delta=getattr(args, "eta_delta", None),
             lambda_null=getattr(args, "lambda_null", None),
+            lambda_delta=getattr(args, "lambda_delta", None),
             lambda_delta_null=getattr(args, "lambda_delta_null", None),
+            lambda_distill=getattr(args, "lambda_distill", None),
             beta_delta_cm=getattr(args, "beta_delta_cm", None),
             shifts_per_step=getattr(args, "shifts_per_step", None),
             preextract_frozen_cnn=getattr(args, "preextract_frozen_cnn", None),
@@ -953,8 +1012,12 @@ def _workflow_eval(args) -> int:
         config_path=args.config,
         control_config_path=control_cfg,
         shift_seconds=getattr(args, "shift_seconds", None),
+        shift_mode=getattr(args, "shift_mode", None),
+        preroll_seconds=getattr(args, "preroll_seconds", None),
         zero_signal_control=bool(getattr(args, "zero_signal_control", False)),
         subtraction_etas=getattr(args, "subtraction_etas", None),
+        cms_mode=getattr(args, "cms_mode", None),
+        cms_ema_decay=getattr(args, "cms_ema_decay", None),
         all_stages=args.all_stages,
         plot=not bool(getattr(args, "no_plot", False)),
         show_progress=not bool(getattr(args, "no_progress", False)),
@@ -1128,7 +1191,21 @@ def build_parser() -> argparse.ArgumentParser:
     decode_cmd.add_argument("--top-k", type=int, default=None, help="可选覆写神经候选词截断数量 K")
     decode_cmd.add_argument("--beam-width", type=int, default=None, help="可选覆写定稿主干束宽 B")
     decode_cmd.add_argument("--temperature", default=None, help="可选覆写校准温度网格（如 0.05,0.07 或 0.05）")
-    decode_cmd.add_argument("--cms-eta", type=float, default=None, help="可选覆写共模扣除系数 eta（默认：0.0）")
+    decode_cmd.add_argument("--cms-eta", type=float, default=None, help="可选覆写共模扣除系数 eta（默认：从协议 YAML 读取 0.5；amortized_timing 默认 0.0）")
+    decode_cmd.add_argument(
+        "--cms-mode",
+        choices=("historical_shifts", "leave_one_out", "causal_ema"),
+        default=None,
+        help="可选覆写 S3 共模扣除模式：historical_shifts 或 causal_ema（严格在线因果 EMA，0 次额外错位前向）",
+    )
+    decode_cmd.add_argument("--cms-ema-decay", type=float, default=None, help="因果 EMA 共模扣除指数衰减率 alpha（默认：0.99）")
+    decode_cmd.add_argument(
+        "--shift-mode",
+        choices=("deterministic_circular", "preroll"),
+        default=None,
+        help="可选覆写负对照错位采样模式：deterministic_circular 或 preroll",
+    )
+    decode_cmd.add_argument("--preroll-seconds", type=float, default=None, help="Pre-Roll 因果校准缓冲区秒数（默认：45.0）")
     decode_cmd.add_argument("--control-shift-seconds", type=float, default=None, help="可选覆写负对照错位秒数")
     decode_cmd.add_argument("--k-observations", default=None, help="可选覆写跨被试聚合观测数列表（默认：1,2,5,10）")
     decode_cmd.add_argument("--vocab-sizes", default=None, help="可选覆写多尺度候选词表规模列表（默认：50,100,full；支持 50,100,full,250）")

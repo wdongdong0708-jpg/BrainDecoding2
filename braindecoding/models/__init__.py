@@ -19,6 +19,7 @@ from braindecoding.models.embedding import (
     BrainEmbeddingModel,
     PreTransformerTrajectoryResidual,
     RelationDiscriminationHead,
+    TemporalGeometryBiasHead,
     build_brain_embedding_model,
 )
 from braindecoding.models.experimental import (
@@ -67,6 +68,7 @@ __all__ = [
     "GroupedTransformerEncoder",
     "PreTransformerTrajectoryResidual",
     "RelationDiscriminationHead",
+    "TemporalGeometryBiasHead",
     "BrainEmbeddingModel",
     "ThreeStateTrajectoryReadout",
     "ThreeStateBrainEmbeddingModel",

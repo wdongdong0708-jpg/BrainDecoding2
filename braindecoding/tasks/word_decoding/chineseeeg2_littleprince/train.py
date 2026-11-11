@@ -171,6 +171,11 @@ def 构建数据集(
     zero_eeg=False,
     zero_signal=False,
     temporal_shift_seconds: float = 0.0,
+    *,
+    shift_mode: str | None = None,
+    preroll_seconds: float | None = None,
+    preroll_source_table=None,
+    preroll_buffers=None,
 ):
     zero_eeg = bool(zero_eeg or zero_signal)
     return _构建数据集_impl(
@@ -178,6 +183,10 @@ def 构建数据集(
         table,
         zero_eeg=zero_eeg,
         temporal_shift_seconds=float(temporal_shift_seconds),
+        shift_mode=shift_mode,
+        preroll_seconds=preroll_seconds,
+        preroll_source_table=preroll_source_table,
+        preroll_buffers=preroll_buffers,
     )
 
 
@@ -186,16 +195,40 @@ def _构建数据集_impl(
     table,
     zero_eeg=False,
     temporal_shift_seconds: float = 0.0,
+    *,
+    shift_mode: str | None = None,
+    preroll_seconds: float | None = None,
+    preroll_source_table=None,
+    preroll_buffers=None,
 ):
     """构建与当前配置绑定的词事件数据集。"""
+    dataset_cfg = dict(config["dataset"])
+    cache_cfg = config.get("cache") or {}
+    if "event_table" in cache_cfg and "event_table_path" not in dataset_cfg:
+        dataset_cfg["event_table_path"] = str(cache_cfg["event_table"])
+    siamese_cfg = config.get("siamese_debiased") or {}
+    effective_shift_mode = (
+        shift_mode
+        if shift_mode is not None
+        else dataset_cfg.get("shift_mode", siamese_cfg.get("shift_mode"))
+    )
+    effective_preroll_seconds = (
+        preroll_seconds
+        if preroll_seconds is not None
+        else dataset_cfg.get("preroll_seconds", siamese_cfg.get("preroll_seconds"))
+    )
     return dataset_module.ChineseEEG2LittlePrinceWordDataset(
         table,
-        config["dataset"],
+        dataset_cfg,
         config["cache"]["eeg_dir"],
         config["cache"]["text_embeddings"],
         config["text_embedding"],
         zero_eeg=zero_eeg,
         temporal_shift_seconds=float(temporal_shift_seconds),
+        shift_mode=effective_shift_mode,
+        preroll_seconds=effective_preroll_seconds,
+        preroll_source_table=preroll_source_table,
+        preroll_buffers=preroll_buffers,
     )
 
 

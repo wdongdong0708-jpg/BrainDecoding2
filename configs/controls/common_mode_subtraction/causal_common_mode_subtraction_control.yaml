@@ -1,0 +1,45 @@
+# 严格因果流式共模扣除（Causal EMA Common-Mode Subtraction）与只读 Pre-Roll 负对照配置
+# 在推理期无需任何历史错位前向（Clean M_eval = 0，单遍流式前向），严格使用先验均值 mu_0 与历史因果 EMA 状态 mu_{c-1} 扣除慢漂移：
+#   - Session 起点 : mu <- mu_0  (来自训练集全局输出均值，已保存在 best.ckpt['causal_cms_mu0'] 或自动从只读 train 划分估算)
+#   - 词步 c 去偏  : y_tilde_c = normalize(y_hat_c - eta * mu_{c-1})
+#   - 因果状态更新 : mu_c      = alpha * mu_{c-1} + (1 - alpha) * y_hat_c   (alpha = 0.99)
+# 如需同步审计 Shifted 负对照机遇基线，默认采用无环绕 Pre-Roll 近程错位 [-10s, -20s, -30s, -40s]；也可传 --shift-seconds none 实现纯 M_eval=0 极速评估。
+#
+# 启动命令示例：
+#   # 1. 包含 Pre-Roll 近程错位负对照审计（M_eval = 4）：
+#   python -u -m braindecoding eval-run --config configs/training/siamese_debiased/pallier2025_causal_null_space_prefix_revision.yaml --split test --control-config configs/controls/common_mode_subtraction/causal_common_mode_subtraction_control.yaml
+#   # 2. 纯在线单遍推理评估（M_eval = 0，跳过一切错位前向）：
+#   python -u -m braindecoding eval-run --config configs/training/siamese_debiased/pallier2025_causal_null_space_prefix_revision.yaml --split test --control-config configs/controls/common_mode_subtraction/causal_common_mode_subtraction_control.yaml --shift-seconds none
+
+extends: ../temporal_shift/temporal_shift_control.yaml
+
+control:
+  name: causal_common_mode_subtraction_negative_control
+  control_type: causal_common_mode_subtraction
+  description: Strictly causal online EMA common-mode subtraction (M_eval=0 Clean inference + optional Pre-Roll near-range shifted negative controls [-10s, -20s, -30s, -40s]).
+  shift_seconds: [-10.0, -20.0, -30.0, -40.0]
+  shift_mode: preroll
+  preroll_seconds: 45.0
+  same_subject: true
+  same_recording: true
+  non_overlapping_window: true
+  include_clean_reference: true
+  include_zero_signal: false
+  common_mode_subtraction:
+    enabled: true
+    mode: causal_ema
+    ema_decay: 0.99
+    eta_values: [0.5]
+    normalize_before_subtraction: true
+
+evaluation:
+  negative_control: causal_common_mode_subtraction
+  shift_mode: preroll
+  preroll_seconds: 45.0
+  shift_seconds: [-10.0, -20.0, -30.0, -40.0]
+  zero_signal_control: false
+  common_mode_subtraction:
+    enabled: true
+    mode: causal_ema
+    ema_decay: 0.99
+    eta_values: [0.5]

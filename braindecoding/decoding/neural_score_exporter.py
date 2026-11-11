@@ -66,6 +66,30 @@ DEFAULT_BACKGROUND_SHIFT_SECONDS: tuple[float, ...] = (
 )
 DEFAULT_CONTROL_SHIFT_SECONDS: float = -75.0
 DEFAULT_SUBTRACTION_ETA: float = 0.8
+DEFAULT_CAUSAL_CMS_EMA_DECAY: float = 0.99
+DEFAULT_PREROLL_SECONDS: float = 45.0
+
+
+def _normalize_s3_cms_mode(mode: str | None) -> str:
+    text = str(mode or "historical_shifts").strip().lower()
+    if text in {"", "historical_shifts", "historical", "leave_one_out", "loo"}:
+        return "historical_shifts"
+    if text in {"causal_ema", "causal", "ema", "online_ema"}:
+        return "causal_ema"
+    raise ValueError(
+        f"S3 cms_mode 仅支持 'historical_shifts' 或 'causal_ema'，当前为：{mode!r}"
+    )
+
+
+def _normalize_s3_shift_mode(mode: str | None) -> str:
+    text = str(mode or "deterministic_circular").strip().lower()
+    if text in {"", "deterministic_circular", "circular"}:
+        return "deterministic_circular"
+    if text in {"preroll", "pre_roll", "pre-roll"}:
+        return "preroll"
+    raise ValueError(
+        f"S3 shift_mode 仅支持 'deterministic_circular' 或 'preroll'，当前为：{mode!r}"
+    )
 
 
 def _digest_json(value: object) -> str:
@@ -322,10 +346,24 @@ def _encode_stage_with_shifts(
     background_shift_seconds: tuple[float, ...],
     control_shift_seconds: float,
     subtraction_eta: float,
+    cms_mode: str = "historical_shifts",
+    cms_ema_decay: float = DEFAULT_CAUSAL_CMS_EMA_DECAY,
+    shift_mode: str = "deterministic_circular",
+    preroll_seconds: float = DEFAULT_PREROLL_SECONDS,
+    train_table=None,
     show_progress: bool = True,
 ) -> dict:
-    """加载单个阶段的检查点，提取 Clean (0s) 与 Shifted (-75s)（含 6 窗口历史共模扣除）特征。"""
+    """加载单个阶段的检查点，提取 Clean (0s) 与 Shifted (-75s)（支持在线因果 EMA-CMS 或历史共模扣除）特征。"""
+    from braindecoding.evaluation.common_mode_subtraction_evaluation import (
+        apply_causal_ema_subtraction_to_encoded,
+    )
     from braindecoding.models import build_brain_embedding_model
+    from braindecoding.training.siamese_debiased_training import (
+        compute_causal_cms_mu0_from_encoded,
+    )
+
+    norm_cms_mode = _normalize_s3_cms_mode(cms_mode)
+    norm_shift_mode = _normalize_s3_shift_mode(shift_mode)
 
     dataset = cfg["experiment"]["dataset"]
     tc = cfg["training"]
@@ -356,7 +394,17 @@ def _encode_stage_with_shifts(
         if ckpt_off is not None:
             cfg["dataset"]["window_start_offset_seconds"] = float(ckpt_off)
 
-    clean_ds = build_fn(cfg, eval_table)
+    cfg["dataset"]["shift_mode"] = norm_shift_mode
+    cfg["dataset"]["preroll_seconds"] = float(preroll_seconds)
+    preroll_src = train_table if norm_shift_mode == "preroll" else None
+
+    clean_ds = build_fn(
+        cfg,
+        eval_table,
+        shift_mode=norm_shift_mode,
+        preroll_seconds=float(preroll_seconds),
+        preroll_source_table=preroll_src,
+    )
     clean_loader, _ = make_loader(
         clean_ds, tc, shuffle=False, group_column=grp_col, batch_size=eval_bs
     )
@@ -378,14 +426,32 @@ def _encode_stage_with_shifts(
     amp_dtype = resolve_amp_dtype(tc)
     ds_table = getattr(clean_ds, "table", eval_table)
     event_col = "event_id" if "event_id" in ds_table.columns else "事件编号"
+    subj_col = "subject_id" if "subject_id" in ds_table.columns else "受试者"
+    rec_col = "recording_id" if "recording_id" in ds_table.columns else "记录编号"
     canonical_event_ids = [
         str(e) for e in ds_table[event_col].astype(str).tolist()
+    ]
+    canonical_subject_ids = (
+        [str(s) for s in ds_table[subj_col].astype(str).tolist()]
+        if subj_col in ds_table.columns
+        else ["sub-00"] * len(canonical_event_ids)
+    )
+    canonical_recording_ids = (
+        [str(r) for r in ds_table[rec_col].astype(str).tolist()]
+        if rec_col in ds_table.columns
+        else ["rec-00"] * len(canonical_event_ids)
+    )
+    canonical_stream_keys = [
+        f"{s_id}::{r_id}"
+        for s_id, r_id in zip(canonical_subject_ids, canonical_recording_ids)
     ]
 
     def _align_encoded_to_canonical_events(encoded: dict) -> dict:
         actual_ids = [str(e) for e in encoded["event_ids"]]
         if actual_ids == canonical_event_ids:
-            return encoded
+            aligned_same = dict(encoded)
+            aligned_same["recording_ids"] = list(canonical_recording_ids)
+            return aligned_same
         if len(actual_ids) != len(canonical_event_ids) or set(actual_ids) != set(
             canonical_event_ids
         ):
@@ -399,15 +465,22 @@ def _encode_stage_with_shifts(
         )
         aligned = dict(encoded)
         aligned["event_ids"] = list(canonical_event_ids)
+        aligned["recording_ids"] = list(canonical_recording_ids)
         if "predictions" in aligned and isinstance(
             aligned["predictions"], torch.Tensor
         ):
             aligned["predictions"] = aligned["predictions"][perm]
         if "targets" in aligned and isinstance(aligned["targets"], torch.Tensor):
             aligned["targets"] = aligned["targets"][perm]
-        if " words" in aligned or "words" in aligned:
-            if "words" in aligned and isinstance(aligned["words"], list):
-                aligned["words"] = [aligned["words"][int(i)] for i in perm]
+        for idx_key in ("subject_indices", "sentence_indices"):
+            if idx_key in aligned:
+                val = aligned[idx_key]
+                if isinstance(val, torch.Tensor):
+                    aligned[idx_key] = val[perm]
+                elif isinstance(val, list) and len(val) == len(canonical_event_ids):
+                    aligned[idx_key] = [val[int(i)] for i in perm]
+        if "words" in aligned and isinstance(aligned["words"], list):
+            aligned["words"] = [aligned["words"][int(i)] for i in perm]
         if "revision_predictions" in aligned and isinstance(
             aligned["revision_predictions"], dict
         ):
@@ -429,7 +502,12 @@ def _encode_stage_with_shifts(
             ds_obj, loader_obj = clean_ds, clean_loader
         else:
             ds_obj = build_fn(
-                cfg, eval_table, temporal_shift_seconds=float(shift_sec)
+                cfg,
+                eval_table,
+                temporal_shift_seconds=float(shift_sec),
+                shift_mode=norm_shift_mode,
+                preroll_seconds=float(preroll_seconds),
+                preroll_source_table=preroll_src,
             )
             loader_obj, _ = make_loader(
                 ds_obj, tc, shuffle=False, group_column=grp_col, batch_size=eval_bs
@@ -450,23 +528,107 @@ def _encode_stage_with_shifts(
         float(control_shift_seconds), f"Shifted {control_shift_seconds:+.0f}s"
     )
 
-    use_cms = bool(background_shift_seconds) and abs(float(subtraction_eta)) > 1e-12
+    mu0_payload: dict[str, Any] | None = (
+        checkpoint.get("causal_cms_mu0")
+        if isinstance(checkpoint.get("causal_cms_mu0"), dict)
+        else None
+    )
     hist_encoded_list: list[dict] = []
-    if use_cms:
-        for shift_sec in background_shift_seconds:
-            hist_encoded_list.append(
-                _run_encode(float(shift_sec), f"CMS Hist {float(shift_sec):+.0f}s")
+    if norm_cms_mode == "causal_ema":
+        if (
+            mu0_payload is None
+            and abs(float(subtraction_eta)) > 1e-12
+            and train_table is not None
+            and len(train_table) > 0
+        ):
+            train_ds_mu0 = build_fn(
+                cfg,
+                train_table,
+                shift_mode=norm_shift_mode,
+                preroll_seconds=float(preroll_seconds),
             )
+            train_loader_mu0, _ = make_loader(
+                train_ds_mu0,
+                tc,
+                shuffle=False,
+                group_column=grp_col,
+                batch_size=eval_bs,
+            )
+            train_encoded_mu0 = encode_loader(
+                model,
+                train_loader_mu0,
+                device,
+                amp=amp_enabled,
+                amp_dtype=amp_dtype,
+                show_progress=show_progress,
+                progress_desc=f"S3 Export [{stage} | train mu0]",
+            )
+            mu0_payload = compute_causal_cms_mu0_from_encoded(train_encoded_mu0)
+            del train_encoded_mu0, train_loader_mu0, train_ds_mu0
+    else:
+        use_cms = bool(background_shift_seconds) and abs(float(subtraction_eta)) > 1e-12
+        if use_cms:
+            for shift_sec in background_shift_seconds:
+                hist_encoded_list.append(
+                    _run_encode(
+                        float(shift_sec), f"CMS Hist {float(shift_sec):+.0f}s"
+                    )
+                )
 
     del model, checkpoint
     gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
-    if stage in ("revision", "prefix_revision") and "revision_predictions" in clean_encoded:
-        clean_states: dict[str, torch.Tensor] = {}
-        shifted_states: dict[str, torch.Tensor] = {}
-        avail_masks: dict[str, torch.Tensor] = {}
+    if norm_cms_mode == "causal_ema":
+        clean_debiased = apply_causal_ema_subtraction_to_encoded(
+            clean_encoded,
+            mu0_payload=mu0_payload,
+            eta=float(subtraction_eta),
+            ema_decay=float(cms_ema_decay),
+            stream_keys=canonical_stream_keys,
+        )
+        control_debiased = apply_causal_ema_subtraction_to_encoded(
+            control_encoded,
+            mu0_payload=mu0_payload,
+            eta=float(subtraction_eta),
+            ema_decay=float(cms_ema_decay),
+            stream_keys=canonical_stream_keys,
+        )
+        if stage in ("revision", "prefix_revision") and "revision_predictions" in clean_debiased:
+            clean_states: dict[str, torch.Tensor] = {}
+            shifted_states: dict[str, torch.Tensor] = {}
+            avail_masks: dict[str, torch.Tensor] = {}
+            for delay in sorted(clean_debiased["revision_predictions"]):
+                state_key = f"K{delay}"
+                clean_states[state_key] = _l2_normalize_tensor(
+                    clean_debiased["revision_predictions"][delay].cpu()
+                )
+                shifted_states[state_key] = _l2_normalize_tensor(
+                    control_debiased["revision_predictions"][delay].cpu()
+                )
+                avail_masks[state_key] = (
+                    clean_debiased["revision_availability_masks"][delay].cpu().bool()
+                )
+        else:
+            state_key = "S0" if stage == "word" else "F"
+            clean_states = {
+                state_key: _l2_normalize_tensor(
+                    clean_debiased["predictions"].cpu()
+                )
+            }
+            shifted_states = {
+                state_key: _l2_normalize_tensor(
+                    control_debiased["predictions"].cpu()
+                )
+            }
+            avail_masks = {
+                state_key: torch.ones(len(clean_encoded["event_ids"]), dtype=torch.bool)
+            }
+    elif stage in ("revision", "prefix_revision") and "revision_predictions" in clean_encoded:
+        clean_states = {}
+        shifted_states = {}
+        avail_masks = {}
         for delay in sorted(clean_encoded["revision_predictions"]):
             state_key = f"K{delay}"
             c_raw = clean_encoded["revision_predictions"][delay].cpu()
@@ -820,6 +982,10 @@ def export_neural_vocabulary_scores(
     background_shift_seconds: Sequence[float] = DEFAULT_BACKGROUND_SHIFT_SECONDS,
     control_shift_seconds: float = DEFAULT_CONTROL_SHIFT_SECONDS,
     subtraction_eta: float = DEFAULT_SUBTRACTION_ETA,
+    cms_mode: str = "historical_shifts",
+    cms_ema_decay: float = DEFAULT_CAUSAL_CMS_EMA_DECAY,
+    shift_mode: str = "deterministic_circular",
+    preroll_seconds: float = DEFAULT_PREROLL_SECONDS,
     eval_batch_size: int | None = None,
     num_workers: int | None = None,
     precision: str | None = None,
@@ -882,7 +1048,32 @@ def export_neural_vocabulary_scores(
     bg_shifts = tuple(float(s) for s in background_shift_seconds)
     ctrl_shift = float(control_shift_seconds)
     eta_val = float(subtraction_eta)
+    norm_cms_mode = _normalize_s3_cms_mode(cms_mode)
+    norm_shift_mode = _normalize_s3_shift_mode(shift_mode)
+    ema_decay_val = float(cms_ema_decay)
+    preroll_sec_val = float(preroll_seconds)
     language = "fr" if dataset == "pallier2025" else "zh"
+
+    def _build_cms_metadata() -> dict[str, Any]:
+        if norm_cms_mode == "causal_ema":
+            return {
+                "enabled": abs(eta_val) > 1e-12,
+                "mode": "causal_ema",
+                "ema_decay": ema_decay_val,
+                "shift_mode": norm_shift_mode,
+                "preroll_seconds": preroll_sec_val,
+                "background_shift_seconds": [],
+                "control_shift_seconds": ctrl_shift,
+                "subtraction_eta": eta_val,
+            }
+        return {
+            "enabled": bool(bg_shifts) and abs(eta_val) > 1e-12,
+            "mode": "historical_shifts",
+            "shift_mode": norm_shift_mode,
+            "background_shift_seconds": list(bg_shifts),
+            "control_shift_seconds": ctrl_shift,
+            "subtraction_eta": eta_val,
+        }
 
     if output_path is None:
         base_out = (
@@ -917,13 +1108,33 @@ def export_neural_vocabulary_scores(
         try:
             cand_payload = load_neural_vocabulary_scores(out_file)
             cand_cms = dict(cand_payload.get("cms_metadata") or {})
+            saved_cms_mode = _normalize_s3_cms_mode(cand_cms.get("mode"))
+            saved_shift_mode = _normalize_s3_shift_mode(
+                cand_cms.get("shift_mode")
+            )
+            mode_ok = (
+                abs(eta_val) <= 1e-12
+                and float(cand_cms.get("subtraction_eta", 0.0)) <= 1e-12
+            ) or (saved_cms_mode == norm_cms_mode)
+            ema_ok = (
+                norm_cms_mode != "causal_ema"
+                or abs(eta_val) <= 1e-12
+                or "ema_decay" not in cand_cms
+                or abs(float(cand_cms["ema_decay"]) - ema_decay_val) <= 1e-6
+            )
             cms_ok = (
-                "subtraction_eta" not in cand_cms
-                or abs(float(cand_cms["subtraction_eta"]) - eta_val) <= 1e-6
-            ) and (
-                "control_shift_seconds" not in cand_cms
-                or abs(float(cand_cms["control_shift_seconds"]) - ctrl_shift)
-                <= 1e-6
+                mode_ok
+                and ema_ok
+                and saved_shift_mode == norm_shift_mode
+                and (
+                    "subtraction_eta" not in cand_cms
+                    or abs(float(cand_cms["subtraction_eta"]) - eta_val) <= 1e-6
+                )
+                and (
+                    "control_shift_seconds" not in cand_cms
+                    or abs(float(cand_cms["control_shift_seconds"]) - ctrl_shift)
+                    <= 1e-6
+                )
             )
             if (
                 cand_payload.get("dataset") == dataset
@@ -1004,12 +1215,7 @@ def export_neural_vocabulary_scores(
             updated_payload["availability_masks"] = availability_masks
             updated_payload["checkpoints"] = checkpoint_provenance
             updated_payload["checkpoint_provenance"] = checkpoint_provenance
-            updated_payload["cms_metadata"] = {
-                "enabled": bool(bg_shifts) and abs(eta_val) > 1e-12,
-                "background_shift_seconds": list(bg_shifts),
-                "control_shift_seconds": ctrl_shift,
-                "subtraction_eta": eta_val,
-            }
+            updated_payload["cms_metadata"] = _build_cms_metadata()
             out_file.parent.mkdir(parents=True, exist_ok=True)
             tmp_file = out_file.with_suffix(out_file.suffix + ".tmp")
             torch.save(updated_payload, tmp_file)
@@ -1238,6 +1444,11 @@ def export_neural_vocabulary_scores(
                 background_shift_seconds=bg_shifts,
                 control_shift_seconds=ctrl_shift,
                 subtraction_eta=eta_val,
+                cms_mode=norm_cms_mode,
+                cms_ema_decay=ema_decay_val,
+                shift_mode=norm_shift_mode,
+                preroll_seconds=preroll_sec_val,
+                train_table=train_table,
                 show_progress=show_progress,
             )
             if rev_result["event_ids"] != event_ids:
@@ -1290,6 +1501,11 @@ def export_neural_vocabulary_scores(
                 background_shift_seconds=bg_shifts,
                 control_shift_seconds=ctrl_shift,
                 subtraction_eta=eta_val,
+                cms_mode=norm_cms_mode,
+                cms_ema_decay=ema_decay_val,
+                shift_mode=norm_shift_mode,
+                preroll_seconds=preroll_sec_val,
+                train_table=train_table,
                 show_progress=show_progress,
             )
             if word_res["event_ids"] != event_ids:
@@ -1345,6 +1561,11 @@ def export_neural_vocabulary_scores(
                 background_shift_seconds=bg_shifts,
                 control_shift_seconds=ctrl_shift,
                 subtraction_eta=eta_val,
+                cms_mode=norm_cms_mode,
+                cms_ema_decay=ema_decay_val,
+                shift_mode=norm_shift_mode,
+                preroll_seconds=preroll_sec_val,
+                train_table=train_table,
                 show_progress=show_progress,
             )
             if ctx_res["event_ids"] != event_ids:
@@ -1402,12 +1623,7 @@ def export_neural_vocabulary_scores(
         "clean_scores": clean_scores,
         "shifted_scores": shifted_scores,
         "segments": segments,
-        "cms_metadata": {
-            "enabled": bool(bg_shifts) and abs(eta_val) > 1e-12,
-            "background_shift_seconds": list(bg_shifts),
-            "control_shift_seconds": ctrl_shift,
-            "subtraction_eta": eta_val,
-        },
+        "cms_metadata": _build_cms_metadata(),
         "checkpoints": checkpoint_provenance,
         "checkpoint_provenance": checkpoint_provenance,
         "elapsed_seconds": round(time.perf_counter() - started, 3),

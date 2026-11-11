@@ -572,6 +572,8 @@ def encode_loader(
     words = []
     event_ids = []
     recording_ids = []
+    subject_indices_all = []
+    sentence_indices_all = []
     internal_masks = []
     relation_positive_scores = []
     relation_negative_scores = []
@@ -598,6 +600,14 @@ def encode_loader(
                 batch, device
             )
             event_times = event_times_for_model(model, batch, device)
+            has_temporal_bias_head = (
+                getattr(model, "temporal_bias_head", None) is not None
+            )
+            onset_seconds = (
+                batch["onset_seconds"].to(device, non_blocking=True)
+                if (has_temporal_bias_head and "onset_seconds" in batch)
+                else None
+            )
             if subject_index_map is not None:
                 from braindecoding.subject_generalization import remap_subject_indices
 
@@ -610,8 +620,13 @@ def encode_loader(
                 enabled=use_amp,
             ):
                 if bool(getattr(model, "prefix_revision_enabled", False)):
+                    rev_kwargs = (
+                        {"onset_seconds": onset_seconds}
+                        if onset_seconds is not None
+                        else {}
+                    )
                     batch_revisions = model.forward_prefix_revisions(
-                        meg, subject_indices, sentence_indices
+                        meg, subject_indices, sentence_indices, **rev_kwargs
                     )
                     batch_availability = model.revision_availability_masks(
                         sentence_indices
@@ -642,16 +657,35 @@ def encode_loader(
                     relation_positive_scores.append(positive_scores.float().cpu())
                     relation_negative_scores.append(negative_scores.float().cpu())
                 elif event_times is None:
-                    estimate = model(meg, subject_indices, sentence_indices)
+                    if onset_seconds is not None:
+                        estimate = model(
+                            meg,
+                            subject_indices,
+                            sentence_indices,
+                            onset_seconds=onset_seconds,
+                        )
+                    else:
+                        estimate = model(meg, subject_indices, sentence_indices)
                 else:
-                    estimate = model(
-                        meg,
-                        subject_indices,
-                        sentence_indices,
-                        event_times=event_times,
-                    )
+                    if onset_seconds is not None:
+                        estimate = model(
+                            meg,
+                            subject_indices,
+                            sentence_indices,
+                            event_times=event_times,
+                            onset_seconds=onset_seconds,
+                        )
+                    else:
+                        estimate = model(
+                            meg,
+                            subject_indices,
+                            sentence_indices,
+                            event_times=event_times,
+                        )
             predictions.append(estimate.float().cpu())
             targets.append(text_embedding.float().cpu())
+            subject_indices_all.append(subject_indices.detach().cpu())
+            sentence_indices_all.append(sentence_indices.detach().cpu())
             words.extend(str(word) for word in batch["word"])
             event_ids.extend(str(value) for value in batch["event_id"])
             recording_ids.extend(str(value) for value in batch["recording_id"])
@@ -672,6 +706,8 @@ def encode_loader(
         "words": words,
         "event_ids": event_ids,
         "recording_ids": recording_ids,
+        "subject_indices": torch.cat(subject_indices_all),
+        "sentence_indices": torch.cat(sentence_indices_all),
         "local_context_internal_mask": concatenated_internal_masks,
         "three_state_internal_mask": concatenated_internal_masks,
     }

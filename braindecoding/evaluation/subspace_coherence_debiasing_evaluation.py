@@ -1624,26 +1624,43 @@ def evaluate_cached_pt_subspace_loo(
         verbose=verbose,
     )
     if update_common_mode_subtraction and isinstance(sub_res, dict):
-        synced_cms = None
-        try:
-            synced_cms = sync_common_mode_subtraction_from_subspace_report(
-                sub_res,
-                resolved_out,
-                plot=plot,
-            )
-        except Exception:
-            synced_cms = None
-        if synced_cms is None:
+        existing_cms_p = (
+            resolved_out / "exploratory" / f"common_mode_subtraction_{split}.json"
+        )
+        preserve_causal_cms = False
+        if existing_cms_p.is_file():
             try:
-                evaluate_cached_pt_common_mode_subtraction(
-                    pt_path,
-                    output_dir=resolved_out,
+                existing_cms = json.loads(existing_cms_p.read_text(encoding="utf-8"))
+                if isinstance(existing_cms, dict) and (
+                    str(existing_cms.get("cms_mode", "")).strip().lower()
+                    == "causal_ema"
+                    or str(existing_cms.get("experiment_type", "")).strip().lower()
+                    == "causal_ema_common_mode_subtraction"
+                ):
+                    preserve_causal_cms = True
+            except Exception:
+                preserve_causal_cms = False
+        if not preserve_causal_cms:
+            synced_cms = None
+            try:
+                synced_cms = sync_common_mode_subtraction_from_subspace_report(
+                    sub_res,
+                    resolved_out,
                     plot=plot,
-                    print_report=False,
-                    verbose=verbose,
                 )
             except Exception:
-                pass
+                synced_cms = None
+            if synced_cms is None:
+                try:
+                    evaluate_cached_pt_common_mode_subtraction(
+                        pt_path,
+                        output_dir=resolved_out,
+                        plot=plot,
+                        print_report=False,
+                        verbose=verbose,
+                    )
+                except Exception:
+                    pass
     eval_json_p = resolved_out / f"evaluation_{split}.json"
     if eval_json_p.is_file() and isinstance(sub_res, dict):
         try:

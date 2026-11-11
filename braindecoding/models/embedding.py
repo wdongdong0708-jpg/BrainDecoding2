@@ -121,6 +121,210 @@ class RelationDiscriminationHead(nn.Module):
         ]
 
 
+class TemporalGeometryBiasHead(nn.Module):
+    """纯词间时间几何摊销偏置预测头 b_psi(Delta_tau_{0:i+r})（严格零脑电信号输入）。"""
+
+    def __init__(self, dimension: int, config: dict | None = None):
+        super().__init__()
+        cfg = dict(config or {})
+        self.dimension = int(dimension)
+        self.hidden_dimension = int(cfg.get("hidden_dimension", 128))
+        self.window_seconds = float(cfg.get("window_seconds", 1.0))
+        self.max_delta_tau = float(cfg.get("max_delta_tau", 10.0))
+        if self.dimension <= 0 or self.hidden_dimension <= 0:
+            raise ValueError("TemporalGeometryBiasHead 维度必须为正整数。")
+        if self.window_seconds <= 0.0:
+            raise ValueError("TemporalGeometryBiasHead window_seconds 必须为正数。")
+
+        self.prefix_gru = nn.GRU(
+            input_size=4,
+            hidden_size=self.hidden_dimension,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=False,
+        )
+        out_linear = nn.Linear(self.hidden_dimension, self.dimension)
+        nn.init.normal_(out_linear.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(out_linear.bias)
+        self.readout = nn.Sequential(
+            nn.Linear(2 * self.hidden_dimension + 4, self.hidden_dimension),
+            nn.LayerNorm(self.hidden_dimension),
+            nn.GELU(),
+            out_linear,
+        )
+
+    def _pack_groups(
+        self,
+        onset_seconds: torch.Tensor,
+        group_indices: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if onset_seconds.ndim != 1 or group_indices.ndim != 1:
+            raise ValueError("onset_seconds 与 group_indices 必须为一维张量。")
+        if len(onset_seconds) != len(group_indices):
+            raise ValueError("onset_seconds 与 group_indices 长度必须一致。")
+        device = onset_seconds.device
+        batch_len = int(len(onset_seconds))
+        groups: dict[int, list[int]] = {}
+        for row_index, grp in enumerate(group_indices.detach().cpu().tolist()):
+            groups.setdefault(int(grp), []).append(row_index)
+        group_list = list(groups.values())
+        num_groups = max(len(group_list), 1)
+        max_len = max((len(g) for g in group_list), default=1)
+
+        onset_2d = torch.zeros(
+            (num_groups, max_len), device=device, dtype=torch.float32
+        )
+        mask_2d = torch.zeros(
+            (num_groups, max_len), device=device, dtype=torch.bool
+        )
+        row_group = torch.zeros(batch_len, device=device, dtype=torch.long)
+        row_pos = torch.zeros(batch_len, device=device, dtype=torch.long)
+        group_lengths = torch.ones(num_groups, device=device, dtype=torch.long)
+
+        onsets_f32 = onset_seconds.detach().to(device=device, dtype=torch.float32)
+        for g_idx, rows in enumerate(group_list):
+            g_len = len(rows)
+            group_lengths[g_idx] = g_len
+            idx_t = torch.as_tensor(rows, device=device, dtype=torch.long)
+            onset_2d[g_idx, :g_len] = onsets_f32.index_select(0, idx_t)
+            mask_2d[g_idx, :g_len] = True
+            row_group.index_fill_(0, idx_t, g_idx)
+            row_pos.index_copy_(
+                0,
+                idx_t,
+                torch.arange(g_len, device=device, dtype=torch.long),
+            )
+        return onset_2d, mask_2d, row_group, row_pos, group_lengths
+
+    def _encode_padded_intervals(
+        self,
+        onset_2d: torch.Tensor,
+        mask_2d: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        delta_tau = torch.zeros_like(onset_2d, dtype=torch.float32)
+        if onset_2d.shape[1] > 1:
+            raw_diff = onset_2d[:, 1:] - onset_2d[:, :-1]
+            valid_pair = mask_2d[:, 1:] & mask_2d[:, :-1]
+            delta_tau[:, 1:] = torch.where(
+                valid_pair,
+                raw_diff.clamp(min=0.0, max=self.max_delta_tau),
+                torch.zeros_like(raw_diff),
+            )
+        overlap_ratio = torch.zeros_like(delta_tau)
+        if onset_2d.shape[1] > 1:
+            overlap_tail = (
+                1.0 - delta_tau[:, 1:] / max(self.window_seconds, 1e-3)
+            ).clamp(min=0.0, max=1.0)
+            overlap_ratio[:, 1:] = torch.where(
+                mask_2d[:, 1:], overlap_tail, torch.zeros_like(overlap_tail)
+            )
+        is_start = torch.zeros_like(delta_tau)
+        is_start[:, 0] = mask_2d[:, 0].float()
+        step_features = torch.stack(
+            (
+                delta_tau,
+                torch.log1p(delta_tau),
+                overlap_ratio,
+                is_start,
+            ),
+            dim=-1,
+        )
+        with torch.autocast(device_type=onset_2d.device.type, enabled=False):
+            h_seq, _ = self.prefix_gru(step_features.float())
+        return h_seq, delta_tau
+
+    def _readout_from_encoded(
+        self,
+        h_seq: torch.Tensor,
+        onset_2d: torch.Tensor,
+        delta_tau: torch.Tensor,
+        g_idx: torch.Tensor,
+        pos_idx: torch.Tensor,
+        cutoff_idx: torch.Tensor,
+    ) -> torch.Tensor:
+        h_target = h_seq[g_idx, pos_idx]
+        h_cutoff = h_seq[g_idx, cutoff_idx]
+        p1_idx = torch.minimum(pos_idx + 1, cutoff_idx)
+        p2_idx = torch.minimum(pos_idx + 2, cutoff_idx)
+        zeros_1d = torch.zeros_like(pos_idx, dtype=torch.float32)
+        dt_p1 = torch.where(pos_idx + 1 <= cutoff_idx, delta_tau[g_idx, p1_idx], zeros_1d)
+        dt_p2 = torch.where(pos_idx + 2 <= cutoff_idx, delta_tau[g_idx, p2_idx], zeros_1d)
+        step_gap = (onset_2d[g_idx, cutoff_idx] - onset_2d[g_idx, pos_idx]).clamp(
+            min=0.0, max=20.0
+        )
+        horizon_frac = (cutoff_idx - pos_idx).to(dtype=torch.float32) * 0.5
+        features = torch.cat(
+            (
+                h_target,
+                h_cutoff,
+                dt_p1.unsqueeze(-1),
+                dt_p2.unsqueeze(-1),
+                step_gap.unsqueeze(-1),
+                horizon_frac.unsqueeze(-1),
+            ),
+            dim=-1,
+        )
+        with torch.autocast(device_type=onset_2d.device.type, enabled=False):
+            return self.readout(features.float())
+
+    def predict_queries(
+        self,
+        onset_seconds: torch.Tensor,
+        group_indices: torch.Tensor,
+        query_rows: torch.Tensor,
+        query_delays: torch.Tensor,
+    ) -> torch.Tensor:
+        """对给定 (query_rows, query_delays) 输出严格因果时序偏置向量 [Q, D]。"""
+        if query_rows.numel() == 0:
+            return onset_seconds.new_zeros((0, self.dimension), dtype=torch.float32)
+        onset_2d, mask_2d, row_group, row_pos, group_lengths = self._pack_groups(
+            onset_seconds, group_indices
+        )
+        h_seq, delta_tau = self._encode_padded_intervals(onset_2d, mask_2d)
+        q_rows = query_rows.to(device=onset_seconds.device, dtype=torch.long)
+        q_delays = query_delays.to(device=onset_seconds.device, dtype=torch.long)
+        g_idx = row_group.index_select(0, q_rows)
+        pos_idx = row_pos.index_select(0, q_rows)
+        max_cutoff = group_lengths.index_select(0, g_idx) - 1
+        cutoff_idx = torch.minimum(pos_idx + q_delays.clamp(min=0), max_cutoff)
+        return self._readout_from_encoded(
+            h_seq, onset_2d, delta_tau, g_idx, pos_idx, cutoff_idx
+        )
+
+    def predict_group_revisions(
+        self,
+        onset_seconds: torch.Tensor,
+        group_indices: torch.Tensor,
+        horizons: tuple[int, ...] | list[int] = (0, 1, 2),
+    ) -> dict[int, torch.Tensor]:
+        """单遍因果前缀编码后，批量输出各延迟 r in horizons 的全行预测偏置字典 {r: [B, D]}。"""
+        horizon_tuple = tuple(int(d) for d in horizons)
+        batch_len = int(len(onset_seconds))
+        if batch_len == 0:
+            return {
+                d: onset_seconds.new_zeros((0, self.dimension), dtype=torch.float32)
+                for d in horizon_tuple
+            }
+        onset_2d, mask_2d, row_group, row_pos, group_lengths = self._pack_groups(
+            onset_seconds, group_indices
+        )
+        h_seq, delta_tau = self._encode_padded_intervals(onset_2d, mask_2d)
+        max_cutoff = group_lengths.index_select(0, row_group) - 1
+
+        num_h = len(horizon_tuple)
+        g_all = row_group.repeat(num_h)
+        pos_all = row_pos.repeat(num_h)
+        cutoff_list = [
+            torch.minimum(row_pos + max(0, int(d)), max_cutoff)
+            for d in horizon_tuple
+        ]
+        cutoff_all = torch.cat(cutoff_list, dim=0)
+        pred_all = self._readout_from_encoded(
+            h_seq, onset_2d, delta_tau, g_all, pos_all, cutoff_all
+        ).view(num_h, batch_len, self.dimension)
+        return {int(d): pred_all[idx] for idx, d in enumerate(horizon_tuple)}
+
+
 class BrainEmbeddingModel(nn.Module):
     """带可选分组上下文 Transformer 的脑信号编码器。"""
 
@@ -259,6 +463,17 @@ class BrainEmbeddingModel(nn.Module):
         )
         if self.prefix_revision_enabled and self.requires_event_times:
             raise ValueError("首版前缀回修不与物理时间偏置组合。")
+        temporal_bias_config = config.get("temporal_bias_head", {})
+        self.temporal_bias_head = None
+        self.temporal_bias_eta = 0.0
+        if bool(temporal_bias_config.get("enabled", False)):
+            if self.context_transformer is None:
+                raise ValueError("摊销时序偏置预测头要求启用上下文 Transformer。")
+            with torch.random.fork_rng(devices=[]):
+                self.temporal_bias_head = TemporalGeometryBiasHead(
+                    output_dimension, temporal_bias_config
+                )
+            self.temporal_bias_eta = float(temporal_bias_config.get("eta", 0.50))
 
     def _load_from_state_dict(
         self,
@@ -298,6 +513,7 @@ class BrainEmbeddingModel(nn.Module):
         group_indices=None,
         event_times=None,
         return_brain_embedding=False,
+        onset_seconds=None,
     ):
         brain_embedding = F.normalize(
             self.brain_encoder(signals, subject_indices), dim=-1
@@ -316,6 +532,21 @@ class BrainEmbeddingModel(nn.Module):
                 output, group_indices, event_times=event_times
             )
             output = F.normalize(output, dim=-1)
+            if (
+                self.temporal_bias_head is not None
+                and onset_seconds is not None
+                and self.temporal_bias_eta > 0.0
+            ):
+                b_pred = (
+                    self.temporal_bias_head.predict_group_revisions(
+                        onset_seconds, group_indices, (0,)
+                    )[0]
+                    .detach()
+                    .to(dtype=output.dtype)
+                )
+                output = F.normalize(
+                    output - float(self.temporal_bias_eta) * b_pred, dim=-1
+                )
         if return_brain_embedding:
             return output, brain_embedding
         return output
@@ -429,6 +660,7 @@ class BrainEmbeddingModel(nn.Module):
         group_indices,
         cutoff_generator=None,
         cutoff_policy="sample_one",
+        onset_seconds=None,
     ):
         """按截止位置构造共享模型的延迟 0/1/2 监督。"""
         if not self.prefix_revision_enabled:
@@ -527,15 +759,29 @@ class BrainEmbeddingModel(nn.Module):
             device=brain_embedding.device,
             dtype=torch.long,
         )
-        return (
-            F.normalize(revised_context[locations], dim=-1),
-            torch.as_tensor(
-                revision_rows, device=group_indices.device, dtype=torch.long
-            ),
-            torch.as_tensor(
-                revision_delays, device=group_indices.device, dtype=torch.long
-            ),
+        rows_tensor = torch.as_tensor(
+            revision_rows, device=group_indices.device, dtype=torch.long
         )
+        delays_tensor = torch.as_tensor(
+            revision_delays, device=group_indices.device, dtype=torch.long
+        )
+        queries = F.normalize(revised_context[locations], dim=-1)
+        if (
+            self.temporal_bias_head is not None
+            and onset_seconds is not None
+            and self.temporal_bias_eta > 0.0
+        ):
+            b_queries = (
+                self.temporal_bias_head.predict_queries(
+                    onset_seconds, group_indices, rows_tensor, delays_tensor
+                )
+                .detach()
+                .to(dtype=queries.dtype)
+            )
+            queries = F.normalize(
+                queries - float(self.temporal_bias_eta) * b_queries, dim=-1
+            )
+        return queries, rows_tensor, delays_tensor
 
     @torch.inference_mode()
     def forward_prefix_revisions(
@@ -543,6 +789,7 @@ class BrainEmbeddingModel(nn.Module):
         signals,
         subject_indices,
         group_indices,
+        onset_seconds=None,
     ):
         """严格截断输入，返回每个目标在延迟 0/1/2 时的预测。"""
         if not self.prefix_revision_enabled:
@@ -621,56 +868,71 @@ class BrainEmbeddingModel(nn.Module):
 
             for delay, row_index, w_idx, target_offset in query_specs:
                 outputs[delay][row_index] = window_outputs[w_idx][target_offset]
-            return outputs
-
-        for delay in self.prefix_revision_horizons:
-            delayed = torch.empty_like(brain_embedding)
-            batch_size = self.prefix_revision_validation_query_batch_size
-            for start in range(0, len(brain_embedding), batch_size):
-                stop = min(start + batch_size, len(brain_embedding))
-                prefix_parts = []
-                prefix_groups = []
-                target_locations = []
-                cursor = 0
-                for virtual_group, row_index in enumerate(range(start, stop)):
-                    _, indices, position = row_to_group[row_index]
-                    window_start, window_stop, target_offset = (
-                        self._revision_window_bounds(
-                            position, delay, len(indices)
+        else:
+            for delay in self.prefix_revision_horizons:
+                delayed = torch.empty_like(brain_embedding)
+                batch_size = self.prefix_revision_validation_query_batch_size
+                for start in range(0, len(brain_embedding), batch_size):
+                    stop = min(start + batch_size, len(brain_embedding))
+                    prefix_parts = []
+                    prefix_groups = []
+                    target_locations = []
+                    cursor = 0
+                    for virtual_group, row_index in enumerate(range(start, stop)):
+                        _, indices, position = row_to_group[row_index]
+                        window_start, window_stop, target_offset = (
+                            self._revision_window_bounds(
+                                position, delay, len(indices)
+                            )
                         )
-                    )
-                    selected_indices = torch.as_tensor(
-                        indices[window_start:window_stop],
-                        device=brain_embedding.device,
-                    )
-                    prefix = brain_embedding[selected_indices]
-                    prefix_parts.append(prefix)
-                    prefix_groups.append(
-                        torch.full(
-                            (len(prefix),),
-                            virtual_group,
-                            device=group_indices.device,
-                            dtype=group_indices.dtype,
-                        )
-                    )
-                    target_locations.append(cursor + target_offset)
-                    cursor += len(prefix)
-                revised = self.context_transformer(
-                    torch.cat(prefix_parts, dim=0),
-                    torch.cat(prefix_groups, dim=0),
-                    causal_override=False,
-                )
-                delayed[start:stop] = F.normalize(
-                    revised[
-                        torch.as_tensor(
-                            target_locations,
+                        selected_indices = torch.as_tensor(
+                            indices[window_start:window_stop],
                             device=brain_embedding.device,
-                            dtype=torch.long,
                         )
-                    ],
+                        prefix = brain_embedding[selected_indices]
+                        prefix_parts.append(prefix)
+                        prefix_groups.append(
+                            torch.full(
+                                (len(prefix),),
+                                virtual_group,
+                                device=group_indices.device,
+                                dtype=group_indices.dtype,
+                            )
+                        )
+                        target_locations.append(cursor + target_offset)
+                        cursor += len(prefix)
+                    revised = self.context_transformer(
+                        torch.cat(prefix_parts, dim=0),
+                        torch.cat(prefix_groups, dim=0),
+                        causal_override=False,
+                    )
+                    delayed[start:stop] = F.normalize(
+                        revised[
+                            torch.as_tensor(
+                                target_locations,
+                                device=brain_embedding.device,
+                                dtype=torch.long,
+                            )
+                        ],
+                        dim=-1,
+                    )
+                outputs[delay] = delayed
+
+        if (
+            self.temporal_bias_head is not None
+            and onset_seconds is not None
+            and self.temporal_bias_eta > 0.0
+        ):
+            b_by_delay = self.temporal_bias_head.predict_group_revisions(
+                onset_seconds, group_indices, self.prefix_revision_horizons
+            )
+            eta_val = float(self.temporal_bias_eta)
+            for delay in self.prefix_revision_horizons:
+                outputs[delay] = F.normalize(
+                    outputs[delay]
+                    - eta_val * b_by_delay[delay].to(dtype=outputs[delay].dtype),
                     dim=-1,
                 )
-            outputs[delay] = delayed
         return outputs
 
 
