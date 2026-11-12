@@ -74,10 +74,18 @@ def _normalize_s3_cms_mode(mode: str | None) -> str:
     text = str(mode or "historical_shifts").strip().lower()
     if text in {"", "historical_shifts", "historical", "leave_one_out", "loo"}:
         return "historical_shifts"
-    if text in {"causal_ema", "causal", "ema", "online_ema"}:
+    if text in {"causal_ema", "causal", "causal_cms", "ema", "online_ema"}:
         return "causal_ema"
+    if text in {
+        "pos_causal_ema",
+        "pos_causal_cms",
+        "position_causal_ema",
+        "position_causal_cms",
+        "position_locked_causal_ema",
+    }:
+        return "pos_causal_ema"
     raise ValueError(
-        f"S3 cms_mode 仅支持 'historical_shifts' 或 'causal_ema'，当前为：{mode!r}"
+        f"S3 cms_mode 仅支持 'historical_shifts'、'causal_ema' 或 'pos_causal_ema'，当前为：{mode!r}"
     )
 
 
@@ -356,6 +364,7 @@ def _encode_stage_with_shifts(
     """加载单个阶段的检查点，提取 Clean (0s) 与 Shifted (-75s)（支持在线因果 EMA-CMS 或历史共模扣除）特征。"""
     from braindecoding.evaluation.common_mode_subtraction_evaluation import (
         apply_causal_ema_subtraction_to_encoded,
+        apply_position_causal_ema_subtraction_to_encoded,
     )
     from braindecoding.models import build_brain_embedding_model
     from braindecoding.training.siamese_debiased_training import (
@@ -534,7 +543,7 @@ def _encode_stage_with_shifts(
         else None
     )
     hist_encoded_list: list[dict] = []
-    if norm_cms_mode == "causal_ema":
+    if norm_cms_mode in {"causal_ema", "pos_causal_ema"}:
         if (
             mu0_payload is None
             and abs(float(subtraction_eta)) > 1e-12
@@ -580,21 +589,39 @@ def _encode_stage_with_shifts(
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
-    if norm_cms_mode == "causal_ema":
-        clean_debiased = apply_causal_ema_subtraction_to_encoded(
-            clean_encoded,
-            mu0_payload=mu0_payload,
-            eta=float(subtraction_eta),
-            ema_decay=float(cms_ema_decay),
-            stream_keys=canonical_stream_keys,
-        )
-        control_debiased = apply_causal_ema_subtraction_to_encoded(
-            control_encoded,
-            mu0_payload=mu0_payload,
-            eta=float(subtraction_eta),
-            ema_decay=float(cms_ema_decay),
-            stream_keys=canonical_stream_keys,
-        )
+    if norm_cms_mode in {"causal_ema", "pos_causal_ema"}:
+        if norm_cms_mode == "pos_causal_ema":
+            clean_debiased = apply_position_causal_ema_subtraction_to_encoded(
+                clean_encoded,
+                mu0_payload=mu0_payload,
+                eta=float(subtraction_eta),
+                ema_decay=float(cms_ema_decay),
+                eval_table=ds_table,
+                stream_keys=canonical_stream_keys,
+            )
+            control_debiased = apply_position_causal_ema_subtraction_to_encoded(
+                control_encoded,
+                mu0_payload=mu0_payload,
+                eta=float(subtraction_eta),
+                ema_decay=float(cms_ema_decay),
+                eval_table=ds_table,
+                stream_keys=canonical_stream_keys,
+            )
+        else:
+            clean_debiased = apply_causal_ema_subtraction_to_encoded(
+                clean_encoded,
+                mu0_payload=mu0_payload,
+                eta=float(subtraction_eta),
+                ema_decay=float(cms_ema_decay),
+                stream_keys=canonical_stream_keys,
+            )
+            control_debiased = apply_causal_ema_subtraction_to_encoded(
+                control_encoded,
+                mu0_payload=mu0_payload,
+                eta=float(subtraction_eta),
+                ema_decay=float(cms_ema_decay),
+                stream_keys=canonical_stream_keys,
+            )
         if stage in ("revision", "prefix_revision") and "revision_predictions" in clean_debiased:
             clean_states: dict[str, torch.Tensor] = {}
             shifted_states: dict[str, torch.Tensor] = {}
@@ -1055,10 +1082,10 @@ def export_neural_vocabulary_scores(
     language = "fr" if dataset == "pallier2025" else "zh"
 
     def _build_cms_metadata() -> dict[str, Any]:
-        if norm_cms_mode == "causal_ema":
-            return {
+        if norm_cms_mode in {"causal_ema", "pos_causal_ema"}:
+            meta_d: dict[str, Any] = {
                 "enabled": abs(eta_val) > 1e-12,
-                "mode": "causal_ema",
+                "mode": norm_cms_mode,
                 "ema_decay": ema_decay_val,
                 "shift_mode": norm_shift_mode,
                 "preroll_seconds": preroll_sec_val,
@@ -1066,6 +1093,10 @@ def export_neural_vocabulary_scores(
                 "control_shift_seconds": ctrl_shift,
                 "subtraction_eta": eta_val,
             }
+            if norm_cms_mode == "pos_causal_ema":
+                meta_d["pos_ema_decay"] = 0.95
+                meta_d["min_bucket_count"] = 3
+            return meta_d
         return {
             "enabled": bool(bg_shifts) and abs(eta_val) > 1e-12,
             "mode": "historical_shifts",
@@ -1117,7 +1148,7 @@ def export_neural_vocabulary_scores(
                 and float(cand_cms.get("subtraction_eta", 0.0)) <= 1e-12
             ) or (saved_cms_mode == norm_cms_mode)
             ema_ok = (
-                norm_cms_mode != "causal_ema"
+                norm_cms_mode not in {"causal_ema", "pos_causal_ema"}
                 or abs(eta_val) <= 1e-12
                 or "ema_decay" not in cand_cms
                 or abs(float(cand_cms["ema_decay"]) - ema_decay_val) <= 1e-6

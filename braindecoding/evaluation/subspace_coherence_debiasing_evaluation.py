@@ -1203,6 +1203,7 @@ def save_subspace_encoded_cache(
     vocab50: Sequence[str],
     clean_encoded: dict,
     shifted_encoded_by_shift: Sequence[tuple[float, str, str, dict]],
+    mu0_payload: object | None = None,
 ) -> Path | None:
     """将单次编码的 Clean + M 个 Shifted 特征压缩保存至 exploratory/subspace_encoded_cache_{split}.pt (~45MB)。"""
     try:
@@ -1261,6 +1262,25 @@ def save_subspace_encoded_cache(
             for w in all_needed_words
             if w in eval_ds.embedding_map
         }
+        compact_mu0 = None
+        if isinstance(mu0_payload, torch.Tensor):
+            compact_mu0 = mu0_payload.detach().cpu().to(dtype=torch.float32)
+        elif isinstance(mu0_payload, Mapping):
+            compact_mu0 = {}
+            for mk, mv in mu0_payload.items():
+                if isinstance(mv, torch.Tensor):
+                    compact_mu0[mk] = mv.detach().cpu().to(dtype=torch.float32)
+                elif isinstance(mv, Mapping):
+                    compact_mu0[mk] = {
+                        int(rk) if str(rk).isdigit() else rk: (
+                            rv.detach().cpu().to(dtype=torch.float32)
+                            if isinstance(rv, torch.Tensor)
+                            else rv
+                        )
+                        for rk, rv in mv.items()
+                    }
+                else:
+                    compact_mu0[mk] = mv
         tmp_cache = encoded_cache_path.with_suffix(".pt.tmp")
         torch.save(
             {
@@ -1281,6 +1301,7 @@ def save_subspace_encoded_cache(
                 "embedding_map": minimal_emb_map,
                 "clean_encoded": compact_clean,
                 "shifted_encoded_by_shift": compact_shifts,
+                "mu0_payload": compact_mu0,
             },
             tmp_cache,
         )
@@ -1320,6 +1341,20 @@ def _compact_encoded_dict(encoded: dict) -> dict:
         "event_ids": list(encoded["event_ids"]),
         "recording_ids": list(encoded.get("recording_ids", ())),
     }
+    if "subject_indices" in encoded and encoded["subject_indices"] is not None:
+        si = encoded["subject_indices"]
+        compact["subject_indices"] = (
+            si.detach().cpu().to(dtype=torch.long)
+            if isinstance(si, torch.Tensor)
+            else list(si)
+        )
+    if "sentence_indices" in encoded and encoded["sentence_indices"] is not None:
+        sni = encoded["sentence_indices"]
+        compact["sentence_indices"] = (
+            sni.detach().cpu().to(dtype=torch.long)
+            if isinstance(sni, torch.Tensor)
+            else list(sni)
+        )
     if "revision_predictions" in encoded and isinstance(
         encoded["revision_predictions"], dict
     ):
@@ -1633,9 +1668,12 @@ def evaluate_cached_pt_subspace_loo(
                 existing_cms = json.loads(existing_cms_p.read_text(encoding="utf-8"))
                 if isinstance(existing_cms, dict) and (
                     str(existing_cms.get("cms_mode", "")).strip().lower()
-                    == "causal_ema"
+                    in {"causal_ema", "pos_causal_ema"}
                     or str(existing_cms.get("experiment_type", "")).strip().lower()
-                    == "causal_ema_common_mode_subtraction"
+                    in {
+                        "causal_ema_common_mode_subtraction",
+                        "position_causal_ema_common_mode_subtraction",
+                    }
                 ):
                     preserve_causal_cms = True
             except Exception:

@@ -837,9 +837,9 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--cms-mode",
-        choices=("leave_one_out", "causal_ema"),
+        choices=("leave_one_out", "causal_ema", "pos_causal_ema", "pos_causal_cms"),
         default=None,
-        help="共模扣除模式：causal_ema（严格在线因果 EMA，支持 M_eval=0 单遍前向）或 leave_one_out（留一法 6 错位背景）",
+        help="共模扣除模式：pos_causal_ema（句内位置分桶在线因果 EMA，M_eval=0）、causal_ema（全局在线因果 EMA）或 leave_one_out（留一法多错位背景）",
     )
     parser.add_argument(
         "--cms-ema-decay",
@@ -1200,9 +1200,15 @@ def build_parser() -> argparse.ArgumentParser:
     decode_cmd.add_argument("--cms-eta", type=float, default=None, help="可选覆写共模扣除系数 eta（默认：从协议 YAML 读取 0.5；amortized_timing 默认 0.0）")
     decode_cmd.add_argument(
         "--cms-mode",
-        choices=("historical_shifts", "leave_one_out", "causal_ema"),
+        choices=(
+            "historical_shifts",
+            "leave_one_out",
+            "causal_ema",
+            "pos_causal_ema",
+            "pos_causal_cms",
+        ),
         default=None,
-        help="可选覆写 S3 共模扣除模式：historical_shifts 或 causal_ema（严格在线因果 EMA，0 次额外错位前向）",
+        help="可选覆写 S3 共模扣除模式：historical_shifts、causal_ema 或 pos_causal_ema（句内位置分桶在线因果 EMA，0 次额外错位前向）",
     )
     decode_cmd.add_argument("--cms-ema-decay", type=float, default=None, help="因果 EMA 共模扣除指数衰减率 alpha（默认：0.99）")
     decode_cmd.add_argument(

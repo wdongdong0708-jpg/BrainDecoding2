@@ -197,9 +197,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--cms-mode",
-        choices=("historical_shifts", "leave_one_out", "causal_ema"),
+        choices=(
+            "historical_shifts",
+            "leave_one_out",
+            "causal_ema",
+            "pos_causal_ema",
+            "pos_causal_cms",
+        ),
         default=None,
-        help="可选覆写 S3 共模扣除模式：historical_shifts（6 窗口历史错位）或 causal_ema（严格在线因果 EMA，0 次额外错位前向）",
+        help="可选覆写 S3 共模扣除模式：historical_shifts（6 窗口历史错位）、causal_ema（全局在线因果 EMA）或 pos_causal_ema（句内位置分桶在线因果 EMA，0 次额外错位前向）",
     )
     parser.add_argument(
         "--cms-ema-decay",

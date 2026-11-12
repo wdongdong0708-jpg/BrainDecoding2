@@ -892,14 +892,23 @@ def format_common_mode_subtraction_report(
     f_info = report.get("formula") or {}
     m_count = f_info.get("num_shifted_conditions_M", 6)
     loo_div = f_info.get("shifted_loo_divisor", 5)
-    is_causal_ema = (
-        str(report.get("cms_mode") or f_info.get("cms_mode") or "").lower()
-        == "causal_ema"
-    )
+    cms_mode_str = str(report.get("cms_mode") or f_info.get("cms_mode") or "").lower()
+    is_pos_causal_ema = cms_mode_str == "pos_causal_ema"
+    is_causal_ema = cms_mode_str in {"causal_ema", "pos_causal_ema"}
 
     banner = "=" * REPORT_WIDTH
     rule = "-" * REPORT_WIDTH
-    if is_causal_ema:
+    if is_pos_causal_ema:
+        ema_alpha = float(f_info.get("ema_decay", 0.99))
+        pos_alpha = float(f_info.get("pos_ema_decay", 0.95))
+        min_cnt = int(f_info.get("min_bucket_count", 3))
+        sh_mode = str(report.get("shift_mode") or f_info.get("shift_mode", "preroll"))
+        title_line = f"Position-Locked Causal EMA-CMS | {dataset} | {stage} ({split.upper()}) | Seed: {seed}"
+        sub_line = (
+            f"PosAlpha={pos_alpha:g} (B=7, min={min_cnt}) | GlobalAlpha={ema_alpha:g} | "
+            f"ShiftMode={sh_mode} | Shifts: M={m_count}"
+        )
+    elif is_causal_ema:
         ema_alpha = float(f_info.get("ema_decay", 0.99))
         mu0_src = str(f_info.get("mu0_source", "train"))
         sh_mode = str(report.get("shift_mode") or f_info.get("shift_mode", "preroll"))
@@ -923,15 +932,21 @@ def format_common_mode_subtraction_report(
     lines.append(hdr_50)
     lines.append(rule)
 
+    def _row_eta_lbl(it: Mapping[str, Any]) -> str:
+        s_lbl = it.get("short_label")
+        if isinstance(s_lbl, str) and s_lbl.strip():
+            return s_lbl.strip()[:14]
+        e_v = float(it.get("eta", 0.0))
+        return f"eta={e_v:.2f} (raw)" if abs(e_v) <= 1e-9 else f"eta={e_v:.2f}"
+
     has_horizons = False
     for item in sweep_list:
-        eta = float(item.get("eta", 0.0))
         c_ref = item.get("clean_reference") or {}
         agg = item.get("shifted_aggregate") or {}
         d_eta0 = item.get("delta_vs_eta0")
         if c_ref.get("horizons"):
             has_horizons = True
-        eta_lbl = f"eta={eta:.2f} (raw)" if abs(eta) <= 1e-9 else f"eta={eta:.2f}"
+        eta_lbl = _row_eta_lbl(item)
         d50_str = (
             "base".rjust(8)
             if d_eta0 is None
@@ -959,10 +974,9 @@ def format_common_mode_subtraction_report(
     lines.append(hdr_full)
     lines.append(rule)
     for item in sweep_list:
-        eta = float(item.get("eta", 0.0))
         c_ref = item.get("clean_reference") or {}
         agg = item.get("shifted_aggregate") or {}
-        eta_lbl = f"eta={eta:.2f} (raw)" if abs(eta) <= 1e-9 else f"eta={eta:.2f}"
+        eta_lbl = _row_eta_lbl(item)
         c_fv_m10 = c_ref.get("full_vocab_word_macro_top10", c_ref.get("full_vocab_macro_top10"))
         s_fv_m10 = agg.get("mean_full_vocab_word_macro_top10", agg.get("mean_full_vocab_macro_top10"))
         g_fv_m10 = (
@@ -997,8 +1011,7 @@ def format_common_mode_subtraction_report(
             lines.append(h_hdr)
             lines.append(rule)
             for item in sweep_list:
-                eta = float(item.get("eta", 0.0))
-                eta_lbl = f"eta={eta:.2f} (raw)" if abs(eta) <= 1e-9 else f"eta={eta:.2f}"
+                eta_lbl = _row_eta_lbl(item)
                 c_hz = (item.get("clean_reference") or {}).get("horizons") or {}
                 s_hz = (item.get("shifted_aggregate") or {}).get("horizons") or {}
                 cols: list[str] = []

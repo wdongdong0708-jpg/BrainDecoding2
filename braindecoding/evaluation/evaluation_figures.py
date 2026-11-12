@@ -1209,7 +1209,10 @@ def plot_common_mode_subtraction_figures(
 
     etas = [float(item["eta"]) for item in sweep]
     x_labels = [
-        f"η={e:g}\n(raw)" if abs(e) <= 1e-9 else f"η={e:g}" for e in etas
+        str(item["short_label"])
+        if isinstance(item.get("short_label"), str) and str(item["short_label"]).strip()
+        else (f"η={float(item['eta']):g}\n(raw)" if abs(float(item["eta"])) <= 1e-9 else f"η={float(item['eta']):g}")
+        for item in sweep
     ]
     x_pos = np.arange(len(etas))
 
@@ -1250,10 +1253,22 @@ def plot_common_mode_subtraction_figures(
         for item in sweep
     ]
 
+    cms_mode_title = str(
+        report.get("cms_mode")
+        or (report.get("formula") or {}).get("cms_mode")
+        or "leave_one_out"
+    ).lower()
+    if cms_mode_title == "pos_causal_ema":
+        main_title = "Position-Locked Causal EMA-CMS"
+    elif cms_mode_title == "causal_ema":
+        main_title = "Causal EMA Common-Mode Subtraction"
+    else:
+        main_title = "Leave-One-Out Common-Mode Subtraction"
+
     with evaluation_plot_context():
         fig, axes = plt.subplots(2, 2, figsize=(15, 10.5), dpi=160)
         fig.suptitle(
-            f"Leave-One-Out Common-Mode Subtraction  |  {dataset}  |  stage={stage}  |  split={split}  |  seed={seed}",
+            f"{main_title}  |  {dataset}  |  stage={stage}  |  split={split}  |  seed={seed}",
             fontsize=13,
             fontweight="bold",
             y=0.98,

@@ -1856,6 +1856,9 @@ def _resolve_control_specification(
     from braindecoding.evaluation.common_mode_subtraction_evaluation import (
         DEFAULT_CAUSAL_CMS_EMA_DECAY,
         DEFAULT_CAUSAL_CMS_ETAS,
+        DEFAULT_POS_CAUSAL_CMS_ETAS,
+        DEFAULT_POS_CAUSAL_EMA_DECAY,
+        DEFAULT_POS_MIN_BUCKET_COUNT,
         DEFAULT_SUBTRACTION_ETAS,
         normalize_cms_mode,
         parse_eta_values,
@@ -1936,14 +1939,26 @@ def _resolve_control_specification(
         or cms_mode is not None
         or bool(cms_raw.get("enabled", False))
         or str(merged_control.get("control_type", "")).strip().lower()
-        in {"common_mode_subtraction", "causal_common_mode_subtraction"}
+        in {
+            "common_mode_subtraction",
+            "causal_common_mode_subtraction",
+            "position_causal_common_mode_subtraction",
+        }
         or str(merged_eval.get("negative_control", "")).strip().lower()
-        in {"common_mode_subtraction", "causal_common_mode_subtraction"}
+        in {
+            "common_mode_subtraction",
+            "causal_common_mode_subtraction",
+            "position_causal_common_mode_subtraction",
+        }
     )
     default_etas = (
-        DEFAULT_CAUSAL_CMS_ETAS
-        if resolved_cms_mode == "causal_ema"
-        else DEFAULT_SUBTRACTION_ETAS
+        DEFAULT_POS_CAUSAL_CMS_ETAS
+        if resolved_cms_mode == "pos_causal_ema"
+        else (
+            DEFAULT_CAUSAL_CMS_ETAS
+            if resolved_cms_mode == "causal_ema"
+            else DEFAULT_SUBTRACTION_ETAS
+        )
     )
     cms_etas = parse_eta_values(
         subtraction_etas
@@ -1956,6 +1971,15 @@ def _resolve_control_specification(
         cms_ema_decay
         if cms_ema_decay is not None
         else cms_raw.get("ema_decay", DEFAULT_CAUSAL_CMS_EMA_DECAY)
+    )
+    resolved_pos_ema_decay = float(
+        cms_raw.get("pos_ema_decay", DEFAULT_POS_CAUSAL_EMA_DECAY)
+    )
+    resolved_min_bucket_count = max(
+        1, int(cms_raw.get("min_bucket_count", DEFAULT_POS_MIN_BUCKET_COUNT))
+    )
+    include_global_causal_baseline = bool(
+        cms_raw.get("include_global_causal_baseline", True)
     )
 
     sub_raw = (
@@ -1994,7 +2018,9 @@ def _resolve_control_specification(
         shifts = _parse_shift_seconds_list(merged_control.get("shift_seconds"))
     elif "shift_seconds" in merged_eval:
         shifts = _parse_shift_seconds_list(merged_eval.get("shift_seconds"))
-    elif sub_enabled or (cms_enabled and resolved_cms_mode != "causal_ema"):
+    elif sub_enabled or (
+        cms_enabled and resolved_cms_mode not in {"causal_ema", "pos_causal_ema"}
+    ):
         shifts = list(DEFAULT_CONTROL_SHIFTS_SECONDS)
     else:
         shifts = []
@@ -2008,7 +2034,7 @@ def _resolve_control_specification(
             or (cfg.get("dataset") or {}).get("shift_mode")
             or (
                 "preroll"
-                if resolved_cms_mode == "causal_ema"
+                if resolved_cms_mode in {"causal_ema", "pos_causal_ema"}
                 else "deterministic_circular"
             )
         )
@@ -2053,6 +2079,9 @@ def _resolve_control_specification(
                 "enabled": False,
                 "mode": resolved_cms_mode,
                 "ema_decay": resolved_ema_decay,
+                "pos_ema_decay": resolved_pos_ema_decay,
+                "min_bucket_count": resolved_min_bucket_count,
+                "include_global_causal_baseline": include_global_causal_baseline,
                 "eta_values": [],
                 "normalize_before_subtraction": True,
             },
@@ -2071,18 +2100,22 @@ def _resolve_control_specification(
         "subspace_coherence_debiasing"
         if sub_enabled
         else (
-            "causal_common_mode_subtraction"
-            if (cms_enabled and resolved_cms_mode == "causal_ema")
+            "position_causal_common_mode_subtraction"
+            if (cms_enabled and resolved_cms_mode == "pos_causal_ema")
             else (
-                "common_mode_subtraction"
-                if cms_enabled
+                "causal_common_mode_subtraction"
+                if (cms_enabled and resolved_cms_mode == "causal_ema")
                 else (
-                    "temporal_shift"
-                    if shifts and not enable_zero
+                    "common_mode_subtraction"
+                    if cms_enabled
                     else (
-                        "zero_signal"
-                        if enable_zero and not shifts
-                        else "combined_control"
+                        "temporal_shift"
+                        if shifts and not enable_zero
+                        else (
+                            "zero_signal"
+                            if enable_zero and not shifts
+                            else "combined_control"
+                        )
                     )
                 )
             )
@@ -2127,6 +2160,9 @@ def _resolve_control_specification(
             "enabled": bool(cms_enabled),
             "mode": resolved_cms_mode,
             "ema_decay": resolved_ema_decay,
+            "pos_ema_decay": resolved_pos_ema_decay,
+            "min_bucket_count": resolved_min_bucket_count,
+            "include_global_causal_baseline": include_global_causal_baseline,
             "eta_values": cms_etas,
             "normalize_before_subtraction": cms_normalize,
         },
@@ -2898,7 +2934,9 @@ def _evaluate_common_horizon_subset_from_pt(
     cms_mode_sub = str(cms_cfg.get("mode", "leave_one_out")).strip().lower()
     cms_sub_json_path: Path | None = None
     cms_summary_meta: dict[str, object] = {}
-    if cms_mode_sub == "causal_ema" and bool(cms_cfg.get("enabled", False)):
+    if cms_mode_sub in {"causal_ema", "pos_causal_ema"} and bool(
+        cms_cfg.get("enabled", False)
+    ):
         from braindecoding.evaluation.common_mode_subtraction_evaluation import (
             run_causal_ema_common_mode_subtraction_sweep,
         )
@@ -2928,8 +2966,14 @@ def _evaluate_common_horizon_subset_from_pt(
             vocab50=vocab50,
             cfg=cfg,
             mu0_payload=mu0_sub,
-            eta_values=cms_cfg.get("eta_values", (0.5,)),
+            cms_mode=cms_mode_sub,
+            eta_values=cms_cfg.get("eta_values"),
             ema_decay=float(cms_cfg.get("ema_decay", 0.99)),
+            pos_ema_decay=float(cms_cfg.get("pos_ema_decay", 0.95)),
+            min_bucket_count=int(cms_cfg.get("min_bucket_count", 3)),
+            include_global_causal_baseline=bool(
+                cms_cfg.get("include_global_causal_baseline", True)
+            ),
             shift_mode=str(control_spec.get("shift_mode", "preroll")),
             normalize_inputs=bool(
                 cms_cfg.get("normalize_before_subtraction", True)
@@ -2952,7 +2996,7 @@ def _evaluate_common_horizon_subset_from_pt(
         )
         save_json(cms_sub_json_path, cms_report)
         cms_summary_meta = {
-            "cms_mode": "causal_ema",
+            "cms_mode": cms_mode_sub,
             "eta_grid": cms_report["eta_grid"],
             "best_eta_by_clean_vocab50_top10": cms_report[
                 "best_eta_by_clean_vocab50_top10"
@@ -3624,7 +3668,7 @@ def _evaluate_single_stage(
     mu0_payload = checkpoint.get("causal_cms_mu0")
     if (
         cms_enabled
-        and cms_mode_str == "causal_ema"
+        and cms_mode_str in {"causal_ema", "pos_causal_ema"}
         and not isinstance(mu0_payload, (Mapping, torch.Tensor))
     ):
         from braindecoding.training.siamese_debiased_training import (
@@ -3747,11 +3791,12 @@ def _evaluate_single_stage(
             vocab50=vocab50,
             clean_encoded=encoded,
             shifted_encoded_by_shift=shifted_encoded_by_shift,
+            mu0_payload=mu0_payload,
         )
         if saved_cache_pt is not None:
             eval_result["subspace_encoded_cache_pt"] = str(saved_cache_pt)
 
-    if cms_enabled and cms_mode_str == "causal_ema":
+    if cms_enabled and cms_mode_str in {"causal_ema", "pos_causal_ema"}:
         from braindecoding.evaluation.common_mode_subtraction_evaluation import (
             run_causal_ema_common_mode_subtraction_sweep,
         )
@@ -3771,8 +3816,14 @@ def _evaluate_single_stage(
             vocab50=vocab50,
             cfg=cfg,
             mu0_payload=mu0_payload,
-            eta_values=cms_cfg.get("eta_values", (0.5,)),
+            cms_mode=cms_mode_str,
+            eta_values=cms_cfg.get("eta_values"),
             ema_decay=float(cms_cfg.get("ema_decay", 0.99)),
+            pos_ema_decay=float(cms_cfg.get("pos_ema_decay", 0.95)),
+            min_bucket_count=int(cms_cfg.get("min_bucket_count", 3)),
+            include_global_causal_baseline=bool(
+                cms_cfg.get("include_global_causal_baseline", True)
+            ),
             shift_mode=ctrl_shift_mode,
             normalize_inputs=bool(
                 cms_cfg.get("normalize_before_subtraction", True)
@@ -3793,8 +3844,10 @@ def _evaluate_single_stage(
             cms_report.get("exploratory_json")
         )
         eval_result["exploratory_common_mode_subtraction_summary"] = {
-            "cms_mode": "causal_ema",
+            "cms_mode": cms_mode_str,
             "ema_decay": float(cms_cfg.get("ema_decay", 0.99)),
+            "pos_ema_decay": float(cms_cfg.get("pos_ema_decay", 0.95)),
+            "min_bucket_count": int(cms_cfg.get("min_bucket_count", 3)),
             "eta_grid": cms_report["eta_grid"],
             "best_eta_by_clean_vocab50_top10": cms_report[
                 "best_eta_by_clean_vocab50_top10"
@@ -5289,7 +5342,13 @@ def _select_active_control_method(
     cms_candidates = [
         v
         for k, v in methods_map.items()
-        if k.startswith("cms:") and float(v.get("eta") or 0.0) > 1e-9
+        if k.startswith(("cms:", "causal_cms:", "pos_causal_cms:"))
+        and float(v.get("eta") or 0.0) > 1e-9
+    ]
+    pos_cms_candidates = [
+        v
+        for k, v in methods_map.items()
+        if k.startswith("pos_causal_cms:") and float(v.get("eta") or 0.0) > 1e-9
     ]
     sub_candidates = [
         v
@@ -5301,6 +5360,14 @@ def _select_active_control_method(
         if sub_candidates:
             best = max(
                 sub_candidates,
+                key=lambda x: float(
+                    _extract_metric_from_control_agg(x, metric_spec)["mean_gap"]
+                ),
+            )
+            return dict(best)
+        if pos_cms_candidates:
+            best = max(
+                pos_cms_candidates,
                 key=lambda x: float(
                     _extract_metric_from_control_agg(x, metric_spec)["mean_gap"]
                 ),
@@ -5333,6 +5400,30 @@ def _select_active_control_method(
     for k, v in methods_map.items():
         if k.lower().replace(" ", "") == norm_sel:
             return dict(v)
+
+    if (
+        norm_sel
+        in ("pos_causal_cms", "pos_causal_ema", "pos_causal_cms:best_gap", "pos_causal_cms_best_gap")
+        and pos_cms_candidates
+    ):
+        best = max(
+            pos_cms_candidates,
+            key=lambda x: float(
+                _extract_metric_from_control_agg(x, metric_spec)["mean_gap"]
+            ),
+        )
+        return dict(best)
+    if (
+        norm_sel in ("pos_causal_cms:best_clean", "pos_causal_cms_best_clean")
+        and pos_cms_candidates
+    ):
+        best = max(
+            pos_cms_candidates,
+            key=lambda x: float(
+                _extract_metric_from_control_agg(x, metric_spec)["mean_clean"]
+            ),
+        )
+        return dict(best)
 
     if norm_sel in ("cms", "cms:best_gap", "cms_best_gap") and cms_candidates:
         best = max(
@@ -6965,11 +7056,15 @@ def _aggregate_single_stage_multi_seed(
             for item in sweep_obj:
                 if isinstance(item, dict):
                     eta_v = float(item.get("eta", 0.0))
-                    k_str = (
-                        "eta_0"
-                        if abs(eta_v) <= 1e-9
-                        else f"eta_{eta_v:g}".replace(".", "_")
-                    )
+                    explicit_k = str(
+                        item.get("sweep_key") or item.get("method_id") or ""
+                    ).strip()
+                    if abs(eta_v) <= 1e-9:
+                        k_str = "eta_0"
+                    elif explicit_k and ":" in explicit_k:
+                        k_str = explicit_k
+                    else:
+                        k_str = f"eta_{eta_v:g}".replace(".", "_")
                     out_d[k_str] = item
             return out_d
         return {}
@@ -7071,23 +7166,51 @@ def _aggregate_single_stage_multi_seed(
     cms_aggregate: dict[str, object] = {"enabled": False}
     if cms_reports_by_seed:
         first_cms_rep = cms_reports_by_seed[0][1]
+        cms_mode_agg = str(first_cms_rep.get("cms_mode") or "").strip().lower()
+        exp_type_agg = str(first_cms_rep.get("experiment_type") or "").strip().lower()
+        is_pos_cms_report = (
+            cms_mode_agg == "pos_causal_ema"
+            or exp_type_agg == "position_causal_ema_common_mode_subtraction"
+        )
         is_causal_cms = (
-            str(first_cms_rep.get("cms_mode") or "").strip().lower()
-            == "causal_ema"
-            or str(first_cms_rep.get("experiment_type") or "").strip().lower()
-            == "causal_ema_common_mode_subtraction"
+            is_pos_cms_report
+            or cms_mode_agg == "causal_ema"
+            or exp_type_agg == "causal_ema_common_mode_subtraction"
         )
         first_sweep = _normalize_cms_sweep_dict(first_cms_rep.get("sweep"))
         cms_methods: dict[str, dict] = {}
         for eta_key, first_eta_ent in first_sweep.items():
             eta_val = float(first_eta_ent.get("eta", 0.0))
             eta_round = round(eta_val, 6)
+            variant_i = str(
+                first_eta_ent.get("cms_variant")
+                or (
+                    "pos_causal_ema"
+                    if is_pos_cms_report
+                    else ("causal_ema" if is_causal_cms else "leave_one_out")
+                )
+            ).strip().lower()
             if abs(eta_val) <= 1e-9:
                 m_id = "raw"
                 m_lbl = "Raw Baseline (eta=0.0)"
-            elif is_causal_cms:
-                m_id = f"causal_cms:eta={eta_val:g}"
-                m_lbl = f"Causal EMA-CMS (eta={eta_val:g})"
+            elif variant_i == "pos_causal_ema":
+                m_id = str(
+                    first_eta_ent.get("method_id")
+                    or f"pos_causal_cms:eta={eta_val:g}"
+                )
+                m_lbl = str(
+                    first_eta_ent.get("label")
+                    or f"Pos-Locked Causal EMA-CMS (eta={eta_val:g})"
+                )
+            elif variant_i == "causal_ema" or is_causal_cms:
+                m_id = str(
+                    first_eta_ent.get("method_id")
+                    or f"causal_cms:eta={eta_val:g}"
+                )
+                m_lbl = str(
+                    first_eta_ent.get("label")
+                    or f"Causal EMA-CMS (eta={eta_val:g})"
+                )
             else:
                 m_id = f"cms:eta={eta_val:g}"
                 m_lbl = f"LOO Common-Mode Subtraction (eta={eta_val:g})"
@@ -7121,9 +7244,13 @@ def _aggregate_single_stage_multi_seed(
                 method_id=m_id,
                 method_label=m_lbl,
                 control_type=(
-                    "causal_common_mode_subtraction"
-                    if is_causal_cms
-                    else "common_mode_subtraction"
+                    "position_causal_common_mode_subtraction"
+                    if variant_i == "pos_causal_ema"
+                    else (
+                        "causal_common_mode_subtraction"
+                        if (variant_i == "causal_ema" or is_causal_cms)
+                        else "common_mode_subtraction"
+                    )
                 ),
                 eta=eta_val,
                 baseline_raw_agg=raw_nc_agg,
@@ -7146,7 +7273,11 @@ def _aggregate_single_stage_multi_seed(
         if cms_methods:
             cms_aggregate = {
                 "enabled": True,
-                "cms_mode": "causal_ema" if is_causal_cms else "leave_one_out",
+                "cms_mode": (
+                    "pos_causal_ema"
+                    if is_pos_cms_report
+                    else ("causal_ema" if is_causal_cms else "leave_one_out")
+                ),
                 "seed_count": len(cms_reports_by_seed),
                 "eta_grid": list(
                     first_cms_rep.get("eta_grid")

@@ -1,0 +1,47 @@
+# 句内位置分桶严格因果共模扣除（Position-Locked Online Causal EMA-CMS, pos_causal_cms）与 Pre-Roll 负对照配置
+# 无需重训任何模型、Clean 在线推理零额外错位前向（M_eval = 0，1x 前向，仅 21 个状态向量 <85 KB）：
+#   - 7 档句内 0-based 位置分桶 b(i) : 0, 1, 2, [3,4], [5,7], [8,12], [13+]（配合 K0/K1/K2 共 3 x 7 = 21 个向量）
+#   - 冷启动兜底 (<3 句)             : 某位置桶历史完整句样本数 < 3 时自动回退使用全局因果均值 mu_global (alpha = 0.99)
+#   - 句边界严格因果更新             : 仅在整句结束时按无偏预热权重 w_k = max(1 - alpha_pos, 1/k) 更新桶均值 (alpha_pos = 0.95)
+#   - 同表对照                       : 自动并列输出 Raw (eta=0.0)、Global Causal EMA (eta=0.5) 与 Pos-Locked Causal EMA (eta in {0.5, 0.8, 1.0})
+#   - Pre-Roll 负对照池              : 默认采用 6 个零回绕纯历史错位 [-10, -20, -30, -40, -50, -60]s（preroll_seconds: 70.0），
+#                                      一次性同步生成 subspace_encoded_cache_{split}.pt 以支持 M_eval in {0, 1, 2, 4, 6} 算力-特异性曲线。
+
+extends: ../temporal_shift/temporal_shift_control.yaml
+
+control:
+  name: position_causal_common_mode_subtraction_negative_control
+  control_type: position_causal_common_mode_subtraction
+  description: Position-stratified online causal EMA common-mode subtraction (M_eval=0 Clean 1x inference with 7 intra-sentence position buckets + 6-shift zero-wrap Pre-Roll negative controls [-10s..-60s]).
+  shift_seconds: [-10.0, -20.0, -30.0, -40.0, -50.0, -60.0]
+  shift_mode: preroll
+  preroll_seconds: 70.0
+  same_subject: true
+  same_recording: true
+  non_overlapping_window: true
+  include_clean_reference: true
+  include_zero_signal: false
+  common_mode_subtraction:
+    enabled: true
+    mode: pos_causal_ema
+    ema_decay: 0.99
+    pos_ema_decay: 0.95
+    min_bucket_count: 3
+    include_global_causal_baseline: true
+    eta_values: [0.5, 0.8, 1.0]
+    normalize_before_subtraction: true
+
+evaluation:
+  negative_control: position_causal_common_mode_subtraction
+  shift_mode: preroll
+  preroll_seconds: 70.0
+  shift_seconds: [-10.0, -20.0, -30.0, -40.0, -50.0, -60.0]
+  zero_signal_control: false
+  common_mode_subtraction:
+    enabled: true
+    mode: pos_causal_ema
+    ema_decay: 0.99
+    pos_ema_decay: 0.95
+    min_bucket_count: 3
+    include_global_causal_baseline: true
+    eta_values: [0.5, 0.8, 1.0]
