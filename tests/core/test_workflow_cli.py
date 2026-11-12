@@ -3383,3 +3383,512 @@ def test_common_horizon_delay_subset_filter_and_cli_arg() -> None:
     assert parsed_report.word_exp_tag == "lr4e-4_bs256"
 
 
+def test_s3_four_protocol_batch_matrix_reuse_and_isolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import torch
+    import braindecoding.decoding.neural_score_exporter as exporter_mod
+    import braindecoding.decoding.rolling_beam_search as beam_mod
+    import braindecoding.decoding.state_hyperparameter_calibrator as cal_mod
+    import braindecoding.evaluation.sequence_decoding_evaluation as seq_eval_mod
+    import scripts.decode_sentences as decode_mod
+    from braindecoding.cli import build_parser
+    from scripts.decode_sentences import (
+        print_pipeline_summary,
+        run_sequence_decoding_pipeline,
+    )
+
+    runs_dir = tmp_path / "r"
+    monkeypatch.setenv("BRAINDECODING_RESULTS_DIR", str(runs_dir))
+
+    four_configs = ",".join(
+        [
+            "configs/decoding/causal_ema_simple_sequence_decoding_protocol.yaml",
+            "configs/decoding/causal_ema_full_sequence_decoding_protocol.yaml",
+            "configs/decoding/raw_simple_sequence_decoding_protocol.yaml",
+            "configs/decoding/raw_full_sequence_decoding_protocol.yaml",
+        ]
+    )
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "decode-sentences",
+            "--step",
+            "all",
+            "--config",
+            four_configs,
+            "--training-config",
+            "configs/training/siamese_debiased/pallier2025_siamese_debiased_prefix_revision.yaml",
+            "--revision-stage",
+            "auto",
+            "--dataset",
+            "pallier2025",
+            "--split",
+            "test",
+            "--seed",
+            "0,1",
+            "--exp-tag",
+            "t",
+            "--word-exp-tag",
+            "tw",
+            "--context-exp-tag",
+            "tc",
+            "--control-shift-seconds",
+            "-75.0",
+            "--k-observations",
+            "1,2",
+            "--no-plot",
+            "--no-progress",
+            "--no-bertscore",
+        ]
+    )
+
+    fake_ckpt_dir = tmp_path / "fake_ckpts"
+    fake_ckpt_dir.mkdir(parents=True, exist_ok=True)
+    for seed_idx in (0, 1):
+        for stage_name in ("word", "context", "prefix_revision"):
+            p = fake_ckpt_dir / f"{stage_name}_seed{seed_idx}.pt"
+            p.write_bytes(b"ckpt")
+
+    def _fake_resolve_ckpts(dataset: str, *, seed: int, **kwargs):
+        return {
+            "word_checkpoint": fake_ckpt_dir / f"word_seed{int(seed)}.pt",
+            "context_checkpoint": fake_ckpt_dir / f"context_seed{int(seed)}.pt",
+            "revision_checkpoint": fake_ckpt_dir / f"prefix_revision_seed{int(seed)}.pt",
+            "revision_stage": "prefix_revision",
+        }
+
+    export_calls: list[tuple[str, int, float, str, str, str]] = []
+
+    def _fake_export(
+        dataset: str,
+        *,
+        split: str,
+        seed: int,
+        subtraction_eta: float,
+        cms_mode: str,
+        cms_ema_decay: float,
+        shift_mode: str,
+        output_path: Path,
+        **kwargs,
+    ) -> Path:
+        export_calls.append(
+            (
+                str(split),
+                int(seed),
+                float(subtraction_eta),
+                str(cms_mode),
+                str(shift_mode),
+                output_path.parent.parent.name,
+            )
+        )
+        vocab = [f"mot{i}" for i in range(60)]
+        segs = [
+            {
+                "segment_index": 0,
+                "group_id": "run-01:0",
+                "subject_id": "sub-01",
+                "recording_id": "sub-01_run-01",
+                "words": vocab[:6],
+                "vocab_indices": [0, 1, 2, 3, 4, 5],
+                "in_vocabulary_mask": [True] * 6,
+                "start_event_offset": 0,
+                "length": 6,
+            },
+            {
+                "segment_index": 1,
+                "group_id": "run-01:1",
+                "subject_id": "sub-02",
+                "recording_id": "sub-02_run-01",
+                "words": vocab[:3],
+                "vocab_indices": [0, 1, 2],
+                "in_vocabulary_mask": [True] * 3,
+                "start_event_offset": 6,
+                "length": 3,
+            },
+        ]
+        mat = torch.zeros((9, 60), dtype=torch.float32)
+        payload = {
+            "dataset": dataset,
+            "language": "fr",
+            "split": split,
+            "seed": int(seed),
+            "vocabulary": vocab,
+            "vocabulary_size": len(vocab),
+            "train_word_counts": {w: 100 - idx for idx, w in enumerate(vocab)},
+            "segments": segs,
+            "clean_scores": {
+                st: mat.clone() for st in ("S0", "K0", "K1", "K2", "F")
+            },
+            "shifted_scores": {st: mat.clone() for st in ("K0", "K2")},
+            "cms_metadata": {
+                "enabled": float(subtraction_eta) > 0.0,
+                "mode": str(cms_mode),
+                "ema_decay": float(cms_ema_decay),
+                "subtraction_eta": float(subtraction_eta),
+                "shift_mode": str(shift_mode),
+                "control_shift_seconds": -75.0,
+            },
+            "checkpoint_provenance": {
+                "word": str(fake_ckpt_dir / f"word_seed{int(seed)}.pt"),
+                "context": str(fake_ckpt_dir / f"context_seed{int(seed)}.pt"),
+                "revision": str(fake_ckpt_dir / f"prefix_revision_seed{int(seed)}.pt"),
+                "revision_stage": "prefix_revision",
+            },
+        }
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(payload, output_path)
+        return output_path
+
+    llm_load_calls: list[tuple[str, int]] = []
+    cache_clears: list[int] = []
+
+    class _DummyScorer:
+        def __init__(self, vocabulary: list[str]) -> None:
+            self.vocabulary = list(vocabulary)
+
+        def clear_gpu_prefix_cache(self) -> None:
+            cache_clears.append(1)
+
+    def _fake_load_lm(
+        protocol_cfg: dict,
+        *,
+        dataset: str,
+        vocabulary: list[str],
+        language_model_override: str | None = None,
+        **kwargs,
+    ):
+        llm_load_calls.append(
+            (str(language_model_override or "Qwen/Qwen3-8B-Base"), len(vocabulary))
+        )
+        return _DummyScorer(vocabulary)
+
+    calibrate_calls: list[tuple[int, float]] = []
+
+    def _fake_calibrate(val_payload: dict, scorer, *, states=(), **kwargs):
+        eta_val = float(
+            (val_payload.get("cms_metadata") or {}).get("subtraction_eta", -1.0)
+        )
+        calibrate_calls.append((int(val_payload["seed"]), eta_val))
+        return {
+            "temperature_grid": [
+                float(t) for t in kwargs.get("temperature_grid", ())
+            ],
+            "shared_language_weight": bool(
+                kwargs.get("shared_language_weight", False)
+            ),
+            "states": {
+                st: {"temperature": 0.07, "language_weight": 0.15}
+                for st in states
+            },
+            "grids": {st: [] for st in states},
+        }
+
+    def _make_dummy_bundle(condition: str, seg_indices) -> dict:
+        n_segs = 2 if seg_indices is None else len(seg_indices)
+        recs = [
+            {
+                "segment_index": idx,
+                "group_id": f"run-01:{idx}",
+                "subject_id": "sub-01",
+                "recording_id": "sub-01_run-01",
+                "reference_words": ["mot0", "mot1", "mot2", "mot3", "mot4"],
+                "predicted_words": ["mot0", "mot1", "mot2", "mot3", "mot4"],
+                "in_vocabulary_mask": [True] * 5,
+            }
+            for idx in range(n_segs)
+        ]
+        out = {
+            "condition": condition,
+            "segment_count": n_segs,
+            "vocabulary_size": 60,
+            "records": recs,
+        }
+        if "shifted" in condition or condition in ("S3", "S3_clean"):
+            out["screen_histories"] = [{"rewrites": 0}] * n_segs
+        return out
+
+    def _fake_decode_single(
+        payload, scorer, hp, *, condition: str, segment_indices=None, **kwargs
+    ):
+        return _make_dummy_bundle(condition, segment_indices)
+
+    def _fake_decode_jobs(
+        payload, scorer, hp, jobs: dict, *, segment_indices=None, **kwargs
+    ):
+        return {
+            job_key: _make_dummy_bundle(job_key, segment_indices)
+            for job_key in jobs
+        }
+
+    scaling_calls: list[tuple[str, tuple, object, object]] = []
+
+    def _fake_scaling_sweep(
+        payload,
+        scorer,
+        hp,
+        *,
+        vocab_sizes,
+        core_vocab_size,
+        min_sentence_length,
+        **kwargs,
+    ):
+        scaling_calls.append(
+            (
+                str((payload.get("cms_metadata") or {}).get("subtraction_eta")),
+                tuple(vocab_sizes),
+                core_vocab_size,
+                min_sentence_length,
+            )
+        )
+        return {
+            f"V={v}": {
+                "vocabulary_size": 60 if str(v) == "full" else int(v),
+                "total_segment_count": 1,
+                "conditions": {"S3_clean": _make_dummy_bundle("S3_clean", [0])},
+            }
+            for v in vocab_sizes
+        }
+
+    def _fake_ms_sweep(payload, scorer, hp, *, k_observations, vocab_sizes, **kwargs):
+        return {
+            f"k={int(k)}": {
+                "segment_count": 1,
+                "conditions": {
+                    "S3_clean": _make_dummy_bundle("S3_clean", [0]),
+                    "S0": _make_dummy_bundle("S0", [0]),
+                    "K0": _make_dummy_bundle("K0", [0]),
+                    "S3_shifted_neg75s": _make_dummy_bundle(
+                        "S3_shifted_neg75s", [0]
+                    ),
+                },
+                "by_vocabulary_size": {str(v): {} for v in vocab_sizes},
+            }
+            for k in k_observations
+        }
+
+    eval_calls: list[dict] = []
+
+    def _fake_eval_export(
+        decoded_bundles_map,
+        *,
+        output_dir: Path,
+        core_vocab_size,
+        core_vocab_sizes,
+        cms_eta,
+        seed: int,
+        **kwargs,
+    ):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        eval_calls.append(
+            {
+                "subdir": output_dir.parent.parent.name,
+                "seed": int(seed),
+                "cms_eta": float(cms_eta),
+                "core_vocab_size": core_vocab_size,
+                "core_vocab_sizes": tuple(core_vocab_sizes),
+            }
+        )
+        rep = {
+            "conditions": {},
+            "report_path": str(output_dir / "s3_evaluation_summary_test.json"),
+        }
+        (output_dir / "s3_evaluation_summary_test.json").write_text(
+            json.dumps({"cms_eta": float(cms_eta), "seed": int(seed)}),
+            encoding="utf-8",
+        )
+        return rep
+
+    ms_summary_dirs: list[str] = []
+
+    def _fake_ms_summary(seq_root_dir: Path, **kwargs):
+        ms_summary_dirs.append(seq_root_dir.name)
+        return {"sequence_root": str(seq_root_dir), "num_seeds": 2}
+
+    monkeypatch.setattr(exporter_mod, "resolve_stage_checkpoints", _fake_resolve_ckpts)
+    monkeypatch.setattr(
+        exporter_mod, "export_neural_vocabulary_scores", _fake_export
+    )
+    monkeypatch.setattr(
+        decode_mod, "_load_or_init_language_scorer", _fake_load_lm
+    )
+    monkeypatch.setattr(
+        cal_mod, "calibrate_state_hyperparameters", _fake_calibrate
+    )
+    monkeypatch.setattr(beam_mod, "decode_dataset_segments", _fake_decode_single)
+    monkeypatch.setattr(
+        beam_mod, "decode_dataset_segment_jobs", _fake_decode_jobs
+    )
+    monkeypatch.setattr(
+        beam_mod, "run_vocabulary_scaling_sweep", _fake_scaling_sweep
+    )
+    monkeypatch.setattr(
+        beam_mod, "run_multi_subject_observation_sweep", _fake_ms_sweep
+    )
+    monkeypatch.setattr(
+        seq_eval_mod, "evaluate_and_export_sequence_decoding", _fake_eval_export
+    )
+    monkeypatch.setattr(
+        seq_eval_mod,
+        "summarize_and_export_multi_seed_sequence_decoding",
+        _fake_ms_summary,
+    )
+    monkeypatch.setattr(
+        seq_eval_mod, "format_sequence_decoding_report", lambda *a, **k: "OK"
+    )
+    monkeypatch.setattr(
+        seq_eval_mod, "print_sequence_decoding_report", lambda *a, **k: None
+    )
+
+    batch_summary = run_sequence_decoding_pipeline(args)
+    print_pipeline_summary(batch_summary, json_output=False, verbose=False)
+
+    # 1. Qwen language model loaded strictly ONCE across all 4 configs x 2 seeds = 8 runs
+    assert len(llm_load_calls) == 1
+    assert len(cache_clears) >= 4
+
+    # 2. Verify all 4 subdirectories & protocol specs without mutating args across configs
+    per_cfg = batch_summary["per_config_summaries"]
+    assert len(per_cfg) == 4
+    cfg_items = list(per_cfg.values())
+    expected_specs = [
+        (
+            "causal_simple_sequence_decoding",
+            "l5_sentence_matched_closed_set",
+            5,
+            0.5,
+        ),
+        ("causal_sequence_decoding", "open_segment_full_vocabulary", 0, 0.5),
+        (
+            "raw_simple_sequence_decoding",
+            "l5_sentence_matched_closed_set",
+            5,
+            0.0,
+        ),
+        ("raw_sequence_decoding", "open_segment_full_vocabulary", 0, 0.0),
+    ]
+    for cfg_sum, (exp_sub, exp_proto, exp_min_len, exp_eta) in zip(
+        cfg_items, expected_specs, strict=True
+    ):
+        assert cfg_sum["sequence_subdir"] == exp_sub
+        assert cfg_sum["protocol_mode"] == exp_proto
+        assert cfg_sum["cms_eta"] == pytest.approx(exp_eta)
+        for seed_key in ("seed-000", "seed-001"):
+            s_res = cfg_sum["per_seed_summaries"][seed_key]
+            assert s_res["sequence_subdir"] == exp_sub
+            assert s_res["protocol_mode"] == exp_proto
+            assert s_res["min_sentence_length"] == exp_min_len
+            assert s_res["cms_eta"] == pytest.approx(exp_eta)
+            assert s_res["cms_mode"] == "causal_ema"
+            assert s_res["shift_mode"] == "preroll"
+
+    # 3. Verify 0-second cross-dir reuse within same eta AND strict isolation across eta=0.5 vs eta=0.0
+    #    Only causal_simple_sequence_decoding (eta=0.5) and raw_simple_sequence_decoding (eta=0.0) should export val+test!
+    assert len(export_calls) == 8
+    exported_subdirs = {c[5] for c in export_calls}
+    assert exported_subdirs == {
+        "causal_simple_sequence_decoding",
+        "raw_simple_sequence_decoding",
+    }
+    assert len(calibrate_calls) == 4
+    assert sorted(calibrate_calls) == [
+        (0, 0.0),
+        (0, 0.5),
+        (1, 0.0),
+        (1, 0.5),
+    ]
+
+    # 4. Verify evaluation vocabulary anchors per protocol & zero overwrite of legacy dirs
+    exp_root = runs_dir / "pallier2025" / "t"
+    assert not (exp_root / "simple_sequence_decoding").exists()
+    assert not (exp_root / "sequence_decoding").exists()
+    assert ms_summary_dirs == [
+        "causal_simple_sequence_decoding",
+        "causal_sequence_decoding",
+        "raw_simple_sequence_decoding",
+        "raw_sequence_decoding",
+    ]
+    eval_by_subdir = {e["subdir"]: e for e in eval_calls if e["seed"] == 0}
+    assert eval_by_subdir["causal_simple_sequence_decoding"][
+        "core_vocab_size"
+    ] == "full"
+    assert eval_by_subdir["causal_simple_sequence_decoding"][
+        "core_vocab_sizes"
+    ] == (50, 100, "full")
+    assert eval_by_subdir["causal_sequence_decoding"]["core_vocab_size"] == 250
+    assert eval_by_subdir["causal_sequence_decoding"]["core_vocab_sizes"] == (
+        100,
+        250,
+    )
+    assert eval_by_subdir["raw_simple_sequence_decoding"][
+        "core_vocab_size"
+    ] == "full"
+    assert eval_by_subdir["raw_sequence_decoding"]["core_vocab_size"] == 250
+
+
+def test_colab_gpu_evaluation_notebook_s3_matrix_syntax_and_specs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nb_path = PROJECT_ROOT / "scripts" / "colab" / "colab_gpu_evaluation.ipynb"
+    nb = json.loads(nb_path.read_text(encoding="utf-8"))
+    code_cells = [c for c in nb["cells"] if c.get("cell_type") == "code"]
+    assert len(code_cells) >= 8
+
+    def _strip_ipython_bang(src_lines: list[str]) -> str:
+        cleaned: list[str] = []
+        in_bang_continuation = False
+        for raw_line in src_lines:
+            line = raw_line.rstrip("\r\n")
+            stripped = line.lstrip()
+            indent = line[: len(line) - len(stripped)]
+            if in_bang_continuation:
+                in_bang_continuation = stripped.endswith("\\")
+                continue
+            if stripped.startswith("!"):
+                cleaned.append(f"{indent}pass")
+                in_bang_continuation = stripped.endswith("\\")
+            else:
+                cleaned.append(line)
+        return "\n".join(cleaned) + "\n"
+
+    for idx, cell in enumerate(code_cells):
+        py_src = _strip_ipython_bang(cell.get("source") or [])
+        compile(py_src, f"colab_gpu_evaluation_cell_{idx}.py", "exec")
+
+    cell1_src = _strip_ipython_bang(code_cells[0]["source"]).replace(
+        "'/content/", f"'{tmp_path.as_posix()}/content/"
+    )
+    ns: dict[str, object] = {}
+    for k in (
+        "BRAINDECODING_DATA_DIR",
+        "BRAINDATA_ROOT",
+        "BRAINDECODING_CACHE_DIR",
+        "BRAINDECODING_ARCHIVE_DIR",
+        "BRAINDECODING_RESULTS_DIR",
+        "BRAINDECODING_EXP_TAG",
+        "BRAINDECODING_EVAL_SUBDIR",
+        "BRAINDECODING_WORD_EXP_TAG",
+        "BRAINDECODING_CONTEXT_EXP_TAG",
+        "BRAINDECODING_MODEL_DIR",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    exec(compile(cell1_src, "cell1.py", "exec"), ns)
+
+    assert ns["RUN_WORD_LEVEL_EVAL"] is False
+    assert ns["RUN_S3_SEQUENCE_DECODING"] is True
+    assert ns["POS_CAUSAL_MEVAL_AUDIT_PRESET"] is False
+    assert ns["CAUSAL_FAST_AUDIT_PRESET"] is False
+    assert ns["RUN_POS_CAUSAL_FAST_PT_AUDIT"] is False
+    assert ns["S3_ACTIVE_SUBDIRS"] == [
+        "causal_simple_sequence_decoding",
+        "causal_sequence_decoding",
+        "raw_simple_sequence_decoding",
+        "raw_sequence_decoding",
+    ]
+    batch_cfgs = str(ns["S3_BATCH_CONFIGS_ARG"]).split(",")
+    assert len(batch_cfgs) == 4
+    for rel_cfg in batch_cfgs:
+        assert (PROJECT_ROOT / rel_cfg).is_file()
+
+
+

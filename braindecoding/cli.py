@@ -1037,28 +1037,17 @@ def _workflow_eval(args) -> int:
 
 
 def _workflow_decode_sentences(args) -> int:
-    from braindecoding.evaluation.sequence_decoding_evaluation import (
-        print_sequence_decoding_report,
+    from scripts.decode_sentences import (
+        print_pipeline_summary,
+        run_sequence_decoding_pipeline,
     )
-    from scripts.decode_sentences import run_sequence_decoding_pipeline
 
     summary = run_sequence_decoding_pipeline(args)
-    if bool(getattr(args, "json_output", False)):
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
-    elif isinstance(summary, dict) and isinstance(summary.get("per_seed_summaries"), dict):
-        for seed_key, seed_summary in summary["per_seed_summaries"].items():
-            if "conditions" in seed_summary or "vocabulary_scaling" in seed_summary:
-                print_sequence_decoding_report(
-                    seed_summary,
-                    verbose=bool(getattr(args, "verbose", False)),
-                )
-    elif "conditions" not in summary and "vocabulary_scaling" not in summary:
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
-    else:
-        print_sequence_decoding_report(
-            summary,
-            verbose=bool(getattr(args, "verbose", False)),
-        )
+    print_pipeline_summary(
+        summary,
+        json_output=bool(getattr(args, "json_output", False)),
+        verbose=bool(getattr(args, "verbose", False)),
+    )
     return 0
 
 
@@ -1144,7 +1133,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-c",
         default="configs/decoding/sequence_decoding_protocol.yaml",
         help=(
-            "S3 序列解码协议 YAML 或神经训练阶段 YAML 配置文件路径"
+            "S3 序列解码协议 YAML（支持逗号分隔批量传入多份协议配置并共享单次加载的 LLM）或神经训练阶段 YAML 配置文件路径"
             "（若传入如 configs/training/siamese_debiased/pallier2025_siamese_debiased_prefix_revision.yaml 的训练配置，"
             "将自动加载默认 S3 协议并提取 dataset、revision_stage 与 window_seconds）"
         ),
@@ -1222,13 +1211,28 @@ def build_parser() -> argparse.ArgumentParser:
     decode_cmd.add_argument("--k-observations", default=None, help="可选覆写跨被试聚合观测数列表（默认：1,2,5,10）")
     decode_cmd.add_argument("--vocab-sizes", default=None, help="可选覆写多尺度候选词表规模列表（默认：50,100,full；支持 50,100,full,250）")
     decode_cmd.add_argument("--core-vocab-size", default=None, help="可选覆写高覆盖核心基准词表规模（默认：full）")
-    decode_cmd.add_argument("--min-sentence-length", type=int, default=None, help="流式滚动物理最小句长准入（R=2 时默认 L >= 2R + 1 = 5）")
+    decode_cmd.add_argument(
+        "--protocol-mode",
+        choices=(
+            "auto",
+            "simple",
+            "full",
+            "l5_sentence_matched_closed_set",
+            "open_segment_full_vocabulary",
+        ),
+        default="auto",
+        help=(
+            "可选显式指定 S3 序列解码协议模式：auto（默认按 YAML / 子目录名 / min_sentence_length 自动识别）、"
+            "simple（简化句子解码协议：L >= 5 句表同源闭集）或 full（完整句子解码协议：n=1,940 全词表开放句段）"
+        ),
+    )
+    decode_cmd.add_argument("--min-sentence-length", type=int, default=None, help="流式滚动物理最小句长准入（R=2 时默认 L >= 2R + 1 = 5；设为 0 启用完整开放句段协议）")
     decode_cmd.add_argument("--max-segments", type=int, default=None, help="可选限制最大解码段落数")
     decode_cmd.add_argument("--output-dir", default=None, help="可选显式指定输出根目录")
     decode_cmd.add_argument(
         "--sequence-subdir",
         default=None,
-        help="序列解码结果保存子目录名（默认：simple_sequence_decoding；不覆盖旧版 sequence_decoding，且自动只读复用 sequence_decoding 下的 .pt 得分矩阵与校准超参）",
+        help="序列解码结果保存子目录名（默认：simple_sequence_decoding；支持 causal_simple_sequence_decoding / causal_sequence_decoding / raw_simple_sequence_decoding / raw_sequence_decoding 等成对隔离子目录并自动跨目录复用匹配 .pt 与校准超参）",
     )
     decode_cmd.add_argument("--export-path", default=None, help="可选显式指定神经词表得分 .pt 路径")
     decode_cmd.add_argument("--calibration-path", default=None, help="可选显式指定状态校准 JSON 路径")

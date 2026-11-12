@@ -1,0 +1,35 @@
+# Stage 3 (S3) 序列解码协议：Raw (eta=0) 零后处理共模扣除 + Pre-Roll 负对照 + 完整句子解码协议 (n=1,940 全词表开放句段 |V|=2,020)
+# 输出子目录：raw_sequence_decoding（自动 0 秒只读复用 raw_simple_sequence_decoding 下的 .pt 得分矩阵与校准超参）
+extends: sequence_decoding_protocol.yaml
+
+decoding:
+  protocol_mode: open_segment_full_vocabulary
+  min_sentence_length: 0
+  sequence_subdir: raw_sequence_decoding
+
+control:
+  common_mode_subtraction:
+    enabled: false
+    mode: causal_ema
+    ema_decay: 0.99
+    subtraction_eta: 0.0
+  shifted_negative_control:
+    shift_mode: preroll
+    preroll_seconds: 45.0
+    control_shift_seconds: -75.0
+
+evaluation:
+  min_sentence_length: 0
+  core_vocabulary_size: 250
+  core_vocabulary_sizes:
+    - 100
+    - 250
+  multi_subject_vocabulary_sizes:
+    - 100
+    - 250
+  vocabulary_scaling_sizes:
+    - 50
+    - 100
+    - 250
+    - 500
+    - 1000

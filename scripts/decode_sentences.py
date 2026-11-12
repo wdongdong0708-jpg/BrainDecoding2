@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 import copy
 import json
 import os
@@ -53,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-c",
         default=DEFAULT_CONFIG_PATH,
         help=(
-            f"S3 序列解码协议 YAML 或神经训练阶段 YAML 配置文件路径（默认：{DEFAULT_CONFIG_PATH}；"
+            f"S3 序列解码协议 YAML（支持逗号分隔批量传入多份协议配置并共享单次加载的 LLM）或神经训练阶段 YAML 配置文件路径（默认：{DEFAULT_CONFIG_PATH}；"
             "若传入如 configs/training/siamese_debiased/pallier2025_siamese_debiased_prefix_revision.yaml 的训练配置，"
             "将自动加载默认 S3 协议并提取 dataset、revision_stage 与 window_seconds）"
         ),
@@ -247,10 +248,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="可选覆写高覆盖核心词表规模（默认：full）",
     )
     parser.add_argument(
+        "--protocol-mode",
+        choices=(
+            "auto",
+            "simple",
+            "full",
+            "l5_sentence_matched_closed_set",
+            "open_segment_full_vocabulary",
+        ),
+        default="auto",
+        help=(
+            "可选显式指定 S3 序列解码协议模式：auto（默认按 YAML / 子目录名 / min_sentence_length 自动识别）、"
+            "simple（简化句子解码协议：L >= 5 句表同源闭集）或 full（完整句子解码协议：n=1,940 全词表开放句段）"
+        ),
+    )
+    parser.add_argument(
         "--min-sentence-length",
         type=int,
         default=None,
-        help="流式滚动物理最小句长准入（R=2 时默认 L >= 2R + 1 = 5）",
+        help="流式滚动物理最小句长准入（R=2 时默认 L >= 2R + 1 = 5；设为 0 启用完整开放句段协议）",
     )
     parser.add_argument(
         "--max-segments",
@@ -266,7 +282,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sequence-subdir",
         default=None,
-        help="序列解码结果保存子目录名（默认：simple_sequence_decoding；不覆盖旧版 sequence_decoding，且自动只读复用 sequence_decoding 下的 .pt 得分矩阵与校准超参）",
+        help="序列解码结果保存子目录名（默认：simple_sequence_decoding；支持 causal_simple_sequence_decoding / causal_sequence_decoding / raw_simple_sequence_decoding / raw_sequence_decoding 等成对隔离子目录并自动跨目录复用匹配 .pt 与校准文件）",
     )
     parser.add_argument(
         "--export-path",
@@ -332,6 +348,43 @@ def build_parser() -> argparse.ArgumentParser:
 DEFAULT_SEQUENCE_SUBDIR = "simple_sequence_decoding"
 
 
+def _is_open_segment_subdir(subdir_name: str | None) -> bool:
+    s = str(subdir_name or "").strip()
+    if not s:
+        return False
+    if s == "sequence_decoding":
+        return True
+    return s.endswith("_sequence_decoding") and not s.endswith(
+        "_simple_sequence_decoding"
+    )
+
+
+def _paired_sequence_subdirs(subdir_name: str) -> list[str]:
+    s = str(subdir_name or "").strip() or DEFAULT_SEQUENCE_SUBDIR
+    paired: list[str] = []
+    if s == "simple_sequence_decoding":
+        paired.append("sequence_decoding")
+    elif s == "sequence_decoding":
+        paired.append("simple_sequence_decoding")
+    elif s.endswith("_simple_sequence_decoding"):
+        prefix = s[: -len("_simple_sequence_decoding")]
+        if prefix:
+            paired.append(f"{prefix}_sequence_decoding")
+        paired.extend(["simple_sequence_decoding", "sequence_decoding"])
+    elif s.endswith("_sequence_decoding"):
+        prefix = s[: -len("_sequence_decoding")]
+        if prefix:
+            paired.append(f"{prefix}_simple_sequence_decoding")
+        paired.extend(["sequence_decoding", "simple_sequence_decoding"])
+    else:
+        paired.extend(["sequence_decoding", "simple_sequence_decoding"])
+    deduped: list[str] = []
+    for item in paired:
+        if item != s and item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
 def resolve_default_paths(
     dataset: str,
     split: str,
@@ -340,7 +393,7 @@ def resolve_default_paths(
     output_dir: str | Path | None = None,
     exp_tag: str | None = None,
     sequence_subdir: str | None = None,
-) -> dict[str, Path]:
+) -> dict[str, Any]:
     subdir_name = (
         str(sequence_subdir).strip()
         if sequence_subdir and str(sequence_subdir).strip()
@@ -350,6 +403,7 @@ def resolve_default_paths(
         )
     )
     legacy_base_dir: Path | None = None
+    candidate_reuse_dirs: list[Path] = []
     if output_dir is not None:
         base_dir = Path(output_dir).resolve()
     else:
@@ -357,21 +411,20 @@ def resolve_default_paths(
         if exp_tag and str(exp_tag).strip().lower() not in {"", "default", "root", "none"}:
             root = root / str(exp_tag).strip()
         base_dir = (root / subdir_name / f"seed-{int(seed):03d}").resolve()
-        if subdir_name != "sequence_decoding":
-            legacy_base_dir = (
-                root / "sequence_decoding" / f"seed-{int(seed):03d}"
-            ).resolve()
-        else:
-            legacy_base_dir = (
-                root / "simple_sequence_decoding" / f"seed-{int(seed):03d}"
-            ).resolve()
-    res: dict[str, Path] = {
+        candidate_reuse_dirs = [
+            (root / sd / f"seed-{int(seed):03d}").resolve()
+            for sd in _paired_sequence_subdirs(subdir_name)
+        ]
+        if candidate_reuse_dirs:
+            legacy_base_dir = candidate_reuse_dirs[0]
+    res: dict[str, Any] = {
         "base_dir": base_dir,
         "val_export_path": base_dir / "neural_vocabulary_scores_val.pt",
         "split_export_path": base_dir / f"neural_vocabulary_scores_{split}.pt",
         "calibration_path": base_dir / "state_hyperparameter_calibration.json",
         "decoding_path": base_dir / f"sequence_decoding_{split}.json",
         "evaluation_dir": base_dir / f"evaluation_{split}",
+        "candidate_reuse_dirs": candidate_reuse_dirs,
     }
     if legacy_base_dir is not None:
         res["legacy_base_dir"] = legacy_base_dir
@@ -432,6 +485,51 @@ def _load_or_init_language_scorer(
 
 def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     ensure_default_environment()
+    args = copy.copy(args)
+
+    raw_cfg_arg = getattr(args, "config", None) or DEFAULT_CONFIG_PATH
+    if isinstance(raw_cfg_arg, (list, tuple)):
+        config_list = [str(c).strip() for c in raw_cfg_arg if str(c).strip()]
+    elif isinstance(raw_cfg_arg, str) and "," in raw_cfg_arg:
+        config_list = [c.strip() for c in raw_cfg_arg.split(",") if c.strip()]
+    else:
+        config_list = [str(raw_cfg_arg).strip()]
+    if len(config_list) > 1:
+        per_config_summaries: dict[str, dict[str, Any]] = {}
+        shared_scorer_box: dict[str, Any] = getattr(
+            args, "_shared_scorer_box", {}
+        )
+        for cfg_idx, cfg_item in enumerate(config_list):
+            print(
+                f"\n{'=' * 86}\n"
+                f" [Batch S3 Protocol {cfg_idx + 1}/{len(config_list)}] "
+                f"config={cfg_item}\n"
+                f"{'=' * 86}",
+                flush=True,
+            )
+            cfg_args = copy.copy(args)
+            cfg_args.config = cfg_item
+            cfg_args.output_dir = None
+            cfg_args.export_path = None
+            cfg_args.calibration_path = None
+            cfg_args.decoding_path = None
+            cfg_args._shared_scorer_box = shared_scorer_box
+            per_config_summaries[cfg_item] = run_sequence_decoding_pipeline(
+                cfg_args
+            )
+            active_scorer = shared_scorer_box.get("scorer")
+            if active_scorer is not None and hasattr(
+                active_scorer, "clear_gpu_prefix_cache"
+            ):
+                active_scorer.clear_gpu_prefix_cache()
+        return {
+            "dataset": args.dataset,
+            "split": args.split,
+            "configs": config_list,
+            "per_config_summaries": per_config_summaries,
+        }
+    args.config = config_list[0] if config_list else DEFAULT_CONFIG_PATH
+
     raw_seed = getattr(args, "seed", 0)
     if isinstance(raw_seed, (list, tuple)):
         seed_list = [int(s) for s in raw_seed]
@@ -442,14 +540,12 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         seed_list = [int(raw_seed)]
     if len(seed_list) > 1:
         per_seed_summaries: dict[str, dict[str, Any]] = {}
-        shared_scorer_box: dict[str, Any] = getattr(
-            args, "_shared_scorer_box", {}
-        )
+        shared_scorer_box = getattr(args, "_shared_scorer_box", {})
         for idx, seed_val in enumerate(seed_list):
             print(
                 f"\n{'#' * 86}\n"
                 f" [Multi-Seed S3 Sequence Decoding {idx + 1}/{len(seed_list)}] "
-                f"Running seed={seed_val} (all seeds: {seed_list})\n"
+                f"Running seed={seed_val} (all seeds: {seed_list} | config={args.config})\n"
                 f"{'#' * 86}",
                 flush=True,
             )
@@ -470,37 +566,47 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             ):
                 active_scorer.clear_gpu_prefix_cache()
         multi_seed_summary: dict[str, Any] = {}
+        first_seed_Summary = (
+            next(iter(per_seed_summaries.values())) if per_seed_summaries else {}
+        )
+        resolved_ds = str(first_seed_Summary.get("dataset") or args.dataset)
         if args.step in ("evaluate", "all") and per_seed_summaries:
             from braindecoding.evaluation.sequence_decoding_evaluation import (
                 summarize_and_export_multi_seed_sequence_decoding,
             )
 
-            first_seed_Summary = next(iter(per_seed_summaries.values()))
             first_eval_dir = first_seed_Summary.get("evaluation_dir")
             seq_root_dir = (
                 Path(first_eval_dir).resolve().parent.parent
                 if first_eval_dir
                 else resolve_default_paths(
-                    args.dataset,
+                    resolved_ds,
                     args.split,
                     seed_list[0],
                     output_dir=args.output_dir,
                     exp_tag=getattr(args, "exp_tag", None),
-                    sequence_subdir=getattr(args, "sequence_subdir", None),
+                    sequence_subdir=first_seed_Summary.get("sequence_subdir")
+                    or getattr(args, "sequence_subdir", None),
                 )["base_dir"].parent
             )
             multi_seed_summary = summarize_and_export_multi_seed_sequence_decoding(
                 seq_root_dir,
                 split=args.split,
-                dataset=args.dataset,
+                dataset=resolved_ds,
                 exp_tag=first_seed_Summary.get("exp_tag"),
                 seed_reports=list(per_seed_summaries.values()),
                 plot=not bool(getattr(args, "no_plot", False)),
             )
         return {
-            "dataset": args.dataset,
+            "dataset": resolved_ds,
             "split": args.split,
             "seeds": seed_list,
+            "config": args.config,
+            "sequence_subdir": first_seed_Summary.get("sequence_subdir"),
+            "protocol_mode": first_seed_Summary.get("protocol_mode"),
+            "cms_mode": first_seed_Summary.get("cms_mode"),
+            "cms_eta": first_seed_Summary.get("cms_eta"),
+            "shift_mode": first_seed_Summary.get("shift_mode"),
             "per_seed_summaries": per_seed_summaries,
             "multi_seed_summary": multi_seed_summary,
         }
@@ -518,6 +624,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         and any(k in loaded_cfg for k in ("workflow", "siamese_debiased", "model", "training"))
         and "decoding" not in loaded_cfg
         and "language_model" not in loaded_cfg
+    )
+    has_explicit_protocol_cfg = (not is_training_yaml_in_config) and (
+        cfg_path.resolve() != default_proto_path.resolve()
     )
     if is_training_yaml_in_config:
         training_cfg_path = cfg_path
@@ -600,6 +709,30 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         if siam_b.get("s3_cms_eta") is not None:
             yaml_s3_cms_eta = float(siam_b["s3_cms_eta"])
 
+    from braindecoding.decoding.neural_score_exporter import (
+        _is_fake_provenance,
+        _normalize_s3_cms_mode,
+        _normalize_s3_shift_mode,
+        _same_checkpoint_path,
+        export_neural_vocabulary_scores,
+        load_neural_vocabulary_scores,
+        resolve_stage_checkpoints,
+    )
+    from braindecoding.decoding.rolling_beam_search import (
+        decode_dataset_segment_jobs,
+        decode_dataset_segments,
+        run_multi_subject_observation_sweep,
+        run_vocabulary_scaling_sweep,
+    )
+    from braindecoding.decoding.state_hyperparameter_calibrator import (
+        calibrate_state_hyperparameters,
+    )
+    from braindecoding.evaluation.sequence_decoding_evaluation import (
+        DEFAULT_TAU_GATE_GRID,
+        _backfill_intermediate_and_shifted_bundles,
+        evaluate_and_export_sequence_decoding,
+    )
+
     dec_cfg = dict(protocol_cfg.get("decoding") or {})
     cal_cfg = dict(protocol_cfg.get("calibration") or {})
     ctrl_cfg = dict(protocol_cfg.get("control") or protocol_cfg.get("controls") or {})
@@ -644,43 +777,42 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     )
     segment_batch_size = int(dec_cfg.get("segment_batch_size", 32))
     raw_shift_mode_arg = getattr(args, "shift_mode", None)
+    proto_shift_mode = shift_ctrl_cfg.get("shift_mode", cms_cfg.get("shift_mode"))
     if raw_shift_mode_arg is not None and str(raw_shift_mode_arg).strip():
-        shift_mode = str(raw_shift_mode_arg).strip().lower()
+        shift_mode = _normalize_s3_shift_mode(raw_shift_mode_arg)
+    elif has_explicit_protocol_cfg and proto_shift_mode is not None and str(proto_shift_mode).strip():
+        shift_mode = _normalize_s3_shift_mode(proto_shift_mode)
     elif yaml_shift_mode is not None:
-        shift_mode = yaml_shift_mode
+        shift_mode = _normalize_s3_shift_mode(yaml_shift_mode)
     else:
-        shift_mode = str(
-            shift_ctrl_cfg.get(
-                "shift_mode",
-                cms_cfg.get("shift_mode", "deterministic_circular"),
-            )
-            or "deterministic_circular"
-        ).strip().lower()
+        shift_mode = _normalize_s3_shift_mode(
+            proto_shift_mode or "deterministic_circular"
+        )
 
     raw_preroll_arg = getattr(args, "preroll_seconds", None)
+    proto_preroll = shift_ctrl_cfg.get(
+        "preroll_seconds", cms_cfg.get("preroll_seconds")
+    )
     if raw_preroll_arg is not None:
         preroll_seconds = float(raw_preroll_arg)
+    elif has_explicit_protocol_cfg and proto_preroll is not None:
+        preroll_seconds = float(proto_preroll)
     elif yaml_preroll_seconds is not None:
         preroll_seconds = float(yaml_preroll_seconds)
     else:
-        preroll_seconds = float(
-            shift_ctrl_cfg.get(
-                "preroll_seconds", cms_cfg.get("preroll_seconds", 45.0)
-            )
-        )
+        preroll_seconds = float(45.0 if proto_preroll is None else proto_preroll)
 
     raw_cms_mode_arg = getattr(args, "cms_mode", None)
     if raw_cms_mode_arg is not None and str(raw_cms_mode_arg).strip():
-        raw_cm_str = str(raw_cms_mode_arg).strip().lower()
+        cms_mode = _normalize_s3_cms_mode(raw_cms_mode_arg)
+    elif has_explicit_protocol_cfg and cms_cfg.get("mode") is not None:
+        cms_mode = _normalize_s3_cms_mode(cms_cfg.get("mode"))
     elif shift_mode == "preroll" or yaml_debias_mode in {"null_space", "amortized_timing"}:
-        raw_cm_str = "causal_ema"
+        cms_mode = "causal_ema"
     else:
-        raw_cm_str = str(cms_cfg.get("mode", "historical_shifts") or "historical_shifts").strip().lower()
-    cms_mode = (
-        "causal_ema"
-        if raw_cm_str in {"causal_ema", "causal", "ema", "online_ema"}
-        else "historical_shifts"
-    )
+        cms_mode = _normalize_s3_cms_mode(
+            cms_cfg.get("mode", "historical_shifts")
+        )
     raw_cms_decay_arg = getattr(args, "cms_ema_decay", None)
     cms_ema_decay = float(
         raw_cms_decay_arg
@@ -688,18 +820,25 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         else cms_cfg.get("ema_decay", 0.99)
     )
 
+    proto_cms_eta = (
+        0.0
+        if cms_cfg.get("enabled") is False
+        else float(
+            cms_cfg.get(
+                "subtraction_eta", ctrl_cfg.get("common_mode_subtraction_eta", 0.0)
+            )
+        )
+    )
     if args.cms_eta is not None:
         cms_eta = float(args.cms_eta)
+    elif has_explicit_protocol_cfg:
+        cms_eta = proto_cms_eta
     elif yaml_s3_cms_eta is not None:
         cms_eta = float(yaml_s3_cms_eta)
     elif yaml_debias_mode == "amortized_timing":
         cms_eta = 0.0
     else:
-        cms_eta = float(
-            cms_cfg.get(
-                "subtraction_eta", ctrl_cfg.get("common_mode_subtraction_eta", 0.0)
-            )
-        )
+        cms_eta = proto_cms_eta
     cms_shifts = tuple(
         float(s)
         for s in cms_cfg.get(
@@ -733,6 +872,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             int(x)
             for x in eval_cfg.get("multi_subject_observations", [1, 2, 5, 10])
         )
+
     def _parse_vocab_scale_list(
         raw_val: Any, default_list: Sequence[int | str] = (50, 100, "full")
     ) -> tuple[int | str, ...]:
@@ -762,35 +902,82 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     parsed.append(v_i)
         return tuple(parsed)
 
-    sequence_subdir = (
-        getattr(args, "sequence_subdir", None)
-        or os.environ.get("BRAINDECODING_SEQUENCE_SUBDIR", "").strip()
-        or dec_cfg.get("sequence_subdir")
-        or DEFAULT_SEQUENCE_SUBDIR
-    )
+    raw_seq_subdir_arg = getattr(args, "sequence_subdir", None)
+    if raw_seq_subdir_arg is not None and str(raw_seq_subdir_arg).strip():
+        sequence_subdir = str(raw_seq_subdir_arg).strip()
+    elif has_explicit_protocol_cfg and dec_cfg.get("sequence_subdir"):
+        sequence_subdir = str(dec_cfg["sequence_subdir"]).strip()
+    else:
+        sequence_subdir = (
+            os.environ.get("BRAINDECODING_SEQUENCE_SUBDIR", "").strip()
+            or (
+                str(dec_cfg["sequence_subdir"]).strip()
+                if dec_cfg.get("sequence_subdir")
+                else ""
+            )
+            or DEFAULT_SEQUENCE_SUBDIR
+        )
+
+    raw_proto_arg = str(getattr(args, "protocol_mode", "auto") or "auto").strip().lower()
     raw_min_len_arg = getattr(args, "min_sentence_length", None)
-    is_open_segment_protocol = (
-        str(sequence_subdir).strip() == "sequence_decoding"
-        and raw_min_len_arg is None
-    ) or (raw_min_len_arg is not None and int(raw_min_len_arg) <= 0)
+    yaml_proto_mode = str(dec_cfg.get("protocol_mode") or "").strip().lower()
+    if raw_proto_arg in {"full", "open_segment_full_vocabulary"}:
+        is_open_segment_protocol = True
+    elif raw_proto_arg in {"simple", "l5_sentence_matched_closed_set"}:
+        is_open_segment_protocol = False
+    elif raw_min_len_arg is not None:
+        is_open_segment_protocol = int(raw_min_len_arg) <= 0
+    elif yaml_proto_mode in {"full", "open_segment_full_vocabulary"}:
+        is_open_segment_protocol = True
+    elif _is_open_segment_subdir(sequence_subdir):
+        is_open_segment_protocol = True
+    else:
+        cfg_min_len = int(
+            dec_cfg.get(
+                "min_sentence_length", eval_cfg.get("min_sentence_length", 5)
+            )
+        )
+        is_open_segment_protocol = cfg_min_len <= 0
+
+    resolved_protocol_mode = (
+        "open_segment_full_vocabulary"
+        if is_open_segment_protocol
+        else "l5_sentence_matched_closed_set"
+    )
     if is_open_segment_protocol:
         min_sentence_length = 0
     else:
         min_sentence_length = int(
             raw_min_len_arg
             if raw_min_len_arg is not None
-            else dec_cfg.get(
-                "min_sentence_length", eval_cfg.get("min_sentence_length", 5)
+            else max(
+                1,
+                int(
+                    dec_cfg.get(
+                        "min_sentence_length",
+                        eval_cfg.get("min_sentence_length", 5),
+                    )
+                ),
             )
         )
     args.min_sentence_length = min_sentence_length
+
+    use_custom_open_eval = (
+        is_open_segment_protocol
+        and has_explicit_protocol_cfg
+        and yaml_proto_mode in {"full", "open_segment_full_vocabulary"}
+    )
     raw_core_v = (
         args.core_vocab_size
         if getattr(args, "core_vocab_size", None) is not None
         else (
-            250
-            if is_open_segment_protocol
-            else eval_cfg.get("core_vocabulary_size", "full")
+            eval_cfg.get("core_vocabulary_size", 250)
+            if use_custom_open_eval
+            else (
+                250
+                if is_open_segment_protocol
+                else eval_cfg.get("core_vocabulary_size", "full")
+            )
         )
     )
     if isinstance(raw_core_v, str) and raw_core_v.strip().lower() in ("full", "all", ""):
@@ -801,13 +988,43 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         core_vocab_size = int(raw_core_v) if raw_core_v is not None else "full"
 
     if is_open_segment_protocol:
-        core_vocab_sizes: tuple[int | str, ...] = (100, 250)
-        multi_subject_vocab_sizes: tuple[int | str, ...] = (100, 250)
+        if use_custom_open_eval:
+            parsed_core_vs = tuple(
+                x
+                for x in _parse_vocab_scale_list(
+                    eval_cfg.get("core_vocabulary_sizes"), (100, 250)
+                )
+                if isinstance(x, int)
+            )
+            parsed_ms_vs = tuple(
+                x
+                for x in _parse_vocab_scale_list(
+                    eval_cfg.get("multi_subject_vocabulary_sizes"), (100, 250)
+                )
+                if isinstance(x, int)
+            )
+            core_vocab_sizes: tuple[int | str, ...] = parsed_core_vs or (100, 250)
+            multi_subject_vocab_sizes: tuple[int | str, ...] = parsed_ms_vs or (
+                100,
+                250,
+            )
+        else:
+            core_vocab_sizes = (100, 250)
+            multi_subject_vocab_sizes = (100, 250)
         raw_vocab_sizes = getattr(args, "vocab_sizes", None)
         if raw_vocab_sizes is not None:
             vocab_sizes = tuple(
                 x
                 for x in _parse_vocab_scale_list(raw_vocab_sizes, ())
+                if isinstance(x, int)
+            )
+        elif use_custom_open_eval:
+            vocab_sizes = tuple(
+                x
+                for x in _parse_vocab_scale_list(
+                    eval_cfg.get("vocabulary_scaling_sizes"),
+                    (50, 100, 250, 500, 1000),
+                )
                 if isinstance(x, int)
             )
         else:
@@ -863,53 +1080,39 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         if args.decoding_path
         else paths["decoding_path"]
     )
+    reuse_dirs: list[Path] = list(paths.get("candidate_reuse_dirs") or [])
+    candidate_split_pts: list[Path] = (
+        []
+        if args.export_path
+        else [d / f"neural_vocabulary_scores_{args.split}.pt" for d in reuse_dirs]
+    )
+    candidate_val_pts: list[Path] = [
+        d / "neural_vocabulary_scores_val.pt" for d in reuse_dirs
+    ]
+    candidate_cal_paths: list[Path] = (
+        []
+        if args.calibration_path
+        else [d / "state_hyperparameter_calibration.json" for d in reuse_dirs]
+    )
     legacy_split_export_path = (
-        paths.get("legacy_split_export_path") if not args.export_path else None
-    )
-    legacy_val_export_path = (
-        paths.get("legacy_val_export_path") if not args.export_path else None
-    )
-    legacy_calibration_path = (
-        paths.get("legacy_calibration_path")
-        if not args.calibration_path
-        else None
+        candidate_split_pts[0] if candidate_split_pts else None
     )
 
     results_summary: dict[str, Any] = {
         "step": args.step,
+        "config": str(args.config),
         "dataset": args.dataset,
         "split": args.split,
         "seed": int(args.seed),
         "exp_tag": exp_tag,
+        "sequence_subdir": str(sequence_subdir),
+        "protocol_mode": resolved_protocol_mode,
+        "min_sentence_length": int(min_sentence_length),
         "cms_eta": cms_eta,
         "cms_mode": cms_mode,
         "cms_ema_decay": cms_ema_decay,
         "shift_mode": shift_mode,
     }
-
-    from braindecoding.decoding.neural_score_exporter import (
-        _is_fake_provenance,
-        _normalize_s3_cms_mode,
-        _normalize_s3_shift_mode,
-        _same_checkpoint_path,
-        export_neural_vocabulary_scores,
-        load_neural_vocabulary_scores,
-        resolve_stage_checkpoints,
-    )
-    from braindecoding.decoding.rolling_beam_search import (
-        decode_dataset_segment_jobs,
-        decode_dataset_segments,
-        run_multi_subject_observation_sweep,
-        run_vocabulary_scaling_sweep,
-    )
-    from braindecoding.decoding.state_hyperparameter_calibrator import (
-        calibrate_state_hyperparameters,
-    )
-    from braindecoding.evaluation.sequence_decoding_evaluation import (
-        DEFAULT_TAU_GATE_GRID,
-        _backfill_intermediate_and_shifted_bundles,
-        evaluate_and_export_sequence_decoding,
-    )
 
     force_rerun = bool(getattr(args, "force", False))
     resolved_ckpts = resolve_stage_checkpoints(
@@ -976,7 +1179,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             show_progress=show_progress,
         )
 
-    def _export_matches_cms_eta(pt_path: Path, expected_eta: float) -> bool:
+    def _export_matches_cms_eta(
+        pt_path: Path, expected_eta: float, *, strict_meta: bool = False
+    ) -> bool:
         if not pt_path.is_file():
             return False
         try:
@@ -1039,6 +1244,16 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             norm_req_shift_mode = _normalize_s3_shift_mode(shift_mode)
             if saved_shift_mode != norm_req_shift_mode:
                 return False
+            if (
+                "control_shift_seconds" in cms_meta
+                and cms_meta["control_shift_seconds"] is not None
+                and abs(
+                    float(cms_meta["control_shift_seconds"])
+                    - float(control_shift)
+                )
+                > 1e-6
+            ):
+                return False
             saved_eta_raw = float(cms_meta.get("subtraction_eta", 0.0))
             if (
                 abs(float(expected_eta)) > 1e-12 or abs(saved_eta_raw) > 1e-12
@@ -1053,12 +1268,14 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             ):
                 return False
             if "subtraction_eta" not in cms_meta:
-                return True
+                return not strict_meta
             saved_eta = float(cms_meta["subtraction_eta"])
             if abs(saved_eta - float(expected_eta)) <= 1e-6:
                 return True
             if (
-                getattr(args, "cms_eta", None) is None
+                not strict_meta
+                and not has_explicit_protocol_cfg
+                and getattr(args, "cms_eta", None) is None
                 and not force_rerun
                 and saved_eta >= 0.0
             ):
@@ -1068,27 +1285,84 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             return False
 
     def _resolve_reusable_export_pt(
-        primary_pt: Path, legacy_pt: Path | None
+        primary_pt: Path, candidate_pts: Sequence[Path] | Path | None
     ) -> Path:
-        if _export_matches_cms_eta(primary_pt, cms_eta):
-            return primary_pt
-        if (
-            not force_rerun
-            and legacy_pt is not None
-            and _export_matches_cms_eta(legacy_pt, cms_eta)
+        if _export_matches_cms_eta(
+            primary_pt, cms_eta, strict_meta=has_explicit_protocol_cfg
         ):
-            return legacy_pt
+            return primary_pt
+        if not force_rerun and candidate_pts is not None:
+            cand_iter = (
+                [candidate_pts]
+                if isinstance(candidate_pts, Path)
+                else list(candidate_pts)
+            )
+            for cand_pt in cand_iter:
+                if cand_pt != primary_pt and _export_matches_cms_eta(
+                    cand_pt, cms_eta, strict_meta=True
+                ):
+                    return cand_pt
         return primary_pt
+
+    def _check_calibration_metadata_compatible(
+        existing_cal: dict[str, Any], *, is_cross_dir: bool
+    ) -> bool:
+        saved_eta = existing_cal.get("cms_eta")
+        strict_cal = (
+            is_cross_dir
+            or has_explicit_protocol_cfg
+            or getattr(args, "cms_eta", None) is not None
+        )
+        if strict_cal:
+            if saved_eta is None or abs(float(saved_eta) - float(cms_eta)) > 1e-6:
+                return False
+        elif saved_eta is not None and abs(float(saved_eta) - float(cms_eta)) > 1e-6:
+            return False
+
+        saved_raw_mode = existing_cal.get("cms_mode")
+        saved_cal_cms_mode = _normalize_s3_cms_mode(saved_raw_mode)
+        both_zero_eta = abs(float(cms_eta)) <= 1e-12 and (
+            (saved_eta is not None and abs(float(saved_eta)) <= 1e-12)
+            or (saved_eta is None and not strict_cal)
+        )
+        if not both_zero_eta:
+            if strict_cal and saved_raw_mode is None:
+                return False
+            if saved_cal_cms_mode != cms_mode:
+                return False
+            if (
+                cms_mode == "causal_ema"
+                and existing_cal.get("cms_ema_decay") is not None
+                and abs(
+                    float(existing_cal["cms_ema_decay"]) - float(cms_ema_decay)
+                )
+                > 1e-6
+            ):
+                return False
+            if (
+                cms_mode == "historical_shifts"
+                and existing_cal.get("shift_mode") is not None
+                and _normalize_s3_shift_mode(existing_cal["shift_mode"])
+                != _normalize_s3_shift_mode(shift_mode)
+            ):
+                return False
+        return True
 
     export_was_regenerated = False
     if args.step in ("export", "all"):
         reusable_split_pt = _resolve_reusable_export_pt(
-            export_path, legacy_split_export_path
+            export_path, candidate_split_pts
         )
         if (
             args.step == "all"
             and not force_rerun
-            and _export_matches_cms_eta(reusable_split_pt, cms_eta)
+            and _export_matches_cms_eta(
+                reusable_split_pt,
+                cms_eta,
+                strict_meta=(
+                    reusable_split_pt != export_path or has_explicit_protocol_cfg
+                ),
+            )
         ):
             out_pt = reusable_split_pt
             export_path = reusable_split_pt
@@ -1164,63 +1438,49 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
         reusable_cal_states: dict[str, dict[str, Any]] = {}
         existing_cal_base: dict[str, Any] | None = None
-        cal_read_path = (
-            calibration_path
-            if calibration_path.is_file()
-            else (
-                legacy_calibration_path
-                if (
-                    legacy_calibration_path is not None
-                    and legacy_calibration_path.is_file()
-                )
-                else calibration_path
-            )
+        expected_temps = sorted(
+            {round(float(t), 6) for t in temp_grid if float(t) > 0.0}
         )
-        if not force_rerun and cal_read_path.is_file():
-            try:
-                existing_cal = json.loads(
-                    cal_read_path.read_text(encoding="utf-8")
-                )
-                saved_cal_stage = existing_cal.get("revision_stage")
-                cal_stage_ok = (
-                    not saved_cal_stage
-                    or effective_rev_stage not in ("revision", "prefix_revision")
-                    or saved_cal_stage == effective_rev_stage
-                )
-                saved_temps = [
-                    round(float(t), 6)
-                    for t in existing_cal.get("temperature_grid") or []
-                ]
-                expected_temps = sorted(
-                    {round(float(t), 6) for t in temp_grid if float(t) > 0.0}
-                )
-                saved_eta = existing_cal.get("cms_eta")
-                eta_ok = saved_eta is None or (
-                    abs(float(saved_eta) - float(cms_eta)) <= 1e-6
-                )
-                saved_cal_cms_mode = _normalize_s3_cms_mode(
-                    existing_cal.get("cms_mode")
-                )
-                cms_mode_ok = (
-                    abs(float(cms_eta)) <= 1e-12
-                    and (saved_eta is None or abs(float(saved_eta)) <= 1e-12)
-                ) or (saved_cal_cms_mode == cms_mode)
-                shared_mode_ok = (
-                    bool(existing_cal.get("shared_language_weight", False))
-                    == shared_lam_cfg
-                )
-                saved_states = existing_cal.get("states")
-                saved_cal_prov = dict(
-                    existing_cal.get("checkpoint_provenance") or {}
-                )
-                if (
-                    saved_temps == expected_temps
-                    and eta_ok
-                    and cms_mode_ok
-                    and shared_mode_ok
-                    and isinstance(saved_states, dict)
-                ):
-                    existing_cal_base = existing_cal
+        ordered_cal_candidates = [calibration_path, *candidate_cal_paths]
+        if not force_rerun:
+            for cand_cal_path in ordered_cal_candidates:
+                if not cand_cal_path.is_file():
+                    continue
+                is_cross_cal = cand_cal_path.resolve() != calibration_path.resolve()
+                try:
+                    existing_cal = json.loads(
+                        cand_cal_path.read_text(encoding="utf-8")
+                    )
+                    if not isinstance(existing_cal, dict):
+                        continue
+                    saved_cal_stage = existing_cal.get("revision_stage")
+                    cal_stage_ok = (
+                        not saved_cal_stage
+                        or effective_rev_stage not in ("revision", "prefix_revision")
+                        or saved_cal_stage == effective_rev_stage
+                    )
+                    saved_temps = [
+                        round(float(t), 6)
+                        for t in existing_cal.get("temperature_grid") or []
+                    ]
+                    shared_mode_ok = (
+                        bool(existing_cal.get("shared_language_weight", False))
+                        == shared_lam_cfg
+                    )
+                    saved_states = existing_cal.get("states")
+                    saved_cal_prov = dict(
+                        existing_cal.get("checkpoint_provenance") or {}
+                    )
+                    if not (
+                        saved_temps == expected_temps
+                        and _check_calibration_metadata_compatible(
+                            existing_cal, is_cross_dir=is_cross_cal
+                        )
+                        and shared_mode_ok
+                        and isinstance(saved_states, dict)
+                    ):
+                        continue
+                    cand_states: dict[str, dict[str, Any]] = {}
                     cur_w = ref_prov.get("word") or resolved_ckpts.get(
                         "word_checkpoint"
                     )
@@ -1239,7 +1499,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                             or _same_checkpoint_path(saved_w, cur_w)
                         )
                     ):
-                        reusable_cal_states["S0"] = dict(saved_states["S0"])
+                        cand_states["S0"] = dict(saved_states["S0"])
 
                     cur_r = ref_prov.get("revision") or resolved_ckpts.get(
                         "revision_checkpoint"
@@ -1270,7 +1530,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         )
                     ):
                         for k_st in ("K0", "K1", "K2"):
-                            reusable_cal_states[k_st] = dict(saved_states[k_st])
+                            cand_states[k_st] = dict(saved_states[k_st])
 
                     cur_c = ref_prov.get("context") or resolved_ckpts.get(
                         "context_checkpoint"
@@ -1294,10 +1554,19 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         ).startswith("fallback_from_")
                         and ctx_prov_ok
                     ):
-                        reusable_cal_states["F"] = dict(saved_states["F"])
-            except Exception:
-                reusable_cal_states = {}
-                existing_cal_base = None
+                        cand_states["F"] = dict(saved_states["F"])
+
+                    if len(cand_states) > len(reusable_cal_states) or (
+                        existing_cal_base is None and cand_states
+                    ):
+                        existing_cal_base = existing_cal
+                        reusable_cal_states = cand_states
+                    if required_cal_states and all(
+                        st in reusable_cal_states for st in required_cal_states
+                    ):
+                        break
+                except Exception:
+                    continue
 
         if (
             existing_cal_base is not None
@@ -1310,6 +1579,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             }
             if ref_prov:
                 calibration_res["checkpoint_provenance"] = dict(ref_prov)
+            calibration_res["cms_eta"] = float(cms_eta)
+            calibration_res["cms_mode"] = str(cms_mode)
+            calibration_res["cms_ema_decay"] = float(cms_ema_decay)
+            calibration_res["shift_mode"] = str(shift_mode)
             try:
                 calibration_path.parent.mkdir(parents=True, exist_ok=True)
                 calibration_path.write_text(
@@ -1320,14 +1593,22 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 pass
         else:
             reusable_val_pt = _resolve_reusable_export_pt(
-                val_export_path, legacy_val_export_path
+                val_export_path, candidate_val_pts
             )
             cal_source_path = (
                 reusable_val_pt
                 if (args.split != "val" or reusable_val_pt.is_file())
                 else export_path
             )
-            if force_rerun or not _export_matches_cms_eta(cal_source_path, cms_eta):
+            if force_rerun or not _export_matches_cms_eta(
+                cal_source_path,
+                cms_eta,
+                strict_meta=(
+                    cal_source_path != val_export_path
+                    and cal_source_path != export_path
+                )
+                or has_explicit_protocol_cfg,
+            ):
                 _run_export_for_split("val", val_export_path)
                 cal_source_path = val_export_path
             val_payload = load_neural_vocabulary_scores(cal_source_path)
@@ -1415,6 +1696,8 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             )
             calibration_res["cms_eta"] = float(cms_eta)
             calibration_res["cms_mode"] = str(cms_mode)
+            calibration_res["cms_ema_decay"] = float(cms_ema_decay)
+            calibration_res["shift_mode"] = str(shift_mode)
             try:
                 calibration_path.parent.mkdir(parents=True, exist_ok=True)
                 calibration_path.write_text(
@@ -1428,9 +1711,15 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
     if args.step in ("decode", "all"):
         reusable_split_pt = _resolve_reusable_export_pt(
-            export_path, legacy_split_export_path
+            export_path, candidate_split_pts
         )
-        if _export_matches_cms_eta(reusable_split_pt, cms_eta):
+        if _export_matches_cms_eta(
+            reusable_split_pt,
+            cms_eta,
+            strict_meta=(
+                reusable_split_pt != export_path or has_explicit_protocol_cfg
+            ),
+        ):
             export_path = reusable_split_pt
         else:
             _run_export_for_split(args.split, export_path)
@@ -1444,18 +1733,23 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
         has_s3_clean = all(k in available_clean for k in ("K0", "K1", "K2"))
         f_mode = "F_full_context" if has_real_context else "not_available"
-        if calibration_path.is_file():
-            cal_json = json.loads(calibration_path.read_text(encoding="utf-8"))
-            hyperparameters = cal_json
-        elif (
-            legacy_calibration_path is not None
-            and legacy_calibration_path.is_file()
-        ):
-            cal_json = json.loads(
-                legacy_calibration_path.read_text(encoding="utf-8")
-            )
-            hyperparameters = cal_json
-        else:
+        hyperparameters: dict[str, Any] | None = None
+        for cand_cal_p in [calibration_path, *candidate_cal_paths]:
+            if not cand_cal_p.is_file():
+                continue
+            try:
+                cal_json = json.loads(cand_cal_p.read_text(encoding="utf-8"))
+                if isinstance(cal_json, dict) and _check_calibration_metadata_compatible(
+                    cal_json,
+                    is_cross_dir=(
+                        cand_cal_p.resolve() != calibration_path.resolve()
+                    ),
+                ):
+                    hyperparameters = cal_json
+                    break
+            except Exception:
+                continue
+        if hyperparameters is None:
             hyperparameters = {
                 "states": {
                     s: {"temperature": 0.07, "language_weight": 0.15}
@@ -1674,11 +1968,33 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         == int(eff_min_sentence_length or 5)
                     )
                 )
+                dec_eta_matches = (
+                    "cms_eta" not in existing_dec
+                    or abs(float(existing_dec["cms_eta"]) - float(cms_eta))
+                    <= 1e-6
+                )
+                dec_shift_matches = (
+                    "shift_mode" not in existing_dec
+                    or _normalize_s3_shift_mode(existing_dec["shift_mode"])
+                    == _normalize_s3_shift_mode(shift_mode)
+                )
+                dec_cms_mode_matches = (
+                    "cms_mode" not in existing_dec
+                    or (
+                        abs(float(cms_eta)) <= 1e-12
+                        and abs(float(existing_dec.get("cms_eta", 0.0))) <= 1e-12
+                    )
+                    or _normalize_s3_cms_mode(existing_dec["cms_mode"])
+                    == cms_mode
+                )
                 if (
                     existing_dec.get("dataset") == args.dataset
                     and existing_dec.get("split") == args.split
                     and int(existing_dec.get("seed", -1)) == int(args.seed)
                     and protocol_matches
+                    and dec_eta_matches
+                    and dec_shift_matches
+                    and dec_cms_mode_matches
                 ):
                     for cond_k, cond_b in (
                         existing_dec.get("decoded_bundles") or {}
@@ -1756,16 +2072,17 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 decoded_bundles.pop("F_clean", None)
             bundle_obj = {
                 "schema_version": "s3-decoding-bundle/v2",
-                "protocol_mode": (
-                    "open_segment_full_vocabulary"
-                    if is_open_segment_protocol
-                    else "l5_sentence_matched_closed_set"
-                ),
+                "protocol_mode": resolved_protocol_mode,
+                "sequence_subdir": str(sequence_subdir),
                 "min_sentence_length": (
                     0
                     if eff_min_sentence_length is None
                     else int(eff_min_sentence_length)
                 ),
+                "cms_eta": float(cms_eta),
+                "cms_mode": str(cms_mode),
+                "cms_ema_decay": float(cms_ema_decay),
+                "shift_mode": str(shift_mode),
                 "dataset": args.dataset,
                 "split": args.split,
                 "seed": int(args.seed),
@@ -2100,15 +2417,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         eval_pt_path = (
             export_path
             if export_path.is_file()
-            else (
-                legacy_split_export_path
-                if (
-                    legacy_split_export_path is not None
-                    and legacy_split_export_path.is_file()
-                )
-                else export_path
-            )
+            else _resolve_reusable_export_pt(export_path, candidate_split_pts)
         )
+        if not eval_pt_path.is_file() and legacy_split_export_path is not None and legacy_split_export_path.is_file():
+            eval_pt_path = legacy_split_export_path
         if not bool(args.no_bertscore) and (
             "split_payload" in locals() or eval_pt_path.is_file()
         ):
@@ -2197,22 +2509,57 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     return results_summary
 
 
-def main(argv: list[str] | None = None) -> int:
+def print_pipeline_summary(
+    summary: dict[str, Any],
+    *,
+    json_output: bool = False,
+    verbose: bool = False,
+) -> None:
     from braindecoding.evaluation.sequence_decoding_evaluation import (
         print_sequence_decoding_report,
     )
 
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    summary = run_sequence_decoding_pipeline(args)
-    if bool(getattr(args, "json_output", False)):
+    if json_output:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
-    elif isinstance(summary, dict) and isinstance(summary.get("per_seed_summaries"), dict):
+        return
+    if isinstance(summary, dict) and isinstance(
+        summary.get("per_config_summaries"), dict
+    ):
+        for cfg_key, cfg_summary in summary["per_config_summaries"].items():
+            sub_lbl = (
+                cfg_summary.get("sequence_subdir")
+                if isinstance(cfg_summary, dict)
+                else None
+            )
+            eta_lbl = (
+                cfg_summary.get("cms_eta")
+                if isinstance(cfg_summary, dict)
+                else None
+            )
+            proto_lbl = (
+                cfg_summary.get("protocol_mode")
+                if isinstance(cfg_summary, dict)
+                else None
+            )
+            print(
+                f"\n{'=' * 86}\n"
+                f" [S3 Report] subdir={sub_lbl or '-'} | protocol={proto_lbl or '-'} | "
+                f"cms_eta={eta_lbl if eta_lbl is not None else '-'} | config={cfg_key}\n"
+                f"{'=' * 86}",
+                flush=True,
+            )
+            print_pipeline_summary(
+                cfg_summary, json_output=False, verbose=verbose
+            )
+        return
+    if isinstance(summary, dict) and isinstance(
+        summary.get("per_seed_summaries"), dict
+    ):
         for seed_summary in summary["per_seed_summaries"].values():
             if "conditions" in seed_summary or "vocabulary_scaling" in seed_summary:
                 print_sequence_decoding_report(
                     seed_summary,
-                    verbose=bool(getattr(args, "verbose", False)),
+                    verbose=verbose,
                 )
         ms_rep = summary.get("multi_seed_summary")
         if isinstance(ms_rep, dict) and (
@@ -2220,15 +2567,27 @@ def main(argv: list[str] | None = None) -> int:
         ):
             print_sequence_decoding_report(
                 ms_rep,
-                verbose=bool(getattr(args, "verbose", False)),
+                verbose=verbose,
             )
-    elif "conditions" not in summary and "vocabulary_scaling" not in summary:
+        return
+    if "conditions" not in summary and "vocabulary_scaling" not in summary:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
     else:
         print_sequence_decoding_report(
             summary,
-            verbose=bool(getattr(args, "verbose", False)),
+            verbose=verbose,
         )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    summary = run_sequence_decoding_pipeline(args)
+    print_pipeline_summary(
+        summary,
+        json_output=bool(getattr(args, "json_output", False)),
+        verbose=bool(getattr(args, "verbose", False)),
+    )
     return 0
 
 
