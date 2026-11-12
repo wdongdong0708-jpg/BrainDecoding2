@@ -1,4 +1,4 @@
-# ChineseEEG-2 中文《小王子》EEG 阶段 2.3（全历史因果前缀滚动修订 [1..i, i+r]）：主推档位 A（纯因果 Pre-Roll + 维度平衡零空间正交惩罚 + 欧氏跨视界稳定）
+# ChineseEEG-2 中文《小王子》EEG 阶段 2.3（全历史因果前缀滚动修订 [1..i, i+r]）：档位 A（纯因果 Pre-Roll + 维度平衡零空间正交惩罚 + 欧氏跨视界稳定）
 # 启动命令：
 #   python -u -m braindecoding train --config configs/training/siamese_debiased/chineseeeg2_causal_null_space_prefix_revision.yaml --require-cache --resume auto
 extends: ../chineseeeg2_prefix_revision.yaml
@@ -28,15 +28,15 @@ siamese_debiased:
   debias_mode: null_space
   shift_mode: preroll
   preroll_seconds: 45.0
-  shift_seconds: [-10.0, -20.0, -30.0, -40.0]
-  shifts_per_step: 1
   eta_0: 0.0
   eta_train: 0.0
   eta_delta: 0.0
-  lambda_null: 0.15
-  lambda_delta: 0.15
-  lambda_delta_null: 0.0
+  lambda_null: 10.0
+  lambda_delta: 0.45
+  lambda_distill: 0.0
   beta_delta_cm: 0.0
+  shift_seconds: [-12.0, -19.0, -27.0, -36.0]
+  shifts_per_step: 2
   synchronize_dropout_rng: true
   preextract_frozen_cnn: true
   cache_preextracted_to_disk: true

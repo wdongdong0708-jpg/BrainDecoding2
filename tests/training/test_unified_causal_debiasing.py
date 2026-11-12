@@ -233,9 +233,10 @@ def test_train_one_epoch_tier_a_null_space_and_tier_b_amortized_timing():
                 "debias_mode": "null_space",
                 "shift_mode": "preroll",
                 "eta_0": 0.0,
-                "lambda_null": 0.15,
-                "lambda_delta": 0.15,
-                "shifts_per_step": 1,
+                "lambda_null": 10.0,
+                "lambda_delta": 0.45,
+                "shift_seconds": [-10.0, -20.0],
+                "shifts_per_step": 2,
             }
         }
     )
@@ -313,18 +314,28 @@ def test_train_one_epoch_tier_a_null_space_and_tier_b_amortized_timing():
     scaler_b = torch.amp.GradScaler("cuda", enabled=False)
     siam_cfg_b = resolve_siamese_debiased_config(
         {
+            "model": {
+                "temporal_bias_head": {
+                    "enabled": True,
+                    "eta": 0.4,
+                    "hidden_dimension": 16,
+                    "window_seconds": 1.0,
+                }
+            },
             "siamese_debiased": {
                 "enabled": True,
                 "debias_mode": "amortized_timing",
                 "shift_mode": "preroll",
-                "eta_0": 0.50,
-                "lambda_distill": 1.0,
-                "lambda_null": 0.05,
-                "lambda_delta": 0.0,
-                "shifts_per_step": 1,
-            }
+                "lambda_distill": 0.5,
+                "lambda_null": 10.0,
+                "lambda_delta": 0.45,
+                "shift_seconds": [-10.0, -20.0],
+                "shifts_per_step": 2,
+            },
         }
     )
+    assert pytest.approx(float(siam_cfg_b["eta_0"]), abs=1e-6) == 0.4
+    assert int(siam_cfg_b["temporal_bias_hidden_dim"]) == 16
     loss_val_b, seen_b, updates_b, diag_b = train_one_epoch_siamese_debiased(
         model_b,
         loss_mod_b,
@@ -341,6 +352,8 @@ def test_train_one_epoch_tier_a_null_space_and_tier_b_amortized_timing():
     assert np.isfinite(loss_val_b)
     assert seen_b == 2 and updates_b == 2
     assert diag_b["debias_mode"] == "amortized_timing"
+    assert diag_b["shift_null_loss"] > 0.0
+    assert diag_b["delta_shift_null_loss"] > 0.0
     assert diag_b["distill_loss"] > 0.0
     assert any(
         not torch.equal(v, head_before[k])
@@ -379,17 +392,40 @@ def test_train_one_epoch_tier_a_null_space_and_tier_b_amortized_timing():
 def test_new_causal_yaml_configs_build_workflow_cleanly(
     yaml_relpath: str, expected_mode: str
 ):
-    """确认新增的 4 份法汉因果 YAML 配置均可无损解析并自动继承 Pre-Roll 与对应去偏档位。"""
+    """确认新增的 4 份法汉因果 YAML 配置无参数遮蔽/量纲陷阱，并严格呈递进消融关系。"""
+    import yaml
+
     root = Path(__file__).resolve().parents[2]
-    cfg, _meta = build_workflow_config(config_path=str(root / yaml_relpath), seed=0)
+    yaml_path = root / yaml_relpath
+    raw_yaml = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+    raw_siam = raw_yaml.get("siamese_debiased") or {}
+    assert "lambda_delta_null" not in raw_siam, (
+        f"{yaml_relpath} must not define lambda_delta_null alongside lambda_delta"
+    )
+
+    cfg, _meta = build_workflow_config(config_path=str(yaml_path), seed=0)
     siam = cfg["siamese_debiased"]
     assert siam["enabled"] is True
     assert siam["debias_mode"] == expected_mode
     assert siam["shift_mode"] == "preroll"
     assert float(siam["preroll_seconds"]) == 45.0
-    assert list(siam["shift_seconds"]) == [-10.0, -20.0, -30.0, -40.0]
-    assert int(siam["shifts_per_step"]) == 1
-    if expected_mode == "amortized_timing":
+    assert list(siam["shift_seconds"]) == [-12.0, -19.0, -27.0, -36.0]
+    assert int(siam["shifts_per_step"]) == 2
+    assert pytest.approx(float(siam["lambda_null"]), abs=1e-6) == 10.0
+    assert pytest.approx(float(siam["lambda_delta"]), abs=1e-6) == 0.45
+    assert pytest.approx(float(siam["beta_delta_cm"]), abs=1e-6) == 0.0
+    if expected_mode == "null_space":
+        assert pytest.approx(float(siam["eta_0"]), abs=1e-6) == 0.0
+        assert pytest.approx(float(siam["lambda_distill"]), abs=1e-6) == 0.0
+        assert "temporal_bias_head" not in (cfg.get("model") or {})
+    elif expected_mode == "amortized_timing":
+        assert pytest.approx(float(siam["eta_0"]), abs=1e-6) == 0.4
+        assert pytest.approx(float(siam["eta_train"]), abs=1e-6) == 0.4
+        assert pytest.approx(float(siam["lambda_distill"]), abs=1e-6) == 0.5
+        assert int(siam["temporal_bias_hidden_dim"]) == 256
+        assert pytest.approx(float(siam["s3_cms_eta"]), abs=1e-6) == 0.0
         tb_cfg = cfg["model"].get("temporal_bias_head") or {}
         assert tb_cfg.get("enabled") is True
-        assert pytest.approx(float(tb_cfg.get("eta", 0.0)), abs=1e-6) == 0.50
+        assert pytest.approx(float(tb_cfg.get("eta", 0.0)), abs=1e-6) == 0.40
+        assert int(tb_cfg.get("hidden_dimension", 0)) == 256
+        assert pytest.approx(float(tb_cfg.get("window_seconds", 0.0)), abs=1e-6) == 1.0

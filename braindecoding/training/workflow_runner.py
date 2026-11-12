@@ -32,6 +32,7 @@ from braindecoding.config import (
     PROJECT_ROOT,
     cache_root,
     data_root,
+    deep_merge,
     ensure_default_environment,
     load_yaml_with_extends,
     model_root,
@@ -685,20 +686,23 @@ def build_workflow_config(
             "experiment",
             "training",
             "dataset",
+            "model",
             "siamese_debiased",
         ):
             if isinstance(explicit_yaml.get(overlay_key), dict):
                 cfg.setdefault(overlay_key, {})
                 if isinstance(cfg[overlay_key], dict):
-                    cfg[overlay_key].update(
-                        copy.deepcopy(explicit_yaml[overlay_key])
+                    cfg[overlay_key] = deep_merge(
+                        cfg[overlay_key], copy.deepcopy(explicit_yaml[overlay_key])
                     )
                 else:
                     cfg[overlay_key] = copy.deepcopy(explicit_yaml[overlay_key])
         merged_active_yaml = copy.deepcopy(base_stage_yaml)
         for k, v in explicit_yaml.items():
             if isinstance(v, dict) and isinstance(merged_active_yaml.get(k), dict):
-                merged_active_yaml[k].update(copy.deepcopy(v))
+                merged_active_yaml[k] = deep_merge(
+                    merged_active_yaml[k], copy.deepcopy(v)
+                )
             else:
                 merged_active_yaml[k] = copy.deepcopy(v)
         active_yaml = merged_active_yaml
@@ -1024,12 +1028,20 @@ def build_workflow_config(
         )
     if siamese_spec["enabled"] and siamese_spec.get("debias_mode") == "amortized_timing":
         siamese_spec["preextract_frozen_cnn"] = True
-        cfg["model"]["temporal_bias_head"] = {
-            "enabled": True,
-            "eta": float(siamese_spec.get("eta_0", siamese_spec.get("eta_train", 0.50))),
-            "hidden_dimension": int(siamese_spec.get("temporal_bias_hidden_dim", 128)),
-            "window_seconds": float(window_info["window_seconds"]),
-        }
+        existing_tbh = (
+            dict(cfg["model"]["temporal_bias_head"])
+            if isinstance(cfg["model"].get("temporal_bias_head"), dict)
+            else {}
+        )
+        existing_tbh.update(
+            {
+                "enabled": True,
+                "eta": float(siamese_spec.get("eta_0", siamese_spec.get("eta_train", 0.40))),
+                "hidden_dimension": int(siamese_spec.get("temporal_bias_hidden_dim", 128)),
+                "window_seconds": float(window_info["window_seconds"]),
+            }
+        )
+        cfg["model"]["temporal_bias_head"] = existing_tbh
     else:
         cfg["model"].pop("temporal_bias_head", None)
     if siamese_spec["enabled"] or shift_mode is not None:

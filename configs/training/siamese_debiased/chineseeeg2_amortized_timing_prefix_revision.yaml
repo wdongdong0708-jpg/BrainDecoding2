@@ -1,4 +1,4 @@
-# ChineseEEG-2 中文《小王子》EEG 阶段 2.3（全历史因果前缀滚动修订 [1..i, i+r]）：保底档位 B（零脑信号纯时间几何摊销偏置头 b_psi(Delta_tau) 蒸馏抵消）
+# ChineseEEG-2 中文《小王子》EEG 阶段 2.3（全历史因果前缀滚动修订 [1..i, i+r]）：档位 B（档位 A 零空间正则 + TemporalGeometryBiasHead 逐视野时序几何自校准）
 # 启动命令：
 #   python -u -m braindecoding train --config configs/training/siamese_debiased/chineseeeg2_amortized_timing_prefix_revision.yaml --require-cache --resume auto
 extends: ../chineseeeg2_prefix_revision.yaml
@@ -10,6 +10,13 @@ workflow:
   precision: bf16-mixed
   window_seconds: 1.0
   window_start_offset_seconds: 0.0
+
+model:
+  temporal_bias_head:
+    enabled: true
+    eta: 0.4
+    hidden_dimension: 256
+    window_seconds: 1.0
 
 training:
   epochs: 30
@@ -28,16 +35,16 @@ siamese_debiased:
   debias_mode: amortized_timing
   shift_mode: preroll
   preroll_seconds: 45.0
-  shift_seconds: [-10.0, -20.0, -30.0, -40.0]
-  shifts_per_step: 1
-  eta_0: 0.50
-  eta_train: 0.50
+  eta_0: 0.4
+  eta_train: 0.4
   eta_delta: 0.0
-  lambda_distill: 1.0
-  lambda_null: 0.05
-  lambda_delta: 0.0
-  lambda_delta_null: 0.0
+  lambda_null: 10.0
+  lambda_delta: 0.45
+  lambda_distill: 0.5
   beta_delta_cm: 0.0
+  temporal_bias_hidden_dim: 256
+  shift_seconds: [-12.0, -19.0, -27.0, -36.0]
+  shifts_per_step: 2
   s3_cms_eta: 0.0
   synchronize_dropout_rng: true
   preextract_frozen_cnn: true

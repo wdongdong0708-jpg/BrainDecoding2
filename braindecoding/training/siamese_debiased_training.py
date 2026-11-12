@@ -171,6 +171,14 @@ def resolve_siamese_debiased_config(
     ds_block = (
         cfg.get("dataset") if isinstance(cfg.get("dataset"), dict) else {}
     )
+    model_block = (
+        cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+    )
+    model_tbh = (
+        model_block.get("temporal_bias_head")
+        if isinstance(model_block.get("temporal_bias_head"), dict)
+        else {}
+    )
     tc = cfg.get("training", {}) if isinstance(cfg.get("training"), dict) else {}
 
     env_enabled = _parse_bool_env("BRAINDECODING_SIAMESE_DEBIASED")
@@ -241,7 +249,12 @@ def resolve_siamese_debiased_config(
     default_eta_by_mode = (
         0.0
         if resolved_debias_mode == "null_space"
-        else (0.50 if resolved_debias_mode == "amortized_timing" else 0.8)
+        else (
+            float(model_tbh["eta"])
+            if resolved_debias_mode == "amortized_timing"
+            and model_tbh.get("eta") is not None
+            else (0.40 if resolved_debias_mode == "amortized_timing" else 0.8)
+        )
     )
     yaml_eta_default = (
         raw_block["eta_0"]
@@ -388,10 +401,15 @@ def resolve_siamese_debiased_config(
     resolved_hidden_dim = int(
         temporal_bias_hidden_dim
         if temporal_bias_hidden_dim is not None
-        else raw_block.get("temporal_bias_hidden_dim", 128)
+        else raw_block.get(
+            "temporal_bias_hidden_dim",
+            model_tbh.get("hidden_dimension", 128),
+        )
     )
     sync_rng = bool(raw_block.get("synchronize_dropout_rng", True))
     cache_to_disk = bool(raw_block.get("cache_preextracted_to_disk", True))
+    default_s3_cms_eta = 0.0 if resolved_debias_mode == "amortized_timing" else 0.5
+    resolved_s3_cms_eta = float(raw_block.get("s3_cms_eta", default_s3_cms_eta))
 
     return {
         "enabled": bool(enabled),
@@ -409,6 +427,7 @@ def resolve_siamese_debiased_config(
         "temporal_bias_hidden_dim": resolved_hidden_dim,
         "shift_seconds": resolved_shifts,
         "shifts_per_step": int(resolved_m),
+        "s3_cms_eta": resolved_s3_cms_eta,
         "synchronize_dropout_rng": sync_rng,
         "preextract_frozen_cnn": bool(resolved_preextract),
         "cache_preextracted_to_disk": cache_to_disk,
@@ -3519,26 +3538,21 @@ def train_one_epoch_siamese_debiased(
                 running_tot = float(total_loss_gpu.item()) / denom_cur
                 running_sig = float(siglip_loss_gpu.item()) / denom_cur
                 running_nul = float(null_loss_gpu.item()) / denom_cur
+                postfix = {
+                    "loss": f"{running_tot:.4f}",
+                    "siglip": f"{running_sig:.4f}",
+                    "null": f"{running_nul:.4f}",
+                }
                 if lambda_delta_null > 0.0:
-                    running_dnul = (
-                        float(delta_null_loss_gpu.item()) / denom_cur
+                    postfix["d_null"] = (
+                        f"{float(delta_null_loss_gpu.item()) / denom_cur:.4f}"
                     )
-                    pbar.set_postfix(
-                        loss=f"{running_tot:.4f}",
-                        siglip=f"{running_sig:.4f}",
-                        null=f"{running_nul:.4f}",
-                        d_null=f"{running_dnul:.4f}",
-                        lr=f"{current_lr:.1e}",
-                        refresh=False,
+                if debias_mode == "amortized_timing" and lambda_distill > 0.0:
+                    postfix["dist"] = (
+                        f"{float(distill_loss_gpu.item()) / denom_cur:.4f}"
                     )
-                else:
-                    pbar.set_postfix(
-                        loss=f"{running_tot:.4f}",
-                        siglip=f"{running_sig:.4f}",
-                        null=f"{running_nul:.4f}",
-                        lr=f"{current_lr:.1e}",
-                        refresh=False,
-                    )
+                postfix["lr"] = f"{current_lr:.1e}"
+                pbar.set_postfix(postfix, refresh=False)
     finally:
         if pbar is not None:
             pbar.close()
