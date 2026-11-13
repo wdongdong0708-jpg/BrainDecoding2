@@ -1197,6 +1197,8 @@ def save_subspace_encoded_cache(
     eval_ds,
     shifts: Sequence[float] | None = None,
     shift_seconds: Sequence[float] | None = None,
+    shift_mode: str | None = None,
+    preroll_seconds: float | None = None,
     window_seconds: float | None = None,
     window_samples: int | None = None,
     vocabulary: Sequence[str],
@@ -1295,6 +1297,16 @@ def save_subspace_encoded_cache(
                 "window_seconds": resolved_win_sec,
                 "window_samples": resolved_win_samp,
                 "shift_seconds": [float(s) for s in resolved_shifts],
+                "shift_mode": (
+                    str(shift_mode).strip().lower()
+                    if shift_mode is not None
+                    else "circular"
+                ),
+                "preroll_seconds": (
+                    float(preroll_seconds)
+                    if preroll_seconds is not None
+                    else None
+                ),
                 "vocabulary": [str(w) for w in vocabulary],
                 "vocab50": [str(w) for w in vocab50],
                 "eval_table": eval_table_minimal,

@@ -27,6 +27,10 @@ from braindecoding.evaluation.evaluation_reporting import (
 )
 from braindecoding.evaluation.word_retrieval_evaluation import (
     _apply_eval_subdir_to_seed_dir,
+    _evaluate_common_horizon_subset_from_pt,
+    _is_encoded_cache_compatible,
+    _load_seed_exploratory_json,
+    summarize_multi_seed_evaluation,
 )
 
 
@@ -793,4 +797,207 @@ def test_preroll_m_eval_tradeoff_and_cached_pt_zero_overwrite_evaluator(tmp_path
     assert "Position-Locked Causal EMA" in compact_pos_text
     for line in compact_pos_text.splitlines():
         assert len(line) <= 86, f"Pos-EMA report line exceeded 86 cols ({len(line)}): {line!r}"
+
+
+def test_common_horizon_subset_inherits_mu0_isolates_exploratory_and_promotes_primary(
+    tmp_path: Path,
+):
+    """验证 common_horizon_delay 复用 .pt 内 mu0、隔离未裁剪探索 JSON，并在 eval_subdir 下同步主路径产物。"""
+    import hashlib
+    import json
+    import pandas as pd
+    from braindecoding.config import PROJECT_ROOT
+    from braindecoding.results import load_vocabulary_assets
+
+    g = torch.Generator().manual_seed(2027)
+    dim = 16
+    manifests = load_vocabulary_assets(PROJECT_ROOT / "data/manifests/pallier2025")
+    vocab50 = [str(w) for w in manifests[50]["vocabulary"]]
+    vocab = [str(w) for w in manifests[150]["vocabulary"]]
+    emb_map = {w: F.normalize(torch.randn(dim, generator=g), dim=-1).numpy() for w in vocab}
+
+    # 构建 4 个句段 * 每句 8 词 = 32 事件；delay=2 保留每句前 6 词，共 24 条共同有效事件
+    words = []
+    event_ids = []
+    sentence_uids = []
+    recording_ids = []
+    sentence_indices = []
+    for s_idx in range(4):
+        for p_idx in range(8):
+            words.append(vocab50[(s_idx * 8 + p_idx) % len(vocab50)])
+            event_ids.append(f"ev_{s_idx}_{p_idx}")
+            sentence_uids.append(f"run-01:s{s_idx}")
+            recording_ids.append("run-01")
+            sentence_indices.append(s_idx)
+
+    n_events = len(words)
+    drift = F.normalize(torch.randn(dim, generator=g), dim=-1)
+    word_vecs = torch.stack([torch.from_numpy(emb_map[w]) for w in words], dim=0)
+
+    class _SubsetDs:
+        def __init__(self):
+            self.table = pd.DataFrame(
+                {
+                    "event_id": event_ids,
+                    "subject_id": ["sub-01"] * n_events,
+                    "recording_id": recording_ids,
+                    "sentence_uid": sentence_uids,
+                    "runtime_context_uid": sentence_uids,
+                }
+            )
+            self.embedding_map = emb_map
+            self.window_seconds = 1.0
+            self.window_samples = 50
+
+    audit_root = tmp_path / "exp_ctx" / "causal_fast_audit" / "context" / "all-n10"
+    cfg = {
+        "experiment": {"dataset": "pallier2025"},
+        "training": {"precision": "fp32", "seed": 0},
+        "dataset": {
+            "dataset": "pallier2025",
+            "subjects": ["sub-01"],
+            "window_seconds": 1.0,
+            "window_start_offset_seconds": 0.0,
+        },
+        "workflow": {"stage": "context", "exp_tag": "exp_ctx", "word_exp_tag": "exp_word"},
+        "evaluation": {"bootstrap_resamples": 20, "permutation_resamples": 20},
+    }
+    subset_spec = {
+        "dataset": "pallier2025",
+        "subset_tag": "all-n10",
+        "subjects": ["sub-01"],
+    }
+    control_spec = {
+        "enabled": True,
+        "name": "causal_common_mode_subtraction_negative_control",
+        "control_type": "causal_common_mode_subtraction",
+        "shift_mode": "preroll",
+        "preroll_seconds": 45.0,
+        "shift_seconds": [-10.0, -20.0],
+        "common_mode_subtraction": {
+            "enabled": True,
+            "mode": "causal_ema",
+            "ema_decay": 0.99,
+            "eta_values": [0.5],
+            "normalize_before_subtraction": True,
+        },
+        "subspace_coherence_debiasing": {"enabled": False},
+    }
+
+    seed_results = []
+    for seed in (0, 1):
+        seed_dir = audit_root / f"seed-{seed:03d}"
+        seed_dir.mkdir(parents=True, exist_ok=True)
+        # 故意构造不含 causal_cms_mu0 的旧格式检查点，测试从 .pt mu0_payload 回退继承
+        ckpt_path = seed_dir / "best.ckpt"
+        torch.save({"epoch": 4, "model_state_dict": {}}, ckpt_path)
+
+        clean_p = F.normalize(word_vecs + 0.5 * drift.unsqueeze(0) + 0.25 * torch.randn(n_events, dim, generator=g), dim=-1)
+        clean_enc = {
+            "predictions": clean_p,
+            "targets": word_vecs,
+            "words": words,
+            "event_ids": event_ids,
+            "recording_ids": recording_ids,
+            "subject_indices": torch.zeros(n_events, dtype=torch.long),
+            "sentence_indices": torch.tensor(sentence_indices, dtype=torch.long),
+        }
+        shifts = [-10.0, -20.0]
+        shifted_by_s = []
+        for sec in shifts:
+            sp = F.normalize(0.8 * drift.unsqueeze(0) + 0.35 * torch.randn(n_events, dim, generator=g), dim=-1)
+            shifted_by_s.append((sec, f"shift_{int(abs(sec))}s", f"Shift {int(sec)}s", {**clean_enc, "predictions": sp}))
+
+        pt_path = save_subspace_encoded_cache(
+            seed_dir,
+            split="test",
+            checkpoint_sha256=hashlib.sha256(ckpt_path.read_bytes()).hexdigest(),
+            dataset="pallier2025",
+            stage="context",
+            seed=seed,
+            exp_tag="exp_ctx",
+            word_exp_tag="exp_word",
+            eval_ds=_SubsetDs(),
+            shifts=shifts,
+            shift_mode="preroll",
+            preroll_seconds=45.0,
+            vocabulary=vocab,
+            vocab50=vocab50,
+            clean_encoded=clean_enc,
+            shifted_encoded_by_shift=shifted_by_s,
+            mu0_payload={"source": "train_readonly_fallback", "predictions": drift.clone()},
+        )
+        assert pt_path is not None and pt_path.is_file()
+
+        # 刻意种植未裁剪的 8930 条假探索 JSON，验证 common_horizon_delay=2 绝不串读
+        exp_dir = seed_dir / "exploratory"
+        (exp_dir / "subspace_coherence_debiasing_test.json").write_text(
+            json.dumps({"enabled": True, "decoy": 8930, "raw_baseline": {"vocab50_macro_top10": {"clean": 0.99, "shifted": 0.6173, "gap": 0.3727}}}),
+            encoding="utf-8",
+        )
+        (exp_dir / "common_mode_subtraction_test.json").write_text(
+            json.dumps({"cms_mode": "loo", "mu0_source": "decoy_loo", "sweep": []}),
+            encoding="utf-8",
+        )
+        assert (
+            _load_seed_exploratory_json(
+                {"common_horizon_delay": 2, "output_dir": str(seed_dir)},
+                split="test",
+                json_key="exploratory_subspace_debiasing_json",
+                filename_prefix="subspace_coherence_debiasing",
+            )
+            is None
+        )
+
+        # 验证缓存兼容性检查对旧 circular/.pt 拒绝、对匹配 preroll/.pt 放行
+        assert _is_encoded_cache_compatible(pt_path, control_spec=control_spec, ckpt_file=ckpt_path)
+        circular_spec = {**control_spec, "shift_mode": "circular"}
+        assert not _is_encoded_cache_compatible(pt_path, control_spec=circular_spec, ckpt_file=ckpt_path)
+
+        cfg_seed = {**cfg, "training": {**cfg["training"], "seed": seed}}
+        res = _evaluate_common_horizon_subset_from_pt(
+            pt_path,
+            cfg=cfg_seed,
+            subset_spec=subset_spec,
+            control_spec=control_spec,
+            common_horizon_delay=2,
+            ckpt_file=ckpt_path,
+            output_dir=seed_dir,
+            split="test",
+            verbose=False,
+            print_report=False,
+            promote_to_primary=True,
+            plot=False,
+        )
+        assert res["promoted_common_subset_to_primary"] is True
+        assert res["checkpoint"]["epoch"] == 4
+        cms_loaded = json.loads(Path(res["exploratory_common_mode_subtraction_json"]).read_text(encoding="utf-8"))
+        assert cms_loaded["formula"]["mu0_source"] == "train_readonly_fallback"
+        assert (seed_dir / "evaluation_test.json").is_file()
+        assert (seed_dir / "evaluation_common_subset_test.json").is_file()
+        seed_results.append(res)
+
+    summary = summarize_multi_seed_evaluation(
+        seed_results,
+        split="test",
+        output_dir=audit_root,
+        verbose=False,
+        print_report=False,
+        control_method="raw,causal_cms:eta=0.5",
+        control_metric="vocab50_macro_top10,vocab50_macro_top1,full_vocab_macro_top10,full_vocab_macro_top1",
+        common_horizon_delay=2,
+        eval_subdir="causal_fast_audit",
+    )
+
+    assert summary["subspace_debiasing_aggregate"]["enabled"] is False
+    assert summary["selected_control_methods"] == ["raw", "causal_cms:eta=0.5"]
+    assert summary["vocabulary_sweep_aggregate"]["N50"]["query_count"] == 24
+    assert (audit_root / "multi_seed_evaluation_test.json").is_file()
+    assert (audit_root / "multi_seed_evaluation_common_subset_test.json").is_file()
+    assert (audit_root / "multi_seed_evaluation_report_test.txt").is_file()
+    assert (audit_root / "tables" / "multi_seed_negative_controls_test.csv").is_file()
+    report_txt = (audit_root / "multi_seed_evaluation_report_test.txt").read_text(encoding="utf-8")
+    assert "Causal EMA" in report_txt
+    assert "CMS LOO" not in report_txt
+
 

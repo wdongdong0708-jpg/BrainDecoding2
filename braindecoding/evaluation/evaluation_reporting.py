@@ -4370,13 +4370,20 @@ def format_multi_seed_evaluation_report(
                         )
                 lines.append(wide_rule)
 
-    # [4B] Exploratory LOO Common-Mode Subtraction (CMS) Multi-Seed Sweep
+    # [4B] Exploratory LOO / Causal EMA Common-Mode Subtraction (CMS) Multi-Seed Sweep
     cms_agg = summary.get("common_mode_subtraction_aggregate") or {}
     if isinstance(cms_agg, Mapping) and cms_agg.get("enabled"):
+        cms_mode_str = str(cms_agg.get("cms_mode", "loo")).strip().lower()
+        is_causal_cms = cms_mode_str in {"causal_ema", "pos_causal_ema"}
+        cms_section_title = (
+            "[4B] Exploratory Online Causal EMA Common-Mode Subtraction (CMS) Multi-Seed Sweep (Mean ± SD)"
+            if is_causal_cms
+            else "[4B] Exploratory Leave-One-Out Common-Mode Subtraction (CMS) Multi-Seed Sweep (Mean ± SD)"
+        )
         lines.extend(
             [
                 "",
-                "[4B] Exploratory Leave-One-Out Common-Mode Subtraction (CMS) Multi-Seed Sweep (Mean ± SD)",
+                cms_section_title,
                 wide_rule,
                 (
                     f"{'CMS Method (eta)':<26} | {'50w Clean10':>12} | {'50w Shft10':>12} | {'50w Gap10':>12} | "
@@ -4388,7 +4395,12 @@ def format_multi_seed_evaluation_report(
         for c_row in cms_agg.get("sweep") or []:
             if not isinstance(c_row, Mapping):
                 continue
-            m_lbl = f"CMS LOO (eta={float(c_row.get('eta', 0.0)):.2f})"[:26]
+            default_lbl = (
+                f"Causal EMA-CMS (eta={float(c_row.get('eta', 0.0)):.2f})"
+                if is_causal_cms
+                else f"CMS LOO (eta={float(c_row.get('eta', 0.0)):.2f})"
+            )
+            m_lbl = str(c_row.get("label") or default_lbl)[:26]
             lines.append(
                 f"{m_lbl:<26} | "
                 f"{_fmt_mean_sd_pct(c_row.get('mean_clean_vocab50_macro_top10'), c_row.get('std_clean_vocab50_macro_top10'), 12)} | "
@@ -4539,6 +4551,9 @@ def print_multi_seed_evaluation_report(
     split = str(enriched.get("split", "val")).lower()
     is_multi_stage = bool(enriched.get("stages_aggregate"))
     has_common_subset = enriched.get("common_horizon_delay") is not None
+    promote_primary = has_common_subset and bool(
+        enriched.get("promoted_common_subset_to_primary")
+    )
     subset_tag_suffix = "_common_subset" if has_common_subset else ""
     report_filename = (
         f"multi_seed_stage_comparison{subset_tag_suffix}_report_{split}.txt"
@@ -4578,6 +4593,34 @@ def print_multi_seed_evaluation_report(
             )
             export_target.mkdir(parents=True, exist_ok=True)
             export_multi_seed_tables_and_markdown(enriched, export_target)
+            if promote_primary:
+                primary_report_filename = (
+                    f"multi_seed_stage_comparison_report_{split}.txt"
+                    if is_multi_stage
+                    else f"multi_seed_evaluation_report_{split}.txt"
+                )
+                primary_json_filename = (
+                    f"multi_seed_stage_comparison_{split}.json"
+                    if is_multi_stage
+                    else f"multi_seed_evaluation_{split}.json"
+                )
+                (out_dir_path / primary_report_filename).write_text(
+                    full_txt + "\n", encoding="utf-8"
+                )
+                primary_json_path = out_dir_path / primary_json_filename
+                if (
+                    primary_json_path.is_file()
+                    and (
+                        was_reaggregated
+                        or control_method is not None
+                        or control_metric is not None
+                    )
+                ):
+                    primary_json_path.write_text(
+                        json.dumps(enriched, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                export_multi_seed_tables_and_markdown(enriched, out_dir_path)
         except OSError:
             pass
     rendered = format_multi_seed_evaluation_report(

@@ -2768,6 +2768,8 @@ def _evaluate_common_horizon_subset_from_pt(
     split: str,
     verbose: bool = False,
     print_report: bool = True,
+    promote_to_primary: bool = False,
+    plot: bool = False,
 ) -> dict:
     """直接从已编码的 subspace_encoded_cache_{split}.pt 秒级过滤并评估 N=14,590 (D=2) 共同有效子集，不覆盖全量评估文件。"""
     from braindecoding.evaluation.common_mode_subtraction_evaluation import (
@@ -2930,9 +2932,19 @@ def _evaluate_common_horizon_subset_from_pt(
     exploratory_dir = output_dir / "exploratory"
     exploratory_dir.mkdir(parents=True, exist_ok=True)
 
+    ckpt_d: dict | None = None
+    if ckpt_file is not None and ckpt_file.is_file():
+        try:
+            loaded_ckpt = load_checkpoint(ckpt_file, map_location="cpu")
+            if isinstance(loaded_ckpt, dict):
+                ckpt_d = loaded_ckpt
+        except Exception:
+            ckpt_d = None
+
     cms_cfg = control_spec.get("common_mode_subtraction") or {}
     cms_mode_sub = str(cms_cfg.get("mode", "leave_one_out")).strip().lower()
     cms_sub_json_path: Path | None = None
+    cms_report: dict | None = None
     cms_summary_meta: dict[str, object] = {}
     if cms_mode_sub in {"causal_ema", "pos_causal_ema"} and bool(
         cms_cfg.get("enabled", False)
@@ -2941,16 +2953,12 @@ def _evaluate_common_horizon_subset_from_pt(
             run_causal_ema_common_mode_subtraction_sweep,
         )
 
-        mu0_sub = None
-        if ckpt_file is not None and ckpt_file.is_file():
-            try:
-                ckpt_d = load_checkpoint(ckpt_file, map_location="cpu")
-                mu0_sub = ckpt_d.get("causal_cms_mu0")
-                if isinstance(mu0_sub, Mapping) and "predictions" in mu0_sub:
-                    # Common-horizon subset slices the eval stream; mu0 global train vector remains unchanged
-                    mu0_sub = dict(mu0_sub)
-            except Exception:
-                mu0_sub = None
+        mu0_sub = ckpt_d.get("causal_cms_mu0") if isinstance(ckpt_d, Mapping) else None
+        if mu0_sub is None:
+            mu0_sub = cached_bundle.get("mu0_payload")
+        if isinstance(mu0_sub, Mapping) and "predictions" in mu0_sub:
+            # Common-horizon subset slices the eval stream; mu0 global train vector remains unchanged
+            mu0_sub = dict(mu0_sub)
         cms_report = run_causal_ema_common_mode_subtraction_sweep(
             dataset=dataset,
             stage=stage,
@@ -3065,6 +3073,11 @@ def _evaluate_common_horizon_subset_from_pt(
             ckpt_epoch = int((full_ev_d.get("checkpoint") or {}).get("epoch", 0))
         except Exception:
             ckpt_epoch = 0
+    if ckpt_epoch == 0 and isinstance(ckpt_d, Mapping):
+        try:
+            ckpt_epoch = int(ckpt_d.get("epoch", 0) or 0)
+        except Exception:
+            ckpt_epoch = 0
 
     eval_result: dict[str, object] = {
         "status": "evaluation_completed",
@@ -3113,8 +3126,35 @@ def _evaluate_common_horizon_subset_from_pt(
         eval_result, sub_out_dir
     )
     eval_json_path = output_dir / f"evaluation_common_subset_{split}.json"
-    save_json(eval_json_path, eval_result)
-    eval_result["evaluation_json"] = str(eval_json_path)
+    if promote_to_primary:
+        eval_result["promoted_common_subset_to_primary"] = True
+        if cms_sub_json_path is not None and isinstance(cms_report, Mapping):
+            primary_cms_json = (
+                exploratory_dir / f"common_mode_subtraction_{split}.json"
+            )
+            save_json(primary_cms_json, cms_report)
+            eval_result["exploratory_common_mode_subtraction_json"] = str(
+                primary_cms_json
+            )
+        print_word_evaluation_report(
+            eval_result,
+            verbose=verbose,
+            output_dir=output_dir,
+            print_to_stdout=False,
+        )
+        eval_result["exported_files"] = (
+            export_word_evaluation_tables_and_markdown(eval_result, output_dir)
+        )
+        if plot:
+            figs = plot_evaluation_figures(eval_result, output_dir / "figures")
+            eval_result["figures"].update(figs)
+        primary_eval_json = output_dir / f"evaluation_{split}.json"
+        eval_result["evaluation_json"] = str(primary_eval_json)
+        save_json(eval_json_path, eval_result)
+        save_json(primary_eval_json, eval_result)
+    else:
+        save_json(eval_json_path, eval_result)
+        eval_result["evaluation_json"] = str(eval_json_path)
     return eval_result
 
 
@@ -3153,6 +3193,78 @@ def _apply_eval_subdir_to_seed_dir(
             / resolved.name
         )
     return resolved / sub
+
+
+def _is_encoded_cache_compatible(
+    encoded_cache_pt: Path,
+    *,
+    control_spec: Mapping[str, object],
+    ckpt_file: Path | None,
+) -> bool:
+    """检查已有 subspace_encoded_cache_{split}.pt 是否与当前移位模式、移位集合、检查点及 mu0 要求一致。"""
+    if not encoded_cache_pt.is_file():
+        return False
+    try:
+        bundle = torch.load(
+            encoded_cache_pt, map_location="cpu", weights_only=False
+        )
+    except Exception:
+        return False
+    if not isinstance(bundle, Mapping):
+        return False
+
+    cached_ckpt_sha = str(bundle.get("checkpoint_sha256", "") or "").strip()
+    if ckpt_file is not None and ckpt_file.is_file() and cached_ckpt_sha:
+        try:
+            if cached_ckpt_sha != file_sha256(ckpt_file):
+                return False
+        except Exception:
+            return False
+
+    cached_shifts = [
+        round(float(x), 4) for x in (bundle.get("shift_seconds") or ())
+    ]
+    req_shifts = [
+        round(float(x), 4) for x in (control_spec.get("shift_seconds") or ())
+    ]
+    if cached_shifts != req_shifts:
+        return False
+
+    req_mode = str(control_spec.get("shift_mode", "circular")).strip().lower()
+    raw_cached_mode = bundle.get("shift_mode")
+    if req_mode == "circular":
+        if str(raw_cached_mode or "circular").strip().lower() != "circular":
+            return False
+    else:
+        if str(raw_cached_mode or "").strip().lower() != req_mode:
+            return False
+        cached_preroll = bundle.get("preroll_seconds")
+        req_preroll = float(control_spec.get("preroll_seconds", 45.0))
+        if (
+            cached_preroll is not None
+            and abs(float(cached_preroll) - req_preroll) >= 1e-4
+        ):
+            return False
+
+    cms_spec = control_spec.get("common_mode_subtraction") or {}
+    if bool(cms_spec.get("enabled", False)) and str(
+        cms_spec.get("mode", "loo")
+    ).strip().lower() in {"causal_ema", "pos_causal_ema"}:
+        if bundle.get("mu0_payload") is None:
+            has_ckpt_mu0 = False
+            if ckpt_file is not None and ckpt_file.is_file():
+                try:
+                    ckpt_probe = load_checkpoint(ckpt_file, map_location="cpu")
+                    has_ckpt_mu0 = (
+                        isinstance(ckpt_probe, Mapping)
+                        and ckpt_probe.get("causal_cms_mu0") is not None
+                    )
+                except Exception:
+                    has_ckpt_mu0 = False
+            if not has_ckpt_mu0:
+                return False
+
+    return True
 
 
 def _evaluate_single_stage(
@@ -3321,7 +3433,13 @@ def _evaluate_single_stage(
         and int(common_horizon_delay) > 0
         and stage in ("word", "context")
     ):
-        if not encoded_cache_pt.is_file():
+        has_isolated_eval_subdir = bool(_resolve_eval_subdir(eval_subdir))
+        resolved_ckpt_file = ckpt_file if ckpt_file.is_file() else None
+        if not _is_encoded_cache_compatible(
+            encoded_cache_pt,
+            control_spec=control_spec,
+            ckpt_file=resolved_ckpt_file,
+        ):
             _evaluate_single_stage(
                 dataset,
                 stage=stage,
@@ -3350,7 +3468,7 @@ def _evaluate_single_stage(
                 cms_ema_decay=cms_ema_decay,
                 zero_signal_control=zero_signal_control,
                 subtraction_etas=subtraction_etas,
-                plot=plot,
+                plot=(plot and not has_isolated_eval_subdir),
                 show_progress=show_progress,
                 max_eval_rows=max_eval_rows,
                 verbose=verbose,
@@ -3364,11 +3482,13 @@ def _evaluate_single_stage(
                 subset_spec=subset_spec,
                 control_spec=control_spec,
                 common_horizon_delay=int(common_horizon_delay),
-                ckpt_file=ckpt_file if ckpt_file.is_file() else None,
+                ckpt_file=resolved_ckpt_file,
                 output_dir=out,
                 split=split,
                 verbose=verbose,
                 print_report=print_report,
+                promote_to_primary=has_isolated_eval_subdir,
+                plot=(plot and has_isolated_eval_subdir),
             )
 
     if require_cache:
@@ -3787,6 +3907,8 @@ def _evaluate_single_stage(
             word_exp_tag=resolved_word_exp_tag,
             eval_ds=eval_ds,
             shifts=[sec for sec, _, _, _ in shifted_encoded_by_shift],
+            shift_mode=str(control_spec.get("shift_mode", "circular")),
+            preroll_seconds=float(control_spec.get("preroll_seconds", 45.0)),
             vocabulary=vocabulary,
             vocab50=vocab50,
             clean_encoded=encoded,
@@ -5910,17 +6032,26 @@ def _load_seed_exploratory_json(
     explicit_p = res.get(json_key)
     if explicit_p:
         candidates.append(Path(str(explicit_p)))
+    is_common_subset = (
+        res.get("common_horizon_delay") is not None
+        or str(res.get("evaluation_json", "")).endswith(
+            f"common_subset_{split}.json"
+        )
+    )
+    sub_infix = "_common_subset" if is_common_subset else ""
     out_d = res.get("output_dir")
     if out_d:
         candidates.append(
-            Path(str(out_d)) / "exploratory" / f"{filename_prefix}_{split}.json"
+            Path(str(out_d))
+            / "exploratory"
+            / f"{filename_prefix}{sub_infix}_{split}.json"
         )
     eval_j = res.get("evaluation_json")
     if eval_j:
         candidates.append(
             Path(str(eval_j)).parent
             / "exploratory"
-            / f"{filename_prefix}_{split}.json"
+            / f"{filename_prefix}{sub_infix}_{split}.json"
         )
     for cand in candidates:
         if cand.is_file():
@@ -7512,6 +7643,7 @@ def summarize_multi_seed_evaluation(
     control_method: str | Iterable[str] | None = None,
     control_metric: str | Iterable[str] | None = None,
     common_horizon_delay: int | None = None,
+    eval_subdir: str | None = None,
     **_extra_kwargs,
 ) -> dict:
     """将多个随机种子（或单种子 n=1）的评估结果汇总为 Multi-Seed Summary JSON 与报表并落盘。"""
@@ -7527,6 +7659,14 @@ def summarize_multi_seed_evaluation(
         else first.get("common_horizon_delay")
     )
     has_common_subset = eff_common_delay is not None
+    promote_primary = has_common_subset and (
+        bool(_resolve_eval_subdir(eval_subdir))
+        or all(
+            isinstance(r, Mapping)
+            and bool(r.get("promoted_common_subset_to_primary"))
+            for r in seed_results
+        )
+    )
     subset_tag_suffix = "_common_subset" if has_common_subset else ""
     is_multi_stage = (
         "stages" in first and isinstance(first.get("stages"), dict)
@@ -7590,6 +7730,8 @@ def summarize_multi_seed_evaluation(
         }
         if has_common_subset:
             summary["common_horizon_delay"] = int(eff_common_delay)
+        if promote_primary:
+            summary["promoted_common_subset_to_primary"] = True
         if save_files:
             target_dir.mkdir(parents=True, exist_ok=True)
             json_path = (
@@ -7605,9 +7747,21 @@ def summarize_multi_seed_evaluation(
             multi_exports = export_multi_seed_tables_and_markdown(
                 summary, export_dir
             )
-            summary["exports"] = multi_exports
-            save_json(json_path, summary)
-            summary["evaluation_json"] = str(json_path)
+            if promote_primary:
+                primary_exports = export_multi_seed_tables_and_markdown(
+                    summary, target_dir
+                )
+                primary_json_path = (
+                    target_dir / f"multi_seed_stage_comparison_{split}.json"
+                )
+                summary["exports"] = primary_exports
+                summary["evaluation_json"] = str(primary_json_path)
+                save_json(json_path, summary)
+                save_json(primary_json_path, summary)
+            else:
+                summary["exports"] = multi_exports
+                save_json(json_path, summary)
+                summary["evaluation_json"] = str(json_path)
             print_multi_seed_evaluation_report(
                 summary,
                 verbose=verbose,
@@ -7626,6 +7780,8 @@ def summarize_multi_seed_evaluation(
     )
     if has_common_subset:
         summary["common_horizon_delay"] = int(eff_common_delay)
+    if promote_primary:
+        summary["promoted_common_subset_to_primary"] = True
     target_dir = (
         Path(output_dir).resolve()
         if output_dir is not None
@@ -7646,9 +7802,21 @@ def summarize_multi_seed_evaluation(
         multi_exports = export_multi_seed_tables_and_markdown(
             summary, export_dir
         )
-        summary["exports"] = multi_exports
-        save_json(json_path, summary)
-        summary["evaluation_json"] = str(json_path)
+        if promote_primary:
+            primary_exports = export_multi_seed_tables_and_markdown(
+                summary, target_dir
+            )
+            primary_json_path = (
+                target_dir / f"multi_seed_evaluation_{split}.json"
+            )
+            summary["exports"] = primary_exports
+            summary["evaluation_json"] = str(primary_json_path)
+            save_json(json_path, summary)
+            save_json(primary_json_path, summary)
+        else:
+            summary["exports"] = multi_exports
+            save_json(json_path, summary)
+            summary["evaluation_json"] = str(json_path)
         print_multi_seed_evaluation_report(
             summary,
             verbose=verbose,
@@ -7772,6 +7940,7 @@ def run_evaluation_workflow(
             control_method=control_method,
             control_metric=control_metric,
             common_horizon_delay=common_horizon_delay,
+            eval_subdir=eval_subdir,
         )
 
     seed = int(seed_list[0])
@@ -7932,6 +8101,7 @@ def run_evaluation_workflow(
                 control_method=control_method,
                 control_metric=control_metric,
                 common_horizon_delay=common_horizon_delay,
+                eval_subdir=eval_subdir,
             )
             single_res["outer_multi_seed_evaluation_json"] = str(
                 outer_summary.get("evaluation_json", "")
