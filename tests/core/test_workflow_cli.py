@@ -160,6 +160,8 @@ def test_colab_notebooks_follow_streaming_and_symlink_rules():
         PROJECT_ROOT / "scripts" / "colab" / "colab_cpu_cache.ipynb",
         PROJECT_ROOT / "scripts" / "colab" / "colab_gpu_train.ipynb",
         PROJECT_ROOT / "scripts" / "colab" / "colab_gpu_evaluation.ipynb",
+        PROJECT_ROOT / "scripts" / "colab" / "colab_gpu_train_broderick.ipynb",
+        PROJECT_ROOT / "scripts" / "colab" / "colab_gpu_evaluation_broderick.ipynb",
     ]
     for nb_path in notebooks:
         assert nb_path.is_file(), f"缺少 Notebook: {nb_path}"

@@ -21,6 +21,7 @@ BRODERICK_TRAINING_CONFIGS = (
     "configs/training/broderick2018_rolling_revision.yaml",
     "configs/training/broderick2018_prefix_revision.yaml",
     "configs/training/siamese_debiased/broderick2018_causal_null_space_prefix_revision.yaml",
+    "configs/training/siamese_debiased/broderick2018_amortized_timing_prefix_revision.yaml",
     "configs/training/siamese_debiased/broderick2018_siamese_debiased_context.yaml",
     "configs/training/siamese_debiased/broderick2018_siamese_debiased_prefix_revision.yaml",
 )
@@ -41,6 +42,10 @@ def test_broderick_training_configs_resolve_all_n19_and_preroll_policy(config_re
         assert float(sd["preroll_seconds"]) == 45.0
         assert [float(v) for v in sd["shift_seconds"]] == [-12.0, -19.0, -27.0, -36.0]
         assert int(sd["shifts_per_step"]) == 2
+    if "amortized_timing" in config_rel:
+        assert cfg["workflow"]["stage"] == "prefix_revision"
+        assert cfg["siamese_debiased"]["debias_mode"] == "amortized_timing"
+        assert cfg["model"]["temporal_bias_head"]["enabled"] is True
 
 
 def test_exp_tag_and_word_exp_tag_precedence_cli_over_env_over_yaml(monkeypatch):
@@ -273,3 +278,77 @@ def test_colab_broderick_and_cpu_cache_notebooks_valid_json_and_python_syntax() 
         "STAGE_RAW_TO_LOCAL_SSD",
     ):
         assert token in cache_text
+    cache_code = "\n".join(
+        "".join(cell.get("source", []))
+        for cell in json.loads(cache_text).get("cells", [])
+        if cell.get("cell_type") == "code"
+    )
+    assert "dataset_manifest.json" not in cache_code
+    assert 'ds_derived / "manifest.json"' in cache_code
+
+
+def test_colab_broderick_gpu_train_and_evaluation_notebooks_contract() -> None:
+    import ast
+    import json
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    train_nb = repo_root / "scripts/colab/colab_gpu_train_broderick.ipynb"
+    eval_nb = repo_root / "scripts/colab/colab_gpu_evaluation_broderick.ipynb"
+
+    shared_tokens = (
+        "Broderick-EEG",
+        "broderick2018",
+        "features_broderick2018.tar",
+        "/content/studies_links",
+        "/content/local_cache",
+        "/content/proj-venv",
+        "--require-cache",
+        "causal_common_mode_subtraction_control.yaml",
+        "broderick2018_word_encoder.yaml",
+        "broderick2018_context_transformer.yaml",
+        "broderick2018_siamese_debiased_context.yaml",
+        "broderick2018_causal_null_space_prefix_revision.yaml",
+    )
+
+    for nb_path in (train_nb, eval_nb):
+        assert nb_path.is_file(), f"Missing notebook: {nb_path}"
+        raw_text = nb_path.read_text(encoding="utf-8")
+        payload = json.loads(raw_text)
+        assert payload["nbformat"] == 4
+        assert len(payload["cells"]) >= 6
+
+        code_parts: list[str] = []
+        for cell in payload["cells"]:
+            if cell["cell_type"] == "code":
+                src = "".join(cell.get("source", []))
+                ast.parse(src)
+                assert "subprocess.run(" not in src
+                assert not any(line.lstrip().startswith("!") for line in src.splitlines())
+                code_parts.append(src)
+        code_text = "\n".join(code_parts)
+        for token in shared_tokens:
+            assert token in code_text, f"{nb_path.name} missing token: {token}"
+
+    train_code = "\n".join(
+        "".join(c.get("source", []))
+        for c in json.loads(train_nb.read_text(encoding="utf-8"))["cells"]
+        if c["cell_type"] == "code"
+    )
+    assert "broderick2018_amortized_timing_prefix_revision.yaml" in train_code
+    assert "AUTO_TRAIN_MISSING_STAGE1" in train_code
+
+    eval_code = "\n".join(
+        "".join(c.get("source", []))
+        for c in json.loads(eval_nb.read_text(encoding="utf-8"))["cells"]
+        if c["cell_type"] == "code"
+    )
+    for token in (
+        "resolve_and_export_cross_model_comparison",
+        "upgrade_and_refresh_saved_multi_seed_reports",
+        "common_mode_subtraction_evaluation",
+    ):
+        assert token in eval_code
+    assert "decode-sentences" not in eval_code
+    assert "Qwen3-8B" not in eval_code
+

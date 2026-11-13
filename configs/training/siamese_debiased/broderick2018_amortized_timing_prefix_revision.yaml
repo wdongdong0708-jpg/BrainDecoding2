@@ -1,0 +1,52 @@
+# Broderick2018 英语 EEG 阶段 2.3（全历史因果前缀滚动修订 [1..i, i+r]）：档位 B（档位 A 零空间正则 + TemporalGeometryBiasHead 逐视野时序几何自校准）
+# 启动命令：
+#   python -u -m braindecoding train --config configs/training/siamese_debiased/broderick2018_amortized_timing_prefix_revision.yaml --require-cache --resume auto
+extends: ../broderick2018_prefix_revision.yaml
+
+workflow:
+  dataset: broderick2018
+  stage: prefix_revision
+  subject: all
+  precision: bf16-mixed
+  window_seconds: 1.0
+  window_start_offset_seconds: 0.0
+
+model:
+  temporal_bias_head:
+    enabled: true
+    eta: 0.4
+    hidden_dimension: 256
+    window_seconds: 1.0
+
+training:
+  epochs: 30
+  batch_size: 128
+  eval_batch_size: 512
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  patience: 6
+  early_stop_metric: full_vocab
+  freeze_brain_encoder_epochs: 30
+  preserve_complete_groups: true
+  revision_cutoff_policy: all
+
+siamese_debiased:
+  enabled: true
+  debias_mode: amortized_timing
+  shift_mode: preroll
+  preroll_seconds: 45.0
+  eta_0: 0.4
+  eta_train: 0.4
+  eta_delta: 0.0
+  lambda_null: 10.0
+  lambda_delta: 0.45
+  lambda_distill: 0.5
+  beta_delta_cm: 0.0
+  temporal_bias_hidden_dim: 256
+  # 与评测脚本固定的 [-10, -20, -30, -40]s 负控制步长错开，且严格落在 45.0s Pre-Roll 安全边界内
+  shift_seconds: [-12.0, -19.0, -27.0, -36.0]
+  shifts_per_step: 2
+  s3_cms_eta: 0.0
+  synchronize_dropout_rng: true
+  preextract_frozen_cnn: true
+  cache_preextracted_to_disk: true
