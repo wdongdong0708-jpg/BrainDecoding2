@@ -1703,44 +1703,114 @@ def run_cache_workflow(
                     force=force,
                 )
         elif ds_name == "broderick2018":
-            if force or not event_path.is_file():
+            is_full_canonical = tuple(selected_subjects) == tuple(broderick2018.SUBJECTS)
+            cache_manifest_dir = event_path.parent / "manifests"
+            if is_full_canonical and include_test and config_path is None:
                 from braindecoding.data.dataset_builder import build_dataset
 
-                build_dataset("broderick2018", events=True, force=force)
-            cache_manifest_dir = event_path.parent / "manifests"
-            if force or not (cache_manifest_dir / "vocabulary_N50.json").is_file():
-                broderick2018.write_protocol_assets(event_path, cache_manifest_dir)
-            frames = [
-                broderick2018.load_event_table(
-                    event_path,
-                    split=sp,
-                    subjects=selected_subjects,
-                    trainable_only=True,
+                build_dataset(
+                    "broderick2018",
+                    events=True,
+                    signals=True,
+                    text=True,
+                    force=force,
                 )
-                for sp in splits
-            ]
-            subset_table = broderick2018.pd.concat(frames, ignore_index=True)
-            all_trainable = broderick2018.load_event_table(
-                event_path, trainable_only=True
-            )
-            text_words = (
-                all_trainable["标准词"]
-                if len(all_trainable) > 0
-                else subset_table["标准词"]
-            )
-            if force and Path(cfg["cache"]["text_embeddings"]).is_file():
-                Path(cfg["cache"]["text_embeddings"]).unlink(missing_ok=True)
-            text_data.ensure_text_embedding_cache(
-                text_words,
-                cfg["text_embedding"],
-                cfg["cache"]["text_embeddings"],
-            )
-            broderick2018.ensure_recording_signals(
-                subset_table,
-                cfg["dataset"],
-                cfg["cache"]["eeg_dir"],
-                force=force,
-            )
+                if force or not (cache_manifest_dir / "vocabulary_N50.json").is_file():
+                    broderick2018.write_protocol_assets(event_path, cache_manifest_dir)
+            else:
+                if force or not event_path.is_file():
+                    if is_full_canonical and config_path is None:
+                        from braindecoding.data.dataset_builder import build_dataset
+
+                        build_dataset("broderick2018", events=True, force=force)
+                    else:
+                        from braindecoding.data.derived_cache import write_event_product
+                        from braindecoding.experiment import PROJECT_ROOT
+
+                        subset_ds_cfg = dict(cfg["dataset"])
+                        subset_ds_cfg["subjects"] = list(selected_subjects)
+                        table, audit = broderick2018.build_event_table(subset_ds_cfg)
+                        split_manifest = Path(
+                            subset_ds_cfg.get("split_manifest")
+                            or subset_ds_cfg.get("run_split_path")
+                            or PROJECT_ROOT / "data/manifests/broderick2018/run_split.json"
+                        )
+                        write_event_product(
+                            table,
+                            event_path,
+                            manifest_kwargs={
+                                "dataset": "broderick2018",
+                                "project_root": PROJECT_ROOT,
+                                "source_raw_roots": [
+                                    str(
+                                        subset_ds_cfg.get("root")
+                                        or subset_ds_cfg.get("raw_root")
+                                        or ""
+                                    )
+                                ],
+                                "artifact_dependencies": [],
+                                "context_definition": {
+                                    "grouping": subset_ds_cfg.get("context_grouping"),
+                                    "maximum_words": subset_ds_cfg.get(
+                                        "max_context_words"
+                                    ),
+                                    "semantic_context": subset_ds_cfg.get(
+                                        "semantic_context"
+                                    ),
+                                    "identifier": "broderick2018|run-YY|sequence-ZZZ",
+                                },
+                                "window_contract": broderick2018.word_window_contract(
+                                    subset_ds_cfg
+                                ),
+                                "source_contract": {
+                                    "dataset_config": subset_ds_cfg,
+                                    "artifact_dependencies": [],
+                                },
+                                "audit": audit,
+                                "additional_fields": {
+                                    "allow_subject_subset": True,
+                                    "subject_subset": list(selected_subjects),
+                                    "split_manifest_sha256": sha256_file(split_manifest),
+                                },
+                                "builder_sources": [
+                                    Path(__file__),
+                                    Path(broderick2018.__file__),
+                                ],
+                            },
+                        )
+                if force or not (cache_manifest_dir / "vocabulary_N50.json").is_file():
+                    broderick2018.write_protocol_assets(event_path, cache_manifest_dir)
+                frames = [
+                    broderick2018.load_event_table(
+                        event_path,
+                        split=sp,
+                        subjects=selected_subjects,
+                        trainable_only=True,
+                    )
+                    for sp in splits
+                ]
+                subset_table = broderick2018.pd.concat(frames, ignore_index=True)
+                all_trainable = broderick2018.load_event_table(
+                    event_path, trainable_only=True
+                )
+                text_words = (
+                    broderick2018.material_word_view(all_trainable)["标准词"]
+                    if len(all_trainable) > 0
+                    else broderick2018.material_word_view(subset_table)["标准词"]
+                )
+                if force and Path(cfg["cache"]["text_embeddings"]).is_file():
+                    Path(cfg["cache"]["text_embeddings"]).unlink(missing_ok=True)
+                text_data.ensure_text_embedding_cache(
+                    text_words,
+                    cfg["text_embedding"],
+                    cfg["cache"]["text_embeddings"],
+                )
+                broderick2018.ensure_recording_signals(
+                    subset_table,
+                    cfg["dataset"],
+                    cfg["cache"]["eeg_dir"],
+                    force=force,
+                )
 
         verified = verify_cache_ready(cfg, splits=splits)
         cache_out_dir = (

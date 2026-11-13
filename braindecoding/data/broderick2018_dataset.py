@@ -1214,7 +1214,12 @@ def build_signal_manifest(
 ) -> Path:
     """扫描已物化 EEG 信号并原子写入 signals/manifest.json。"""
     cache_path = Path(cache_dir)
-    target = Path(manifest_path) if manifest_path is not None else cache_path / "manifest.json"
+    if manifest_path is not None:
+        target = Path(manifest_path)
+    elif cache_path.name == "eeg_50hz":
+        target = cache_path.parent / "manifest.json"
+    else:
+        target = cache_path / "manifest.json"
     contract = signal_preprocessing_contract(dataset_config)
     records = []
     dedup = (
@@ -1371,7 +1376,8 @@ def build_text_product(
             raise ValueError("Broderick2018 text product 事件表合同已变化。")
         return manifest_path
 
-    words = text_data.prepared_words(event_table["标准词"], config)
+    material_table = material_word_view(event_table)
+    words = text_data.prepared_words(material_table["标准词"], config)
     tokenizer, model, device = text_data.load_text_model(config)
     fixture_words = list(ENGLISH_REFERENCE_TOKENS)
     direct = _reference_t5_embeddings(fixture_words, config, tokenizer, model, device)
