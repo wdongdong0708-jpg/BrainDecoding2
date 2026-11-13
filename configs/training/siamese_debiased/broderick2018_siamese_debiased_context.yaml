@@ -1,0 +1,35 @@
+# Broderick2018 英语 EEG 阶段 2.1：全局上下文 Transformer 孪生共模抵消 + 错位零化正则 + Pre-Roll 移位隔离 + 冻结 CNN 预提取训练配置
+# 启动命令：
+#   python -u -m braindecoding train --config configs/training/siamese_debiased/broderick2018_siamese_debiased_context.yaml --require-cache --resume auto
+extends: ../broderick2018_context_transformer.yaml
+
+workflow:
+  dataset: broderick2018
+  stage: context
+  subject: all
+  precision: bf16-mixed
+  window_seconds: 1.0
+  window_start_offset_seconds: 0.0
+
+training:
+  epochs: 30
+  batch_size: 128
+  eval_batch_size: 512
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  patience: 6
+  freeze_brain_encoder_epochs: 30
+
+siamese_debiased:
+  enabled: true
+  shift_mode: preroll
+  preroll_seconds: 45.0
+  eta_0: 0.50
+  eta_train: 0.50
+  lambda_null: 10.0
+  # 与评测负对照 [-10, -20, -30, -40]s 错开，且严格落在 45.0s Pre-Roll 安全边界内
+  shift_seconds: [-12.0, -19.0, -27.0, -36.0]
+  shifts_per_step: 2
+  synchronize_dropout_rng: true
+  preextract_frozen_cnn: true
+  cache_preextracted_to_disk: true

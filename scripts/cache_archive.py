@@ -29,6 +29,9 @@ MODALITY_TO_DATASET = {
     "meg": "pallier2025",
     "pallier": "pallier2025",
     "pallier2025": "pallier2025",
+    "broderick": "broderick2018",
+    "broderick2018": "broderick2018",
+    "eeg_en": "broderick2018",
     "all": "all",
 }
 
@@ -53,6 +56,8 @@ def resolve_archive_path(
         return Path(archive).resolve()
     base_dir = Path(archive_dir) if archive_dir else Path("archives")
     clean_mod = str(modality or "eeg").strip().lower()
+    if clean_mod in {"broderick", "broderick2018", "eeg_en"}:
+        return (base_dir / "features_broderick2018.tar").resolve()
     return (base_dir / f"features_{clean_mod}.tar").resolve()
 
 
@@ -410,7 +415,7 @@ def build_parser() -> argparse.ArgumentParser:
     pack_p.add_argument(
         "--modality",
         default="eeg",
-        help="模态或数据集标识（eeg / meg / chineseeeg2_littleprince / pallier2025 / all）",
+        help="模态或数据集标识（eeg / meg / broderick2018 / chineseeeg2_littleprince / pallier2025 / all）",
     )
 
     unpack_p = subparsers.add_parser(
@@ -434,7 +439,7 @@ def build_parser() -> argparse.ArgumentParser:
     unpack_p.add_argument(
         "--modality",
         default="eeg",
-        help="模态或数据集标识（eeg / meg / chineseeeg2_littleprince / pallier2025 / all）",
+        help="模态或数据集标识（eeg / meg / broderick2018 / chineseeeg2_littleprince / pallier2025 / all）",
     )
     unpack_p.add_argument(
         "--skip-existing",

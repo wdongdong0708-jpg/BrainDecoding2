@@ -3162,7 +3162,10 @@ def export_sequence_decoding_tables_and_markdown(
     split = str(report.get("split", "test"))
     dataset = str(report.get("dataset", "-"))
     language = str(
-        report.get("language", "fr" if dataset == "pallier2025" else "zh")
+        report.get(
+            "language",
+            {"pallier2025": "fr", "broderick2018": "en"}.get(dataset, "zh"),
+        )
     )
     conditions = report.get("conditions") or {}
     sig_map = (
@@ -3224,6 +3227,11 @@ def export_sequence_decoding_tables_and_markdown(
                 full_v_sz = int(entry.get("vocabulary_size") or 0)
                 if full_v_sz > 0:
                     break
+    _default_full_v = (
+        2645
+        if dataset == "broderick2018"
+        else (2020 if dataset == "pallier2025" else 2180)
+    )
     if full_v_sz <= 0:
         full_v_sz = int(
             max(
@@ -3232,11 +3240,11 @@ def export_sequence_decoding_tables_and_markdown(
                     for k in list(vocab_scaling.keys()) + list(core_benchmarks.keys())
                     if str(k).lstrip("vV=_").isdigit()
                 ),
-                default=2020 if dataset == "pallier2025" else 2180,
+                default=_default_full_v,
             )
         )
         if full_v_sz <= 250 and not full_vocab_subsets_blk:
-            full_v_sz = 2020 if dataset == "pallier2025" else 2180
+            full_v_sz = _default_full_v
     full_v_key = f"V={full_v_sz}"
 
     if full_v_key not in core_benchmarks:

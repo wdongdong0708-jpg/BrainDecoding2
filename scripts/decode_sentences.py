@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--dataset",
-        choices=("pallier2025", "chineseeeg2_littleprince"),
+        choices=("pallier2025", "chineseeeg2_littleprince", "broderick2018"),
         default="pallier2025",
         help="目标数据集（默认：pallier2025）",
     )
@@ -463,9 +463,17 @@ def _load_or_init_language_scorer(
     )
     precision = str(lm_cfg.get("precision") or lm_cfg.get("dtype") or "bf16-mixed")
     local_files_only = bool(lm_cfg.get("local_files_only", False))
-    language = "fr" if dataset == "pallier2025" else "zh"
+    language = {"pallier2025": "fr", "broderick2018": "en"}.get(dataset, "zh")
     prompts = dict(lm_cfg.get("prompts") or PROMPTS)
-    prompt_body = str(prompts.get(language, PROMPTS[language])).strip()
+    prompt_body = str(
+        prompts.get(
+            language,
+            PROMPTS.get(
+                language,
+                "Write a paragraph of narrative prose in English. Provide only the text, without a title or list.",
+            ),
+        )
+    ).strip()
 
     model, tokenizer = load_causal_language_model(
         model_name,
@@ -2086,7 +2094,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 "dataset": args.dataset,
                 "split": args.split,
                 "seed": int(args.seed),
-                "language": "fr" if args.dataset == "pallier2025" else "zh",
+                "language": {"pallier2025": "fr", "broderick2018": "en"}.get(
+                    args.dataset, "zh"
+                ),
                 "checkpoint_provenance": ckpt_prov,
                 "f_condition_mode": f_mode,
                 "state_hyperparameters": target_states_hp,
@@ -2354,7 +2364,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         )
 
         if args.step == "all" and "decoded_bundles" in locals():
-            language = "fr" if args.dataset == "pallier2025" else "zh"
+            language = {"pallier2025": "fr", "broderick2018": "en"}.get(
+                args.dataset, "zh"
+            )
             decoded_bundles_map = dict(decoded_bundles)
             decoded_bundles_map.pop("F_local", None)
             multi_subject_bundles_map = dict(multi_subject_bundles)
@@ -2365,7 +2377,10 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             bundle = json.loads(decoding_path.read_text(encoding="utf-8"))
             language = str(
                 bundle.get(
-                    "language", "fr" if args.dataset == "pallier2025" else "zh"
+                    "language",
+                    {"pallier2025": "fr", "broderick2018": "en"}.get(
+                        args.dataset, "zh"
+                    ),
                 )
             )
             bundle_prov = dict(bundle.get("checkpoint_provenance") or {})

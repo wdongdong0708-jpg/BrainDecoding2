@@ -641,3 +641,199 @@ def test_same_recording_split_guard_truncates_at_train_end_and_refuses_overflow(
             preroll_source_table=pure_train_only,
             allow_subject_subset=True,
         )
+
+
+def _write_broderick_signal_fixture(
+    cache_dir: Path,
+    *,
+    subject: str,
+    run: str,
+    array: np.ndarray,
+) -> tuple[Path, Path]:
+    from braindecoding.data import broderick2018_dataset as broderick_mod
+
+    out_path, sidecar_path = broderick_mod._signal_product_paths(cache_dir, subject, run)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    arr_f32 = np.asarray(array, dtype=np.float32)
+    np.save(out_path, arr_f32, allow_pickle=False)
+    rec_id = f"broderick2018|{subject}|{run}"
+    sidecar = {
+        "schema_version": 1,
+        "dataset": "broderick2018",
+        "recording_id": rec_id,
+        "subject": subject,
+        "run": run,
+        "recording_signal_status": "valid",
+        "event_training_status": "eligible_by_signal_contract",
+        "source_first_samp": 0,
+        "source_sampling_rate_hz": 128.0,
+        "output_first_samp": 0,
+        "output_sampling_rate_hz": 50.0,
+        "output_sample_count": int(arr_f32.shape[1]),
+        "channel_count": broderick_mod.EEG_CHANNEL_COUNT,
+        "channel_names": list(broderick_mod.BIOSEMI128_CHANNEL_NAMES),
+        "channel_names_sha256": broderick_mod.CHANNEL_NAMES_SHA256,
+        "mastoid_rereference": False,
+        "bad_channels": [],
+        "shape": list(arr_f32.shape),
+        "dtype": "float32",
+        "output_sha256": sha256_file(out_path),
+        "preprocessing_contract_sha256": "synthetic_broderick_contract",
+    }
+    sidecar_path.write_text(json.dumps(sidecar, ensure_ascii=False), encoding="utf-8")
+    return out_path, sidecar_path
+
+
+def _make_broderick_rows(
+    *,
+    subject: str,
+    run: str,
+    split: str,
+    onsets: list[float],
+    words: list[str],
+) -> pd.DataFrame:
+    rec_id = f"broderick2018|{subject}|{run}"
+    return pd.DataFrame(
+        {
+            "事件编号": [f"{rec_id}:{i}" for i in range(len(onsets))],
+            "受试者": [subject] * len(onsets),
+            "记录编号": [rec_id] * len(onsets),
+            "材料编号": [f"{run}:s0" for _ in onsets],
+            "划分单元": [run] * len(onsets),
+            "记录内序号": list(range(len(onsets))),
+            "词": list(words),
+            "标准词": list(words),
+            "开始时间": [float(t) for t in onsets],
+            "结束时间": [float(t) + 0.3 for t in onsets],
+            "上下文编号": ["c0"] * len(onsets),
+            "数据划分": [split] * len(onsets),
+            "是否可训练": [True] * len(onsets),
+            "排除原因": [""] * len(onsets),
+            "运行编号": [run] * len(onsets),
+        }
+    )
+
+
+def test_broderick_preroll_causal_shift_isolation_and_anti_wrap_guard(
+    tmp_path: Path, monkeypatch
+):
+    """验证 Broderick2018 45s Pre-Roll 严格使用只读 train 尾拼接、绝不未来泄漏，且训练/评测步长互不相交。"""
+    from braindecoding.config import load_yaml_with_extends
+    from braindecoding.data import broderick2018_dataset as broderick_mod
+
+    monkeypatch.setenv("BRAINDATA_ROOT", str(tmp_path / "braindata"))
+
+    ch = broderick_mod.EEG_CHANNEL_COUNT
+    eeg_cache = tmp_path / "broderick_eeg_50hz"
+    emb_path, text_cfg = _write_pallier_text_cache(tmp_path, ["the", "sea"])
+
+    # 3 段 50Hz 信号：run-02/run-03 为 train（共 3000 点 = 60s），run-06 为 test（60s）
+    sig_t1 = np.full((ch, 1500), 1.0, dtype=np.float32)
+    sig_t2 = np.full((ch, 1500), 3.0, dtype=np.float32)
+    sig_te = np.full((ch, 3000), -50.0, dtype=np.float32)
+    sig_te[:, :100] = 7.0
+    sig_te[:, 100:] = 999.0  # 测试未来段即使被大幅篡改也不得泄漏到 t=1s 的 [-10..-40]s 移位
+
+    _write_broderick_signal_fixture(eeg_cache, subject="sub-01", run="run-02", array=sig_t1)
+    _write_broderick_signal_fixture(eeg_cache, subject="sub-01", run="run-03", array=sig_t2)
+    _write_broderick_signal_fixture(eeg_cache, subject="sub-01", run="run-06", array=sig_te)
+
+    tr_1 = _make_broderick_rows(subject="sub-01", run="run-02", split="train", onsets=[1.0, 2.0], words=["the", "sea"])
+    tr_2 = _make_broderick_rows(subject="sub-01", run="run-03", split="train", onsets=[1.0, 2.0], words=["the", "sea"])
+    te_rows = _make_broderick_rows(subject="sub-01", run="run-06", split="test", onsets=[0.2, 5.0], words=["the", "sea"])
+    full_table = pd.concat([tr_1, tr_2, te_rows], ignore_index=True)
+
+    ds_cfg = {
+        "subjects": ["sub-01"],
+        "window_seconds": 1.0,
+        "window_start_offset_seconds": 0.0,
+        "baseline_seconds": 0.0,
+        "clamp": 1e6,
+    }
+
+    with pytest.raises(ValueError, match="仅允许严格过去移位"):
+        _ = broderick_mod.Broderick2018WordDataset(
+            te_rows,
+            ds_cfg,
+            eeg_cache,
+            emb_path,
+            text_cfg,
+            temporal_shift_seconds=10.0,
+            shift_mode="preroll",
+            preroll_seconds=45.0,
+            preroll_source_table=full_table,
+            allow_subject_subset=True,
+        )
+
+    # 验证训练移位池 [-12,-19,-27,-36] 与评测负对照移位池 [-10,-20,-30,-40] 严格错开
+    train_ctrl = load_yaml_with_extends(
+        "configs/training/siamese_debiased/broderick2018_causal_null_space_prefix_revision.yaml"
+    )
+    eval_ctrl = load_yaml_with_extends(
+        "configs/controls/common_mode_subtraction/causal_common_mode_subtraction_control.yaml"
+    )
+    train_shifts = {float(x) for x in train_ctrl["siamese_debiased"]["shift_seconds"]}
+    eval_shifts = {float(x) for x in eval_ctrl["control"]["shift_seconds"]}
+    assert train_shifts == {-12.0, -19.0, -27.0, -36.0}
+    assert eval_shifts == {-10.0, -20.0, -30.0, -40.0}
+    assert train_shifts.isdisjoint(eval_shifts)
+
+    before_vals = {}
+    for sh in (-10.0, -20.0, -30.0, -40.0):
+        ds_te = broderick_mod.Broderick2018WordDataset(
+            te_rows,
+            ds_cfg,
+            eeg_cache,
+            emb_path,
+            text_cfg,
+            temporal_shift_seconds=sh,
+            shift_mode="preroll",
+            preroll_seconds=45.0,
+            preroll_source_table=full_table,
+            allow_subject_subset=True,
+        )
+        # 检查只读性与 45s 尾拼接缓冲防自环绕
+        assert not ds_te._preroll_by_recording["broderick2018|sub-01|run-06"].flags.writeable
+        before_vals[sh] = ds_te.read_eeg(0).copy()
+
+    # 篡改 test 未来部分 [100:] 并重测，t=0.2s 在任何负移位下不得有任何变化
+    eeg_cache_mut = tmp_path / "broderick_eeg_50hz_mut"
+    sig_te_mut = sig_te.copy()
+    sig_te_mut[:, 100:] = -7777.0
+    _write_broderick_signal_fixture(eeg_cache_mut, subject="sub-01", run="run-02", array=sig_t1)
+    _write_broderick_signal_fixture(eeg_cache_mut, subject="sub-01", run="run-03", array=sig_t2)
+    _write_broderick_signal_fixture(eeg_cache_mut, subject="sub-01", run="run-06", array=sig_te_mut)
+
+    for sh in (-10.0, -20.0, -30.0, -40.0):
+        ds_te_mut = broderick_mod.Broderick2018WordDataset(
+            te_rows,
+            ds_cfg,
+            eeg_cache_mut,
+            emb_path,
+            text_cfg,
+            temporal_shift_seconds=sh,
+            shift_mode="preroll",
+            preroll_seconds=45.0,
+            preroll_source_table=full_table,
+            allow_subject_subset=True,
+        )
+        assert float(np.max(np.abs(ds_te_mut.read_eeg(0) - before_vals[sh]))) == 0.0
+
+    # train 自身最末一条 run-03 必须切换至 alt_cache (run-02 = 1.0)，绝不环绕自身 3.0
+    train_both = pd.concat([tr_1, tr_2], ignore_index=True)
+    ds_tr = broderick_mod.Broderick2018WordDataset(
+        train_both,
+        ds_cfg,
+        eeg_cache,
+        emb_path,
+        text_cfg,
+        temporal_shift_seconds=-12.0,
+        shift_mode="preroll",
+        preroll_seconds=20.0,
+        preroll_source_table=train_both,
+        allow_subject_subset=True,
+    )
+    # tr_2 第 0 词 onset=1.0s，shift=-12.0s -> 落入 run-02 alt_cache 尾部（全 1.0）而非 run-03（全 3.0）
+    idx_run3_first = 2
+    np.testing.assert_allclose(ds_tr.read_eeg(idx_run3_first), 1.0, atol=0.0, rtol=0.0)
+

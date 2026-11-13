@@ -156,6 +156,7 @@ def resolve_experiment_config(config, output_root=None):
     resolved.setdefault("training", {})["output_dir"] = output_dir
     dataset_name = experiment_identity(resolved)["dataset"]
     if dataset_name in {
+        "broderick2018",
         "chineseeeg2_littleprince",
         "smn4lang",
         "libribrain100",
@@ -166,6 +167,7 @@ def resolve_experiment_config(config, output_root=None):
 
         resolved.setdefault("cache", {}).update(canonical_cache_paths(dataset_name))
         if dataset_name in {
+            "broderick2018",
             "chineseeeg2_littleprince",
             "smn4lang",
             "pallier2025",

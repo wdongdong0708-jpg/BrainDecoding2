@@ -1822,6 +1822,11 @@ def format_sequence_decoding_report(
                 full_v_sz = int(entry.get("vocabulary_size") or 0)
                 if full_v_sz > 0:
                     break
+    _default_full_v = (
+        2645
+        if dataset == "broderick2018"
+        else (2020 if dataset == "pallier2025" else 2180)
+    )
     if full_v_sz <= 0:
         full_v_sz = int(
             max(
@@ -1830,11 +1835,11 @@ def format_sequence_decoding_report(
                     for k in list(vocab_scaling.keys()) + list(core_benchmarks.keys())
                     if str(k).lstrip("vV=_").isdigit()
                 ),
-                default=2020 if dataset == "pallier2025" else 2180,
+                default=_default_full_v,
             )
         )
         if full_v_sz <= 250 and not full_core:
-            full_v_sz = 2020 if dataset == "pallier2025" else 2180
+            full_v_sz = _default_full_v
     full_v_key = f"V={full_v_sz}"
 
     if full_v_key not in core_benchmarks:
@@ -2977,7 +2982,11 @@ def upgrade_and_refresh_saved_multi_seed_reports(
                     raw_bundle = json.loads(raw_decode_path.read_text(encoding="utf-8"))
                     if isinstance(raw_bundle, Mapping):
                         ds_name = str(raw_bundle.get("dataset") or prev_sum.get("dataset") or "pallier2025")
-                        lang_name = str(raw_bundle.get("language") or prev_sum.get("language") or ("fr" if ds_name == "pallier2025" else "zh"))
+                        lang_name = str(
+                            raw_bundle.get("language")
+                            or prev_sum.get("language")
+                            or {"pallier2025": "fr", "broderick2018": "en"}.get(ds_name, "zh")
+                        )
                         decoded_map = dict(raw_bundle.get("decoded_bundles") or raw_bundle.get("conditions") or {})
                         decoded_map.pop("F_local", None)
                         raw_prov = dict(raw_bundle.get("checkpoint_provenance") or prev_sum.get("checkpoint_provenance") or {})

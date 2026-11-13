@@ -137,6 +137,10 @@ def _task_modules(dataset: str):
         from braindecoding.tasks.word_decoding.pallier2025 import evaluate, train
 
         return train, evaluate
+    if dataset == "broderick2018":
+        from braindecoding.tasks.word_decoding.broderick2018 import evaluate, train
+
+        return train, evaluate
     raise ValueError(f"当前 CLI 不支持数据集：{dataset}")
 
 
@@ -467,7 +471,7 @@ def _add_training_workflow_args(
     )
     parser.add_argument(
         "--dataset",
-        choices=("chineseeeg2_littleprince", "pallier2025"),
+        choices=("chineseeeg2_littleprince", "pallier2025", "broderick2018"),
         default=None,
         help="目标数据集（指定 --config 时自动从 YAML 读取；未指定时默认 chineseeeg2_littleprince）",
     )
@@ -700,7 +704,7 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--dataset",
-        choices=("chineseeeg2_littleprince", "pallier2025"),
+        choices=("chineseeeg2_littleprince", "pallier2025", "broderick2018"),
         default=None,
         help="目标数据集（指定 --config 时自动从 YAML 读取；未指定时默认 chineseeeg2_littleprince）",
     )
@@ -1084,7 +1088,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cache_cmd.add_argument(
         "--dataset",
-        choices=("chineseeeg2_littleprince", "pallier2025", "all"),
+        choices=("chineseeeg2_littleprince", "pallier2025", "broderick2018", "all"),
         default=None,
         help="要预热缓存的数据集（未传 --config 时默认 chineseeeg2_littleprince，支持 all）",
     )
@@ -1145,7 +1149,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     decode_cmd.add_argument(
         "--dataset",
-        choices=("pallier2025", "chineseeeg2_littleprince"),
+        choices=("pallier2025", "chineseeeg2_littleprince", "broderick2018"),
         default="pallier2025",
         help="目标数据集（默认：pallier2025）",
     )
@@ -1293,7 +1297,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report.add_argument(
         "--dataset",
-        choices=("chineseeeg2_littleprince", "pallier2025"),
+        choices=("chineseeeg2_littleprince", "pallier2025", "broderick2018"),
         default=None,
         help="可选：通过数据集名称定位已保存评估报告",
     )

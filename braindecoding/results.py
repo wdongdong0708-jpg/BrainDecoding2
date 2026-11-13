@@ -764,7 +764,7 @@ def render_figures(name: str, dataset: str | None = None, *, root: Path = PROJEC
     """只调用固定的 render 函数，完成后整理旧生成器的输出。"""
     study, filename, status, module_name = RENDERERS[name]
     if name == "dataset_revision_gain_full":
-        if dataset not in {"pallier2025", "chineseeeg2_littleprince"}:
+        if dataset not in {"pallier2025", "chineseeeg2_littleprince", "broderick2018"}:
             raise ValueError("单数据集图表需要指定 --dataset")
         filename = f"{dataset}_completed.json"
     elif dataset is not None:
@@ -792,7 +792,7 @@ def main(argv=None) -> int:
     action.add_argument("--check", action="store_true", help="只读检查目录和图表来源")
     action.add_argument("--normalize", action="store_true", help="整理冻结旧生成器的已有输出")
     action.add_argument("--render", choices=RENDERERS, help="从已有已完成报告重画，不重算实验")
-    parser.add_argument("--dataset", choices=("pallier2025", "chineseeeg2_littleprince"))
+    parser.add_argument("--dataset", choices=("pallier2025", "chineseeeg2_littleprince", "broderick2018"))
     args = parser.parse_args(argv)
     if args.dataset and not args.render:
         parser.error("--dataset 需要 --render")

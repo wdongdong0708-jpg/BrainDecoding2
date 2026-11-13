@@ -41,6 +41,7 @@ from braindecoding.config import (
     resolve_config_path,
     results_root,
 )
+from braindecoding.data import broderick2018_dataset as broderick2018
 from braindecoding.data import chineseeeg2_dataset as chineseeeg2
 from braindecoding.data import pallier2025_dataset as pallier2025
 from braindecoding.data import text_embeddings as text_data
@@ -81,13 +82,14 @@ from braindecoding.optimizers import (
     build_adamw_for_modules,
     build_cosine_annealing_scheduler,
 )
+from braindecoding.tasks.word_decoding.broderick2018 import train as broderick_task
 from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import train as chinese_task
 from braindecoding.tasks.word_decoding.pallier2025 import train as pallier_task
 from braindecoding.training.pallier_alignment_training import strict_bank_metrics
 from braindecoding.training.protocol_stage_training import (
     COMMON_TRAINING_KEYS,
     CONFIG_PATH,
-    DATASETS,
+    SUPPORTED_DATASETS as DATASETS,
     STAGES,
     group_column,
 )
@@ -115,7 +117,16 @@ from braindecoding.training.word_encoder_training import (
 CANONICAL_SUBJECTS: dict[str, tuple[str, ...]] = {
     "chineseeeg2_littleprince": tuple(f"sub-{index:02d}" for index in range(1, 9)),
     "pallier2025": tuple(pallier2025.SUBJECTS),
+    "broderick2018": tuple(broderick2018.SUBJECTS),
 }
+
+
+def _task_module_for_dataset(dataset: str):
+    if dataset == "pallier2025":
+        return pallier_task
+    if dataset == "broderick2018":
+        return broderick_task
+    return chinese_task
 
 WORKFLOW_STAGES: tuple[str, ...] = (
     "word",
@@ -155,6 +166,10 @@ DEFAULT_STAGE_CONFIGS: dict[tuple[str, str], str] = {
     ("pallier2025", "context"): "configs/training/pallier2025_context_transformer.yaml",
     ("pallier2025", "revision"): "configs/training/pallier2025_rolling_revision.yaml",
     ("pallier2025", "prefix_revision"): "configs/training/pallier2025_prefix_revision.yaml",
+    ("broderick2018", "word"): "configs/training/broderick2018_word_encoder.yaml",
+    ("broderick2018", "context"): "configs/training/broderick2018_context_transformer.yaml",
+    ("broderick2018", "revision"): "configs/training/broderick2018_rolling_revision.yaml",
+    ("broderick2018", "prefix_revision"): "configs/training/broderick2018_prefix_revision.yaml",
     ("chineseeeg2_littleprince", "word"): "configs/training/chineseeeg2_word_encoder.yaml",
     ("chineseeeg2_littleprince", "context"): "configs/training/chineseeeg2_context_transformer.yaml",
     ("chineseeeg2_littleprince", "revision"): "configs/training/chineseeeg2_rolling_revision.yaml",
@@ -347,13 +362,14 @@ def _resolve_word_exp_tag(
     返回 ``(是否显式指定了阶段1标签, 规范化后的阶段1标签)``。
     当填入 ``'default'`` / ``'root'`` / ``'none'`` 时，显式指向无标签根目录 ``runs/<dataset>/word/...``。
     """
+    env_word_tag = os.environ.get("BRAINDECODING_WORD_EXP_TAG", "").strip()
     raw = (
         word_exp_tag
         if word_exp_tag is not None
         else (
-            yaml_word_exp_tag
-            if yaml_word_exp_tag is not None
-            else os.environ.get("BRAINDECODING_WORD_EXP_TAG", "")
+            env_word_tag
+            if env_word_tag
+            else yaml_word_exp_tag
         )
     )
     text = str(raw or "").strip().strip("/\\")
@@ -652,11 +668,7 @@ def build_workflow_config(
 
     settings = load_yaml_with_extends(CONFIG_PATH)
     adapter = settings["adapters"][dataset]
-    loader = (
-        pallier_task.load_config
-        if dataset == "pallier2025"
-        else chinese_task.load_config
-    )
+    loader = _task_module_for_dataset(dataset).load_config
     adapter_stage = "revision" if stage == "prefix_revision" else stage
     default_source_rel = DEFAULT_STAGE_CONFIGS.get(
         (dataset, stage),
@@ -754,8 +766,9 @@ def build_workflow_config(
             or yaml_tc.get("word_exp_tag")
             or yaml_tc.get("warm_start_exp_tag")
         )
+    env_exp_tag = os.environ.get("BRAINDECODING_EXP_TAG", "").strip()
     _, resolved_exp_tag = _resolve_results_root_and_exp_tag(
-        exp_tag if exp_tag is not None else yaml_exp_tag
+        exp_tag if exp_tag is not None else (env_exp_tag or yaml_exp_tag)
     )
     has_explicit_word_tag, resolved_word_exp_tag = _resolve_word_exp_tag(
         word_exp_tag, yaml_word_exp_tag=yaml_word_exp_tag
@@ -1185,6 +1198,42 @@ def verify_cache_ready(cfg: dict, *, splits: tuple[str, ...] = ("train", "val"))
                 )
             output_path, _ = located
             checked_signals.append(str(output_path))
+    elif dataset == "broderick2018":
+        signal_dir = Path(cfg["cache"]["eeg_dir"])
+        frames = [
+            broderick2018.load_event_table(
+                event_path, split=sp, subjects=subjects, trainable_only=True
+            )
+            for sp in splits
+        ]
+        table = (
+            frames[0]
+            if len(frames) == 1
+            else broderick2018.pd.concat(frames, ignore_index=True)
+        )
+        missing_words = sorted(
+            set(table["标准词"].astype(str)) - set(embedding_map)
+        )
+        if missing_words:
+            raise FileNotFoundError(
+                f"[require-cache] 文本向量缓存缺少所选子集词型：{missing_words[:5]}"
+            )
+        recordings = (
+            table[["记录编号", "受试者", "运行编号"]]
+            .drop_duplicates()
+            .itertuples(index=False)
+        )
+        checked_signals = []
+        for recording_id, subj, run in recordings:
+            signal_path, sidecar_path = broderick2018._signal_product_paths(
+                signal_dir, str(subj), str(run)
+            )
+            if not signal_path.is_file() or not sidecar_path.is_file():
+                raise FileNotFoundError(
+                    f"[require-cache] Broderick2018 信号缓存未命中（{recording_id}: {signal_path}）。"
+                    "请先运行 cache 预热或解包缓存归档。"
+                )
+            checked_signals.append(str(signal_path))
     else:
         signal_dir = Path(cfg["cache"]["meg_dir"])
         frames = [
@@ -1237,7 +1286,7 @@ def verify_cache_ready(cfg: dict, *, splits: tuple[str, ...] = ("train", "val"))
 def _load_subset_datasets_and_loaders(cfg: dict):
     """加载所选受试者子集的 train 与 val 数据集及 DataLoader。"""
     dataset = cfg["experiment"]["dataset"]
-    task = pallier_task if dataset == "pallier2025" else chinese_task
+    task = _task_module_for_dataset(dataset)
     read_fn = task.dataset_module.load_event_table
     build_fn = task.build_dataset
     subjects = cfg["dataset"]["subjects"]
@@ -1318,11 +1367,12 @@ def validate_subset_population(cfg: dict, train_ds, val_ds) -> tuple:
             raise ValueError("上下文分组跨越了受试者或记录边界。")
 
     vocabulary = sorted(set(train_ds.table["normalized_word"].astype(str)))
-    vocab50 = list(
-        pallier_task.frozen_vocabulary()
-        if dataset == "pallier2025"
-        else chinese_task.frozen_vocabulary(cfg["cache"]["event_table"])
-    )
+    if dataset == "pallier2025":
+        vocab50 = list(pallier_task.frozen_vocabulary())
+    elif dataset == "broderick2018":
+        vocab50 = list(broderick_task.frozen_vocabulary(cfg["cache"]["event_table"]))
+    else:
+        vocab50 = list(chinese_task.frozen_vocabulary(cfg["cache"]["event_table"]))
     if len(vocab50) != 50 or len(set(vocab50)) != 50:
         raise ValueError("冻结 50 词评测候选词表异常。")
 
@@ -1415,7 +1465,11 @@ def _evaluate_subset_validation(
     vocab_name = (
         pallier_task.SELECTION_VOCABULARY_NAME
         if dataset == "pallier2025"
-        else "chineseeeg2_littleprince50"
+        else (
+            broderick_task.SELECTION_VOCABULARY_NAME
+            if dataset == "broderick2018"
+            else "chineseeeg2_littleprince50"
+        )
     )
     legacy_metrics = fixed_vocabulary_retrieval_metrics(
         encoded["predictions"],
@@ -1595,7 +1649,7 @@ def run_cache_workflow(
                 cfg["cache"]["eeg_dir"],
                 force=force,
             )
-        else:
+        elif ds_name == "pallier2025":
             if force or not event_path.is_file():
                 from braindecoding.data.dataset_builder import build_dataset
 
@@ -1648,6 +1702,45 @@ def run_cache_workflow(
                     run=str(run),
                     force=force,
                 )
+        elif ds_name == "broderick2018":
+            if force or not event_path.is_file():
+                from braindecoding.data.dataset_builder import build_dataset
+
+                build_dataset("broderick2018", events=True, force=force)
+            cache_manifest_dir = event_path.parent / "manifests"
+            if force or not (cache_manifest_dir / "vocabulary_N50.json").is_file():
+                broderick2018.write_protocol_assets(event_path, cache_manifest_dir)
+            frames = [
+                broderick2018.load_event_table(
+                    event_path,
+                    split=sp,
+                    subjects=selected_subjects,
+                    trainable_only=True,
+                )
+                for sp in splits
+            ]
+            subset_table = broderick2018.pd.concat(frames, ignore_index=True)
+            all_trainable = broderick2018.load_event_table(
+                event_path, trainable_only=True
+            )
+            text_words = (
+                all_trainable["标准词"]
+                if len(all_trainable) > 0
+                else subset_table["标准词"]
+            )
+            if force and Path(cfg["cache"]["text_embeddings"]).is_file():
+                Path(cfg["cache"]["text_embeddings"]).unlink(missing_ok=True)
+            text_data.ensure_text_embedding_cache(
+                text_words,
+                cfg["text_embedding"],
+                cfg["cache"]["text_embeddings"],
+            )
+            broderick2018.ensure_recording_signals(
+                subset_table,
+                cfg["dataset"],
+                cfg["cache"]["eeg_dir"],
+                force=force,
+            )
 
         verified = verify_cache_ready(cfg, splits=splits)
         cache_out_dir = (

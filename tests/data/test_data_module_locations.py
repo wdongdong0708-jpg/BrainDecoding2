@@ -9,6 +9,7 @@ from braindecoding.config import PROJECT_ROOT
 MODULES = (
     ("chineseeeg2_dataset", "ChineseEEG2LittlePrinceWordDataset"),
     ("pallier2025_dataset", "Pallier2025WordDataset"),
+    ("broderick2018_dataset", "Broderick2018WordDataset"),
 )
 
 

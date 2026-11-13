@@ -1,0 +1,14 @@
+extends: ../base.yaml
+
+experiment:
+  task: word_decoding
+  dataset: broderick2018
+  subject_scope: sub01-19
+  id: main_word
+  category: main
+
+model:
+  use_transformer: false
+
+provenance:
+  context_condition: conv_only

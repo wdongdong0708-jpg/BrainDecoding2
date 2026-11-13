@@ -355,6 +355,72 @@ CHINESE_FUNCTION_WORDS: frozenset[str] = frozenset(
 )
 
 
+# 英语闭集功能词表（冠词、介词、代词/限定词、连词、助动词/情态动词/否定及标准缩写、功能副词）
+ENGLISH_FUNCTION_WORDS: frozenset[str] = frozenset(
+    {
+        "a", "an", "the",
+        "of", "in", "to", "for", "with", "on", "at", "from", "by", "about",
+        "as", "into", "like", "through", "after", "over", "between", "out",
+        "against", "during", "without", "before", "under", "around", "among",
+        "upon", "toward", "towards", "within", "along", "across", "behind",
+        "beyond", "near", "off", "down", "up", "onto", "beside", "besides",
+        "beneath", "throughout", "despite", "except",
+        "i", "me", "my", "mine", "myself",
+        "you", "your", "yours", "yourself", "yourselves",
+        "he", "him", "his", "himself",
+        "she", "her", "hers", "herself",
+        "it", "its", "itself",
+        "we", "us", "our", "ours", "ourselves",
+        "they", "them", "their", "theirs", "themselves",
+        "this", "that", "these", "those",
+        "who", "whom", "whose", "which", "what", "whatever", "whoever",
+        "whomever", "whichever",
+        "someone", "somebody", "something", "anyone", "anybody", "anything",
+        "everyone", "everybody", "everything", "no", "none", "nobody", "nothing",
+        "one", "ones", "each", "either", "neither", "another", "other", "others",
+        "both", "few", "many", "several", "some", "any", "all", "most", "much",
+        "more", "less", "least", "enough", "such", "own", "same",
+        "and", "but", "or", "nor", "yet", "so", "although", "though", "even",
+        "if", "unless", "until", "till", "while", "whereas", "whether",
+        "because", "since", "when", "whenever", "where", "wherever", "how",
+        "however", "than", "once", "lest",
+        "be", "am", "is", "are", "was", "were", "been", "being",
+        "have", "has", "had", "having", "do", "does", "did", "doing",
+        "will", "would", "shall", "should", "can", "could", "may", "might",
+        "must", "ought", "not", "n't",
+        "don't", "doesn't", "didn't", "won't", "wouldn't", "shan't",
+        "shouldn't", "can't", "cannot", "couldn't", "mustn't", "isn't",
+        "aren't", "wasn't", "weren't", "haven't", "hasn't", "hadn't",
+        "i'm", "i've", "i'd", "i'll", "you're", "you've", "you'd", "you'll",
+        "he's", "he'd", "he'll", "she's", "she'd", "she'll",
+        "it's", "it'd", "it'll", "we're", "we've", "we'd", "we'll",
+        "they're", "they've", "they'd", "they'll",
+        "that's", "there's", "here's", "what's", "who's", "where's", "let's",
+        "very", "too", "also", "just", "only", "still", "already", "always",
+        "never", "ever", "often", "there", "here", "then", "now", "well",
+        "quite", "rather", "almost", "again", "away", "back",
+    }
+)
+
+DATASET_LANGUAGE_MAP: dict[str, str] = {
+    "pallier2025": "fr",
+    "broderick2018": "en",
+    "chineseeeg2_littleprince": "zh",
+}
+
+
+def dataset_language(dataset: str) -> str:
+    """将标准数据集名称映射为语言代码 ('fr' | 'en' | 'zh')。"""
+    key = str(dataset or "").strip().lower()
+    if key in DATASET_LANGUAGE_MAP:
+        return DATASET_LANGUAGE_MAP[key]
+    if "broderick" in key:
+        return "en"
+    if "pallier" in key:
+        return "fr"
+    return "zh"
+
+
 def is_function_word(word: str, language: str) -> bool:
     """判断给定词是否为功能词（Function Word）。"""
     clean = str(word).strip()
@@ -363,6 +429,11 @@ def is_function_word(word: str, language: str) -> bool:
     if language == "zh":
         return clean in CHINESE_FUNCTION_WORDS
     lowered = clean.lower()
+    if language == "en":
+        return (
+            lowered in ENGLISH_FUNCTION_WORDS
+            or lowered.strip("'-") in ENGLISH_FUNCTION_WORDS
+        )
     if lowered in FRENCH_FUNCTION_WORDS or lowered.lstrip("-") in FRENCH_FUNCTION_WORDS:
         return True
     return False

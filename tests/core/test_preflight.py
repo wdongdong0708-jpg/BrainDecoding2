@@ -23,6 +23,7 @@ def _derived_result(dataset):
     recordings = {
         "chineseeeg2_littleprince": (216, 128, 2415, 768),
         "pallier2025": (90, 306, 2426, 1024),
+        "broderick2018": (380, 128, 2645, 1024),
     }
     count, channels, words, dimension = recordings[dataset]
     return {
@@ -82,7 +83,7 @@ def test_preflight_covers_supported_legacy_configs_without_side_effects(
         for item in report["scope"]["excluded_configs"]
     )
     assert {item["identity"]["dataset"] for item in report["experiments"]} == {
-        "chineseeeg2_littleprince", "pallier2025",
+        "chineseeeg2_littleprince", "pallier2025", "broderick2018",
     }
     identities = [tuple(item["identity"].values()) for item in report["experiments"]]
     assert len(identities) == len(set(identities)) == len(expected)

@@ -47,6 +47,14 @@ def canonical_cache_paths(dataset: str) -> dict[str, str]:
                 "data/cache/derived/pallier2025/text/t5_large_layer_0_5/embeddings.npz"
             ),
         }
+    if dataset == "broderick2018":
+        return {
+            "event_table": "data/cache/derived/broderick2018/events/events.csv",
+            "eeg_dir": "data/cache/derived/broderick2018/signals/eeg_50hz",
+            "text_embeddings": (
+                "data/cache/derived/broderick2018/text/t5_large_layer_0_5/embeddings.npz"
+            ),
+        }
     raise ValueError(f"没有为数据集定义 canonical derived 路径：{dataset}")
 
 

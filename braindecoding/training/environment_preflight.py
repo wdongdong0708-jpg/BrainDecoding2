@@ -22,6 +22,7 @@ from braindecoding.experiment import (
     warm_start_checkpoint,
 )
 EXPECTED_SUBJECTS = {
+    "broderick2018": tuple(f"sub-{index:02d}" for index in range(1, 20)),
     "chineseeeg2_littleprince": tuple(f"sub-{index:02d}" for index in range(1, 9)),
     "pallier2025": tuple(f"sub-{index:02d}" for index in range(1, 11)),
 }
@@ -90,8 +91,16 @@ def _stable_config_hashes(relative_path: str, output_root=None) -> dict:
     }
 
 
+def _read_optional_json(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _dataset_manifest(dataset: str) -> dict:
     path = PROJECT_ROOT / "data" / "cache" / "derived" / dataset / "manifest.json"
+    if not path.is_file():
+        return {"dataset": dataset, "status": "missing", "components": {}}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -157,11 +166,16 @@ def _subject_status(dataset: str, config: dict, event_manifest: dict) -> dict:
     expected = EXPECTED_SUBJECTS[dataset]
     event_subjects = tuple(event_manifest.get("subjects", ()))
     config_subjects = tuple(config["dataset"].get("subjects", event_subjects))
+    matches = (
+        config_subjects == expected
+        if not event_subjects
+        else config_subjects == expected and event_subjects == expected
+    )
     return {
         "expected": list(expected),
         "config": list(config_subjects),
         "event_manifest": list(event_subjects),
-        "matches": config_subjects == expected and event_subjects == expected,
+        "matches": matches,
     }
 
 
@@ -185,16 +199,14 @@ def _pallier_contract_status(config: dict, event_manifest: dict) -> dict:
         / "pallier2025"
         / "sub-09_run-03_qc.json"
     )
-    signal = json.loads(signal_path.read_text(encoding="utf-8"))
-    text = json.loads(text_path.read_text(encoding="utf-8"))
-    split = json.loads((asset_root / "run_split.json").read_text(encoding="utf-8"))
-    qc = json.loads(qc_path.read_text(encoding="utf-8"))
+    signal = _read_optional_json(signal_path)
+    text = _read_optional_json(text_path)
+    split = _read_optional_json(asset_root / "run_split.json")
+    qc = _read_optional_json(qc_path)
     vocabulary_hashes = {}
     vocabulary_valid = True
     for size in (20, 50, 100, 150):
-        payload = json.loads(
-            (asset_root / f"vocabulary_N{size}.json").read_text(encoding="utf-8")
-        )
+        payload = _read_optional_json(asset_root / f"vocabulary_N{size}.json")
         vocabulary_hashes[str(size)] = payload.get("manifest_sha256")
         vocabulary_valid = vocabulary_valid and (
             _embedded_hash_valid(payload)
@@ -341,6 +353,50 @@ def _pallier_contract_status(config: dict, event_manifest: dict) -> dict:
     }
 
 
+def _broderick_contract_status(config: dict, event_manifest: dict) -> dict:
+    """只读验证 Broderick2018 Run 划分与通道/缓存合同。"""
+    from braindecoding.data.broderick2018_dataset import (
+        CHANNEL_NAMES_SHA256,
+        EEG_CHANNEL_COUNT,
+        load_run_split,
+    )
+
+    asset_root = PROJECT_ROOT / "data" / "manifests" / "broderick2018"
+    split_path = asset_root / "run_split.json"
+    split_valid = False
+    try:
+        split_by_run = load_run_split(split_path)
+        split_valid = (
+            sum(1 for v in split_by_run.values() if v == "train") == 16
+            and sum(1 for v in split_by_run.values() if v == "val") == 2
+            and sum(1 for v in split_by_run.values() if v == "test") == 2
+        )
+    except Exception:
+        split_valid = False
+    dataset = config.get("dataset", {})
+    cache_cfg = config.get("cache", {})
+    checks = {
+        "run_split_valid": split_valid,
+        "channel_count_128": int(dataset.get("expected_eeg_channel_count", 0)) == EEG_CHANNEL_COUNT,
+        "channel_names_sha256": dataset.get("channel_names_sha256") == CHANNEL_NAMES_SHA256,
+        "canonical_event_path": str(cache_cfg.get("event_table", ""))
+        .replace("\\", "/")
+        .endswith("data/cache/derived/broderick2018/events/events.csv"),
+        "canonical_signal_path": str(cache_cfg.get("eeg_dir", ""))
+        .replace("\\", "/")
+        .endswith("data/cache/derived/broderick2018/signals/eeg_50hz"),
+        "canonical_text_path": str(cache_cfg.get("text_embeddings", ""))
+        .replace("\\", "/")
+        .endswith("data/cache/derived/broderick2018/text/t5_large_layer_0_5/embeddings.npz"),
+    }
+    return {
+        "status": "valid" if all(checks.values()) else "invalid",
+        "checks": checks,
+        "neural_arrays_loaded": False,
+        "model_loaded": False,
+    }
+
+
 def _production_legacy_references() -> list[dict]:
     """扫描历史适配器与公共实现中的旧根目录依赖。"""
     paths = [
@@ -416,9 +472,13 @@ def build_preflight_report(*, output_root=None, config_paths=None) -> dict:
         identity = identities[relative_path]
         dataset = identity["dataset"]
         dataset_manifest = _dataset_manifest(dataset)
-        components = dataset_manifest["components"]
-        event_manifest_path = project_path(components["events"]["manifest"])
-        event_manifest = json.loads(event_manifest_path.read_text(encoding="utf-8"))
+        components = dataset_manifest.get("components", {})
+        event_manifest_ref = components.get("events", {}).get("manifest")
+        event_manifest = (
+            _read_optional_json(project_path(event_manifest_ref))
+            if event_manifest_ref
+            else {}
+        )
         output = _output_status(config, output_root=output_root)
         dependency = _dependency_status(
             config, active_identity_set, output_root=output_root
@@ -428,6 +488,8 @@ def build_preflight_report(*, output_root=None, config_paths=None) -> dict:
         pallier_contract = (
             _pallier_contract_status(config, event_manifest)
             if dataset == "pallier2025"
+            else _broderick_contract_status(config, event_manifest)
+            if dataset == "broderick2018"
             else None
         )
         default_split = config.get("evaluation", {}).get("default_split")
@@ -485,21 +547,21 @@ def build_preflight_report(*, output_root=None, config_paths=None) -> dict:
                 **hash_record,
                 "derived_status": derived_checks[dataset]["status"],
                 "event_status": {
-                    "status": components["events"]["status"],
-                    "manifest": components["events"]["manifest"],
-                    "manifest_sha256": components["events"]["sha256"],
-                    "event_table_sha256": components["events"]["event_table_sha256"],
+                    "status": components.get("events", {}).get("status", "missing"),
+                    "manifest": components.get("events", {}).get("manifest"),
+                    "manifest_sha256": components.get("events", {}).get("sha256"),
+                    "event_table_sha256": components.get("events", {}).get("event_table_sha256"),
                 },
                 "signal_status": {
-                    "status": components["signals"]["status"],
-                    "manifest": components["signals"]["manifest"],
-                    "manifest_sha256": components["signals"]["sha256"],
+                    "status": components.get("signals", {}).get("status", "missing"),
+                    "manifest": components.get("signals", {}).get("manifest"),
+                    "manifest_sha256": components.get("signals", {}).get("sha256"),
                     "coverage": derived_checks[dataset]["signal_coverage"],
                 },
                 "text_status": {
-                    "status": components["text"]["status"],
-                    "manifest": components["text"]["manifest"],
-                    "manifest_sha256": components["text"]["sha256"],
+                    "status": components.get("text", {}).get("status", "missing"),
+                    "manifest": components.get("text", {}).get("manifest"),
+                    "manifest_sha256": components.get("text", {}).get("sha256"),
                     "contract": derived_checks[dataset]["text_contract"],
                 },
                 "subject_scope": subjects,

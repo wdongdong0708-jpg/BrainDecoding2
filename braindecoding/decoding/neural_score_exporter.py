@@ -30,8 +30,17 @@ from braindecoding.config import (
     resolve_config_path,
     results_root,
 )
+from braindecoding.tasks.word_decoding.broderick2018 import train as broderick_task
 from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import train as chinese_task
 from braindecoding.tasks.word_decoding.pallier2025 import train as pallier_task
+
+
+def _task_module_for_dataset(dataset: str):
+    if dataset == "pallier2025":
+        return pallier_task
+    if dataset == "broderick2018":
+        return broderick_task
+    return chinese_task
 from braindecoding.training.protocol_stage_training import CONFIG_PATH, group_column
 from braindecoding.training.training_runtime import (
     choose_device,
@@ -183,9 +192,11 @@ def build_segment_inventory(
         seg_idx = len(segments)
         parent.append(seg_idx)
         row_indices = [int(i) for i in rows.index.tolist()]
-        if dataset == "pallier2025":
+        if dataset in ("pallier2025", "broderick2018"):
             run_col = "运行编号" if "运行编号" in rows.columns else rec_col
-            bids_col = "BIDS事件行号" if "BIDS事件行号" in rows.columns else "event_index"
+            bids_col = "BIDS事件行号" if "BIDS事件行号" in rows.columns else (
+                "记录内序号" if "记录内序号" in rows.columns else "event_index"
+            )
             scope = str(rows[run_col].iloc[0])
             if bids_col in rows.columns:
                 atoms = [f"{scope}|event-{v}" for v in rows[bids_col].tolist()]
@@ -376,7 +387,7 @@ def _encode_stage_with_shifts(
 
     dataset = cfg["experiment"]["dataset"]
     tc = cfg["training"]
-    task = pallier_task if dataset == "pallier2025" else chinese_task
+    task = _task_module_for_dataset(dataset)
     build_fn = task.build_dataset
     grp_col = group_column(cfg)
     eval_bs = int(tc.get("eval_batch_size", tc["batch_size"]))
@@ -1079,7 +1090,7 @@ def export_neural_vocabulary_scores(
     norm_shift_mode = _normalize_s3_shift_mode(shift_mode)
     ema_decay_val = float(cms_ema_decay)
     preroll_sec_val = float(preroll_seconds)
-    language = "fr" if dataset == "pallier2025" else "zh"
+    language = {"pallier2025": "fr", "broderick2018": "en"}.get(dataset, "zh")
 
     def _build_cms_metadata() -> dict[str, Any]:
         if norm_cms_mode in {"causal_ema", "pos_causal_ema"}:
@@ -1292,7 +1303,11 @@ def export_neural_vocabulary_scores(
             try:
                 from scripts.cache_archive import resolve_archive_path, unpack_cache
 
-                modality_key = "meg" if dataset == "pallier2025" else "eeg"
+                modality_key = (
+                    "meg"
+                    if dataset == "pallier2025"
+                    else ("broderick2018" if dataset == "broderick2018" else "eeg")
+                )
                 cand_archive_dirs: list[Path] = []
                 env_arch = os.environ.get("BRAINDECODING_ARCHIVE_DIR", "").strip()
                 if env_arch:
@@ -1347,7 +1362,7 @@ def export_neural_vocabulary_scores(
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    task = pallier_task if dataset == "pallier2025" else chinese_task
+    task = _task_module_for_dataset(dataset)
     read_fn = task.dataset_module.load_event_table
     selected_subjects = rev_cfg["dataset"]["subjects"]
 
@@ -1388,6 +1403,18 @@ def export_neural_vocabulary_scores(
         dedup_train = (
             train_table.drop_duplicates([run_c, bids_c])
             if (run_c in train_table.columns and bids_c in train_table.columns)
+            else train_table
+        )
+    elif dataset == "broderick2018":
+        run_c = (
+            "运行编号" if "运行编号" in train_table.columns else "recording_id"
+        )
+        ord_c = (
+            "记录内序号" if "记录内序号" in train_table.columns else "event_index"
+        )
+        dedup_train = (
+            train_table.drop_duplicates([run_c, ord_c])
+            if (run_c in train_table.columns and ord_c in train_table.columns)
             else train_table
         )
     else:
@@ -1725,7 +1752,7 @@ def resolve_vocabulary_frequency_order(
 
     if not counts:
         try:
-            task = pallier_task if dataset == "pallier2025" else chinese_task
+            task = _task_module_for_dataset(dataset)
             from braindecoding.data.derived_cache import canonical_cache_paths
 
             evt_path = Path(canonical_cache_paths(dataset)["event_table"])
@@ -1751,6 +1778,19 @@ def resolve_vocabulary_frequency_order(
                     )
                     if r_col in train_df.columns and b_col in train_df.columns:
                         train_df = train_df.drop_duplicates([r_col, b_col])
+                elif dataset == "broderick2018":
+                    r_col = (
+                        "运行编号"
+                        if "运行编号" in train_df.columns
+                        else "recording_id"
+                    )
+                    o_col = (
+                        "记录内序号"
+                        if "记录内序号" in train_df.columns
+                        else "event_index"
+                    )
+                    if r_col in train_df.columns and o_col in train_df.columns:
+                        train_df = train_df.drop_duplicates([r_col, o_col])
                 else:
                     v_col = (
                         "音频版本"
@@ -1776,9 +1816,10 @@ def resolve_vocabulary_frequency_order(
             counts = {}
 
     if not counts:
-        manifest_dir = (
-            "pallier2025" if dataset == "pallier2025" else "chineseeeg2"
-        )
+        manifest_dir = {
+            "pallier2025": "pallier2025",
+            "broderick2018": "broderick2018",
+        }.get(dataset, "chineseeeg2")
         n150_path = project_path(
             f"data/manifests/{manifest_dir}/vocabulary_N150.json"
         )

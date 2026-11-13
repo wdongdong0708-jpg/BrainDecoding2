@@ -1844,6 +1844,9 @@ def run_standalone_subspace_evaluation(
     )
     from braindecoding.experiment import file_sha256
     from braindecoding.models import build_brain_embedding_model
+    from braindecoding.tasks.word_decoding.broderick2018 import (
+        train as broderick_task,
+    )
     from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import (
         train as chinese_task,
     )
@@ -2056,7 +2059,11 @@ def run_standalone_subspace_evaluation(
         exploratory_dir / f"subspace_encoded_cache_{split}.pt"
     )
 
-    task = pallier_task if dataset == "pallier2025" else chinese_task
+    task = (
+        pallier_task
+        if dataset == "pallier2025"
+        else (broderick_task if dataset == "broderick2018" else chinese_task)
+    )
     read_fn = task.dataset_module.load_event_table
     build_fn = task.build_dataset
     selected_subjects = cfg["dataset"]["subjects"]
@@ -2192,11 +2199,12 @@ def run_standalone_subspace_evaluation(
         else "标准词"
     )
     vocabulary = sorted(set(train_table[train_word_col].astype(str)))
-    vocab50 = list(
-        pallier_task.frozen_vocabulary()
-        if dataset == "pallier2025"
-        else chinese_task.frozen_vocabulary(cfg["cache"]["event_table"])
-    )
+    if dataset == "pallier2025":
+        vocab50 = list(pallier_task.frozen_vocabulary())
+    elif dataset == "broderick2018":
+        vocab50 = list(broderick_task.frozen_vocabulary(cfg["cache"]["event_table"]))
+    else:
+        vocab50 = list(chinese_task.frozen_vocabulary(cfg["cache"]["event_table"]))
 
     model_cfg = checkpoint.get("model_config", cfg["model"])
     ckpt_subjects = list(checkpoint.get("subject_ids", selected_subjects))
@@ -2319,7 +2327,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser._negative_number_matcher = re.compile(
         r"^-\d+(?:\.\d+)?(?:,\s*[+-]?\d+(?:\.\d+)?)*$"
     )
-    parser.add_argument("--dataset", default=None, help="数据集名称: pallier2025 或 chineseeeg2_littleprince")
+    parser.add_argument("--dataset", default=None, help="数据集名称: pallier2025、broderick2018 或 chineseeeg2_littleprince")
     parser.add_argument(
         "--stage",
         default="auto",

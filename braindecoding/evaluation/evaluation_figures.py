@@ -32,6 +32,7 @@ STAGE_SHORT_LABELS = {
 
 EVALUATION_PALETTE = {
     "pallier2025": "#1f77b4",
+    "broderick2018": "#2ca02c",
     "chineseeeg2_littleprince": "#6a3d9a",
     "clean": "#1f77b4",
     "shifted": "#ff7f0e",

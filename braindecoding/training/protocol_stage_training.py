@@ -28,6 +28,7 @@ from braindecoding.optimizers import build_adamw_for_modules, build_cosine_annea
 from braindecoding.pallier_alignment_trial import strict_bank_metrics
 from braindecoding.pallier_bge_trial import save_json
 from braindecoding.reporting import study_report_dir
+from braindecoding.tasks.word_decoding.broderick2018 import train as broderick
 from braindecoding.tasks.word_decoding.pallier2025 import train as pallier
 from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import train as chinese
 from braindecoding.training.runtime import cpu_state_dict, load_checkpoint, save_checkpoint, set_seed
@@ -37,6 +38,7 @@ from braindecoding.unified_rolling_training import full_vocabulary_metrics
 
 CONFIG_PATH = PROJECT_ROOT / "configs/training/rolling_revision_protocol.yaml"
 DATASETS = ("pallier2025", "chineseeeg2_littleprince")
+SUPPORTED_DATASETS = (*DATASETS, "broderick2018")
 STAGES = ("word", "revision")
 COMMON_TRAINING_KEYS = (
     "device", "batch_size", "num_workers", "patience", "learning_rate",
@@ -44,12 +46,22 @@ COMMON_TRAINING_KEYS = (
 )
 
 
+def _task_module(dataset: str):
+    if dataset == "pallier2025":
+        return pallier
+    if dataset == "broderick2018":
+        return broderick
+    if dataset == "chineseeeg2_littleprince":
+        return chinese
+    raise ValueError(f"Unsupported dataset: {dataset}")
+
+
 def config():
     return load_yaml_with_extends(CONFIG_PATH)
 
 
 def _identity(settings, dataset, seed, stage):
-    if dataset not in DATASETS or dataset not in settings["adapters"]:
+    if dataset not in SUPPORTED_DATASETS or dataset not in settings["adapters"]:
         raise ValueError(f"Unsupported dataset: {dataset}")
     adapter_stage = "revision" if stage == "prefix_revision" else stage
     if adapter_stage not in STAGES or adapter_stage not in settings["protocol"]["stages"]:
@@ -64,7 +76,7 @@ def build_config(dataset, seed, stage, word_checkpoint=None):
     _identity(settings, dataset, seed, stage)
     adapter_stage = "revision" if stage == "prefix_revision" else stage
     adapter = settings["adapters"][dataset]
-    loader = pallier.load_config if dataset == "pallier2025" else chinese.load_config
+    loader = _task_module(dataset).load_config
     cfg = loader(project_path(adapter[f"{adapter_stage}_source_config"]))
     cfg["experiment"]["output_group"] = settings["execution"]["output_group"]
     if stage == "prefix_revision":
@@ -135,16 +147,16 @@ def assert_ready(settings):
 
 
 def group_column(cfg):
-    if cfg["experiment"]["dataset"] == "pallier2025":
-        return pallier.loader_group_column(cfg)
+    ds_name = cfg["experiment"]["dataset"]
+    if ds_name in {"pallier2025", "broderick2018"}:
+        return _task_module(ds_name).loader_group_column(cfg)
     return "sentence_uid"
 
 
 def dataset_and_loader(cfg, split):
     if split not in ("train", "val"):
         raise ValueError("Only train and validation may be loaded.")
-    is_pallier = cfg["experiment"]["dataset"] == "pallier2025"
-    task = pallier if is_pallier else chinese
+    task = _task_module(cfg["experiment"]["dataset"])
     read = task.dataset_module.load_event_table
     build = task.build_dataset
     table = read(cfg["cache"]["event_table"], split=split,
@@ -169,8 +181,13 @@ def populations(cfg, train, val, adapter):
     manifest = json.loads(project_path(adapter["vocabulary_manifest"]).read_text(encoding="utf-8"))
     if vocabulary != manifest["vocabulary"] or len(vocabulary) != adapter["expected_train_vocabulary"]:
         raise ValueError("Training vocabulary changed.")
-    vocab50 = list(pallier.frozen_vocabulary() if cfg["experiment"]["dataset"] == "pallier2025"
-                   else chinese.frozen_vocabulary(cfg["cache"]["event_table"]))
+    ds_name = cfg["experiment"]["dataset"]
+    if ds_name == "pallier2025":
+        vocab50 = list(pallier.frozen_vocabulary())
+    elif ds_name == "broderick2018":
+        vocab50 = list(broderick.frozen_vocabulary(cfg["cache"]["event_table"]))
+    else:
+        vocab50 = list(chinese.frozen_vocabulary(cfg["cache"]["event_table"]))
     if len(vocab50) != 50 or len(set(vocab50)) != 50 or not set(vocab50).issubset(vocabulary):
         raise ValueError("Frozen 50-word evaluation bank changed.")
     common = val.table.groupby(context_column, sort=False).cumcount(ascending=False).to_numpy() >= 2
@@ -192,8 +209,13 @@ def populations(cfg, train, val, adapter):
 
 def validate(model, loader, dataset, vocabulary, vocab50, cfg, adapter, revision):
     device = torch.device("cuda")
-    if cfg["experiment"]["dataset"] == "pallier2025":
+    ds_name = cfg["experiment"]["dataset"]
+    if ds_name == "pallier2025":
         metrics, encoded = pallier.evaluate_loader(model, loader, device, amp=True)
+    elif ds_name == "broderick2018":
+        metrics, encoded = broderick.evaluate_loader(
+            model, loader, device, amp=True, event_table_path=cfg["cache"]["event_table"]
+        )
     else:
         metrics, encoded = chinese.evaluate_loader(model, loader, device, vocab50, amp=True)
     if len(encoded["event_ids"]) != len(dataset) or set(encoded["event_ids"]) != set(dataset.table.event_id):
@@ -264,12 +286,17 @@ def source_hashes(cfg, adapter):
     paths = {Path(__file__).resolve(), *list(_config_chain(CONFIG_PATH))}
     for key in ("word_source_config", "revision_source_config"):
         paths.update(_config_chain(project_path(adapter[key])))
+    dataset_source_map = {
+        "pallier2025": "data/pallier2025.py",
+        "broderick2018": "data/broderick2018_dataset.py",
+        "chineseeeg2_littleprince": "data/chineseeeg2.py",
+    }
     sources = ["config.py", "experiment.py", "training/word.py", "training/runtime.py",
                "models.py", "losses.py", "optimizers.py", "data/text.py",
                "evaluation/retrieval.py", "results.py", "pallier_bge_trial.py",
                "pallier_alignment_trial.py", "unified_rolling_training.py",
                f"tasks/word_decoding/{dataset}/train.py",
-               "data/pallier2025.py" if dataset == "pallier2025" else "data/chineseeeg2.py"]
+               dataset_source_map[dataset]]
     paths.update(PROJECT_ROOT / "braindecoding" / item for item in sources)
     paths.update(Path(cfg["cache"][key]) for key in ("event_table", "text_embeddings"))
     paths.add(Path(cfg["cache"]["text_embeddings"]).with_suffix(".json"))
@@ -278,8 +305,10 @@ def source_hashes(cfg, adapter):
     for path in (event.with_suffix(".audit.json"), event.parent / "manifest.json"):
         if path.exists():
             paths.add(path)
-    if dataset == "pallier2025":
-        paths.update(pallier.VOCABULARY_ASSET_DIRECTORY.glob("*.json"))
+    if dataset in {"pallier2025", "broderick2018"}:
+        vocab_dir = _task_module(dataset).VOCABULARY_ASSET_DIRECTORY
+        if vocab_dir.is_dir():
+            paths.update(vocab_dir.glob("*.json"))
     if cfg["training"].get("pretrained_brain_encoder_checkpoint"):
         paths.add(Path(cfg["training"]["pretrained_brain_encoder_checkpoint"]))
     return {str(path.resolve()): file_sha256(path) for path in sorted(paths) if path.is_file() and path.suffix not in ('.py', '.yaml', '.yml', '.md', '.tex')}
@@ -442,7 +471,7 @@ def run_stage(dataset, seed, stage, word_checkpoint=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", choices=DATASETS, required=True)
+    parser.add_argument("--dataset", choices=SUPPORTED_DATASETS, required=True)
     parser.add_argument("--seed", type=int, choices=(0, 1, 2), required=True)
     parser.add_argument("--stage", choices=STAGES, required=True)
     parser.add_argument("--word-checkpoint")

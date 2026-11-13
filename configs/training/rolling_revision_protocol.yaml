@@ -185,6 +185,19 @@ adapters:
     expected_legacy_word_candidates: 47
     expected_legacy_common_candidates: 46
     expected_common_rows: 11780
+  broderick2018:
+    source_config: configs/word_decoding/broderick2018/base.yaml
+    subject_scope: sub01-19
+    subjects: 19
+    channels: 128
+    language: en
+    group_column: runtime_context_uid
+    word_source_config: configs/word_decoding/broderick2018/all_subjects/main_word.yaml
+    embedding_cache: data/cache/derived/broderick2018/text/t5_large_layer_0_5/embeddings.npz
+    vocabulary_manifest: data/manifests/broderick2018/vocabulary_N50.json
+    revision_source_config: configs/word_decoding/broderick2018/rolling_revision/local_window_revision.yaml
+    main_selection_metric_word: retrieval_acc10_vocab=broderick2018_50_macro
+    main_selection_metric_revision: revision_common_delay2_retrieval_acc10_vocab=broderick2018_50_macro
 evaluation:
   default_split: val
   primary_selection:

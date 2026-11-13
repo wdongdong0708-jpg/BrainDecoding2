@@ -1,0 +1,168 @@
+{
+  "asset_type": "run_split",
+  "assignments": {
+    "test": [
+      "run-06",
+      "run-13"
+    ],
+    "train": [
+      "run-02",
+      "run-03",
+      "run-05",
+      "run-07",
+      "run-08",
+      "run-09",
+      "run-10",
+      "run-11",
+      "run-12",
+      "run-14",
+      "run-15",
+      "run-16",
+      "run-17",
+      "run-18",
+      "run-19",
+      "run-20"
+    ],
+    "val": [
+      "run-01",
+      "run-04"
+    ]
+  },
+  "created_from_test": false,
+  "dataset": "broderick2018",
+  "hash_contract": "sha256(canonical_json_without_manifest_sha256)",
+  "hash_ranking": [
+    {
+      "rank": 0,
+      "run": "run-15",
+      "sha256": "0aca35cd60d5596bdf6507dbbdcecf29691b96dcc5d59efc930ed0924b6f1221",
+      "split": "train"
+    },
+    {
+      "rank": 1,
+      "run": "run-02",
+      "sha256": "107cb6301f1dfab51b3fbfbe15a419d8df3ba08c1373fc0aabcf32f5398c1956",
+      "split": "train"
+    },
+    {
+      "rank": 2,
+      "run": "run-19",
+      "sha256": "265171ef2c0c978e32020c4791eda3c79639f8e5fdb8e77dccd3d9f711e3ce86",
+      "split": "train"
+    },
+    {
+      "rank": 3,
+      "run": "run-14",
+      "sha256": "3111939fe6123a8ddbe81efebf5e039ddcecc11e6d435b739469dbad3a91799a",
+      "split": "train"
+    },
+    {
+      "rank": 4,
+      "run": "run-17",
+      "sha256": "3cf6ccc8484a64970b8eb81a7483491806c9ed7854ed23b9444da3abc0a8972d",
+      "split": "train"
+    },
+    {
+      "rank": 5,
+      "run": "run-12",
+      "sha256": "4017d041ee5dedebeeb8600a29a39d3689ef1bcabc9a675e63acf2807d0b8794",
+      "split": "train"
+    },
+    {
+      "rank": 6,
+      "run": "run-10",
+      "sha256": "70278dd5da423357b5b597542dc6445214b9c91ff928500fdfb284ff0a2012a8",
+      "split": "train"
+    },
+    {
+      "rank": 7,
+      "run": "run-20",
+      "sha256": "754e62d4ddd13ea20946acee9f3bef311bcb720f852909adb78f9c6131cd9a84",
+      "split": "train"
+    },
+    {
+      "rank": 8,
+      "run": "run-05",
+      "sha256": "7b66969ed37f5d2a16ab86b15f39983b70ea8acf622407b731a25ef3630fdab7",
+      "split": "train"
+    },
+    {
+      "rank": 9,
+      "run": "run-18",
+      "sha256": "836f97e78e9147d1daf6e0925d3c4590824472c647c1dd76358b02e84e7f4d99",
+      "split": "train"
+    },
+    {
+      "rank": 10,
+      "run": "run-03",
+      "sha256": "86e40cdf7eec86b0e41577734d569f92bdd505e06d50ebae79c1f7d03e21226c",
+      "split": "train"
+    },
+    {
+      "rank": 11,
+      "run": "run-08",
+      "sha256": "9737afcb43327bc4cb6cc9d3340cc98f049841496ec56cff6b973079c12a3ec1",
+      "split": "train"
+    },
+    {
+      "rank": 12,
+      "run": "run-16",
+      "sha256": "ad2872382cda5b89bc702b6948daf10402eb2553e14b034384b2041f14e30961",
+      "split": "train"
+    },
+    {
+      "rank": 13,
+      "run": "run-07",
+      "sha256": "c00211dd1b7750eaaa82646adf60737363d6f4e1821703da8556b814992b3c07",
+      "split": "train"
+    },
+    {
+      "rank": 14,
+      "run": "run-09",
+      "sha256": "d247691c3c4b9841a4eabe84ef92ece4681e59d3ac5749ab99e850261dd52afd",
+      "split": "train"
+    },
+    {
+      "rank": 15,
+      "run": "run-11",
+      "sha256": "d94280316dd6aeec7afe42dd7d1e76b108c7cef59a2da9135a59cf4aeaf09d01",
+      "split": "train"
+    },
+    {
+      "rank": 16,
+      "run": "run-04",
+      "sha256": "e883fade3b42e10a816e96f2c59c506cea01b15d54cacff66528f513f2ca3c03",
+      "split": "val"
+    },
+    {
+      "rank": 17,
+      "run": "run-01",
+      "sha256": "f277a4dd8a48ddfddb4f8a0b49c21a1b13f3c28f2e54e2324a28de1163b2e8da",
+      "split": "val"
+    },
+    {
+      "rank": 18,
+      "run": "run-13",
+      "sha256": "f5436d0a83120f35d4e22abff7eea646c89822fd9254f3e81183cbfb944de019",
+      "split": "test"
+    },
+    {
+      "rank": 19,
+      "run": "run-06",
+      "sha256": "fb1e37e635d204b3f5cdd34917670db7528d33034050176eb3dc0b527cdd6f3f",
+      "split": "test"
+    }
+  ],
+  "manifest_sha256": "f8469502708cda90e2c2d43242d0ba7485f6cdfce986f2d452883c75553bfdee",
+  "scope": "broderick2018_all_subjects_word_v1",
+  "status": "frozen",
+  "strategy": {
+    "counts": {
+      "test": 2,
+      "train": 16,
+      "val": 2
+    },
+    "salt": "broderick2018-main-run-split-v1",
+    "type": "deterministic_salted_sha256_run_sort"
+  }
+}

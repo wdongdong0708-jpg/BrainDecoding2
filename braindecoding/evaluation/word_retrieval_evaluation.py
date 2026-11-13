@@ -51,10 +51,21 @@ from braindecoding.evaluation.sequence_decoding_evaluation import (
 )
 from braindecoding.experiment import file_sha256
 from braindecoding.models import build_brain_embedding_model
+from braindecoding.tasks.word_decoding.broderick2018 import (
+    train as broderick_task,
+)
 from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import (
     train as chinese_task,
 )
 from braindecoding.tasks.word_decoding.pallier2025 import train as pallier_task
+
+
+def _task_module_for_dataset(dataset: str):
+    if dataset == "pallier2025":
+        return pallier_task
+    if dataset == "broderick2018":
+        return broderick_task
+    return chinese_task
 from braindecoding.training.pallier_alignment_training import strict_bank_metrics
 from braindecoding.training.protocol_stage_training import group_column
 from braindecoding.training.rolling_revision_training import (
@@ -826,15 +837,42 @@ def _compute_encoded_evaluation_metrics(
     from braindecoding.results import load_vocabulary_assets
 
     dataset = cfg["experiment"]["dataset"]
-    language = "fr" if dataset == "pallier2025" else "zh"
+    language = {"pallier2025": "fr", "broderick2018": "en"}.get(dataset, "zh")
     revision = (
         stage in ("revision", "prefix_revision")
         and "revision_predictions" in encoded
     )
-    manifest_dir = PROJECT_ROOT / "data/manifests" / (
-        "pallier2025" if dataset == "pallier2025" else "chineseeeg2"
-    )
-    manifests = load_vocabulary_assets(manifest_dir)
+    manifest_subdir = {
+        "pallier2025": "pallier2025",
+        "broderick2018": "broderick2018",
+    }.get(dataset, "chineseeeg2")
+    manifest_dir = PROJECT_ROOT / "data/manifests" / manifest_subdir
+    try:
+        manifests = load_vocabulary_assets(manifest_dir)
+    except FileNotFoundError:
+        ev_table_path = cfg.get("cache", {}).get("event_table")
+        cache_manifest_dir = (
+            Path(ev_table_path).parent / "manifests" if ev_table_path else None
+        )
+        if cache_manifest_dir is not None and cache_manifest_dir.is_dir():
+            manifests = load_vocabulary_assets(cache_manifest_dir)
+        elif dataset == "broderick2018":
+            if ev_table_path and Path(ev_table_path).is_file():
+                manifests = {
+                    size: {
+                        "vocabulary": list(
+                            broderick_task.frozen_vocabulary(ev_table_path, size=size)
+                        )
+                    }
+                    for size in (20, 50, 100, 150)
+                }
+            else:
+                manifests = {
+                    size: {"vocabulary": list(vocabulary[:size])}
+                    for size in (20, 50, 100, 150)
+                }
+        else:
+            raise
 
     primary_preds = (
         encoded["revision_predictions"][max(encoded["revision_predictions"])]
@@ -2620,7 +2658,7 @@ def _build_common_horizon_event_filter(
     kept_event_ids: set[str] = set()
     event_id_to_block: dict[str, str] = {}
 
-    task = pallier_task if dataset == "pallier2025" else chinese_task
+    task = _task_module_for_dataset(dataset)
     read_fn = task.dataset_module.load_event_table
     source_df = None
     try:
@@ -2634,7 +2672,7 @@ def _build_common_horizon_event_filter(
             )
             if len(loaded_df) > 0:
                 if (
-                    dataset == "pallier2025"
+                    dataset in ("pallier2025", "broderick2018")
                     and "runtime_context_uid" not in loaded_df.columns
                     and hasattr(task.dataset_module, "add_runtime_context_uid")
                 ):
@@ -2657,7 +2695,7 @@ def _build_common_horizon_event_filter(
         ):
             source_df = fallback_eval_table.copy()
             if (
-                dataset == "pallier2025"
+                dataset in ("pallier2025", "broderick2018")
                 and "runtime_context_uid" not in source_df.columns
                 and "recording_id" in source_df.columns
                 and "sentence_uid" in source_df.columns
@@ -3542,7 +3580,7 @@ def _evaluate_single_stage(
             cfg["dataset"]["window_start_offset_seconds"] = float(ckpt_off)
             cfg["workflow"]["window_start_offset_seconds"] = float(ckpt_off)
 
-    task = pallier_task if dataset == "pallier2025" else chinese_task
+    task = _task_module_for_dataset(dataset)
     read_fn = task.dataset_module.load_event_table
     build_fn = task.build_dataset
     selected_subjects = cfg["dataset"]["subjects"]
@@ -3583,11 +3621,12 @@ def _evaluate_single_stage(
         else "标准词"
     )
     vocabulary = sorted(set(train_table[train_word_col].astype(str)))
-    vocab50 = list(
-        pallier_task.frozen_vocabulary()
-        if dataset == "pallier2025"
-        else chinese_task.frozen_vocabulary(cfg["cache"]["event_table"])
-    )
+    if dataset == "pallier2025":
+        vocab50 = list(pallier_task.frozen_vocabulary())
+    elif dataset == "broderick2018":
+        vocab50 = list(broderick_task.frozen_vocabulary(cfg["cache"]["event_table"]))
+    else:
+        vocab50 = list(chinese_task.frozen_vocabulary(cfg["cache"]["event_table"]))
 
     model_cfg = checkpoint.get("model_config", cfg["model"])
     ckpt_subjects = list(checkpoint.get("subject_ids", selected_subjects))
@@ -6476,7 +6515,11 @@ def _aggregate_single_stage_multi_seed(
     full_vocab_size_stage = int(
         (vocab_sweep_agg.get("full_vocab") or {}).get("candidate_count")
         or (vocab_sweep_agg.get("full_vocab") or {}).get("vocabulary_size")
-        or (2180 if "chineseeeg2" in dataset.lower() else 2020)
+        or (
+            2645
+            if "broderick" in dataset.lower()
+            else (2180 if "chineseeeg2" in dataset.lower() else 2020)
+        )
     )
 
     # Linguistic breakdown across seeds (Content vs Function words)
@@ -6690,9 +6733,14 @@ def _aggregate_single_stage_multi_seed(
                 if sm_key in subject_k2_k0_stats:
                     subject_k2_k0_stats[sm_key].append(mean_sm)
         per_subject_agg.append(s_agg_row)
-    n_subjects_stage = max(
-        len(per_subject_agg),
-        8 if "chineseeeg2" in dataset.lower() else 10,
+    n_subjects_stage = (
+        len(per_subject_agg)
+        if len(per_subject_agg) > 0
+        else (
+            19
+            if "broderick" in dataset.lower()
+            else (8 if "chineseeeg2" in dataset.lower() else 10)
+        )
     )
 
     horizons_agg: dict[str, dict] = {}

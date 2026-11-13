@@ -19,6 +19,7 @@ import sys
 
 _PKG_DIR = Path(__file__).resolve().parent
 _SUBPACKAGE_MAP: dict[str, str] = {
+    "broderick2018_dataset": "data",
     "chineseeeg2_dataset": "data",
     "common_mode_subtraction_evaluation": "evaluation",
     "context_baseline_training": "training",
@@ -64,6 +65,7 @@ _SUBPACKAGE_MAP: dict[str, str] = {
 }
 _MERGED_MODULE_ALIASES: dict[str, tuple[str, str]] = {
     "beam_search": ("decoding", "rolling_beam_search"),
+    "broderick2018": ("data", "broderick2018_dataset"),
     "build": ("data", "dataset_builder"),
     "candidate_recall": ("evaluation", "retrieval_metrics"),
     "catalog": ("", "protocols"),
