@@ -6,6 +6,9 @@ decoding:
   protocol_mode: l5_sentence_matched_closed_set
   min_sentence_length: 5
   sequence_subdir: raw_simple_sequence_decoding
+  include_brain_only: true
+  multi_subject_aggregation_mode: agreement_weighted
+  multi_subject_agreement_alpha: 2.0
 
 control:
   common_mode_subtraction:
@@ -33,3 +36,7 @@ evaluation:
     - 50
     - 100
     - full
+    - 250
+    - 500
+    - 1000
+    - 2020

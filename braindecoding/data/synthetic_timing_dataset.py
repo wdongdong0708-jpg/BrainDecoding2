@@ -86,7 +86,8 @@ class SyntheticTimingDataset(Dataset):
     change some intervals at half-sample boundaries.
     """
     def __init__(self, base, condition, *, split, training_seed=0,
-                 evaluation_seed=20261008, cache_streams=32):
+                 evaluation_seed=20261008, cache_streams=32,
+                 include_onset_seconds=False):
         if condition not in CONDITIONS or split not in ("train", "val", "test"):
             raise ValueError("Unknown synthetic condition or split")
         if cache_streams < 1:
@@ -107,6 +108,13 @@ class SyntheticTimingDataset(Dataset):
         self.words = self.table.normalized_word.astype(str).tolist()
         self.event_ids = self.table.event_id.astype(str).tolist()
         self.recording_ids = self.table.recording_id.astype(str).tolist()
+        self.include_onset_seconds = bool(include_onset_seconds)
+        if "onset_seconds" in self.table.columns:
+            self.onset_seconds = self.table["onset_seconds"].to_numpy(dtype=np.float32)
+        elif "开始时间" in self.table.columns:
+            self.onset_seconds = self.table["开始时间"].to_numpy(dtype=np.float32)
+        else:
+            self.onset_seconds = None
         self.subject_indices = np.asarray([base.subject_map[str(s)] if self.signal_key == "meg"
             else base.subject_to_index[str(s)] for s in self.table.subject_id], dtype=np.int64)
         self.group_keys = list(zip(self.table.subject_id.astype(str),
@@ -167,13 +175,19 @@ class SyntheticTimingDataset(Dataset):
         index = int(index)
         window = transform_window(self.raw_window(index), baseline_samples=self.baseline_samples,
                                   clamp=self.clamp)
-        return {self.signal_key: torch.from_numpy(window),
+        sample = {
+                self.signal_key: torch.from_numpy(window),
                 "text_embedding": torch.from_numpy(np.array(self.embedding_map[self.words[index]],
                                                                dtype=np.float32, copy=True)),
                 "subject_index": torch.tensor(self.subject_indices[index], dtype=torch.long),
                 "sentence_index": torch.tensor(self.sentence_indices[index], dtype=torch.long),
                 "word": self.words[index], "event_id": self.event_ids[index],
                 "recording_id": self.recording_ids[index]}
+        if self.include_onset_seconds and self.onset_seconds is not None:
+            sample["onset_seconds"] = torch.tensor(
+                float(self.onset_seconds[index]), dtype=torch.float32
+            )
+        return sample
 
 
 def overlap_statistics(table, *, window_seconds=1.0):

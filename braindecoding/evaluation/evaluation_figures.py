@@ -2056,6 +2056,7 @@ def plot_baseline_and_shifted_comparison(
         for k, v in condition_metrics.items()
         if str(k) != "F_local"
         and not str(k).endswith("_c_gated")
+        and not str(k).endswith("_brain_only")
         and not (isinstance(v, Mapping) and bool(v.get("is_online_screen_gate")))
     ]
     labels = filtered_labels if filtered_labels else list(condition_metrics.keys())

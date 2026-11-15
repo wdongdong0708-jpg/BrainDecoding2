@@ -34,6 +34,7 @@ _SUBPACKAGE_MAP: dict[str, str] = {
     "language_model_scoring": "decoding",
     "long_window_dataset": "data",
     "long_window_word_evaluation": "evaluation",
+    "manuscript_study_exporter": "evaluation",
     "multilingual_embedding_training": "training",
     "neural_score_exporter": "decoding",
     "pallier2025_dataset": "data",

@@ -3,10 +3,10 @@ protocol:
   version: 2
   description: >
     Stage 3 (S3) unified left-to-right beam search across the 4-tier input latency
-    budget (Isolated S0 1.00s, Rolling-K0 1.00s, Rolling-K1 1.27s, Rolling-K2 1.50s,
-    and optional Full-Context 3.31s), state-adaptive monotonic (T_r, lambda_r >= 0.05)
-    calibration, |V| in {50, 100, 250} core vocabulary & k in {1, 2, 5, 10} multi-subject
-    scaling, and decoupled C-gated streaming screen anti-flicker analysis.
+    budget (Word-Only S0 1.00s, Local (r = 0), Local (r = 1), Local (r = 2),
+    and Full-Context F), state-adaptive monotonic (T_r, lambda_r >= 0.01)
+    calibration, |V| in {50, 100, full} closed-set & open vocabulary scaling,
+    k in {1, 2, 5, 10} agreement-weighted multi-subject aggregation, and Brain-Only baselines.
 
 language_model:
   model_name_or_path: Qwen/Qwen3-8B-Base
@@ -19,12 +19,15 @@ language_model:
   context_tokens: 8192
 
 decoding:
-  architecture: unified_left_to_right_beam_search_with_streaming_screen_audit
+  architecture: unified_left_to_right_beam_search
   protocol_mode: l5_sentence_matched_closed_set
   min_sentence_length: 5
   beam_width: 5
   candidate_top_k: 20
   segment_batch_size: 192
+  include_brain_only: true
+  multi_subject_aggregation_mode: agreement_weighted
+  multi_subject_agreement_alpha: 2.0
   states:
     - S0
     - K0
