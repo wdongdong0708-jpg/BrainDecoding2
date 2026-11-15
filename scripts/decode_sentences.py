@@ -1066,22 +1066,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
 
     _cached_event_table_box: dict[str, Any] = {}
 
-    def _try_enrich_payload_segments(payload: dict[str, Any] | None) -> None:
-        if not isinstance(payload, dict):
-            return
-        segs = payload.get("segments")
-        if not isinstance(segs, list) or not segs:
-            return
-        if all(
-            isinstance(s, dict)
-            and "onset_seconds" in s
-            and "pos_tags" in s
-            and "is_content_word_mask" in s
-            for s in segs
-        ):
-            return
-        try:
-            if "df" not in _cached_event_table_box:
+    def _load_cached_event_table() -> Any:
+        if "df" not in _cached_event_table_box:
+            try:
                 from braindecoding.config import project_path
                 from braindecoding.data.derived_cache import (
                     canonical_cache_paths,
@@ -1091,15 +1078,105 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 ev_rel = canonical_cache_paths(args.dataset)["event_table"]
                 ev_path = project_path(ev_rel)
                 if ev_path.is_file():
-                    df_ev = pd.read_csv(ev_path)
-                    _cached_event_table_box["df"] = restore_legacy_columns(df_ev)
+                    df_ev = pd.read_csv(ev_path, low_memory=False)
+                    _aux_ev_cols = {
+                        "onset_seconds": "开始时间",
+                        "offset_seconds": "结束时间",
+                        "in_recording_index": "记录内序号",
+                        "pos": "词性",
+                        "is_content_word": "是否内容词",
+                    }
+                    _cached_event_table_box["df"] = restore_legacy_columns(
+                        df_ev, _aux_ev_cols
+                    )
                 else:
                     _cached_event_table_box["df"] = None
-            ev_df = _cached_event_table_box.get("df")
-            if ev_df is not None:
-                enrich_segments_from_event_table(segs, ev_df)
-        except Exception:
-            pass
+            except Exception:
+                _cached_event_table_box["df"] = None
+        return _cached_event_table_box.get("df")
+
+    def _enrich_record_list_if_needed(segs: Any) -> bool:
+        if not isinstance(segs, list) or not segs:
+            return False
+        needs = any(
+            isinstance(s, dict)
+            and (
+                "onset_seconds" not in s
+                or "pos_tags" not in s
+                or "is_content_word_mask" not in s
+            )
+            for s in segs
+        )
+        if not needs:
+            return False
+        ev_df = _load_cached_event_table()
+        if ev_df is None:
+            return False
+        before_missing = sum(
+            1
+            for s in segs
+            if isinstance(s, dict)
+            and (
+                "onset_seconds" not in s
+                or "pos_tags" not in s
+                or "is_content_word_mask" not in s
+            )
+        )
+        enrich_segments_from_event_table(segs, ev_df, split=args.split)
+        after_missing = sum(
+            1
+            for s in segs
+            if isinstance(s, dict)
+            and (
+                "onset_seconds" not in s
+                or "pos_tags" not in s
+                or "is_content_word_mask" not in s
+            )
+        )
+        return after_missing < before_missing
+
+    def _try_enrich_payload_segments(payload: dict[str, Any] | None) -> None:
+        if isinstance(payload, dict):
+            _enrich_record_list_if_needed(payload.get("segments"))
+
+    def _enrich_bundle_tree(
+        decoded_map: dict[str, Any] | None,
+        ms_map: dict[str, Any] | None,
+        vs_map: dict[str, Any] | None,
+    ) -> bool:
+        changed = False
+        for cond_b in (decoded_map or {}).values():
+            if isinstance(cond_b, dict) and _enrich_record_list_if_needed(
+                cond_b.get("final_sentences")
+            ):
+                changed = True
+        for ms_b in (ms_map or {}).values():
+            if not isinstance(ms_b, dict):
+                continue
+            if _enrich_record_list_if_needed(ms_b.get("final_sentences")):
+                changed = True
+            for c_b in (ms_b.get("conditions") or {}).values():
+                if isinstance(c_b, dict) and _enrich_record_list_if_needed(
+                    c_b.get("final_sentences")
+                ):
+                    changed = True
+            for v_blk in (ms_b.get("by_vocabulary_size") or {}).values():
+                if not isinstance(v_blk, dict):
+                    continue
+                for c_b in (v_blk.get("conditions") or {}).values():
+                    if isinstance(c_b, dict) and _enrich_record_list_if_needed(
+                        c_b.get("final_sentences")
+                    ):
+                        changed = True
+        for sc_b in (vs_map or {}).values():
+            if not isinstance(sc_b, dict):
+                continue
+            for c_b in (sc_b.get("conditions") or {}).values():
+                if isinstance(c_b, dict) and _enrich_record_list_if_needed(
+                    c_b.get("final_sentences")
+                ):
+                    changed = True
+        return changed
 
     paths = resolve_default_paths(
         args.dataset,
@@ -2121,6 +2198,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             if not has_real_context:
                 decoded_bundles.pop("F", None)
                 decoded_bundles.pop("F_clean", None)
+            _enrich_bundle_tree(
+                decoded_bundles, multi_subject_bundles, vocabulary_scaling_bundles
+            )
             bundle_obj = {
                 "schema_version": "s3-decoding-bundle/v2",
                 "protocol_mode": resolved_protocol_mode,
@@ -2541,6 +2621,26 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     vocabulary_scaling_bundles_map[sk] = sb_copy
                 else:
                     vocabulary_scaling_bundles_map[sk] = sb
+            was_enriched = _enrich_bundle_tree(
+                decoded_bundles_map,
+                multi_subject_bundles_map,
+                vocabulary_scaling_bundles_map,
+            )
+            if was_enriched:
+                bundle_updated = dict(bundle)
+                bundle_updated["decoded_bundles"] = decoded_bundles_map
+                bundle_updated["multi_subject_bundles"] = multi_subject_bundles_map
+                bundle_updated["vocabulary_scaling_bundles"] = (
+                    vocabulary_scaling_bundles_map
+                )
+                try:
+                    decoding_path.write_text(
+                        json.dumps(bundle_updated, ensure_ascii=False, indent=2)
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass
 
         word_embedding_map = None
         eval_pt_path = (

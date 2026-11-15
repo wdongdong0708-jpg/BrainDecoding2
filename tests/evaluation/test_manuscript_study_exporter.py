@@ -445,3 +445,187 @@ def test_full_exporter_pipeline_and_cli_to_tmp_path(tmp_path: Path) -> None:
         p = Path(fpath)
         assert p.is_file() and p.stat().st_size > 0
         assert out_dir_cli.resolve() in p.resolve().parents
+
+
+def test_chinese_canonical_events_cache_dir_and_multi_subject_enrichment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回归测试：多被试共享上下文编号分组、BRAINDECODING_CACHE_DIR 解析、是否内容词映射与旧缓存回填。"""
+    from braindecoding.decoding.neural_score_exporter import (
+        enrich_segments_from_event_table,
+    )
+
+    cache_dir = tmp_path / "local_cache"
+    ev_dir = cache_dir / "pallier2025" / "events"
+    ev_dir.mkdir(parents=True)
+    monkeypatch.setenv("BRAINDECODING_CACHE_DIR", str(cache_dir))
+
+    # Build canonical Chinese events.csv with train + test splits and 2 subjects sharing the same 上下文编号
+    rows: list[dict[str, object]] = []
+    train_words = [("le", 0.0, 0.2, "DET", False), ("petit", 0.3, 0.6, "ADJ", True), ("prince", 0.7, 1.1, "NC", True), ("parle", 1.2, 1.6, "V", True)]
+    test_words = [("le", 10.0, 10.2, "DET", False), ("petit", 10.3, 10.6, "ADJ", True), ("prince", 10.7, 11.1, "NC", True), ("parle", 11.2, 11.6, "V", True)]
+    for subj, rec_tag in (("sub-01", "pallier2025|sub-01|run-06"), ("sub-02", "pallier2025|sub-02|run-06")):
+        for idx, (w, st, en, pos, is_c) in enumerate(train_words):
+            rows.append(
+                {
+                    "事件编号": f"{rec_tag}|tr-{idx}",
+                    "受试者": subj,
+                    "记录编号": f"pallier2025|{subj}|run-01",
+                    "材料编号": "mat-tr",
+                    "划分单元": "unit-tr",
+                    "记录内序号": idx,
+                    "词": w,
+                    "标准词": w,
+                    "开始时间": st,
+                    "结束时间": en,
+                    "上下文编号": "pallier2025|run-01|sequence-000",
+                    "数据划分": "train",
+                    "是否可训练": True,
+                    "排除原因": "",
+                    "词性": pos,
+                    "是否内容词": is_c,
+                }
+            )
+        for idx, (w, st, en, pos, is_c) in enumerate(test_words):
+            # Offset sub-02 clock by +1000s to catch any cross-subject merging bug in physical wait computation
+            clk = 1000.0 if subj == "sub-02" else 0.0
+            rows.append(
+                {
+                    "事件编号": f"{rec_tag}|te-{idx}",
+                    "受试者": subj,
+                    "记录编号": rec_tag,
+                    "材料编号": "mat-te",
+                    "划分单元": "unit-te",
+                    "记录内序号": idx,
+                    "词": w,
+                    "标准词": w,
+                    "开始时间": st + clk,
+                    "结束时间": en + clk,
+                    "上下文编号": "pallier2025|run-06|sequence-000",
+                    "数据划分": "test",
+                    "是否可训练": True,
+                    "排除原因": "",
+                    "词性": pos,
+                    "是否内容词": is_c,
+                }
+            )
+    ev_df_disk = pd.DataFrame(rows)
+    ev_df_disk.to_csv(ev_dir / "events.csv", index=False)
+
+    # 1. Verify cross-subject wait grouping does not merge sub-01 and sub-02 (mean full wait = 2.0s, NOT > 1000s)
+    wait_rows = compute_word_horizon_physical_waits(
+        ev_df_disk, split="test", horizons=(0, 1, 2, "full"), window_seconds=1.0, common_horizon_delay=2
+    )
+    by_h = {r["horizon"]: r for r in wait_rows}
+    assert by_h["r=0"]["query_count"] == 4
+    assert by_h["r=0"]["mean_wait_windows"] == pytest.approx(1.0)
+    assert by_h["r=0"]["mean_wait_seconds"] == pytest.approx(1.0)
+    assert by_h["full"]["mean_wait_windows"] == pytest.approx(3.5)
+    assert by_h["full"]["mean_wait_seconds"] == pytest.approx(2.05)
+
+    # 2. Verify k2:: multi-subject group_id enrichment works even without event_ids/event_indices
+    ms_segs = [
+        {
+            "segment_index": 0,
+            "group_id": "k2::pallier2025|sub-01|run-06::pallier2025|run-06|sequence-000",
+            "subject_id": "multi_subject_k2",
+            "recording_id": "pallier2025|sub-01|run-06",
+            "reference_words": ["le", "petit", "prince", "parle"],
+        }
+    ]
+    enrich_segments_from_event_table(ms_segs, ev_df_disk, split="test")
+    assert ms_segs[0]["onset_seconds"] == pytest.approx([10.0, 10.3, 10.7, 11.2])
+    assert ms_segs[0]["pos_tags"] == ["DET", "ADJ", "NC", "V"]
+    assert ms_segs[0]["is_content_word_mask"] == [False, True, True, True]
+
+    # 3. Verify run_manuscript_study_exports discovers $BRAINDECODING_CACHE_DIR/pallier2025/events/events.csv automatically
+    # with an UN-ENRICHED .pt and an UN-ENRICHED sequence_decoding_test.json
+    vocab = ["le", "petit", "prince", "parle"]
+    vocab_emb = torch.eye(4, dtype=torch.float32)
+    ref_words = ["le", "petit", "prince", "parle", "le", "petit", "prince", "parle"]
+    subj_ids = ["sub-01"] * 4 + ["sub-02"] * 4
+    pt_segments = [
+        {
+            "segment_index": 0,
+            "group_id": "pallier2025|sub-01|run-06::pallier2025|run-06|sequence-000",
+            "subject_id": "sub-01",
+            "recording_id": "pallier2025|sub-01|run-06",
+            "event_indices": [0, 1, 2, 3],
+            "reference_words": ["le", "petit", "prince", "parle"],
+        },
+        {
+            "segment_index": 1,
+            "group_id": "pallier2025|sub-02|run-06::pallier2025|run-06|sequence-000",
+            "subject_id": "sub-02",
+            "recording_id": "pallier2025|sub-02|run-06",
+            "event_indices": [4, 5, 6, 7],
+            "reference_words": ["le", "petit", "prince", "parle"],
+        },
+    ]
+    k2_scores = torch.cat([torch.eye(4, dtype=torch.float32), torch.eye(4, dtype=torch.float32)], dim=0) * 3.0
+    s0_scores = torch.zeros((8, 4), dtype=torch.float32)
+    pt_path = tmp_path / "unenriched.pt"
+    torch.save(
+        {
+            "dataset": "pallier2025",
+            "language": "fr",
+            "split": "test",
+            "vocabulary": vocab,
+            "vocabulary_embeddings": vocab_emb,
+            "vocabulary_train_counts": {w: 10 for w in vocab},
+            "reference_words": ref_words,
+            "subject_ids": subj_ids,
+            "segments": pt_segments,
+            "clean_scores": {"S0": s0_scores, "K0": s0_scores, "K1": k2_scores * 0.5, "K2": k2_scores},
+            "shifted_scores": {"K0": s0_scores, "K1": s0_scores, "K2": s0_scores},
+        },
+        pt_path,
+    )
+    dec_path = tmp_path / "unenriched_dec.json"
+    dec_path.write_text(
+        json.dumps(
+            {
+                "decoded_bundles": {
+                    "S3_clean": {
+                        "final_sentences": [
+                            {
+                                "segment_index": 0,
+                                "group_id": "pallier2025|sub-01|run-06::pallier2025|run-06|sequence-000",
+                                "subject_id": "sub-01",
+                                "recording_id": "pallier2025|sub-01|run-06",
+                                "reference_words": ["le", "petit", "prince", "parle"],
+                                "predicted_words": ["le", "petit", "prince", "parle"],
+                            },
+                            {
+                                "segment_index": 1,
+                                "group_id": "pallier2025|sub-02|run-06::pallier2025|run-06|sequence-000",
+                                "subject_id": "sub-02",
+                                "recording_id": "pallier2025|sub-02|run-06",
+                                "reference_words": ["le", "petit", "prince", "parle"],
+                                "predicted_words": ["le", "petit", "prince", "parle"],
+                            },
+                        ]
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out_auto = tmp_path / "auto_out"
+    manifest = run_manuscript_study_exports(
+        dataset="pallier2025",
+        split="test",
+        output_dir=out_auto,
+        repo_root=tmp_path / "empty_repo",
+        export_pt=pt_path,
+        decoding_json=dec_path,
+        n_permutations=15,
+    )
+    exp = manifest["exported_files"]
+    assert Path(exp["physical_wait_csv"]).is_file()
+    assert Path(exp["duration_prior_alignment_csv"]).is_file()
+    assert Path(exp["pos_four_way_csv"]).is_file()
+    abl_df = pd.read_csv(exp["brain_only_vs_lm_ablation_csv"])
+    assert float(abl_df["bertscore_f1_pct"].iloc[0]) > 0.0
+    assert pd.notna(abl_df["mean_physical_wait_seconds"].iloc[0])

@@ -20,8 +20,11 @@ import numpy as np
 import pandas as pd
 import torch
 
-from braindecoding.config import PROJECT_ROOT
-from braindecoding.data.derived_cache import restore_legacy_columns
+from braindecoding.config import PROJECT_ROOT, project_path
+from braindecoding.data.derived_cache import (
+    canonical_cache_paths,
+    restore_legacy_columns,
+)
 from braindecoding.decoding.neural_score_exporter import (
     enrich_segments_from_event_table,
 )
@@ -156,6 +159,8 @@ def compute_word_horizon_physical_waits(
     if onset_col is None:
         raise ValueError("event_table lacks onset column (onset_seconds / 开始时间).")
 
+    subj_col = _pick_first_column(df.columns, ("subject_id", "受试者"))
+    rec_col = _pick_first_column(df.columns, ("recording_id", "记录编号"))
     ctx_col = _pick_first_column(
         df.columns,
         (
@@ -163,23 +168,33 @@ def compute_word_horizon_physical_waits(
             "sentence_uid",
             "context_id",
             "上下文编号",
-            "recording_id",
-            "记录编号",
         ),
     )
+    group_cols: list[str] = []
+    for c in (subj_col, rec_col, ctx_col):
+        if c is not None and c not in group_cols:
+            group_cols.append(c)
+
     ord_col = _pick_first_column(
         df.columns,
         ("in_recording_index", "记录内序号", "original_seq_index", "序列原编号"),
     )
-    sort_cols = [c for c in (ctx_col, onset_col, ord_col) if c is not None]
+    sort_cols: list[str] = [*group_cols]
+    for c in (onset_col, ord_col):
+        if c is not None and c not in sort_cols:
+            sort_cols.append(c)
     if sort_cols:
         df = df.sort_values(sort_cols, kind="mergesort")
 
     grouped_onsets: list[np.ndarray] = []
-    if ctx_col is None:
-        grouped_onsets.append(pd.to_numeric(df[onset_col], errors="coerce").to_numpy(dtype=np.float64))
+    if not group_cols:
+        arr = pd.to_numeric(df[onset_col], errors="coerce").to_numpy(dtype=np.float64)
+        arr = arr[np.isfinite(arr)]
+        if len(arr) > 0:
+            grouped_onsets.append(arr)
     else:
-        for _, grp in df.groupby(ctx_col, sort=False):
+        by_arg: Any = group_cols[0] if len(group_cols) == 1 else group_cols
+        for _, grp in df.groupby(by_arg, sort=False):
             arr = pd.to_numeric(grp[onset_col], errors="coerce").to_numpy(
                 dtype=np.float64
             )
@@ -204,6 +219,7 @@ def compute_word_horizon_physical_waits(
             disp = f"Local (r = {r_val})"
 
         waits: list[float] = []
+        waits_win: list[float] = []
         for tau in grouped_onsets:
             n_tok = int(len(tau))
             if n_tok <= delay_guard:
@@ -213,16 +229,19 @@ def compute_word_horizon_physical_waits(
             for pos in range(limit):
                 end_pos = last_idx if r_val is None else min(last_idx, pos + r_val)
                 waits.append(max(win_s, float((tau[end_pos] + win_s) - tau[pos])))
+                waits_win.append(float(end_pos - pos + 1))
 
         if not waits:
             continue
         arr_w = np.asarray(waits, dtype=np.float64)
+        arr_win = np.asarray(waits_win, dtype=np.float64)
         out_rows.append(
             {
                 "horizon": h_key,
                 "paper_display_name": disp,
                 "common_horizon_delay": delay_guard,
                 "query_count": int(len(arr_w)),
+                "mean_wait_windows": round(float(np.mean(arr_win)), 6),
                 "mean_wait_seconds": round(float(np.mean(arr_w)), 6),
                 "std_wait_seconds": round(
                     float(np.std(arr_w, ddof=1 if len(arr_w) > 1 else 0)), 6
@@ -1456,8 +1475,10 @@ def export_sentence_and_subject_coupling_studies(
                     for eid_v, st_v, en_v in zip(ev_vals, st_vals, en_vals):
                         if math.isfinite(st_v) and math.isfinite(en_v) and en_v > st_v:
                             dur_lookup[eid_v] = float(en_v - st_v)
-                    matched_d = [dur_lookup.get(eid_v, float("nan")) for eid_v in payload_eids]
-                    if all(math.isfinite(x) and x > 0.0 for x in matched_d):
+                    matched_d = [
+                        dur_lookup.get(eid_v, float("nan")) for eid_v in payload_eids
+                    ]
+                    if sum(1 for x in matched_d if math.isfinite(x) and x > 0.0) >= 2:
                         durs_by_event_idx = np.asarray(matched_d, dtype=np.float64)
 
         if durs_by_event_idx is None and score_payload.get("segments"):
@@ -1475,9 +1496,13 @@ def export_sentence_and_subject_coupling_studies(
                 ):
                     for r_i, s_t, e_t in zip(row_idxs, ons, offs):
                         d_v = float(e_t) - float(s_t)
-                        if 0 <= r_i < len(dur_buf) and math.isfinite(d_v) and d_v > 0.0:
+                        if (
+                            0 <= r_i < len(dur_buf)
+                            and math.isfinite(d_v)
+                            and d_v > 0.0
+                        ):
                             dur_buf[r_i] = d_v
-            if np.all(np.isfinite(dur_buf) & (dur_buf > 0.0)):
+            if int(np.sum(np.isfinite(dur_buf) & (dur_buf > 0.0))) >= 2:
                 durs_by_event_idx = dur_buf
 
         if durs_by_event_idx is not None and len(durs_by_event_idx) == len(ref_words):
@@ -1513,6 +1538,7 @@ def export_sentence_and_subject_coupling_studies(
                             train_d_fit = td_clean
 
             avail_map = score_payload.get("availability_masks") or {}
+            valid_dur_mask = np.isfinite(durs_by_event_idx) & (durs_by_event_idx > 0.0)
             js_rows: list[dict[str, Any]] = []
             for align in ("clean", "shifted"):
                 for cond_k in ("S0", "K0", "K1", "K2", "F"):
@@ -1521,7 +1547,7 @@ def export_sentence_and_subject_coupling_studies(
                     )
                     if mat is None or mat.shape[0] != len(ref_words):
                         continue
-                    row_mask = np.ones(len(ref_words), dtype=bool)
+                    row_mask = valid_dur_mask.copy()
                     if cond_k in avail_map and avail_map[cond_k] is not None:
                         am = np.asarray(
                             avail_map[cond_k].cpu().numpy()
@@ -1569,6 +1595,20 @@ def export_sentence_and_subject_coupling_studies(
 
     # 2. Decoded bundles: Brain-Only ablation + 4-way POS + quantile sentence examples
     if isinstance(decoded_bundles, Mapping) and decoded_bundles:
+        word_embedding_map: dict[str, np.ndarray] | None = None
+        if isinstance(score_payload, Mapping):
+            v_words = [str(w) for w in (score_payload.get("vocabulary") or ())]
+            v_embs = score_payload.get("vocabulary_embeddings")
+            if v_embs is not None and len(v_words) == len(v_embs):
+                emb_arr = (
+                    v_embs.detach().cpu().numpy()
+                    if isinstance(v_embs, torch.Tensor)
+                    else np.asarray(v_embs, dtype=np.float32)
+                )
+                word_embedding_map = {
+                    w: emb_arr[idx] for idx, w in enumerate(v_words)
+                }
+
         ablation_rows: list[dict[str, Any]] = []
         pos4_rows: list[dict[str, Any]] = []
         ordered_keys = (
@@ -1602,7 +1642,11 @@ def export_sentence_and_subject_coupling_studies(
             if not recs:
                 continue
             m6 = evaluate_six_dimensional_metrics(
-                recs, language=language, condition=str(ck), compute_paired_stats=False
+                recs,
+                language=language,
+                word_embedding_map=word_embedding_map,
+                condition=str(ck),
+                compute_paired_stats=False,
             )
             mode = (
                 "Brain-Only"
@@ -1748,30 +1792,40 @@ def run_manuscript_study_exports(
     language = "fr" if str(dataset) == "pallier2025" else "zh"
 
     _aux_event_columns = {
+        "onset_seconds": "开始时间",
+        "offset_seconds": "结束时间",
+        "in_recording_index": "记录内序号",
         "pos": "词性",
-        "is_content_word": "是否实义词",
-        "runtime_context_uid": "上下文编号",
-        "sentence_uid": "句子编号",
+        "is_content_word": "是否内容词",
     }
     event_table: pd.DataFrame | None = None
+    candidate_ev_paths: list[Path] = []
     if event_table_csv is not None and Path(event_table_csv).is_file():
-        event_table = restore_legacy_columns(
-            pd.read_csv(event_table_csv), _aux_event_columns
-        )
+        candidate_ev_paths.append(Path(event_table_csv))
     else:
-        cand_ev = (
-            root
-            / "data"
-            / "cache"
-            / "derived"
-            / dataset
-            / "events"
-            / "event_table.csv"
-        )
-        if cand_ev.is_file():
-            event_table = restore_legacy_columns(
-                pd.read_csv(cand_ev), _aux_event_columns
+        try:
+            candidate_ev_paths.append(
+                project_path(canonical_cache_paths(dataset)["event_table"])
             )
+        except ValueError:
+            pass
+        candidate_ev_paths.extend(
+            [
+                root / "data" / "cache" / "derived" / dataset / "events" / "events.csv",
+                root
+                / "data"
+                / "cache"
+                / "derived"
+                / dataset
+                / "events"
+                / "event_table.csv",
+            ]
+        )
+    chosen_ev_path = next((p for p in candidate_ev_paths if p.is_file()), None)
+    if chosen_ev_path is not None:
+        event_table = restore_legacy_columns(
+            pd.read_csv(chosen_ev_path, low_memory=False), _aux_event_columns
+        )
 
     score_payload: dict[str, Any] | None = None
     if export_pt is not None and Path(export_pt).is_file():
@@ -1783,7 +1837,9 @@ def run_manuscript_study_exports(
             and event_table is not None
             and isinstance(score_payload.get("segments"), list)
         ):
-            enrich_segments_from_event_table(score_payload["segments"], event_table)
+            enrich_segments_from_event_table(
+                score_payload["segments"], event_table, split=split
+            )
 
     decoded_bundles: dict[str, Any] | None = None
     if decoding_json is not None and Path(decoding_json).is_file():
@@ -1796,7 +1852,7 @@ def run_manuscript_study_exports(
                     bundle.get("final_sentences"), list
                 ):
                     enrich_segments_from_event_table(
-                        bundle["final_sentences"], event_table
+                        bundle["final_sentences"], event_table, split=split
                     )
 
     eval_summary: dict[str, Any] | None = None

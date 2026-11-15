@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-11-15T09:09:45Z",
+  "updated_at": "2026-11-15T11:04:31Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "110c502900775c590a30c9a653ce6c7cd82bacb24aa20a10014f628f6184fc23",
-      "size": 46328,
-      "normalized_sha256": "110c502900775c590a30c9a653ce6c7cd82bacb24aa20a10014f628f6184fc23"
+      "sha256": "468095a88b726eb4a2be60ccf215ef7d3e5b6a1290c5b21c56eafced430cb1e6",
+      "size": 46471,
+      "normalized_sha256": "468095a88b726eb4a2be60ccf215ef7d3e5b6a1290c5b21c56eafced430cb1e6"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -143,9 +143,9 @@
     },
     "braindecoding/decoding/neural_score_exporter.py": {
       "role": "index",
-      "sha256": "54d9ff2787d40bb2298dc107c7e92573ace1cfb8ccdbedacb7e3e60947ea2ccf",
-      "size": 80156,
-      "normalized_sha256": "54d9ff2787d40bb2298dc107c7e92573ace1cfb8ccdbedacb7e3e60947ea2ccf"
+      "sha256": "37801cf751f6a0e0236e4cb7c1fb5816f9f9e5d8f40972eb35dd24d6ed4d50c3",
+      "size": 86067,
+      "normalized_sha256": "37801cf751f6a0e0236e4cb7c1fb5816f9f9e5d8f40972eb35dd24d6ed4d50c3"
     },
     "braindecoding/decoding/rolling_beam_search.py": {
       "role": "index",
@@ -209,9 +209,9 @@
     },
     "braindecoding/evaluation/manuscript_study_exporter.py": {
       "role": "index",
-      "sha256": "d3761b41c639ce5e460f1485ae6cc3c225cef8e598a232152e3873158ac71bc3",
-      "size": 76538,
-      "normalized_sha256": "d3761b41c639ce5e460f1485ae6cc3c225cef8e598a232152e3873158ac71bc3"
+      "sha256": "84f0041e8f6206eb51937515469e3c519c5818b72965ae4513d0ea34ae497ecf",
+      "size": 78849,
+      "normalized_sha256": "84f0041e8f6206eb51937515469e3c519c5818b72965ae4513d0ea34ae497ecf"
     },
     "braindecoding/evaluation/retrieval_metrics.py": {
       "role": "index",
@@ -1066,9 +1066,9 @@
     },
     "scripts/colab/colab_pallier2025_task_pipeline.ipynb": {
       "role": "index",
-      "sha256": "6fb3ebb0b9ce18bfbd25b7da3d134133afaacc5ebdf23e294d2b73478d22564f",
-      "size": 44270,
-      "normalized_sha256": "6fb3ebb0b9ce18bfbd25b7da3d134133afaacc5ebdf23e294d2b73478d22564f"
+      "sha256": "123af4754879e9896f955ab141ee7819f99ec00beb829915edf9f08dad39fbfe",
+      "size": 46307,
+      "normalized_sha256": "123af4754879e9896f955ab141ee7819f99ec00beb829915edf9f08dad39fbfe"
     },
     "scripts/colab_setup.py": {
       "role": "index",
@@ -1078,9 +1078,9 @@
     },
     "scripts/decode_sentences.py": {
       "role": "index",
-      "sha256": "4cb3d369ff013e82dccb537654f64b7f24a727a55e1f4611c3b63703ca552ec9",
-      "size": 111444,
-      "normalized_sha256": "4cb3d369ff013e82dccb537654f64b7f24a727a55e1f4611c3b63703ca552ec9"
+      "sha256": "79f580291a05ac965457d2bafded2fd4663adadd9a9a43ef91abceebfc9243b8",
+      "size": 115412,
+      "normalized_sha256": "79f580291a05ac965457d2bafded2fd4663adadd9a9a43ef91abceebfc9243b8"
     },
     "scripts/export_manuscript_studies.py": {
       "role": "index",
