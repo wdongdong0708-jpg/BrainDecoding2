@@ -73,11 +73,56 @@ def parse_args() -> argparse.Namespace:
         default=200,
         help="Number of permutations for Δ_JS duration-prior alignment test.",
     )
+    parser.add_argument(
+        "--results-dir",
+        default=None,
+        help="Optional results root containing dataset experiment directories.",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default=None,
+        help="Optional preprocessed dataset cache directory override.",
+    )
+    parser.add_argument(
+        "--eval-subdir",
+        default="causal_fast_audit",
+        help="Word evaluation subdirectory under each run/seed directory.",
+    )
+    parser.add_argument(
+        "--seeds",
+        default="0,1,2",
+        help="Comma-separated seed indices for 5-model T5-Large diagnostics.",
+    )
+    parser.add_argument(
+        "--run-five-model-diagnostics",
+        action="store_true",
+        help="Run forward-only T5-Large 5-model synthetic, JS-prior, and Top-10 diagnostics.",
+    )
+    parser.add_argument(
+        "--five-model-diagnostics-json",
+        default=None,
+        help="Path to an existing five_model_t5_diagnostics_<split>.json summary to materialize.",
+    )
+    parser.add_argument(
+        "--collect-long-window-results",
+        action="store_true",
+        help="Collect T5-Large isolated long-window and Local r=0/1/2 comparison rows.",
+    )
+    parser.add_argument(
+        "--force-diagnostics",
+        action="store_true",
+        help="Recompute 5-model T5-Large diagnostics even if cached JSON exists.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    seed_tuple = tuple(
+        int(item.strip())
+        for item in str(args.seeds).split(",")
+        if item.strip()
+    )
     manifest = run_manuscript_study_exports(
         dataset=args.dataset,
         split=args.split,
@@ -90,6 +135,14 @@ def main() -> None:
         event_table_csv=args.event_table_csv,
         primary_condition=args.primary_condition,
         n_permutations=args.n_permutations,
+        results_dir=args.results_dir,
+        cache_dir=args.cache_dir,
+        eval_subdir=args.eval_subdir,
+        seeds=seed_tuple,
+        run_five_model_diagnostics=bool(args.run_five_model_diagnostics),
+        five_model_diagnostics_json=args.five_model_diagnostics_json,
+        collect_long_window_results=bool(args.collect_long_window_results),
+        force_diagnostics=bool(args.force_diagnostics),
     )
     print(
         json.dumps(

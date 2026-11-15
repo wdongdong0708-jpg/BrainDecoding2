@@ -38,6 +38,8 @@ def test_lazy_exports_and_subpackage_alias_resolution() -> None:
         "export_sentence_neural_top5_matrix",
         "export_decoded_sentence_quantile_examples",
         "export_subject_retrieval_sentence_coupling",
+        "evaluate_five_model_t5_diagnostics",
+        "collect_t5_long_window_comparison_rows",
         "export_synthetic_and_horizon_studies",
         "export_sentence_and_subject_coupling_studies",
         "run_manuscript_study_exports",
@@ -390,8 +392,9 @@ def test_full_exporter_pipeline_and_cli_to_tmp_path(tmp_path: Path) -> None:
     synth_res = export_synthetic_and_horizon_studies(
         repo_root=fake_repo, output_dir=out_dir_py, event_table=ev_df, dataset="pallier2025", split="test"
     )
-    assert Path(synth_res["exported_files"]["synthetic_timing_csv"]).is_file()
-    assert Path(synth_res["exported_files"]["long_window_csv"]).is_file()
+    # 严禁回退加载旧版 BGE-M3 synthetic_timing_v2 / single_word_long_window_test_v2
+    assert "synthetic_timing_csv" not in synth_res["exported_files"]
+    assert "long_window_csv" not in synth_res["exported_files"]
     assert Path(synth_res["exported_files"]["physical_wait_csv"]).is_file()
 
     payload = torch.load(arts["pt_path"], map_location="cpu", weights_only=False)
@@ -629,3 +632,453 @@ def test_chinese_canonical_events_cache_dir_and_multi_subject_enrichment(
     abl_df = pd.read_csv(exp["brain_only_vs_lm_ablation_csv"])
     assert float(abl_df["bertscore_f1_pct"].iloc[0]) > 0.0
     assert pd.notna(abl_df["mean_physical_wait_seconds"].iloc[0])
+
+
+def test_t5_diag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """端到端验证 T5-Large 5 模型脉冲对照、Δ_JS 先验对齐、1.00–2.50s 长窗对照、缓存命中与非覆盖 CLI 导出。"""
+    import copy
+
+    import braindecoding.data.pallier2025_dataset as pallier_ds_mod
+    from braindecoding.data.text import save_text_embedding_cache
+    from braindecoding.evaluation.manuscript_study_exporter import (
+        CANONICAL_PALLIER2025_FIVE_MODEL_SPECS,
+        evaluate_five_model_t5_diagnostics,
+    )
+    from braindecoding.models import build_brain_embedding_model
+    from braindecoding.tasks.word_decoding.pallier2025 import train as pallier_train
+    from braindecoding.training.workflow_runner import build_workflow_config
+
+    cache_dir = tmp_path / "c"
+    results_dir = tmp_path / "r"
+    ds_cache_dir = cache_dir / "pallier2025"
+    ev_dir = ds_cache_dir / "events"
+    meg_dir = ds_cache_dir / "meg"
+    text_path = ds_cache_dir / "text" / "t5_large_layer_0_5" / "embeddings.npz"
+    ev_dir.mkdir(parents=True)
+    text_path.parent.mkdir(parents=True)
+
+    monkeypatch.setenv("BRAINDECODING_CACHE_DIR", str(cache_dir))
+    monkeypatch.setattr(
+        pallier_ds_mod,
+        "channel_names_sha256",
+        lambda names: pallier_ds_mod.CHANNEL_NAMES_SHA256,
+    )
+    monkeypatch.setattr(
+        pallier_ds_mod,
+        "vectorview_channel_positions",
+        lambda names, path=None: np.zeros((len(names), 2), dtype=np.float32),
+    )
+
+    all_vocab50 = list(pallier_train.frozen_vocabulary())
+    vocab_words = list(all_vocab50[:6])
+    all_embs = np.zeros((len(all_vocab50), 1024), dtype=np.float32)
+    for idx in range(len(all_vocab50)):
+        all_embs[idx, idx] = 1.0
+    text_cfg = {
+        "model_name": "t5-large",
+        "layer_fraction": 0.5,
+        "token_aggregation": "mean",
+        "embedding_dimension": 1024,
+        "word_normalization": "canonical_standard_word",
+    }
+    save_text_embedding_cache(text_path, all_vocab50, all_embs, text_cfg)
+
+    channel_names = [f"MEG{index:04d}" for index in range(pallier_ds_mod.MEG_CHANNEL_COUNT)]
+    rng = np.random.default_rng(12345)
+    ev_rows: list[dict[str, object]] = []
+    pos_tags = ["DET", "NC", "V", "ADJ", "ADV", "PRE"]
+    durs_s = [0.15, 0.35, 0.45, 0.55, 0.65, 0.25]
+    onsets_s = [2.0, 2.4, 2.9, 3.5, 4.2]
+
+    for subj in ("sub-01", "sub-02"):
+        for split_name, run_name in (("train", "run-01"), ("test", "run-06")):
+            rec_id = f"pallier2025|{subj}|{run_name}"
+            sig_p, side_p = pallier_ds_mod._signal_product_paths(meg_dir, subj, run_name)
+            sig_p.parent.mkdir(parents=True, exist_ok=True)
+            np.save(
+                sig_p,
+                rng.normal(0.0, 0.5, size=(pallier_ds_mod.MEG_CHANNEL_COUNT, 800)).astype(
+                    np.float32
+                ),
+            )
+            side_p.write_text(
+                json.dumps(
+                    {
+                        "recording_id": rec_id,
+                        "source_first_samp": 1000,
+                        "source_sampling_rate_hz": 1000.0,
+                        "output_sampling_rate_hz": 50.0,
+                        "channel_count": pallier_ds_mod.MEG_CHANNEL_COUNT,
+                        "channel_names": channel_names,
+                        "channel_names_sha256": pallier_ds_mod.CHANNEL_NAMES_SHA256,
+                        "dtype": "float32",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for idx in range(5):
+                w_idx = (idx + (0 if split_name == "train" else 1)) % 6
+                w = vocab_words[w_idx]
+                st = onsets_s[idx]
+                en = st + durs_s[w_idx]
+                ev_rows.append(
+                    {
+                        "事件编号": f"{rec_id}|{split_name}-{idx}",
+                        "受试者": subj,
+                        "记录编号": rec_id,
+                        "运行编号": run_name,
+                        "材料编号": f"mat-{split_name}",
+                        "划分单元": f"unit-{split_name}",
+                        "记录内序号": idx,
+                        "词": w,
+                        "标准词": w,
+                        "开始时间": st,
+                        "结束时间": en,
+                        "上下文编号": f"pallier2025|{run_name}|sequence-000",
+                        "数据划分": split_name,
+                        "是否可训练": True,
+                        "排除原因": "",
+                        "词性": pos_tags[w_idx],
+                        "是否内容词": w_idx >= 1,
+                    }
+                )
+    ev_df = pd.DataFrame(ev_rows)
+    ev_csv_path = ev_dir / "events.csv"
+    ev_df.to_csv(ev_csv_path, index=False)
+
+    # Identify ordered common test event_ids for cached subspace_encoded_cache_test.pt
+    test_ev = ev_df[ev_df["数据划分"] == "test"].copy()
+    test_ev_ids = test_ev["事件编号"].astype(str).tolist()
+    test_words_all = test_ev["标准词"].astype(str).tolist()
+    common_mask = test_ev["记录内序号"].to_numpy() <= 2
+    common_eids = [e for e, m in zip(test_ev_ids, common_mask) if m]
+    common_words_lst = [w for w, m in zip(test_words_all, common_mask) if m]
+
+    def _tiny_model_cfg(stage_name: str, cfg_path_rel: str) -> dict[str, object]:
+        cfg_m, _ = build_workflow_config(
+            "pallier2025",
+            stage=stage_name,
+            seed=0,
+            subject="all",
+            config_path=cfg_path_rel,
+            mode="eval",
+        )
+        m_cfg = copy.deepcopy(cfg_m["model"])
+        m_cfg["conv"].update(
+            {
+                "merger_channels": 8,
+                "merger_position_dimension": 32,
+                "initial_linear": 16,
+                "hidden": 16,
+                "depth": 1,
+                "temporal_attention_hidden": 16,
+            }
+        )
+        m_cfg["transformer"].update({"depth": 1, "heads": 2})
+        if stage_name == "prefix_revision":
+            lwr = dict(m_cfg.get("local_window_revision") or {})
+            lwr["validation_query_batch_size"] = 8
+            lwr["horizons"] = [0, 1, 2]
+            m_cfg["local_window_revision"] = lwr
+        return m_cfg
+
+    def _mk_seed_summary_entry(
+        seed_val: int, *, stage_name: str, c50_10: float, s50_10: float, fv_10: float
+    ) -> dict[str, object]:
+        if stage_name in ("revision", "prefix_revision"):
+            clean_hz = {
+                f"K{h}": {
+                    "common_vocab50_macro_top10": c50_10 - 0.02 * (2 - h),
+                    "common_vocab50_macro_top1": 0.12,
+                    "common_full_vocab_word_macro_top10": fv_10 - 0.01 * (2 - h),
+                    "common_full_vocab_subject_macro_top10": fv_10 - 0.02 * (2 - h),
+                }
+                for h in (0, 1, 2)
+            }
+            sh_hz = {
+                f"K{h}": {
+                    "mean_common_vocab50_macro_top10": s50_10,
+                    "mean_common_vocab50_macro_top1": 0.05,
+                    "mean_common_full_vocab_word_macro_top10": s50_10 * 0.5,
+                    "mean_common_full_vocab_subject_macro_top10": s50_10 * 0.5,
+                }
+                for h in (0, 1, 2)
+            }
+            return {
+                "seed": seed_val,
+                "vocabulary_sweep": {"full_vocab": {"candidate_count": 6}},
+                "negative_controls": {
+                    "methods": {
+                        "raw": {
+                            "clean_reference": {"horizons": clean_hz},
+                            "shifted_aggregate": {"horizons": sh_hz},
+                        }
+                    }
+                },
+            }
+        return {
+            "seed": seed_val,
+            "vocabulary_sweep": {"full_vocab": {"candidate_count": 6}},
+            "negative_controls": {
+                "methods": {
+                    "raw": {
+                        "clean_reference": {
+                            "vocab50_macro_top10": c50_10,
+                            "vocab50_macro_top1": 0.10,
+                            "full_vocab_word_macro_top10": fv_10,
+                            "full_vocab_subject_macro_top10": fv_10,
+                        },
+                        "shifted_aggregate": {
+                            "mean_vocab50_macro_top10": s50_10,
+                            "mean_vocab50_macro_top1": 0.05,
+                            "mean_full_vocab_word_macro_top10": s50_10 * 0.5,
+                            "mean_full_vocab_subject_macro_top10": s50_10 * 0.5,
+                        },
+                    }
+                }
+            },
+        }
+
+    dummy_pos = np.zeros((pallier_ds_mod.MEG_CHANNEL_COUNT, 2), dtype=np.float32)
+    base_pred = torch.zeros((len(test_ev_ids), 1024), dtype=torch.float32)
+    for row_i, w in enumerate(test_words_all):
+        base_pred[row_i, vocab_words.index(w)] = 1.0
+    sh_pred = torch.zeros((len(test_ev_ids), 1024), dtype=torch.float32)
+    sh_pred[:, 0] = 1.0
+
+    # Save checkpoints + causal_fast_audit summaries + encoded caches for all 5 canonical models
+    for idx_sp, sp in enumerate(CANONICAL_PALLIER2025_FIVE_MODEL_SPECS):
+        stage_m = str(sp["stage"])
+        exp_tag = str(sp["exp_tag"])
+        m_cfg = _tiny_model_cfg(stage_m, str(sp["config_path"]))
+        seed_entries = []
+        for sd in (0, 1):
+            torch.manual_seed(100 + idx_sp * 10 + sd)
+            tiny_model = build_brain_embedding_model(
+                pallier_ds_mod.MEG_CHANNEL_COUNT, dummy_pos, 10, m_cfg
+            )
+            ckpt_dir = results_dir / "pallier2025" / exp_tag / stage_m / "all-n10" / f"seed-{sd:03d}"
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {"model_state": tiny_model.state_dict(), "model_config": m_cfg},
+                ckpt_dir / "best.ckpt",
+            )
+            seed_entries.append(
+                _mk_seed_summary_entry(
+                    sd,
+                    stage_name=stage_m,
+                    c50_10=0.40 + 0.04 * idx_sp,
+                    s50_10=0.20 + (0.25 if "undebiased" in sp["condition_key"] else 0.02),
+                    fv_10=0.25 + 0.03 * idx_sp,
+                )
+            )
+            # Save encoded cache with Clean + Shifted so duration_prior_alignment covers all 3 alignments
+            enc_dir = (
+                results_dir
+                / "pallier2025"
+                / exp_tag
+                / "cfa"
+                / stage_m
+                / "all-n10"
+                / f"seed-{sd:03d}"
+                / "exploratory"
+            )
+            enc_dir.mkdir(parents=True, exist_ok=True)
+            if stage_m in ("revision", "prefix_revision"):
+                c_enc = {
+                    "event_ids": list(common_eids),
+                    "words": list(common_words_lst),
+                    "revision_predictions": {
+                        h: base_pred[common_mask].clone() for h in (0, 1, 2)
+                    },
+                }
+                s_enc = {
+                    "event_ids": list(common_eids),
+                    "words": list(common_words_lst),
+                    "revision_predictions": {
+                        h: sh_pred[common_mask].clone() for h in (0, 1, 2)
+                    },
+                }
+            else:
+                c_enc = {
+                    "event_ids": list(test_ev_ids),
+                    "words": list(test_words_all),
+                    "predictions": base_pred.clone(),
+                }
+                s_enc = {
+                    "event_ids": list(test_ev_ids),
+                    "words": list(test_words_all),
+                    "predictions": sh_pred.clone(),
+                }
+            torch.save(
+                {
+                    "clean_encoded": c_enc,
+                    "shifted_encoded_by_shift": [(-10.0, "preroll", None, s_enc)],
+                },
+                enc_dir / "subspace_encoded_cache_test.pt",
+            )
+
+        ms_dir = results_dir / "pallier2025" / exp_tag / "cfa" / stage_m / "all-n10"
+        ms_dir.mkdir(parents=True, exist_ok=True)
+        (ms_dir / "multi_seed_evaluation_test.json").write_text(
+            json.dumps({"seed_results": seed_entries}), encoding="utf-8"
+        )
+
+    # Save cfa summaries for 1.28 / 1.50 / 2.50s isolated long-window Stage-1 controls
+    for lw_idx, lw_tag in enumerate(
+        ("lr4e-4_bs256_win1p28", "lr4e-4_bs256_win1p50", "lr4e-4_bs256_win2p50"), start=1
+    ):
+        lw_ms_dir = results_dir / "pallier2025" / lw_tag / "cfa" / "word" / "all-n10"
+        lw_ms_dir.mkdir(parents=True, exist_ok=True)
+        lw_ms_dir.joinpath("multi_seed_evaluation_test.json").write_text(
+            json.dumps(
+                {
+                    "seed_results": [
+                        _mk_seed_summary_entry(
+                            sd,
+                            stage_name="word",
+                            c50_10=0.41 + 0.01 * lw_idx,
+                            s50_10=0.20,
+                            fv_10=0.24 + 0.01 * lw_idx,
+                        )
+                        for sd in (0, 1)
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    diag_out = tmp_path / "d"
+    diag_res = evaluate_five_model_t5_diagnostics(
+        results_dir=results_dir,
+        output_dir=diag_out,
+        dataset="pallier2025",
+        split="test",
+        seeds=(0, 1),
+        eval_subdir="cfa",
+        cache_dir=cache_dir,
+        device="cpu",
+        n_permutations=10,
+    )
+    diag_files = diag_res["exported_files"]
+    for req_k in (
+        "five_model_debiasing_ledger_csv",
+        "synthetic_timing_csv",
+        "duration_prior_alignment_csv",
+        "word_top10_neighborhoods_json",
+        "word_top10_neighborhoods_csv",
+        "five_model_diagnostics_json",
+    ):
+        assert Path(diag_files[req_k]).is_file(), f"Missing {req_k}"
+
+    ledger_df = pd.read_csv(diag_files["five_model_debiasing_ledger_csv"])
+    assert set(ledger_df["condition_key"]) == {
+        "S0",
+        "F_joint_undebiased",
+        "F_freeze_undebiased",
+        "F_debiased",
+        "K2",
+    }
+    assert (ledger_df["text_embedding_model"] == "t5-large").all()
+
+    synth_df = pd.read_csv(diag_files["synthetic_timing_csv"])
+    assert set(synth_df["condition_key"]) == {
+        "S0",
+        "F_joint_undebiased",
+        "F_freeze_undebiased",
+        "F_debiased",
+        "K0",
+        "K1",
+        "K2",
+    }
+    assert {"clean", "shifted", "shared", "independent"} <= set(synth_df["condition"])
+
+    js_df = pd.read_csv(diag_files["duration_prior_alignment_csv"])
+    assert set(js_df["alignment"]) == {"clean", "shifted", "synthetic_shared"}
+    assert "p_holm" in js_df.columns
+    assert len(js_df[js_df["alignment"] == "clean"]) == 7
+
+    nb_obj = json.loads(Path(diag_files["word_top10_neighborhoods_json"]).read_text(encoding="utf-8"))
+    assert nb_obj["text_embedding_model"] == "t5-large"
+    assert len(nb_obj["examples"]) >= 1
+    first_nb = nb_obj["examples"][0]
+    assert "target_mean_duration_ms" in first_nb
+    assert "F_joint_undebiased" in first_nb["conditions"]
+    assert "K2" in first_nb["conditions"]
+    nb_csv_df = pd.read_csv(diag_files["word_top10_neighborhoods_csv"])
+    for col in ("target_mean_duration_ms", "candidate_mean_duration_ms", "cosine_to_target"):
+        assert col in nb_csv_df.columns
+
+    # Cache hit check when force=False
+    cached_diag = evaluate_five_model_t5_diagnostics(
+        results_dir=results_dir,
+        output_dir=diag_out,
+        dataset="pallier2025",
+        split="test",
+        seeds=(0, 1),
+        eval_subdir="cfa",
+        cache_dir=cache_dir,
+        device="cpu",
+        n_permutations=10,
+        force=False,
+    )
+    assert cached_diag["common_query_count"] == diag_res["common_query_count"]
+
+    # CLI archive run reusing --five-model-diagnostics-json + --collect-long-window-results alongside --export-pt
+    s_dir = tmp_path / "s"
+    s_dir.mkdir(parents=True, exist_ok=True)
+    arts = _build_fixture_artifacts(s_dir)
+    archive_dir = tmp_path / "a"
+    cmd = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "export_manuscript_studies.py"),
+        "--dataset",
+        "pallier2025",
+        "--split",
+        "test",
+        "--output-dir",
+        str(archive_dir),
+        "--results-dir",
+        str(results_dir),
+        "--eval-subdir",
+        "cfa",
+        "--five-model-diagnostics-json",
+        diag_files["five_model_diagnostics_json"],
+        "--collect-long-window-results",
+        "--export-pt",
+        str(arts["pt_path"]),
+        "--decoding-json",
+        str(arts["dec_path"]),
+        "--event-table-csv",
+        str(ev_csv_path),
+        "--n-permutations",
+        "10",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    cli_res = json.loads(proc.stdout)
+    assert cli_res["status"] == "completed"
+    cli_files = cli_res["exported_files"]
+    lw_df = pd.read_csv(cli_files["long_window_csv"])
+    assert set(lw_df["condition"]) == {
+        "word_1p00s",
+        "word_1p28s",
+        "word_1p50s",
+        "word_2p50s",
+        "local_r0",
+        "local_r1",
+        "local_r2",
+        "F_debiased",
+    }
+    assert (lw_df["text_embedding_model"] == "t5-large").all()
+
+    # Ensure single-model export_pt did NOT clobber 5-model neighborhood/JS files
+    archived_nb = json.loads(
+        (archive_dir / "word_top10_neighborhoods.json").read_text(encoding="utf-8")
+    )
+    assert "F_joint_undebiased" in archived_nb["examples"][0]["conditions"]
+    archived_js = pd.read_csv(archive_dir / "duration_prior_alignment.csv")
+    assert set(archived_js["alignment"]) == {"clean", "shifted", "synthetic_shared"}
+    assert Path(cli_files["sentence_neural_top5_json"]).is_file()
+    assert Path(cli_files["brain_only_vs_lm_ablation_csv"]).is_file()

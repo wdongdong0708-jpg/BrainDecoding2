@@ -80,7 +80,7 @@
 | **`Local (r = 2)`** | `0.08` | **`21.74 ± 0.99`** | **`18.70 ± 0.94`** | **`12.10 ± 0.29`** | `2.61` | **`14.09 ± 0.42`** | `2.69` |
 | `Full-Context` | `0.37` | `20.90 ± 2.01` | `17.55 ± 1.75` | `10.51 ± 1.94` | `5.33` | `12.38 ± 0.97` | `8.31` |
 
-*(局部单字长窗对照存档于 `data/results/studies/single_word_long_window_test_v2/summary.csv`，合成脉冲测试汇总存档于 `data/results/studies/synthetic_timing_v2/results.json`，完整多研究论文数据导出由 `scripts/export_manuscript_studies.py` 输出至 Google Drive 与 `data/results/exports/manuscript_studies/`。)*
+*(注：本文全部核心与对比实验统一基于 `T5-Large` 文本表征与统一测试口径执行，严禁混入已废弃的历史 `BAAI/bge-m3` 存档。5 模型合成脉冲与先验对齐诊断由当前训练好的 `T5-Large` 检查点直接通过 `SyntheticTimingDataset` 纯前向评测生成；孤立单字拉宽窗对照基于同一 `T5-Large` Stage-1 `Word-Only` 架构分别训练 `1.00 s` / `1.28 s` / `1.50 s` / `2.50 s` 并于 `common_horizon_delay = 2` 口径评测；完整论文数据导出由 `scripts/export_manuscript_studies.py` 输出至 Google Drive 与 `data/results/exports/manuscript_studies/`。)*
 
 ---
 
@@ -88,13 +88,14 @@
 
 对应代码实现模块为 [`braindecoding/evaluation/manuscript_study_exporter.py`](../../../braindecoding/evaluation/manuscript_study_exporter.py)，一键命令行入口为 [`scripts/export_manuscript_studies.py`](../../../scripts/export_manuscript_studies.py)，并在 Colab 流水线单元格 `任务 9`–`任务 11` 自动执行：
 
-1. **前置去偏与词长先验对齐诊断（图 2 + 附录）**：
-   - 汇总 `synthetic_timing_v2/results.json`（`shared` / `independent` 脉冲基线）与 `single_word_long_window_test_v2/summary.csv`（`1.0 s` / `1.27 s` / `1.5 s` 孤立长窗）生成 `synthetic_timing_summary.csv` 与 `long_window_comparison.csv`；
-   - 计算词长高斯核密度与真实物理词长/间隔先验分布之间的 Jensen-Shannon 散度降低量 $\Delta_{\text{JS}}$（单位：`bits`，带置换检验 $p$ 值），导出 `duration_prior_alignment_js.csv`。
-2. **词级视野对比与词频四分位分层（图 3）**：
-   - 基于事件时间戳导出 `word_horizon_physical_wait.csv`（`Word-Only` 与 `Local (r = 0..4)`、`Full-Context` 真实等待时长）；
-   - 按训练集词频等分为 `Q1`–`Q4` 四分位统计各状态 Clean / Shifted / Net Top-10 与 Top-1，导出 `word_frequency_quartiles.csv`；
-   - 从 `.pt` 词表得分与 `T5-Large` 词向量抽取典型测试词（含实义词/功能词）在多状态下的 Top-10 近邻词表与余弦相似度，导出 `word_top10_neighborhood_examples.json`。
+1. **5 模型 `T5-Large` 前置去偏与词长先验对齐诊断（图 2 + 表 S1a，零主模型重训）**：
+   - 调用 `evaluate_five_model_t5_diagnostics` 基于当前 `T5-Large` 检查点（`Word-Only`、`Full-Context (Joint)`、`+ Freeze CNN`、`+ Debias, Full-Context`、`+ Debias, Local (r = 2)`）在同一 `common_horizon_delay = 2` 测试子集上执行纯前向 `SyntheticTimingDataset`（`shared` / `independent`，`evaluation_seed = 20261009`）脉冲响应评测，并结合 `causal_fast_audit` 的 Clean / Shifted 指标导出 `five_model_debiasing_ledger.csv`、`synthetic_timing_summary.csv` 与 `five_model_t5_diagnostics_test.json`；
+   - 跨全部 5 组模型计算预测词长高斯核密度与真实物理词长先验分布之间的 Jensen-Shannon 散度及降低量 $\Delta_{\text{JS}}$（单位：`bits`，含多随机种子均值±标准差与 Holm 校正置换检验 $p_{\text{Holm}}$）及 Top-10 词长误差下降（ms），导出 `duration_prior_alignment.csv`；
+   - 基于 5 模型 `.pt` 词表得分抽取典型内容词（含不同词长）在未去偏模型与 `Local (r = 2)` 下的 Top-10 近邻词、目标词排名与真实物理词长，导出 `word_top10_neighborhoods.json` 与 `.csv`。
+2. **词级视野对比、孤立单窗拉宽与词频四分位分层（图 3）**：
+   - 调用 `collect_t5_long_window_comparison_rows` 汇总同一 `T5-Large` 体系下的 Stage-1 孤立拉宽词窗对照（`1.00 s` / `1.28 s` / `1.50 s` / `2.50 s`）与 Stage-2 去偏跨词家族（`Local (r = 0/1/2)`、`Full-Context`），导出 `long_window_comparison.csv`；
+   - 基于事件时间戳导出 `physical_wait_distribution.csv`（`Word-Only` 与 `Local (r = 0..4)`、`Full-Context` 真实等待时长）；
+   - 按训练集词频等分为 `Q1`–`Q4` 四分位统计各状态 Clean / Shifted / Net Top-10 与 Top-1，导出 `word_frequency_quartiles.csv`。
 3. **句子解码定性例句、逐词候选矩阵与跨受试者耦合（图 4 + 表 1–2）**：
    - 导出单句代表性逐词 Top-5 神经概率矩阵（`sentence_neural_top5_matrix.json`）；
    - 按句子 BLEU-1 分位数抽取 `P90` / `P50` / `P10` 真实法语测试例句对比 `Word-Only`、`Local (r = 0/2)` 与 `Full-Context` 解码输出（`decoded_sentence_quantile_examples.json`）；

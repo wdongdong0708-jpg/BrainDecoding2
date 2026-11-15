@@ -19,8 +19,9 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 
-from braindecoding.config import PROJECT_ROOT, project_path
+from braindecoding.config import PROJECT_ROOT, project_path, results_root
 from braindecoding.data.derived_cache import (
     canonical_cache_paths,
     restore_legacy_columns,
@@ -549,15 +550,143 @@ def _extract_segment_row_indices(
     return []
 
 
+_PAPER_CONDITION_DISPLAY_OVERRIDES: dict[str, str] = {
+    "word_only": "Word-Only",
+    "word_1p00s": "Word-Only (1.00s)",
+    "word_1s": "Word-Only (1.00s)",
+    "word_1p28s": "Word-Only (1.28s)",
+    "long_1p27": "Word-Only (1.27s)",
+    "word_1p50s": "Word-Only (1.50s)",
+    "long_1p5": "Word-Only (1.50s)",
+    "word_2p50s": "Word-Only (2.50s)",
+    "F_joint_undebiased": "Full-Context (Joint)",
+    "full_context_joint": "Full-Context (Joint)",
+    "F_freeze_undebiased": "+ Freeze CNN",
+    "full_context_freeze_cnn": "+ Freeze CNN",
+    "F_debiased": "+ Debias, Full-Context",
+    "debiased_full_context": "+ Debias, Full-Context",
+    "debiased_local_r2": "+ Debias, Local (r = 2)",
+    "K2_debiased": "+ Debias, Local (r = 2)",
+    "local_r0": "Local (r = 0)",
+    "rolling_k0": "Local (r = 0)",
+    "local_r1": "Local (r = 1)",
+    "rolling_k1": "Local (r = 1)",
+    "local_r2": "Local (r = 2)",
+    "rolling_k2": "Local (r = 2)",
+}
+
+CANONICAL_PALLIER2025_FIVE_MODEL_SPECS: tuple[dict[str, Any], ...] = (
+    {
+        "model_id": "word_only",
+        "condition_key": "S0",
+        "paper_display_name": "Word-Only",
+        "exp_tag": "lr4e-4_bs256",
+        "word_exp_tag": "lr4e-4_bs256",
+        "stage": "word",
+        "config_path": "configs/training/pallier2025_word_encoder.yaml",
+        "common_horizon_delay": 2,
+    },
+    {
+        "model_id": "full_context_joint",
+        "condition_key": "F_joint_undebiased",
+        "paper_display_name": "Full-Context (Joint)",
+        "exp_tag": "stage1_lr4e-4_bs256_stage2_lr1e-4_bs128",
+        "word_exp_tag": "lr4e-4_bs256",
+        "stage": "context",
+        "config_path": "configs/training/pallier2025_context_transformer.yaml",
+        "common_horizon_delay": 2,
+    },
+    {
+        "model_id": "full_context_freeze_cnn",
+        "condition_key": "F_freeze_undebiased",
+        "paper_display_name": "+ Freeze CNN",
+        "exp_tag": "stage1_freeze_bs256_stage2_lr1e-4_bs128",
+        "word_exp_tag": "lr4e-4_bs256",
+        "stage": "context",
+        "config_path": "configs/training/pallier2025_context_transformer.yaml",
+        "common_horizon_delay": 2,
+    },
+    {
+        "model_id": "debiased_full_context",
+        "condition_key": "F_debiased",
+        "paper_display_name": "+ Debias, Full-Context",
+        "exp_tag": "lr4e-4_bs256_window_1.0_siamese_debiased_lamda_0.5_history_window",
+        "word_exp_tag": "lr4e-4_bs256",
+        "stage": "context",
+        "config_path": "configs/training/siamese_debiased/pallier2025_siamese_debiased_context.yaml",
+        "common_horizon_delay": 2,
+    },
+    {
+        "model_id": "debiased_local_r2",
+        "condition_key": "K2",
+        "paper_display_name": "+ Debias, Local (r = 2)",
+        "exp_tag": "2_lr4e-4_bs256_window_1.0_siamese_debiased_lamda_0.5_history_window",
+        "word_exp_tag": "lr4e-4_bs256",
+        "stage": "prefix_revision",
+        "config_path": "configs/training/siamese_debiased/pallier2025_siamese_debiased_prefix_revision.yaml",
+        "common_horizon_delay": None,
+    },
+)
+
+CANONICAL_PALLIER2025_LONG_WINDOW_SPECS: tuple[dict[str, Any], ...] = (
+    {
+        "condition": "word_1p00s",
+        "paper_display_name": "Word-Only (1.00s)",
+        "exp_tag": "lr4e-4_bs256",
+        "window_seconds": 1.00,
+        "window_samples": 50,
+    },
+    {
+        "condition": "word_1p28s",
+        "paper_display_name": "Word-Only (1.28s)",
+        "exp_tag": "lr4e-4_bs256_win1p28",
+        "window_seconds": 1.28,
+        "window_samples": 64,
+    },
+    {
+        "condition": "word_1p50s",
+        "paper_display_name": "Word-Only (1.50s)",
+        "exp_tag": "lr4e-4_bs256_win1p50",
+        "window_seconds": 1.50,
+        "window_samples": 75,
+    },
+    {
+        "condition": "word_2p50s",
+        "paper_display_name": "Word-Only (2.50s)",
+        "exp_tag": "lr4e-4_bs256_win2p50",
+        "window_seconds": 2.50,
+        "window_samples": 125,
+    },
+)
+
+
+def _condition_paper_display_name(cond: str) -> str:
+    """将内部模型或对照条件代号映射为论文统一术语。"""
+    key = str(cond).strip()
+    if key in _PAPER_CONDITION_DISPLAY_OVERRIDES:
+        return _PAPER_CONDITION_DISPLAY_OVERRIDES[key]
+    return paper_strategy_display_name(key)
+
+
 def export_word_top10_neighborhood_examples(
     payload: Mapping[str, Any],
     *,
-    conditions: Sequence[str] = ("S0", "K0", "K2", "F"),
+    conditions: Sequence[str] = (
+        "S0",
+        "F_joint_undebiased",
+        "F_freeze_undebiased",
+        "F_debiased",
+        "K0",
+        "K1",
+        "K2",
+        "F",
+    ),
     target_words: Sequence[str] | None = None,
+    word_mean_duration_ms: Mapping[str, float] | None = None,
     top_k: int = 10,
     max_examples: int = 12,
 ) -> list[dict[str, Any]]:
-    """导出代表性目标词在不同建模视野（Word-Only / Local r=0,2 / Full-Context）下的 Top-K 神经近邻候选。"""
+    """导出代表性目标词在不同建模视野（Word-Only / Undebiased Full-Context / Debiased Local r=0..2）下的 Top-K 神经近邻候选。"""
     vocab = [str(w) for w in (payload.get("vocabulary") or [])]
     if not vocab:
         return []
@@ -565,6 +694,11 @@ def export_word_top10_neighborhood_examples(
     ref_words = [str(w) for w in (payload.get("reference_words") or [])]
     if not ref_words:
         return []
+    resolved_dur_map: Mapping[str, float] | None = (
+        word_mean_duration_ms
+        if word_mean_duration_ms is not None
+        else payload.get("word_mean_duration_ms")
+    )
 
     avail_map = payload.get("availability_masks") or {}
     clean_matrices: dict[str, np.ndarray] = {}
@@ -599,8 +733,10 @@ def export_word_top10_neighborhood_examples(
     if len(valid_indices) == 0:
         return []
 
-    # Collect per-word row indices and optional content-word hints from segments
-    content_words_seen: set[str] = set()
+    # Collect per-word row indices and optional content-word hints from segments or payload
+    content_words_seen: set[str] = {
+        str(w) for w in (payload.get("content_words") or ())
+    }
     for seg in payload.get("segments") or []:
         words_s = seg.get("reference_words") or []
         icw_s = seg.get("is_content_word_mask") or []
@@ -615,31 +751,49 @@ def export_word_top10_neighborhood_examples(
     if target_words is not None:
         chosen_words = [str(w) for w in target_words if str(w) in word_rows]
     else:
-        base_cond = "S0" if "S0" in clean_matrices else next(iter(clean_matrices))
-        focus_cond = "K2" if "K2" in clean_matrices else base_cond
-        base_mat = clean_matrices[base_cond]
+        base_conds = [
+            c
+            for c in ("S0", "F_joint_undebiased", "F_freeze_undebiased")
+            if c in clean_matrices
+        ]
+        if not base_conds:
+            base_conds = [next(iter(clean_matrices))]
+        focus_cond = "K2" if "K2" in clean_matrices else next(iter(clean_matrices))
         focus_mat = clean_matrices[focus_cond]
-        scored_candidates: list[tuple[int, float, str]] = []
+        max_occ = max((len(idxs) for idxs in word_rows.values()), default=1)
+        min_occ_pref = 5 if max_occ >= 5 else 1
+        scored_candidates: list[tuple[int, int, float, str]] = []
         for w, idxs in word_rows.items():
             t_idx = vocab_to_idx[w]
             idx_arr = np.asarray(idxs, dtype=np.int64)
-            mean_base = np.mean(base_mat[idx_arr], axis=0)
             mean_focus = np.mean(focus_mat[idx_arr], axis=0)
-            rank_base = 1 + int(np.sum(mean_base > mean_base[t_idx]))
             rank_focus = 1 + int(np.sum(mean_focus > mean_focus[t_idx]))
+            base_ranks: list[int] = []
+            for bc in base_conds:
+                mean_base = np.mean(clean_matrices[bc][idx_arr], axis=0)
+                base_ranks.append(1 + int(np.sum(mean_base > mean_base[t_idx])))
+            rank_base = float(np.mean(base_ranks))
+            has_support = 1 if len(idxs) >= min_occ_pref else 0
             is_cw = 1 if (not content_words_seen or w in content_words_seen) else 0
             gain = float(rank_base - rank_focus)
             scored_candidates.append(
-                (is_cw, gain - 0.05 * rank_focus, w)
+                (has_support, is_cw, gain - 0.05 * rank_focus, w)
             )
-        scored_candidates.sort(key=lambda item: (-item[0], -item[1], item[2]))
-        chosen_words = [item[2] for item in scored_candidates[: max(1, int(max_examples))]]
+        scored_candidates.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3]))
+        chosen_words = [item[3] for item in scored_candidates[: max(1, int(max_examples))]]
+
+    def _lookup_dur_ms(word_str: str) -> float | None:
+        if resolved_dur_map is None or word_str not in resolved_dur_map:
+            return None
+        val = float(resolved_dur_map[word_str])
+        return round(val, 2) if math.isfinite(val) and val > 0.0 else None
 
     k_use = max(1, min(int(top_k), len(vocab)))
     examples_out: list[dict[str, Any]] = []
     for word in chosen_words:
         t_idx = vocab_to_idx[word]
         idx_arr = np.asarray(word_rows[word], dtype=np.int64)
+        target_dur_ms = _lookup_dur_ms(word)
         cond_entries: dict[str, Any] = {}
         for cond, mat in clean_matrices.items():
             mean_scores = np.mean(mat[idx_arr], axis=0).astype(np.float64)
@@ -650,34 +804,69 @@ def export_word_top10_neighborhood_examples(
             )[:k_use]
             cands = []
             for r_i, v_i in enumerate(top_order, start=1):
+                cand_word = vocab[v_i]
                 cand_obj: dict[str, Any] = {
                     "rank": r_i,
-                    "word": vocab[v_i],
+                    "word": cand_word,
                     "score": round(float(mean_scores[v_i]), 6),
                     "is_target": bool(v_i == t_idx),
                 }
                 if norm_emb is not None:
                     cos_v = float(np.dot(norm_emb[v_i], norm_emb[t_idx]))
                     cand_obj["cosine_to_target"] = round(cos_v, 6)
+                cand_dur_ms = _lookup_dur_ms(cand_word)
+                if cand_dur_ms is not None:
+                    cand_obj["candidate_mean_duration_ms"] = cand_dur_ms
                 cands.append(cand_obj)
             cond_entries[cond] = {
                 "condition": cond,
-                "paper_display_name": paper_strategy_display_name(cond),
+                "paper_display_name": _condition_paper_display_name(cond),
                 "target_rank": int(target_rank),
                 "target_score": round(float(mean_scores[t_idx]), 6),
                 "top_candidates": cands,
             }
-        examples_out.append(
-            {
-                "target_word": word,
-                "occurrence_count": int(len(idx_arr)),
-                "is_content_word": bool(word in content_words_seen)
-                if content_words_seen
-                else None,
-                "conditions": cond_entries,
-            }
-        )
+        ex_obj: dict[str, Any] = {
+            "target_word": word,
+            "occurrence_count": int(len(idx_arr)),
+            "is_content_word": bool(word in content_words_seen)
+            if content_words_seen
+            else None,
+            "conditions": cond_entries,
+        }
+        if target_dur_ms is not None:
+            ex_obj["target_mean_duration_ms"] = target_dur_ms
+        examples_out.append(ex_obj)
     return examples_out
+
+
+def _flatten_word_top10_neighborhoods(
+    examples: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """将 Top-10 近邻示例展开为适合 CSV 导出的平坦行列表。"""
+    flat_rows: list[dict[str, Any]] = []
+    for ex in examples:
+        target_dur = ex.get("target_mean_duration_ms", "")
+        for cond_k, cond_v in (ex.get("conditions") or {}).items():
+            for cand in cond_v.get("top_candidates") or []:
+                flat_rows.append(
+                    {
+                        "target_word": ex["target_word"],
+                        "occurrence_count": ex["occurrence_count"],
+                        "target_mean_duration_ms": target_dur,
+                        "condition": cond_k,
+                        "paper_display_name": cond_v["paper_display_name"],
+                        "target_rank": cond_v["target_rank"],
+                        "candidate_rank": cand["rank"],
+                        "candidate_word": cand["word"],
+                        "candidate_mean_duration_ms": cand.get(
+                            "candidate_mean_duration_ms", ""
+                        ),
+                        "score": cand["score"],
+                        "cosine_to_target": cand.get("cosine_to_target", ""),
+                        "is_target": cand["is_target"],
+                    }
+                )
+    return flat_rows
 
 
 def export_sentence_neural_top5_matrix(
@@ -1175,15 +1364,1340 @@ def export_subject_retrieval_sentence_coupling(
 
 
 def _long_window_paper_label(cond: str) -> str:
-    mapping = {
-        "word_1s": "Word-Only (1.00s)",
-        "long_1p27": "Word-Only (1.27s)",
-        "long_1p5": "Word-Only (1.50s)",
-        "rolling_k0": "Local (r = 0)",
-        "rolling_k1": "Local (r = 1)",
-        "rolling_k2": "Local (r = 2)",
+    return _condition_paper_display_name(cond)
+
+
+def _apply_cache_dir_override(
+    cfg: dict[str, Any], dataset: str, cache_dir: str | Path | None
+) -> None:
+    """将 workflow cfg['cache'] 路径指向用户指定的 local cache 目录（支持根缓存或数据集子目录）。"""
+    if cache_dir is None:
+        return
+    raw_dir = Path(cache_dir).resolve()
+    ds_dir = (
+        raw_dir
+        if (raw_dir / "events").is_dir() or (raw_dir / "meg").is_dir()
+        else raw_dir / str(dataset)
+    )
+    cache_cfg = cfg.setdefault("cache", {})
+    for ev_name in ("events.csv", "event_table.csv"):
+        ev_cand = ds_dir / "events" / ev_name
+        if ev_cand.is_file():
+            cache_cfg["event_table"] = str(ev_cand)
+            break
+    meg_cand = ds_dir / "meg"
+    if meg_cand.is_dir():
+        cache_cfg["meg_dir"] = str(meg_cand)
+    eeg_cand = ds_dir / "eeg"
+    if eeg_cand.is_dir():
+        cache_cfg["eeg_dir"] = str(eeg_cand)
+    emb_cand = ds_dir / "text" / "t5_large_layer_0_5" / "embeddings.npz"
+    if emb_cand.is_file():
+        cache_cfg["text_embeddings"] = str(emb_cand)
+
+
+def _fit_train_word_duration_stats(
+    event_table: pd.DataFrame | None,
+) -> tuple[list[str], list[float], dict[str, float]]:
+    """从训练划分拟合词表先验分布所需的词列表、时长秒数及按词均时长（ms）映射。"""
+    if event_table is None or len(event_table) == 0:
+        return [], [], {}
+    sp_col = _pick_first_column(
+        event_table.columns, ("data_split", "数据划分", "split")
+    )
+    w_col = _pick_first_column(
+        event_table.columns, ("normalized_word", "标准词", "word", "词")
+    )
+    s_col = _pick_first_column(event_table.columns, ("onset_seconds", "开始时间"))
+    e_col = _pick_first_column(event_table.columns, ("offset_seconds", "结束时间"))
+    if w_col is None or s_col is None or e_col is None:
+        return [], [], {}
+    tr_df = (
+        event_table[event_table[sp_col].astype(str) == "train"]
+        if sp_col is not None
+        else event_table
+    )
+    if len(tr_df) == 0:
+        tr_df = event_table
+    tr_st = pd.to_numeric(tr_df[s_col], errors="coerce").to_numpy(dtype=np.float64)
+    tr_en = pd.to_numeric(tr_df[e_col], errors="coerce").to_numpy(dtype=np.float64)
+    tr_w = tr_df[w_col].astype(str).tolist()
+    train_words: list[str] = []
+    train_durs: list[float] = []
+    dur_accum: dict[str, list[float]] = {}
+    for w_i, st_i, en_i in zip(tr_w, tr_st, tr_en):
+        if math.isfinite(st_i) and math.isfinite(en_i) and en_i > st_i:
+            dur_s = float(en_i - st_i)
+            train_words.append(w_i)
+            train_durs.append(dur_s)
+            dur_accum.setdefault(w_i, []).append(dur_s * 1000.0)
+    mean_ms = {w: float(np.mean(vals)) for w, vals in dur_accum.items() if vals}
+    return train_words, train_durs, mean_ms
+
+
+def _locate_seed_checkpoint(
+    ds_results_dir: Path,
+    exp_tag: str,
+    stage: str,
+    subset_tag: str,
+    seed: int,
+) -> Path:
+    stage_candidates = (stage, "revision") if stage == "prefix_revision" else (stage,)
+    checked: list[Path] = []
+    for st in stage_candidates:
+        seed_dir = ds_results_dir / exp_tag / st / subset_tag / f"seed-{int(seed):03d}"
+        for ckpt_name in ("best.ckpt", "best.pt"):
+            cand = seed_dir / ckpt_name
+            checked.append(cand)
+            if cand.is_file():
+                return cand
+    raise FileNotFoundError(
+        f"未找到阶段 {stage!r} (exp_tag={exp_tag!r}, seed={seed}) 的最佳检查点；"
+        f"已检查: {[str(p) for p in checked]}"
+    )
+
+
+def _locate_multi_seed_summary_json(
+    ds_results_dir: Path,
+    exp_tag: str,
+    eval_subdir: str | None,
+    stage: str,
+    subset_tag: str,
+    split: str,
+) -> Path | None:
+    sub = str(eval_subdir or "").strip().strip("/\\")
+    stage_candidates = (stage, "revision") if stage == "prefix_revision" else (stage,)
+    roots: list[Path] = []
+    for st in stage_candidates:
+        if sub:
+            roots.append(ds_results_dir / exp_tag / sub / st / subset_tag)
+        roots.append(ds_results_dir / exp_tag / st / subset_tag)
+    for base in roots:
+        for fname in (
+            f"multi_seed_evaluation_{split}.json",
+            f"multi_seed_evaluation_common_subset_{split}.json",
+        ):
+            cand = base / fname
+            if cand.is_file():
+                return cand
+    return None
+
+
+def _locate_seed_encoded_cache(
+    ds_results_dir: Path,
+    exp_tag: str,
+    eval_subdir: str | None,
+    stage: str,
+    subset_tag: str,
+    seed: int,
+    split: str,
+) -> Path | None:
+    sub = str(eval_subdir or "").strip().strip("/\\")
+    stage_candidates = (stage, "revision") if stage == "prefix_revision" else (stage,)
+    seed_name = f"seed-{int(seed):03d}"
+    for st in stage_candidates:
+        base_dirs = []
+        if sub:
+            base_dirs.append(ds_results_dir / exp_tag / sub / st / subset_tag / seed_name)
+        base_dirs.append(ds_results_dir / exp_tag / st / subset_tag / seed_name)
+        for s_dir in base_dirs:
+            for rel in (
+                Path("exploratory") / f"subspace_encoded_cache_{split}.pt",
+                Path("common_subset") / "exploratory" / f"subspace_encoded_cache_{split}.pt",
+            ):
+                cand = s_dir / rel
+                if cand.is_file():
+                    return cand
+    return None
+
+
+def _align_encoded_predictions_to_event_ids(
+    encoded: Mapping[str, Any],
+    target_event_ids: Sequence[str],
+    *,
+    horizon_delay: int | None = None,
+) -> np.ndarray | None:
+    """将已编码预测张量严格按 target_event_ids 顺序对齐并 L2 归一化为 float32 矩阵 [N, d]。"""
+    eids = [str(e) for e in (encoded.get("event_ids") or ())]
+    if not eids:
+        return None
+    pred_tensor: torch.Tensor | None = None
+    if horizon_delay is not None and isinstance(encoded.get("revision_predictions"), Mapping):
+        rev_map = encoded["revision_predictions"]
+        pred_tensor = rev_map.get(int(horizon_delay))
+        if pred_tensor is None:
+            pred_tensor = rev_map.get(str(int(horizon_delay)))
+    if pred_tensor is None:
+        raw_p = encoded.get("predictions")
+        if isinstance(raw_p, torch.Tensor):
+            pred_tensor = raw_p
+    if pred_tensor is None or len(pred_tensor) != len(eids):
+        return None
+    eid_to_idx = {eid: idx for idx, eid in enumerate(eids)}
+    try:
+        gather_idx = [eid_to_idx[str(eid)] for eid in target_event_ids]
+    except KeyError:
+        return None
+    aligned = pred_tensor.detach().cpu().to(dtype=torch.float32)[gather_idx]
+    aligned = F.normalize(aligned, p=2.0, dim=-1, eps=1e-8)
+    return aligned.numpy()
+
+
+def _extract_raw_control_metrics_from_seed_result(
+    sr: Mapping[str, Any],
+    *,
+    stage: str,
+    horizon_key: str | None = None,
+) -> dict[str, dict[str, float]]:
+    """从单个 seed_result 提取未经 post-hoc CMS 处理（raw）的 Clean 与 Shifted 核心词级指标。"""
+    nc = sr.get("negative_controls") or {}
+    nc_methods = nc.get("methods") if isinstance(nc.get("methods"), Mapping) else {}
+    raw_nc = (
+        nc_methods.get("raw")
+        or nc_methods.get("raw_eta0")
+        or nc
+    )
+    clean_ref = (
+        raw_nc.get("clean_reference")
+        if isinstance(raw_nc.get("clean_reference"), Mapping)
+        else {}
+    )
+    shifted_agg = (
+        raw_nc.get("shifted_aggregate")
+        if isinstance(raw_nc.get("shifted_aggregate"), Mapping)
+        else {}
+    )
+
+    if stage in ("revision", "prefix_revision") and horizon_key:
+        c_hz = (clean_ref.get("horizons") or {}).get(horizon_key) or {}
+        if not c_hz:
+            c_hz = (sr.get("revision_horizons") or {}).get(horizon_key) or {}
+        s_hz = (shifted_agg.get("horizons") or {}).get(horizon_key) or {}
+        clean_out = {
+            "vocab50_macro_top10": float(c_hz.get("common_vocab50_macro_top10", 0.0)),
+            "vocab50_macro_top1": float(c_hz.get("common_vocab50_macro_top1", 0.0)),
+            "full_vocab_macro_top10": float(
+                c_hz.get(
+                    "common_full_vocab_word_macro_top10",
+                    c_hz.get("common_full_vocab_macro_top10", 0.0),
+                )
+            ),
+            "full_vocab_subject_macro_top10": float(
+                c_hz.get(
+                    "common_full_vocab_subject_macro_top10",
+                    c_hz.get("common_full_vocab_macro_top10", 0.0),
+                )
+            ),
+        }
+        shifted_out = {
+            "vocab50_macro_top10": float(s_hz.get("mean_common_vocab50_macro_top10", 0.0)),
+            "vocab50_macro_top1": float(s_hz.get("mean_common_vocab50_macro_top1", 0.0)),
+            "full_vocab_macro_top10": float(
+                s_hz.get(
+                    "mean_common_full_vocab_word_macro_top10",
+                    s_hz.get("mean_common_full_vocab_macro_top10", 0.0),
+                )
+            ),
+            "full_vocab_subject_macro_top10": float(
+                s_hz.get(
+                    "mean_common_full_vocab_subject_macro_top10",
+                    s_hz.get("mean_common_full_vocab_macro_top10", 0.0),
+                )
+            ),
+        }
+        return {"clean": clean_out, "shifted": shifted_out}
+
+    sweep = sr.get("vocabulary_sweep") or {}
+    n50 = sweep.get("N50") or {}
+    fv = sweep.get("full_vocab") or {}
+    clean_out = {
+        "vocab50_macro_top10": float(
+            clean_ref.get("vocab50_macro_top10", n50.get("macro_top10", 0.0))
+        ),
+        "vocab50_macro_top1": float(
+            clean_ref.get("vocab50_macro_top1", n50.get("macro_top1", 0.0))
+        ),
+        "full_vocab_macro_top10": float(
+            clean_ref.get(
+                "full_vocab_word_macro_top10",
+                clean_ref.get(
+                    "full_vocab_macro_top10",
+                    fv.get("word_macro_top10", fv.get("macro_top10", 0.0)),
+                ),
+            )
+        ),
+        "full_vocab_subject_macro_top10": float(
+            clean_ref.get(
+                "full_vocab_subject_macro_top10",
+                fv.get("subject_macro_top10", fv.get("micro_top10", 0.0)),
+            )
+        ),
     }
-    return mapping.get(str(cond), paper_strategy_display_name(cond))
+    shifted_out = {
+        "vocab50_macro_top10": float(shifted_agg.get("mean_vocab50_macro_top10", 0.0)),
+        "vocab50_macro_top1": float(shifted_agg.get("mean_vocab50_macro_top1", 0.0)),
+        "full_vocab_macro_top10": float(
+            shifted_agg.get(
+                "mean_full_vocab_word_macro_top10",
+                shifted_agg.get("mean_full_vocab_macro_top10", 0.0),
+            )
+        ),
+        "full_vocab_subject_macro_top10": float(
+            shifted_agg.get(
+                "mean_full_vocab_subject_macro_top10",
+                shifted_agg.get("mean_full_vocab_macro_top10", 0.0),
+            )
+        ),
+    }
+    return {"clean": clean_out, "shifted": shifted_out}
+
+
+def _mean_sd(values: Sequence[float]) -> tuple[float, float]:
+    if not values:
+        return 0.0, 0.0
+    arr = np.asarray(values, dtype=np.float64)
+    sd = float(np.std(arr, ddof=1)) if len(arr) >= 2 else 0.0
+    return float(np.mean(arr)), sd
+
+
+def evaluate_five_model_t5_diagnostics(
+    *,
+    results_dir: str | Path | None = None,
+    output_dir: str | Path,
+    dataset: str = "pallier2025",
+    split: str = "test",
+    seeds: Sequence[int] = (0, 1, 2),
+    eval_subdir: str = "causal_fast_audit",
+    synthetic_conditions: Sequence[str] = ("shared", "independent"),
+    synthetic_seed: int = 20261009,
+    model_specs: Sequence[Mapping[str, Any]] | None = None,
+    event_table: pd.DataFrame | None = None,
+    cache_dir: str | Path | None = None,
+    num_workers: int | None = None,
+    device: str | torch.device = "auto",
+    n_permutations: int = 200,
+    force: bool = False,
+) -> dict[str, Any]:
+    """基于现有 T5-Large 5 组模型检查点执行 SyntheticTimingDataset 纯前向脉冲评估、5 模型 Δ_JS 先验对齐及 Top-10 近邻诊断。"""
+    import copy
+
+    from braindecoding.data.synthetic_timing_dataset import SyntheticTimingDataset
+    from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
+        _CachedEvalDatasetProxy,
+    )
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        _build_common_horizon_event_filter,
+        _compute_encoded_evaluation_metrics,
+        _extract_control_summary_row,
+        _slice_encoded_dict,
+    )
+    from braindecoding.models import build_brain_embedding_model
+    from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import (
+        train as chinese_task,
+    )
+    from braindecoding.tasks.word_decoding.pallier2025 import train as pallier_task
+    from braindecoding.training.training_runtime import choose_device, load_checkpoint
+    from braindecoding.training.word_encoder_training import (
+        encode_loader,
+        make_loader,
+        resolve_amp_dtype,
+    )
+    from braindecoding.training.workflow_runner import (
+        build_workflow_config,
+        group_column,
+    )
+
+    out_dir = Path(output_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    seed_list = [int(s) for s in seeds]
+    if not seed_list:
+        raise ValueError("seeds 不能为空。")
+
+    diag_json_path = out_dir / f"five_model_t5_diagnostics_{split}.json"
+    if not force and diag_json_path.is_file():
+        try:
+            cached = json.loads(diag_json_path.read_text(encoding="utf-8"))
+            cached_files = cached.get("exported_files") or {}
+            if (
+                str(cached.get("dataset")) == str(dataset)
+                and str(cached.get("split")) == str(split)
+                and list(cached.get("seeds") or []) == seed_list
+                and cached_files
+                and all(Path(p).is_file() for p in cached_files.values())
+            ):
+                return cached
+        except Exception:
+            pass
+
+    if model_specs is not None:
+        resolved_specs = [dict(sp) for sp in model_specs]
+    elif str(dataset) == "pallier2025":
+        resolved_specs = [dict(sp) for sp in CANONICAL_PALLIER2025_FIVE_MODEL_SPECS]
+    else:
+        raise ValueError(
+            f"数据集 {dataset!r} 未提供默认 CANONICAL_FIVE_MODEL_SPECS，请显式传入 model_specs。"
+        )
+
+    results_root_dir = (
+        Path(results_dir).resolve() if results_dir is not None else results_root()
+    )
+    ds_results_dir = results_root_dir / str(dataset)
+
+    base_cfg, subset_spec = build_workflow_config(
+        dataset,
+        stage="word",
+        seed=seed_list[0],
+        subject="all",
+        mode="eval",
+        num_workers=num_workers,
+    )
+    _apply_cache_dir_override(base_cfg, dataset, cache_dir)
+    task = pallier_task if str(dataset) == "pallier2025" else chinese_task
+    selected_subjects = list(base_cfg["dataset"]["subjects"])
+    subset_tag = str(subset_spec["subset_tag"])
+
+    # Load train and eval tables via canonical task loader
+    ev_path_str = str(base_cfg["cache"]["event_table"])
+    ev_disk_df = event_table if event_table is not None else None
+    if Path(ev_path_str).is_file():
+        train_table = task.dataset_module.load_event_table(
+            ev_path_str,
+            split="train",
+            subjects=selected_subjects,
+            trainable_only=True,
+        )
+        eval_table_loaded = task.dataset_module.load_event_table(
+            ev_path_str,
+            split=split,
+            subjects=selected_subjects,
+            trainable_only=True,
+        )
+        if ev_disk_df is None:
+            ev_disk_df = pd.concat([train_table, eval_table_loaded], ignore_index=True)
+    elif ev_disk_df is not None:
+        sp_col = _pick_first_column(ev_disk_df.columns, ("data_split", "数据划分", "split"))
+        tr_col = _pick_first_column(ev_disk_df.columns, ("is_trainable", "是否可训练"))
+        work_df = ev_disk_df.copy()
+        if tr_col is not None:
+            work_df = work_df[work_df[tr_col].astype(bool)].reset_index(drop=True)
+        if sp_col is not None:
+            train_table = work_df[work_df[sp_col].astype(str) == "train"].reset_index(drop=True)
+            eval_table_loaded = work_df[work_df[sp_col].astype(str) == str(split)].reset_index(drop=True)
+        else:
+            train_table = work_df
+            eval_table_loaded = work_df
+    else:
+        raise FileNotFoundError(f"未找到事件表缓存：{ev_path_str}")
+
+    if len(eval_table_loaded) == 0:
+        raise ValueError(f"数据集 {dataset} 在 split={split!r} 下无可用可训练事件。")
+
+    zero_base_ds = task.build_dataset(base_cfg, eval_table_loaded, zero_signal=True)
+    kept_event_ids, event_id_to_block = _build_common_horizon_event_filter(
+        base_cfg,
+        dataset=str(dataset),
+        split=split,
+        selected_subjects=selected_subjects,
+        common_horizon_delay=2,
+        fallback_eval_table=zero_base_ds.table,
+    )
+
+    ordered_common_indices: list[int] = [
+        idx
+        for idx, eid in enumerate(zero_base_ds.table["event_id"].astype(str).tolist())
+        if eid in kept_event_ids
+    ]
+    if not ordered_common_indices:
+        raise RuntimeError(
+            f"在数据集 {dataset} (split={split}) 上应用 common_horizon_delay=2 后共同有效事件数为 0。"
+        )
+    common_table = zero_base_ds.table.iloc[ordered_common_indices].reset_index(drop=True)
+    ordered_common_eids = common_table["event_id"].astype(str).tolist()
+    common_words = common_table["normalized_word"].astype(str).tolist()
+    common_eids_arr = np.asarray(ordered_common_eids, dtype=object)
+
+    # Target durations for common queries + training duration prior
+    s_col_ev = _pick_first_column(common_table.columns, ("onset_seconds", "开始时间"))
+    e_col_ev = _pick_first_column(common_table.columns, ("offset_seconds", "结束时间"))
+    if s_col_ev is not None and e_col_ev is not None:
+        st_arr = pd.to_numeric(common_table[s_col_ev], errors="coerce").to_numpy(dtype=np.float64)
+        en_arr = pd.to_numeric(common_table[e_col_ev], errors="coerce").to_numpy(dtype=np.float64)
+        common_durs_s = en_arr - st_arr
+    else:
+        common_durs_s = np.full(len(ordered_common_eids), float("nan"), dtype=np.float64)
+
+    train_words_fit, train_durs_fit, train_word_mean_ms = _fit_train_word_duration_stats(
+        train_table if len(train_table) > 0 else ev_disk_df
+    )
+    content_words_set: set[str] = set()
+    icw_col = _pick_first_column(common_table.columns, ("is_content_word", "是否内容词"))
+    if icw_col is not None:
+        for w_v, flag_v in zip(common_words, common_table[icw_col].tolist()):
+            if bool(flag_v):
+                content_words_set.add(str(w_v))
+
+    train_word_col = (
+        "normalized_word"
+        if "normalized_word" in train_table.columns
+        else "标准词"
+    )
+    vocabulary = [
+        w
+        for w in sorted(set(train_table[train_word_col].astype(str)))
+        if w in zero_base_ds.embedding_map
+    ]
+    vocab50 = list(
+        pallier_task.frozen_vocabulary()
+        if str(dataset) == "pallier2025"
+        else chinese_task.frozen_vocabulary(str(base_cfg["cache"]["event_table"]))
+    )
+    emb_dim = int(next(iter(zero_base_ds.embedding_map.values())).shape[0])
+    vocab_emb_np = np.stack(
+        [
+            np.asarray(zero_base_ds.embedding_map[w], dtype=np.float32)
+            for w in vocabulary
+        ],
+        axis=0,
+    )
+    vocab_norms = np.linalg.norm(vocab_emb_np, axis=1, keepdims=True)
+    vocab_emb_norm = (vocab_emb_np / np.maximum(vocab_norms, 1e-8)).astype(np.float32)
+
+    raw_table_dedup = zero_base_ds.table.copy()
+    raw_table_dedup["_eid_str"] = raw_table_dedup["event_id"].astype(str)
+    dedup_table = raw_table_dedup.drop_duplicates(subset=["_eid_str"]).set_index("_eid_str")
+
+    def _metrics_from_encoded(
+        encoded_dict: Mapping[str, Any],
+        cfg_m: dict[str, Any],
+        *,
+        stage_m: str,
+        horizon_delay_filter: int | None,
+    ) -> dict[str, Any]:
+        eids_all = [str(e) for e in encoded_dict["event_ids"]]
+        if horizon_delay_filter is not None or stage_m not in ("revision", "prefix_revision"):
+            keep_mask = np.asarray([eid in kept_event_ids for eid in eids_all], dtype=bool)
+            enc_sub = _slice_encoded_dict(dict(encoded_dict), keep_mask)
+        else:
+            enc_sub = dict(encoded_dict)
+        sub_df = dedup_table.reindex(enc_sub["event_ids"]).reset_index(drop=True)
+        sub_df["event_id"] = list(enc_sub["event_ids"])
+        if (
+            event_id_to_block
+            and "sentence_uid" not in sub_df.columns
+            and "上下文编号" not in sub_df.columns
+        ):
+            sub_df["sentence_uid"] = [
+                event_id_to_block.get(str(eid), f"blk-{i // 8:04d}")
+                for i, eid in enumerate(enc_sub["event_ids"])
+            ]
+        proxy_ds = _CachedEvalDatasetProxy(
+            sub_df,
+            zero_base_ds.embedding_map,
+            window_seconds=float(cfg_m["dataset"].get("window_seconds", 1.0)),
+            window_samples=int(round(float(cfg_m["dataset"].get("window_seconds", 1.0)) * 50.0)),
+        )
+        metrics_res = _compute_encoded_evaluation_metrics(
+            enc_sub,
+            proxy_ds,
+            vocabulary,
+            vocab50,
+            cfg_m,
+            stage=stage_m,
+            split=split,
+        )
+        return _extract_control_summary_row("synth", "Synthetic", None, metrics_res)
+
+    dev = (
+        device
+        if isinstance(device, torch.device)
+        else choose_device(str(device))
+    )
+    if dev.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+    synthetic_datasets = {
+        str(cond): SyntheticTimingDataset(
+            zero_base_ds,
+            str(cond),
+            split=split,
+            evaluation_seed=int(synthetic_seed),
+            include_onset_seconds=True,
+        )
+        for cond in synthetic_conditions
+    }
+
+    ledger_rows: list[dict[str, Any]] = []
+    synthetic_tidy_rows: list[dict[str, Any]] = []
+    duration_alignment_rows: list[dict[str, Any]] = []
+
+    # Retain ensemble Clean score matrices per condition for unified cross-model Top-10 neighborhoods
+    ensemble_clean_scores: dict[str, np.ndarray] = {}
+    model_summaries: list[dict[str, Any]] = []
+
+    valid_dur_mask = np.isfinite(common_durs_s) & (common_durs_s > 0.0)
+    dur_idx = np.flatnonzero(valid_dur_mask)
+
+    for spec in resolved_specs:
+        model_id = str(spec["model_id"])
+        cond_key = str(spec["condition_key"])
+        disp_name = str(spec.get("paper_display_name") or _condition_paper_display_name(cond_key))
+        exp_tag = str(spec["exp_tag"])
+        word_exp_tag = str(spec.get("word_exp_tag") or exp_tag)
+        stage_m = str(spec["stage"])
+        cfg_rel = spec.get("config_path")
+        horizon_filter = spec.get("common_horizon_delay")
+
+        summary_json_p = _locate_multi_seed_summary_json(
+            ds_results_dir, exp_tag, eval_subdir, stage_m, subset_tag, split
+        )
+        summary_seed_map: dict[int, Mapping[str, Any]] = {}
+        if summary_json_p is not None:
+            ms_obj = json.loads(summary_json_p.read_text(encoding="utf-8"))
+            for sr_item in ms_obj.get("seed_results") or ():
+                if isinstance(sr_item, Mapping) and "seed" in sr_item:
+                    summary_seed_map[int(sr_item["seed"])] = sr_item
+
+        # Sub-entries to collect: primary model condition + (if prefix_revision) K0 & K1 horizons
+        if stage_m in ("revision", "prefix_revision"):
+            track_items = [
+                ("K2", 2, disp_name, True),
+                ("K0", 0, _condition_paper_display_name("K0"), False),
+                ("K1", 1, _condition_paper_display_name("K1"), False),
+            ]
+        else:
+            track_items = [(cond_key, None, disp_name, True)]
+
+        per_track_metrics: dict[str, dict[str, list[float]]] = {
+            tk: {
+                "clean_50w_top10": [],
+                "clean_50w_top1": [],
+                "clean_fv_top10": [],
+                "clean_fv_subj_top10": [],
+                "shifted_50w_top10": [],
+                "shifted_50w_top1": [],
+                "shifted_fv_top10": [],
+                "shifted_fv_subj_top10": [],
+                **{f"synth_{sc}_50w_top10": [] for sc in synthetic_conditions},
+                **{f"synth_{sc}_50w_top1": [] for sc in synthetic_conditions},
+                **{f"synth_{sc}_fv_top10": [] for sc in synthetic_conditions},
+                **{f"synth_{sc}_fv_subj_top10": [] for sc in synthetic_conditions},
+            }
+            for tk, _, _, _ in track_items
+        }
+        per_track_align_scores: dict[tuple[str, str], np.ndarray] = {}
+        per_track_align_counts: dict[tuple[str, str], int] = {}
+        per_track_seed_js: dict[tuple[str, str], list[float]] = {}
+        per_track_seed_mae: dict[tuple[str, str], list[float]] = {}
+
+        for sd in seed_list:
+            cfg_m, _ = build_workflow_config(
+                dataset,
+                stage=stage_m,
+                seed=sd,
+                subject="all",
+                exp_tag=exp_tag,
+                word_exp_tag=word_exp_tag,
+                config_path=cfg_rel,
+                mode="eval",
+                num_workers=num_workers,
+            )
+            _apply_cache_dir_override(cfg_m, dataset, cache_dir)
+            ckpt_file = _locate_seed_checkpoint(
+                ds_results_dir, exp_tag, stage_m, subset_tag, sd
+            )
+            checkpoint = load_checkpoint(ckpt_file, map_location="cpu")
+            model_cfg = checkpoint.get("model_config", cfg_m["model"])
+            ckpt_subjects = list(checkpoint.get("subject_ids", selected_subjects))
+            subject_count = max(len(ckpt_subjects), zero_base_ds.subject_count)
+
+            model = build_brain_embedding_model(
+                zero_base_ds.channel_count,
+                zero_base_ds.channel_positions,
+                subject_count,
+                model_cfg,
+            ).to(dev)
+            model.load_state_dict(checkpoint["model_state"], strict=True)
+            model.eval()
+            tc = cfg_m["training"]
+            eval_bs = int(tc.get("eval_batch_size", tc.get("batch_size", 512)))
+            amp_enabled = bool(tc.get("amp", True)) and dev.type == "cuda"
+            amp_dtype = resolve_amp_dtype(tc)
+
+            # 1) Synthetic forward passes ("shared", "independent")
+            synth_encoded_by_cond: dict[str, dict[str, Any]] = {}
+            for cond in synthetic_conditions:
+                synth_loader, _ = make_loader(
+                    synthetic_datasets[str(cond)],
+                    tc,
+                    shuffle=False,
+                    group_column=group_column(cfg_m),
+                    batch_size=eval_bs,
+                )
+                enc_s = encode_loader(
+                    model,
+                    synth_loader,
+                    dev,
+                    amp=amp_enabled,
+                    amp_dtype=amp_dtype,
+                    show_progress=False,
+                )
+                synth_encoded_by_cond[str(cond)] = enc_s
+                synth_row = _metrics_from_encoded(
+                    enc_s,
+                    cfg_m,
+                    stage_m=stage_m,
+                    horizon_delay_filter=horizon_filter,
+                )
+                for tk, h_delay, _, _ in track_items:
+                    if stage_m in ("revision", "prefix_revision") and h_delay is not None:
+                        h_dict = (synth_row.get("horizons") or {}).get(f"K{h_delay}") or {}
+                        v50_10 = float(h_dict.get("common_vocab50_macro_top10", 0.0))
+                        v50_1 = float(h_dict.get("common_vocab50_macro_top1", 0.0))
+                        fv_10 = float(
+                            h_dict.get(
+                                "common_full_vocab_word_macro_top10",
+                                h_dict.get("common_full_vocab_macro_top10", 0.0),
+                            )
+                        )
+                        fv_subj_10 = float(
+                            h_dict.get(
+                                "common_full_vocab_subject_macro_top10",
+                                fv_10,
+                            )
+                        )
+                    else:
+                        v50_10 = float(synth_row.get("vocab50_macro_top10", 0.0))
+                        v50_1 = float(synth_row.get("vocab50_macro_top1", 0.0))
+                        fv_10 = float(
+                            synth_row.get(
+                                "full_vocab_word_macro_top10",
+                                synth_row.get("full_vocab_macro_top10", 0.0),
+                            )
+                        )
+                        fv_subj_10 = float(
+                            synth_row.get("full_vocab_subject_macro_top10", fv_10)
+                        )
+                    per_track_metrics[tk][f"synth_{cond}_50w_top10"].append(v50_10 * 100.0)
+                    per_track_metrics[tk][f"synth_{cond}_50w_top1"].append(v50_1 * 100.0)
+                    per_track_metrics[tk][f"synth_{cond}_fv_top10"].append(fv_10 * 100.0)
+                    per_track_metrics[tk][f"synth_{cond}_fv_subj_top10"].append(fv_subj_10 * 100.0)
+
+                    if str(cond) == "shared":
+                        preds_sh = _align_encoded_predictions_to_event_ids(
+                            enc_s,
+                            ordered_common_eids,
+                            horizon_delay=h_delay,
+                        )
+                        if preds_sh is not None:
+                            s_mat = (preds_sh @ vocab_emb_norm.T).astype(np.float32)
+                            acc_k = (tk, "synthetic_shared")
+                            if acc_k not in per_track_align_scores:
+                                per_track_align_scores[acc_k] = s_mat.copy()
+                            else:
+                                per_track_align_scores[acc_k] += s_mat
+                            per_track_align_counts[acc_k] = (
+                                per_track_align_counts.get(acc_k, 0) + 1
+                            )
+                            if len(dur_idx) >= 2 and train_words_fit and train_durs_fit:
+                                js_seed = compute_duration_prior_alignment_metrics(
+                                    s_mat[dur_idx],
+                                    vocabulary,
+                                    [common_words[int(i)] for i in dur_idx],
+                                    common_durs_s[dur_idx],
+                                    train_words=train_words_fit,
+                                    train_durations_seconds=train_durs_fit,
+                                    n_permutations=0,
+                                )
+                                per_track_seed_js.setdefault(acc_k, []).append(
+                                    float(js_seed["delta_js_bits"])
+                                )
+                                per_track_seed_mae.setdefault(acc_k, []).append(
+                                    float(js_seed["top10_duration_error_reduction_ms"])
+                                )
+                            del s_mat
+
+            # 2) Clean & Shifted encoded embeddings + Clean/Shifted metrics
+            pt_cache_p = _locate_seed_encoded_cache(
+                ds_results_dir, exp_tag, eval_subdir, stage_m, subset_tag, sd, split
+            )
+            clean_enc_for_seed: Mapping[str, Any] | None = None
+            shifted_enc_for_seed: Mapping[str, Any] | None = None
+            if pt_cache_p is not None:
+                pt_bundle = torch.load(pt_cache_p, map_location="cpu", weights_only=False)
+                clean_enc_for_seed = pt_bundle.get("clean_encoded")
+                sh_list = pt_bundle.get("shifted_encoded_by_shift") or ()
+                if sh_list:
+                    shifted_enc_for_seed = sh_list[0][3]
+                del pt_bundle
+
+            if clean_enc_for_seed is None:
+                # Fallback: run live Clean 0s forward if MEG signals exist on local cache
+                try:
+                    real_eval_ds = task.build_dataset(cfg_m, eval_table_loaded, zero_signal=False)
+                    real_loader, _ = make_loader(
+                        real_eval_ds,
+                        tc,
+                        shuffle=False,
+                        group_column=group_column(cfg_m),
+                        batch_size=eval_bs,
+                    )
+                    clean_enc_for_seed = encode_loader(
+                        model,
+                        real_loader,
+                        dev,
+                        amp=amp_enabled,
+                        amp_dtype=amp_dtype,
+                        show_progress=False,
+                    )
+                except Exception:
+                    clean_enc_for_seed = None
+
+            del model
+            if dev.type == "cuda":
+                torch.cuda.empty_cache()
+
+            sr_item = summary_seed_map.get(sd)
+            clean_fallback_row: dict[str, Any] | None = None
+            if sr_item is None and clean_enc_for_seed is not None:
+                clean_fallback_row = _metrics_from_encoded(
+                    clean_enc_for_seed,
+                    cfg_m,
+                    stage_m=stage_m,
+                    horizon_delay_filter=horizon_filter,
+                )
+
+            for tk, h_delay, _, _ in track_items:
+                if sr_item is not None:
+                    ext = _extract_raw_control_metrics_from_seed_result(
+                        sr_item,
+                        stage=stage_m,
+                        horizon_key=(f"K{h_delay}" if h_delay is not None else None),
+                    )
+                    c_m, s_m = ext["clean"], ext["shifted"]
+                    per_track_metrics[tk]["clean_50w_top10"].append(c_m["vocab50_macro_top10"] * 100.0)
+                    per_track_metrics[tk]["clean_50w_top1"].append(c_m["vocab50_macro_top1"] * 100.0)
+                    per_track_metrics[tk]["clean_fv_top10"].append(c_m["full_vocab_macro_top10"] * 100.0)
+                    per_track_metrics[tk]["clean_fv_subj_top10"].append(
+                        c_m["full_vocab_subject_macro_top10"] * 100.0
+                    )
+                    per_track_metrics[tk]["shifted_50w_top10"].append(
+                        s_m["vocab50_macro_top10"] * 100.0
+                    )
+                    per_track_metrics[tk]["shifted_50w_top1"].append(
+                        s_m["vocab50_macro_top1"] * 100.0
+                    )
+                    per_track_metrics[tk]["shifted_fv_top10"].append(
+                        s_m["full_vocab_macro_top10"] * 100.0
+                    )
+                    per_track_metrics[tk]["shifted_fv_subj_top10"].append(
+                        s_m["full_vocab_subject_macro_top10"] * 100.0
+                    )
+                elif clean_fallback_row is not None:
+                    if stage_m in ("revision", "prefix_revision") and h_delay is not None:
+                        h_dict = (clean_fallback_row.get("horizons") or {}).get(f"K{h_delay}") or {}
+                        c50_10 = float(h_dict.get("common_vocab50_macro_top10", 0.0))
+                        c50_1 = float(h_dict.get("common_vocab50_macro_top1", 0.0))
+                        cfv_10 = float(
+                            h_dict.get(
+                                "common_full_vocab_word_macro_top10",
+                                h_dict.get("common_full_vocab_macro_top10", 0.0),
+                            )
+                        )
+                        cfv_s10 = float(
+                            h_dict.get("common_full_vocab_subject_macro_top10", cfv_10)
+                        )
+                    else:
+                        c50_10 = float(clean_fallback_row.get("vocab50_macro_top10", 0.0))
+                        c50_1 = float(clean_fallback_row.get("vocab50_macro_top1", 0.0))
+                        cfv_10 = float(
+                            clean_fallback_row.get(
+                                "full_vocab_word_macro_top10",
+                                clean_fallback_row.get("full_vocab_macro_top10", 0.0),
+                            )
+                        )
+                        cfv_s10 = float(
+                            clean_fallback_row.get("full_vocab_subject_macro_top10", cfv_10)
+                        )
+                    per_track_metrics[tk]["clean_50w_top10"].append(c50_10 * 100.0)
+                    per_track_metrics[tk]["clean_50w_top1"].append(c50_1 * 100.0)
+                    per_track_metrics[tk]["clean_fv_top10"].append(cfv_10 * 100.0)
+                    per_track_metrics[tk]["clean_fv_subj_top10"].append(cfv_s10 * 100.0)
+
+                for align_name, enc_src in (
+                    ("clean", clean_enc_for_seed),
+                    ("shifted", shifted_enc_for_seed),
+                ):
+                    if enc_src is None:
+                        continue
+                    preds_a = _align_encoded_predictions_to_event_ids(
+                        enc_src,
+                        ordered_common_eids,
+                        horizon_delay=h_delay,
+                    )
+                    if preds_a is None:
+                        continue
+                    score_a = (preds_a @ vocab_emb_norm.T).astype(np.float32)
+                    acc_k = (tk, align_name)
+                    if acc_k not in per_track_align_scores:
+                        per_track_align_scores[acc_k] = score_a.copy()
+                    else:
+                        per_track_align_scores[acc_k] += score_a
+                    per_track_align_counts[acc_k] = (
+                        per_track_align_counts.get(acc_k, 0) + 1
+                    )
+                    if len(dur_idx) >= 2 and train_words_fit and train_durs_fit:
+                        js_seed = compute_duration_prior_alignment_metrics(
+                            score_a[dur_idx],
+                            vocabulary,
+                            [common_words[int(i)] for i in dur_idx],
+                            common_durs_s[dur_idx],
+                            train_words=train_words_fit,
+                            train_durations_seconds=train_durs_fit,
+                            n_permutations=0,
+                        )
+                        per_track_seed_js.setdefault(acc_k, []).append(
+                            float(js_seed["delta_js_bits"])
+                        )
+                        per_track_seed_mae.setdefault(acc_k, []).append(
+                            float(js_seed["top10_duration_error_reduction_ms"])
+                        )
+                    del score_a
+
+        # Aggregate across seeds for each track of this model
+        n_common_all = len(ordered_common_eids)
+        n50_q = int(sum(1 for w in common_words if w in set(vocab50)))
+        for tk, h_delay, tk_disp, is_primary_track in track_items:
+            m_store = per_track_metrics[tk]
+            c50_m, c50_sd = _mean_sd(m_store["clean_50w_top10"])
+            s50_m, s50_sd = _mean_sd(m_store["shifted_50w_top10"])
+            gaps_50 = [
+                c - s
+                for c, s in zip(m_store["clean_50w_top10"], m_store["shifted_50w_top10"])
+            ]
+            g50_m, g50_sd = _mean_sd(gaps_50)
+            c50_1_m, c50_1_sd = _mean_sd(m_store["clean_50w_top1"])
+            s50_1_m, s50_1_sd = _mean_sd(m_store["shifted_50w_top1"])
+            cfv_m, cfv_sd = _mean_sd(m_store["clean_fv_top10"])
+            sfv_m, sfv_sd = _mean_sd(m_store["shifted_fv_top10"])
+
+            if is_primary_track:
+                l_row: dict[str, Any] = {
+                    "model_id": model_id,
+                    "condition_key": tk,
+                    "paper_display_name": tk_disp,
+                    "text_embedding_model": "t5-large",
+                    "split": split,
+                    "seed_count": len(seed_list),
+                    "common_query_count": n_common_all,
+                    "n50_query_count": n50_q,
+                    "clean_50w_top10_pct": round(c50_m, 4),
+                    "clean_50w_top10_sd_pct": round(c50_sd, 4),
+                    "shifted_50w_top10_pct": round(s50_m, 4),
+                    "shifted_50w_top10_sd_pct": round(s50_sd, 4),
+                    "net_gain_50w_top10_pp": round(g50_m, 4),
+                    "net_gain_50w_top10_sd_pp": round(g50_sd, 4),
+                    "clean_50w_top1_pct": round(c50_1_m, 4),
+                    "clean_50w_top1_sd_pct": round(c50_1_sd, 4),
+                    "shifted_50w_top1_pct": round(s50_1_m, 4),
+                    "shifted_50w_top1_sd_pct": round(s50_1_sd, 4),
+                    "clean_full_vocab_top10_pct": round(cfv_m, 4),
+                    "clean_full_vocab_top10_sd_pct": round(cfv_sd, 4),
+                    "shifted_full_vocab_top10_pct": round(sfv_m, 4),
+                    "shifted_full_vocab_top10_sd_pct": round(sfv_sd, 4),
+                }
+                for cond in synthetic_conditions:
+                    sm10, ss10 = _mean_sd(m_store[f"synth_{cond}_50w_top10"])
+                    sm1, ss1 = _mean_sd(m_store[f"synth_{cond}_50w_top1"])
+                    sfv10, sfvs10 = _mean_sd(m_store[f"synth_{cond}_fv_top10"])
+                    l_row[f"synthetic_{cond}_50w_top10_pct"] = round(sm10, 4)
+                    l_row[f"synthetic_{cond}_50w_top10_sd_pct"] = round(ss10, 4)
+                    l_row[f"synthetic_{cond}_50w_top1_pct"] = round(sm1, 4)
+                    l_row[f"synthetic_{cond}_50w_top1_sd_pct"] = round(ss1, 4)
+                    l_row[f"synthetic_{cond}_full_vocab_top10_pct"] = round(sfv10, 4)
+                    l_row[f"synthetic_{cond}_full_vocab_top10_sd_pct"] = round(sfvs10, 4)
+                ledger_rows.append(l_row)
+                model_summaries.append(l_row)
+
+            # Tidy rows for synthetic_timing_summary.csv across Clean, Shifted, and Synthetic conditions
+            for cond_tag, cond_lbl, v50_vals, v50_1_vals, fv_vals in (
+                ("clean", "Real MEG (Clean 0s)", m_store["clean_50w_top10"], m_store["clean_50w_top1"], m_store["clean_fv_top10"]),
+                ("shifted", "Shifted MEG", m_store["shifted_50w_top10"], m_store["shifted_50w_top1"], m_store["shifted_fv_top10"]),
+                *[
+                    (
+                        str(sc),
+                        f"Synthetic ({sc})",
+                        m_store[f"synth_{sc}_50w_top10"],
+                        m_store[f"synth_{sc}_50w_top1"],
+                        m_store[f"synth_{sc}_fv_top10"],
+                    )
+                    for sc in synthetic_conditions
+                ],
+            ):
+                if not v50_vals and not fv_vals:
+                    continue
+                m10, sd10 = _mean_sd(v50_vals)
+                m1, sd1 = _mean_sd(v50_1_vals)
+                mfv, sdfv = _mean_sd(fv_vals)
+                synthetic_tidy_rows.append(
+                    {
+                        "dataset": str(dataset),
+                        "split": split,
+                        "model_id": model_id if is_primary_track else f"{model_id}_{tk.lower()}",
+                        "condition_key": tk,
+                        "condition": cond_tag,
+                        "condition_label": f"{cond_lbl} | {tk_disp}",
+                        "horizon": (int(h_delay) if h_delay is not None else -1),
+                        "paper_display_name": tk_disp,
+                        "text_embedding_model": "t5-large",
+                        "n_seeds": len(seed_list),
+                        "query_count_n50": n50_q,
+                        "query_count_common": n_common_all,
+                        "mean_top10_pct": round(m10, 4),
+                        "sd_top10_pct": round(sd10, 4),
+                        "mean_top1_pct": round(m1, 4),
+                        "sd_top1_pct": round(sd1, 4),
+                        "full_vocab_top10_pct": round(mfv, 4),
+                        "full_vocab_top10_sd_pct": round(sdfv, 4),
+                    }
+                )
+
+            # Duration-prior alignment across ("clean", "shifted", "synthetic_shared")
+            for align_name in ("clean", "shifted", "synthetic_shared"):
+                acc_k = (tk, align_name)
+                cnt = int(per_track_align_counts.get(acc_k, 0))
+                if cnt == 0 or len(dur_idx) < 2 or not (train_words_fit and train_durs_fit):
+                    continue
+                ens_mat = (per_track_align_scores[acc_k] / float(cnt)).astype(np.float32)
+                if align_name == "clean":
+                    ensemble_clean_scores[tk] = ens_mat
+                js_ens = compute_duration_prior_alignment_metrics(
+                    ens_mat[dur_idx],
+                    vocabulary,
+                    [common_words[int(i)] for i in dur_idx],
+                    common_durs_s[dur_idx],
+                    train_words=train_words_fit,
+                    train_durations_seconds=train_durs_fit,
+                    n_permutations=n_permutations,
+                )
+                _, js_sd = _mean_sd(per_track_seed_js.get(acc_k, []))
+                _, mae_sd = _mean_sd(per_track_seed_mae.get(acc_k, []))
+                if align_name == "clean":
+                    a_disp = tk_disp
+                elif align_name == "shifted":
+                    a_disp = f"Shifted {tk_disp}"
+                else:
+                    a_disp = f"Synthetic (shared) {tk_disp}"
+                duration_alignment_rows.append(
+                    {
+                        "alignment": align_name,
+                        "condition": tk,
+                        "paper_display_name": a_disp,
+                        "text_embedding_model": "t5-large",
+                        "seed_count": cnt,
+                        **js_ens,
+                        "delta_js_bits_sd": round(js_sd, 6),
+                        "top10_duration_error_reduction_ms_sd": round(mae_sd, 4),
+                    }
+                )
+            # Drop non-clean ensemble buffers eagerly to keep peak RAM low
+            for drop_align in ("shifted", "synthetic_shared"):
+                per_track_align_scores.pop((tk, drop_align), None)
+
+    exported_files: dict[str, str] = {}
+    if ledger_rows:
+        p = _write_csv_rows(out_dir / "five_model_debiasing_ledger.csv", ledger_rows)
+        if p is not None:
+            exported_files["five_model_debiasing_ledger_csv"] = str(p)
+
+    if synthetic_tidy_rows:
+        p = _write_csv_rows(out_dir / "synthetic_timing_summary.csv", synthetic_tidy_rows)
+        if p is not None:
+            exported_files["synthetic_timing_csv"] = str(p)
+
+    if duration_alignment_rows:
+        raw_ps = [float(r["permutation_p_value"]) for r in duration_alignment_rows]
+        for r_item, p_h in zip(duration_alignment_rows, holm_adjust(raw_ps)):
+            r_item["p_holm"] = round(float(p_h), 6)
+        p = _write_csv_rows(out_dir / "duration_prior_alignment.csv", duration_alignment_rows)
+        if p is not None:
+            exported_files["duration_prior_alignment_csv"] = str(p)
+
+    # Cross-model Top-10 French candidate neighborhoods with T5-Large cosines & word durations
+    nb_examples: list[dict[str, Any]] = []
+    if ensemble_clean_scores:
+        nb_payload = {
+            "vocabulary": vocabulary,
+            "vocabulary_embeddings": vocab_emb_norm,
+            "reference_words": common_words,
+            "content_words": sorted(content_words_set),
+            "clean_scores": ensemble_clean_scores,
+            "word_mean_duration_ms": train_word_mean_ms,
+        }
+        cond_order = [
+            c
+            for c in (
+                "S0",
+                "F_joint_undebiased",
+                "F_freeze_undebiased",
+                "F_debiased",
+                "K0",
+                "K1",
+                "K2",
+            )
+            if c in ensemble_clean_scores
+        ]
+        for extra_c in ensemble_clean_scores:
+            if extra_c not in cond_order:
+                cond_order.append(extra_c)
+        nb_examples = export_word_top10_neighborhood_examples(
+            nb_payload,
+            conditions=cond_order,
+            word_mean_duration_ms=train_word_mean_ms,
+        )
+        if nb_examples:
+            nb_json_p = out_dir / "word_top10_neighborhoods.json"
+            save_json(nb_json_p, {"text_embedding_model": "t5-large", "examples": nb_examples})
+            exported_files["word_top10_neighborhoods_json"] = str(nb_json_p)
+            flat_nb_rows = _flatten_word_top10_neighborhoods(nb_examples)
+            nb_csv = _write_csv_rows(out_dir / "word_top10_neighborhoods.csv", flat_nb_rows)
+            if nb_csv is not None:
+                exported_files["word_top10_neighborhoods_csv"] = str(nb_csv)
+
+    diag_result = {
+        "schema_version": 1,
+        "dataset": str(dataset),
+        "split": str(split),
+        "seeds": seed_list,
+        "text_embedding_model": "t5-large",
+        "common_horizon_delay": 2,
+        "common_query_count": len(ordered_common_eids),
+        "n50_query_count": int(sum(1 for w in common_words if w in set(vocab50))),
+        "synthetic_seed": int(synthetic_seed),
+        "synthetic_conditions": [str(c) for c in synthetic_conditions],
+        "output_dir": str(out_dir),
+        "model_summaries": model_summaries,
+        "duration_prior_alignment_rows": duration_alignment_rows,
+        "word_top10_neighborhood_count": len(nb_examples),
+        "exported_files": exported_files,
+    }
+    save_json(diag_json_path, diag_result)
+    exported_files["five_model_diagnostics_json"] = str(diag_json_path)
+    save_json(diag_json_path, diag_result)
+    return diag_result
+
+
+def _physical_waits_lookup(
+    event_table: pd.DataFrame | None, *, split: str
+) -> dict[str, tuple[float, float]]:
+    if event_table is None or len(event_table) == 0:
+        return {}
+    rows = compute_word_horizon_physical_waits(event_table, split=split)
+    lookup: dict[str, tuple[float, float]] = {}
+    for r in rows:
+        lookup[str(r.get("horizon", ""))] = (
+            float(r.get("mean_wait_seconds", 0.0)),
+            float(r.get("median_wait_seconds", 0.0)),
+        )
+    return lookup
+
+
+def collect_t5_long_window_comparison_rows(
+    *,
+    results_dir: str | Path | None = None,
+    dataset: str = "pallier2025",
+    split: str = "test",
+    eval_subdir: str = "causal_fast_audit",
+    subject_scope: str = "all-n10",
+    event_table: pd.DataFrame | None = None,
+    long_window_specs: Sequence[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """收集 T5-Large Stage-1 孤立单窗拉宽对照（1.00/1.28/1.50/2.50s）及去偏跨词对照（Local r=0/1/2, Full-Context）。"""
+    results_root_dir = (
+        Path(results_dir).resolve() if results_dir is not None else results_root()
+    )
+    ds_results_dir = results_root_dir / str(dataset)
+    if not ds_results_dir.is_dir():
+        return []
+
+    specs = (
+        [dict(s) for s in long_window_specs]
+        if long_window_specs is not None
+        else [dict(s) for s in CANONICAL_PALLIER2025_LONG_WINDOW_SPECS]
+    )
+    wait_lookup = _physical_waits_lookup(event_table, split=split)
+    rows_out: list[dict[str, Any]] = []
+
+    def _summarize_stage_metrics(
+        ms_json: Path,
+        *,
+        stage: str,
+        horizon_key: str | None = None,
+    ) -> dict[str, Any] | None:
+        obj = json.loads(ms_json.read_text(encoding="utf-8"))
+        sr_list = obj.get("seed_results") or []
+        if not sr_list:
+            return None
+        v50_10: list[float] = []
+        v50_1: list[float] = []
+        fv_10: list[float] = []
+        fv_s10: list[float] = []
+        sh_v50_10: list[float] = []
+        for sr in sr_list:
+            ext = _extract_raw_control_metrics_from_seed_result(
+                sr, stage=stage, horizon_key=horizon_key
+            )
+            v50_10.append(ext["clean"]["vocab50_macro_top10"] * 100.0)
+            v50_1.append(ext["clean"]["vocab50_macro_top1"] * 100.0)
+            fv_10.append(ext["clean"]["full_vocab_macro_top10"] * 100.0)
+            fv_s10.append(ext["clean"]["full_vocab_subject_macro_top10"] * 100.0)
+            sh_v50_10.append(ext["shifted"]["vocab50_macro_top10"] * 100.0)
+        m_v50_10, sd_v50_10 = _mean_sd(v50_10)
+        m_v50_1, sd_v50_1 = _mean_sd(v50_1)
+        m_fv_10, sd_fv_10 = _mean_sd(fv_10)
+        m_fv_s10, sd_fv_s10 = _mean_sd(fv_s10)
+        m_sh50_10, sd_sh50_10 = _mean_sd(sh_v50_10)
+        first_fv = ((sr_list[0].get("vocabulary_sweep") or {}).get("full_vocab") or {})
+        return {
+            "seeds": int(len(sr_list)),
+            "candidate_count": int(first_fv.get("candidate_count", 0)),
+            "unique_events": int(
+                first_fv.get(
+                    "common_query_count",
+                    first_fv.get("query_count", 0),
+                )
+            ),
+            "vocab50_top10_pct": round(m_v50_10, 4),
+            "vocab50_top10_sd_pct": round(sd_v50_10, 4),
+            "vocab50_top1_pct": round(m_v50_1, 4),
+            "vocab50_top1_sd_pct": round(sd_v50_1, 4),
+            "shifted_vocab50_top10_pct": round(m_sh50_10, 4),
+            "shifted_vocab50_top10_sd_pct": round(sd_sh50_10, 4),
+            "full_vocab_word_macro_top10_pct": round(m_fv_10, 4),
+            "full_vocab_word_macro_top10_sd_pct": round(sd_fv_10, 4),
+            "subject_equal_top10_pct": round(m_fv_s10, 4),
+            "subject_equal_top10_sd_pct": round(sd_fv_s10, 4),
+            "macro_top10_pct": round(m_fv_10, 4),
+            "macro_top10_sd_pct": round(sd_fv_10, 4),
+        }
+
+    # 1. Isolated Word-Only window widths (1.00s, 1.28s, 1.50s, 2.50s)
+    for sp in specs:
+        exp_tag = str(sp["exp_tag"])
+        ms_json = _locate_multi_seed_summary_json(
+            ds_results_dir, exp_tag, eval_subdir, "word", subject_scope, split
+        )
+        if ms_json is None:
+            continue
+        parsed = _summarize_stage_metrics(ms_json, stage="word")
+        if parsed is None:
+            continue
+        win_sec = float(sp["window_seconds"])
+        rows_out.append(
+            {
+                "dataset": str(dataset),
+                "split": split,
+                "condition": str(sp["condition"]),
+                "paper_display_name": str(
+                    sp.get("paper_display_name")
+                    or _condition_paper_display_name(str(sp["condition"]))
+                ),
+                "model_family": "isolated_word_only",
+                "text_embedding_model": "t5-large",
+                "window_seconds": win_sec,
+                "mean_wait_seconds": round(win_sec, 4),
+                "median_wait_seconds": round(win_sec, 4),
+                "population": f"common_horizon_delay=2 ({split})",
+                **parsed,
+            }
+        )
+
+    # 2. Debiased Local (r = 0, 1, 2) from prefix_revision summary
+    local_json = _locate_multi_seed_summary_json(
+        ds_results_dir,
+        "2_lr4e-4_bs256_window_1.0_siamese_debiased_lamda_0.5_history_window",
+        eval_subdir,
+        "prefix_revision",
+        subject_scope,
+        split,
+    )
+    if local_json is not None:
+        for h_delay, cond_id in ((0, "local_r0"), (1, "local_r1"), (2, "local_r2")):
+            parsed = _summarize_stage_metrics(
+                local_json, stage="prefix_revision", horizon_key=f"K{h_delay}"
+            )
+            if parsed is None:
+                continue
+            mean_w, med_w = wait_lookup.get(
+                f"r={h_delay}", (1.0 + 0.8 * h_delay, 1.0 + 0.8 * h_delay)
+            )
+            rows_out.append(
+                {
+                    "dataset": str(dataset),
+                    "split": split,
+                    "condition": cond_id,
+                    "paper_display_name": _condition_paper_display_name(cond_id),
+                    "model_family": "debiased_local_cross_word",
+                    "text_embedding_model": "t5-large",
+                    "window_seconds": 1.0,
+                    "mean_wait_seconds": round(mean_w, 4),
+                    "median_wait_seconds": round(med_w, 4),
+                    "population": f"common_horizon_delay=2 ({split})",
+                    **parsed,
+                }
+            )
+
+    # 3. Debiased Full-Context
+    full_ctx_json = _locate_multi_seed_summary_json(
+        ds_results_dir,
+        "lr4e-4_bs256_window_1.0_siamese_debiased_lamda_0.5_history_window",
+        eval_subdir,
+        "context",
+        subject_scope,
+        split,
+    )
+    if full_ctx_json is not None:
+        parsed = _summarize_stage_metrics(full_ctx_json, stage="context")
+        if parsed is not None:
+            mean_w, med_w = wait_lookup.get("full", (5.33, 5.0))
+            rows_out.append(
+                {
+                    "dataset": str(dataset),
+                    "split": split,
+                    "condition": "F_debiased",
+                    "paper_display_name": _condition_paper_display_name("F_debiased"),
+                    "model_family": "debiased_full_context",
+                    "text_embedding_model": "t5-large",
+                    "window_seconds": 1.0,
+                    "mean_wait_seconds": round(mean_w, 4),
+                    "median_wait_seconds": round(med_w, 4),
+                    "population": f"common_horizon_delay=2 ({split})",
+                    **parsed,
+                }
+            )
+    return rows_out
+
+
+def _materialize_five_model_exports_to_dir(
+    diag_res: Mapping[str, Any], out_dir: Path
+) -> dict[str, str]:
+    """确保 5 模型 T5-Large 诊断产物落在目标导出目录下并返回文件路径字典。"""
+    import shutil
+
+    out_dir = Path(out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    exported: dict[str, str] = {}
+    for key, src_val in (diag_res.get("exported_files") or {}).items():
+        if not src_val:
+            continue
+        src_p = Path(src_val)
+        if not src_p.is_file():
+            continue
+        dst_p = out_dir / src_p.name
+        if src_p.resolve() != dst_p.resolve():
+            shutil.copy2(src_p, dst_p)
+        exported[str(key)] = str(dst_p)
+    return exported
 
 
 def export_synthetic_and_horizon_studies(
@@ -1193,9 +2707,14 @@ def export_synthetic_and_horizon_studies(
     event_table: pd.DataFrame | None = None,
     dataset: str = "pallier2025",
     split: str = "test",
+    five_model_diagnostics: Mapping[str, Any] | None = None,
+    results_dir: str | Path | None = None,
+    collect_long_window: bool = False,
+    eval_subdir: str = "causal_fast_audit",
+    long_window_specs: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """整理并导出已存档合成脉冲对照（synthetic_timing_v2）、长窗消融（single_word_long_window_test_v2）与物理等待分布。"""
-    root = Path(repo_root).resolve() if repo_root is not None else PROJECT_ROOT
+    """整理并导出 T5-Large 5 模型脉冲对照、长词窗对比与物理等待分布（零旧版 BGE-M3 回退）。"""
+    del repo_root  # Never silently load legacy BGE-M3 data/results/studies/ files
     out_dir = Path(output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1203,95 +2722,41 @@ def export_synthetic_and_horizon_studies(
     summary: dict[str, Any] = {
         "dataset": dataset,
         "split": split,
+        "text_embedding_model": "t5-large",
         "output_dir": str(out_dir),
     }
 
-    # 1. Synthetic timing v2 (fallback v1)
-    synth_candidates = (
-        root / "data" / "results" / "studies" / "synthetic_timing_v2" / "results.json",
-        root / "data" / "results" / "studies" / "synthetic_timing_v1" / "results.json",
-    )
-    synth_path = next((p for p in synth_candidates if p.is_file()), None)
-    if synth_path is not None:
-        raw_synth = json.loads(synth_path.read_text(encoding="utf-8"))
-        synth_rows: list[dict[str, Any]] = []
-        for item in raw_synth.get("summaries") or []:
-            if not isinstance(item, Mapping):
-                continue
-            ds_item = str(item.get("dataset", ""))
-            if dataset and ds_item and ds_item != dataset:
-                continue
-            h_i = int(item.get("horizon", 0))
-            cond_raw = str(item.get("condition", ""))
-            cond_label = (
-                "Real MEG"
-                if cond_raw == "real"
-                else f"Synthetic ({cond_raw})"
+    # 1. Materialize 5-model T5-Large synthetic & cross-model diagnostics when explicitly provided
+    if isinstance(five_model_diagnostics, Mapping):
+        mat_files = _materialize_five_model_exports_to_dir(
+            five_model_diagnostics, out_dir
+        )
+        exported_files.update(mat_files)
+        summary["five_model_diagnostics"] = {
+            k: five_model_diagnostics.get(k)
+            for k in (
+                "dataset",
+                "split",
+                "seeds",
+                "common_query_count",
+                "n50_query_count",
+                "synthetic_seed",
+                "model_summaries",
+                "word_top10_neighborhood_count",
             )
-            synth_rows.append(
-                {
-                    "dataset": ds_item,
-                    "condition": cond_raw,
-                    "condition_label": f"{cond_label} | Local (r = {h_i})",
-                    "horizon": h_i,
-                    "paper_display_name": f"Local (r = {h_i})",
-                    "n_seeds": int(item.get("n_seeds", 0)),
-                    "mean_top10_pct": round(float(item.get("mean", 0.0)) * 100.0, 4),
-                    "sd_top10_pct": round(float(item.get("sample_sd", 0.0)) * 100.0, 4),
-                }
-            )
-        csv_p = _write_csv_rows(out_dir / "synthetic_timing_summary.csv", synth_rows)
-        if csv_p is not None:
-            exported_files["synthetic_timing_csv"] = str(csv_p)
-        summary["synthetic_timing_rows"] = synth_rows
+            if k in five_model_diagnostics
+        }
 
-    # 2. Long window comparison
-    lw_path = (
-        root
-        / "data"
-        / "results"
-        / "studies"
-        / "single_word_long_window_test_v2"
-        / "summary.csv"
-    )
-    if lw_path.is_file():
-        lw_df = pd.read_csv(lw_path)
-        lw_rows: list[dict[str, Any]] = []
-        for _, row in lw_df.iterrows():
-            ds_item = str(row.get("dataset", ""))
-            if dataset and ds_item and ds_item != dataset:
-                continue
-            cond_raw = str(row.get("condition", ""))
-            lw_rows.append(
-                {
-                    "dataset": ds_item,
-                    "condition": cond_raw,
-                    "paper_display_name": _long_window_paper_label(cond_raw),
-                    "population": str(row.get("population", "")),
-                    "candidates": str(row.get("candidates", "")),
-                    "candidate_count": int(row.get("candidate_count", 0)),
-                    "unique_events": int(row.get("unique_events", 0)),
-                    "seeds": int(row.get("seeds", 0)),
-                    "subject_equal_top10_pct": round(
-                        float(row.get("subject_equal_recall_at_10_mean", 0.0)) * 100.0, 4
-                    ),
-                    "subject_equal_top10_sd_pct": round(
-                        float(row.get("subject_equal_recall_at_10_sd", 0.0)) * 100.0, 4
-                    ),
-                    "subject_equal_top1_pct": round(
-                        float(row.get("subject_equal_recall_at_1_mean", 0.0)) * 100.0, 4
-                    ),
-                    "subject_equal_top1_sd_pct": round(
-                        float(row.get("subject_equal_recall_at_1_sd", 0.0)) * 100.0, 4
-                    ),
-                    "macro_top10_pct": round(
-                        float(row.get("macro_recall_at_10_mean", 0.0)) * 100.0, 4
-                    ),
-                    "macro_top10_sd_pct": round(
-                        float(row.get("macro_recall_at_10_sd", 0.0)) * 100.0, 4
-                    ),
-                }
-            )
+    # 2. Collect T5-Large Stage-1 isolated long-window + Local r=0/1/2 + Full-Context comparison
+    if collect_long_window:
+        lw_rows = collect_t5_long_window_comparison_rows(
+            results_dir=results_dir,
+            dataset=dataset,
+            split=split,
+            eval_subdir=eval_subdir,
+            event_table=event_table,
+            long_window_specs=long_window_specs,
+        )
         csv_p = _write_csv_rows(out_dir / "long_window_comparison.csv", lw_rows)
         if csv_p is not None:
             exported_files["long_window_csv"] = str(csv_p)
@@ -1326,6 +2791,7 @@ def export_sentence_and_subject_coupling_studies(
     split: str = "test",
     primary_condition: str = "S3_clean",
     n_permutations: int = 200,
+    skip_duration_and_neighborhood_exports: bool = False,
 ) -> dict[str, Any]:
     """统一导出词级诊断（Δ_JS、词频四分位）、定性案例（Top-10 邻域 / 句内矩阵 / 分位数例句）、Brain-Only 消融与跨被试耦合结果。"""
     out_dir = Path(output_dir).resolve()
@@ -1350,37 +2816,19 @@ def export_sentence_and_subject_coupling_studies(
         train_counts = dict(score_payload.get("vocabulary_train_counts") or {})
 
         # 1a. Qualitative word Top-10 neighborhoods
-        nb_examples = export_word_top10_neighborhood_examples(score_payload)
-        if nb_examples:
-            nb_json_p = out_dir / "word_top10_neighborhoods.json"
-            save_json(nb_json_p, {"examples": nb_examples})
-            exported_files["word_top10_neighborhoods_json"] = str(nb_json_p)
-            flat_nb_rows: list[dict[str, Any]] = []
-            for ex in nb_examples:
-                for cond_k, cond_v in (ex.get("conditions") or {}).items():
-                    for cand in cond_v.get("top_candidates") or []:
-                        flat_nb_rows.append(
-                            {
-                                "target_word": ex["target_word"],
-                                "occurrence_count": ex["occurrence_count"],
-                                "condition": cond_k,
-                                "paper_display_name": cond_v["paper_display_name"],
-                                "target_rank": cond_v["target_rank"],
-                                "candidate_rank": cand["rank"],
-                                "candidate_word": cand["word"],
-                                "score": cand["score"],
-                                "cosine_to_target": cand.get(
-                                    "cosine_to_target", ""
-                                ),
-                                "is_target": cand["is_target"],
-                            }
-                        )
-            nb_csv = _write_csv_rows(
-                out_dir / "word_top10_neighborhoods.csv", flat_nb_rows
-            )
-            if nb_csv is not None:
-                exported_files["word_top10_neighborhoods_csv"] = str(nb_csv)
-            summary["word_top10_neighborhood_count"] = len(nb_examples)
+        if not skip_duration_and_neighborhood_exports:
+            nb_examples = export_word_top10_neighborhood_examples(score_payload)
+            if nb_examples:
+                nb_json_p = out_dir / "word_top10_neighborhoods.json"
+                save_json(nb_json_p, {"examples": nb_examples})
+                exported_files["word_top10_neighborhoods_json"] = str(nb_json_p)
+                flat_nb_rows = _flatten_word_top10_neighborhoods(nb_examples)
+                nb_csv = _write_csv_rows(
+                    out_dir / "word_top10_neighborhoods.csv", flat_nb_rows
+                )
+                if nb_csv is not None:
+                    exported_files["word_top10_neighborhoods_csv"] = str(nb_csv)
+                summary["word_top10_neighborhood_count"] = len(nb_examples)
 
         # 1b. Sentence neural Top-5 matrix
         sent_matrix = export_sentence_neural_top5_matrix(score_payload)
@@ -1505,7 +2953,11 @@ def export_sentence_and_subject_coupling_studies(
             if int(np.sum(np.isfinite(dur_buf) & (dur_buf > 0.0))) >= 2:
                 durs_by_event_idx = dur_buf
 
-        if durs_by_event_idx is not None and len(durs_by_event_idx) == len(ref_words):
+        if (
+            not skip_duration_and_neighborhood_exports
+            and durs_by_event_idx is not None
+            and len(durs_by_event_idx) == len(ref_words)
+        ):
             train_w_fit: list[str] | None = None
             train_d_fit: list[float] | None = None
             if event_table is not None and len(event_table) > 0:
@@ -1784,6 +3236,14 @@ def run_manuscript_study_exports(
     event_table_csv: str | Path | None = None,
     primary_condition: str = "S3_clean",
     n_permutations: int = 200,
+    results_dir: str | Path | None = None,
+    cache_dir: str | Path | None = None,
+    eval_subdir: str = "causal_fast_audit",
+    seeds: Sequence[int] = (0, 1, 2),
+    run_five_model_diagnostics: bool = False,
+    five_model_diagnostics_json: str | Path | None = None,
+    collect_long_window_results: bool = False,
+    force_diagnostics: bool = False,
 ) -> dict[str, Any]:
     """统一入口：从可用解码包、神经得分缓存、事件表与已存档研究结果一键生成论文导出产物。"""
     root = Path(repo_root).resolve() if repo_root is not None else PROJECT_ROOT
@@ -1867,12 +3327,38 @@ def run_manuscript_study_exports(
             Path(word_eval_json).read_text(encoding="utf-8")
         )
 
+    five_model_diag: dict[str, Any] | None = None
+    if five_model_diagnostics_json is not None:
+        diag_path = Path(five_model_diagnostics_json).resolve()
+        if not diag_path.is_file():
+            raise FileNotFoundError(
+                f"找不到 five_model_diagnostics_json: {diag_path}"
+            )
+        five_model_diag = json.loads(diag_path.read_text(encoding="utf-8"))
+    elif run_five_model_diagnostics:
+        five_model_diag = evaluate_five_model_t5_diagnostics(
+            results_dir=results_dir,
+            output_dir=out_dir,
+            dataset=dataset,
+            split=split,
+            seeds=seeds,
+            eval_subdir=eval_subdir,
+            event_table=event_table,
+            cache_dir=cache_dir,
+            n_permutations=n_permutations,
+            force=force_diagnostics,
+        )
+
     synth_res = export_synthetic_and_horizon_studies(
         repo_root=root,
         output_dir=out_dir,
         event_table=event_table,
         dataset=dataset,
         split=split,
+        five_model_diagnostics=five_model_diag,
+        results_dir=results_dir,
+        collect_long_window=bool(collect_long_window_results),
+        eval_subdir=eval_subdir,
     )
     sent_res = export_sentence_and_subject_coupling_studies(
         output_dir=out_dir,
@@ -1885,6 +3371,7 @@ def run_manuscript_study_exports(
         split=split,
         primary_condition=primary_condition,
         n_permutations=n_permutations,
+        skip_duration_and_neighborhood_exports=(five_model_diag is not None),
     )
 
     all_files = {
@@ -1898,6 +3385,7 @@ def run_manuscript_study_exports(
         "language": language,
         "output_dir": str(out_dir),
         "exported_files": all_files,
+        "five_model_diagnostics": synth_res.get("five_model_diagnostics"),
         "synthetic_and_horizon": synth_res,
         "sentence_and_coupling": sent_res,
     }
