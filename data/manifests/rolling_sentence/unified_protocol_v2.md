@@ -1,134 +1,84 @@
-# 延迟滚动词／句子解码：共同训练协议 v2
+# 自然连续语流局部跨词去偏编码与句子解码：当前生效实验协议快照
 
-日期：2026-09-27。共同配置：`configs/unified_rolling/v2.yaml`。
+> **维护原则（State Snapshot）**：本文件是 `BrainDecoding` 代码仓唯一生效的实验协议与基准结果状态快照，随主线演进**原地覆写更新**，不追加历史流水账（历史版本留存 `git log`）。此前 `2026-09-27` 的 `BGE-M3 + Qwen2.5-1.5B + A/B/C` 在线句子改写草案及 `C-Gated` 屏幕闪烁门控支线已彻底废弃。
 
-状态：神经训练规则已获用户授权，可用于开发训练；句子解码校准与统计清单尚未冻结。
-本版取代此前 4 层／8 头、BF16、全局事件加权的 v1 训练草案。
-`configs/unified_rolling/v1.yaml` 仅保留指向本版的兼容说明，旧训练入口仍被状态门禁阻止。
+- **当前生效主数据集**：`Pallier2025`（法语连续语音听觉 MEG《小王子》，10 名受试者 `sub-01..10`，随机种子 `Seeds [0, 1, 2]`）
+- **科学主线一句话**：第一阶段独立训练并冻结单词卷积基座（`Word-Only`）；第二阶段在跨词 Transformer 训练期引入同词间间隔错位脑窗遏制隐式词长捷径，测试期统一采用无错位支路单次前向（$\eta_{\text{eval}} = 0.0$）；将跨词视野收敛为已到达前序词与最多 $r = 2$ 个后续词窗的 `Rolling-K2` 直接定稿输出，在将平均输入等待时间缩短一半以上的同时，获得与整句联合编码相当的词表征质量与更优的句子解码性能。
 
-## 1. 授权范围与证据边界
+---
 
-用户授权两个数据集（Pallier2025、ChineseEEG-2）、三个种子（0、1、2）、两个阶段（词模型、回修模型），共 12 项逻辑训练。
-本次以 Pallier seed 0 已通过性能对齐的实际配置为共同规则，并纳入正在进行的 ChineseEEG-2 seed 0 同规则试验。
-已完成且经核验兼容的训练结果直接复用；不为统一目录命名而重复训练。
+## 1. `[ACTIVE]` vs `[DEPRECATED]` 组件与符号映射表
 
-Pallier 单种子对齐支持采用 BGE-M3、16 层／16 头和全覆盖回修的组合接近旧词级性能。
-这不表示多种子稳定性、ChineseEEG-2 性能或句子修正效果已得到验证，也不支持此前整个 v1 组合。
-所有训练、选模和开发评价仅使用 train/val；不评价测试集。
+| 代码工程阶段 / 符号 | 协议状态 | 论文标准术语 | 对应配置文件 / 说明 |
+| :--- | :--- | :--- | :--- |
+| `stage: word` (`S0`) | `[ACTIVE]` | **单词独立解码（`Word-Only`）** | `configs/training/pallier2025_word_encoder.yaml`；第二阶段全程冻结作底 |
+| `stage: context`（端到端微调） | `[ACTIVE Baseline]` | **`Full-Context (Joint)`** | 未冻结 CNN 且未去偏的整句双向基线（暴露隐式时长泄露） |
+| `stage: context`（冻结 CNN，无去偏） | `[ACTIVE Baseline]` | **`+ Freeze CNN`** | 仅冻结 Stage 1 CNN、未施加错位约束的整句基线 |
+| `stage: context`（孪生错位去偏） | `[ACTIVE Reference]` | **`+ Debias (Full-Context)`** | `configs/training/siamese_debiased/pallier2025_siamese_debiased_context.yaml` |
+| `stage: prefix_revision`（$r \in \{0, 1, 2\}$） | **`[ACTIVE Primary]`** | **局部跨词联合编码（`Rolling-K0/K1/K2` / `+ Debias (Rolling-K2)`）** | `configs/training/siamese_debiased/pallier2025_siamese_debiased_prefix_revision.yaml`；可见范围 $z_{1:\min(n, i+r)}$ |
+| `stage: revision`（$R = 2$） | `[ACTIVE Appendix A]` | **对称短窗 `Local-Window (R = 2)`** | 局部窗 $[\max(1, i-2), \min(n, i+r)]$；附录 A 对比消融 |
+| `raw_simple` / `raw_full` 序列解码 | **`[ACTIVE Primary]`** | **第三阶段束搜索句子解码（$\eta_{\text{eval}} = 0.0$）** | `configs/decoding/raw_simple_sequence_decoding_protocol.yaml` 与 `raw_full_sequence_decoding_protocol.yaml` |
+| `C-Gated` / `tau_gate` / `sweep_confidence_gate_pareto` | **`[DEPRECATED]`** | 严禁出现在论文中 | 已砍除“0 秒先出词 + 屏幕改写 + 防闪烁门控”支线，代码函数仅作兼容保留 |
+| `F_local` / 修订率 / 有害覆写 | **`[DEPRECATED]`** | 严禁出现在论文中 | 同上；导出脚本自动过滤或人工制表时剔除 |
+| `BGE-M3` + `Qwen2.5-1.5B` + `A/B/C` 协议 | **`[DEPRECATED]`** | 已由下节 `T5-Large` + `Qwen3-8B-Base` + 固定 $r=2$ 定稿取代 | 旧 `2026-09-27` 草案仅留存于 Git 历史 |
 
-## 2. 数据与共同结构
+---
 
-保留既有材料划分、受试者范围、信号预处理、词事件纳入规则和语义片段边界。
-Pallier 使用 10 名受试者，ChineseEEG-2 使用 8 名受试者。
-每个词的神经输入为起点后 1 秒、50 Hz；K0 输出须等该窗口完整可用，不表示词起点的即时输出。
-已有离线预处理和事件对齐不构成实时在线系统的验证。
+## 2. 当前生效三阶段数据、模型与训练协议
 
-- 文本目标：`BAAI/bge-m3`，revision `5617a9f61b028005a4858fdac845db406aefb181`。
-  独立编码完整规范化词，包含特殊 token；末层首 token、1,024 维、L2 归一化。
-- 词阶段：从头训练 CNN，不使用上下文 Transformer。
-- 回修阶段：共同 CNN，加 16 层／16 头、1,024 维上下文 Transformer；attention dropout 0.1，feedforward dropout 0。
-- CNN 的结构、SigLIP 参数和其余 Transformer 设置逐项采用已接受的 Pallier seed 0 配置；传感器输入和受试者参数按数据集适配。
-- 局部历史半径为 2，延迟为 K0/K1/K2，对应可见窗口 `[-2,0]`、`[-2,1]`、`[-2,2]`；不跨片段补造未来信息。
-- 两种数据的通道、分组、语言规范和规模不同。共同模型结构不意味着总参数量、每轮更新数或计算时间完全相同。
+### 2.1 数据预处理与静态文本目标
+- **脑磁信号预处理**：原始 $1{,}000\text{ Hz}$ 滤波（$0.1\text{--}40\text{ Hz}$）后降采样至 $50\text{ Hz}$；按采集段以 `RobustScaler` 标准化；从词起始时刻 $\tau_i$ 截取固定时长 $T_{\text{win}} = 1.0\text{ s}$（$S = 50$ 采样点），扣除窗口前 $0.5\text{ s}$ 均值完成基线校正并截断至 $[-5, 5]$。测试划分共 $1{,}940$ 个连续片段（每受试者 $194$ 个）、$18{,}450$ 个测试词位；完整训练词表 $\lvert V\rvert = 2{,}020$（覆盖测试集 $82.49\%$ 词位）。
+- **目标词向量 $e_w$**：冻结 `t5-large` 第 12 层（`layer_fraction: 0.5`）子词均值池化并 $\ell_2$ 归一化（$d = 1{,}024$，`data/cache/derived/pallier2025/text/t5_large_layer_0_5/embeddings.npz`）。
 
-## 3. 两阶段训练与初始化
+### 2.2 Stage 1 与 Stage 2 训练超参
+- **Stage 1（`Word-Only`）**：`configs/training/pallier2025_word_encoder.yaml`。$306 \to 270$ 空间注意力 + 5 个残差膨胀卷积块（隐藏维度 $160$，核大小 $3$）+ 时间注意力池化；`D-SigLIP` 去重对比损失（初始温度 $10.0$、偏置 $-10.0$、重复屏蔽阈值 $0.999$）；`AdamW`（`lr = 4e-4`, `weight_decay = 0.0`, `batch_size = 256`, `bf16-mixed`）。
+- **Stage 2（去偏跨词联合编码）**：加载同种子 Stage 1 `best.pt` 并全程冻结 CNN（`freeze_brain_encoder_epochs = 30`）；上层为 16 层 16 头带 RoPE 的非预训练 Transformer（$d = 1{,}024$，注意力丢弃率 $0.1$）；`AdamW`（`lr = 1e-4`, `weight_decay = 0.01`, `batch_size = 128`）。
+  - 同段错位负锚点：$M = 6$ 组循环平移 $\delta_m \in \{-15, -30, -45, -60, -90, -120\}\text{ s}$，训练期扣除系数 $\eta = 0.50$，零化惩罚权重 $\lambda_{\text{null}} = 10.0$；
+  - 局部前序前缀加后续词模型 `Rolling-K0/K1/K2`（`configs/training/siamese_debiased/pallier2025_siamese_debiased_prefix_revision.yaml`）额外施加相对 $r = 0$ 的跨步一致性惩罚：$\lambda_\Delta = 8.0$、$\lambda_{\text{dir}} = 0.50$（配置中对应字段 `lambda_delta_null: 8.0`、`beta_delta_cm: 0.50`），等权优化 $r \in \{0, 1, 2\}$ 三步均值损失。
 
-每个数据集、每个 seed 独立执行以下两阶段：
+### 2.3 Stage 3 序列解码协议
+- **语言模型**：冻结 `Qwen/Qwen3-8B-Base`。
+- **束搜索参数**：每步仅保留脑信号余弦 Top $K_{\text{cand}} = 20$ 候选，局部 Softmax 温度 $T_r \in \{0.06, 0.07\}$（验证集网格选择），束宽 $B = 5$；语言权重满足 $\lambda_{K_0} \ge \lambda_{K_1} \ge \lambda_{K_2}$ 且测试推理固定 $\eta_{\text{eval}} = 0.0$。
+- **两套正式评估协议**：
+  1. **主基准（无 OOV 长句闭集 `L >= 5, 0% OOV`）**：`configs/decoding/raw_simple_sequence_decoding_protocol.yaml`，覆盖基准全集 $\lvert V\rvert = 131\ (n = 300,\ 2{,}300\text{ 词位})$ 及贪心覆盖子集 $\lvert V\rvert = 50\ (n = 100)$、$\lvert V\rvert = 100\ (n = 220)$；支持跨受试者多观测平均 $k \in \{1, 2, 5, 10\}$。
+  2. **附录 B 全测试集协议**：`configs/decoding/raw_full_sequence_decoding_protocol.yaml`，覆盖未筛选全部 $n = 1{,}940$ 个测试片段、完整训练词表 $\lvert V\rvert = 2{,}020$。
 
-1. 从头训练匹配该数据集 BGE 文本目标的词模型，使用本 seed 的随机初始化和普通词阶段采样器。
-2. 从同数据集、同 seed 词模型的主检查点 `best.pt` 加载 CNN 参数；上下文网络和损失参数重新初始化。
-   回修首轮冻结 CNN，之后联合训练。不得使用 T5 CNN，也不得给多个 seed 共用 seed 0 的 CNN。
+---
 
-两阶段均为最多 30 轮，patience 10，按主选模指标决定早停；并列分数保留较早轮次。
-共同优化设置为 AdamW、学习率 `1e-4`、weight decay `0`、batch size 128、按轮余弦退火、最低学习率 0。
-采用 FP16 自动混合精度和 GradScaler，记录成功优化器更新与 AMP 跳步；不声称所有前向监督都导致成功更新。
-本版采用共同训练规则和上限，不要求两个数据集或不同种子具有相同实际早停轮数。
+## 3. 锁定测试评估口径与权威锚点结果（Seeds `0, 1, 2`, 均值 ± 标准差）
 
-### 全覆盖回修的准确含义
+### 3.1 词级检索主表（表 1 口径）
+- **锁定口径**：共同测试词位 $N = 14{,}590$，50 词查询位 $N_{50} = 7{,}440$；错位对照采用严格不接触未来的前序 $45.0\text{ s}$ 缓冲（`shift_mode=preroll`, $\delta_{\text{eval}} \in \{-10, -20, -30, -40\}\text{ s}$），单次前向推理 $\eta_{\text{eval}} = 0.0$；词类等权平衡准确率（随机机会 Top-10 $= 20.00\%$，Top-1 $= 2.00\%$）。
 
-回修按完整组打包，保留组内事件顺序，每轮遍历全部可用截止位置。
-每个目标仅在对应延迟真实可用时参与监督；片段尾部不存在的未来词不填补。
-每个批次分别计算各可用延迟的 SigLIP 平均损失，再对该批次的延迟损失取平均：
+| 模型设置 | Top-10 Clean (%) ↑ | Top-10 Shifted (%) ↓ | Top-10 净增益 (pp) ↑ | Top-1 Clean (%) ↑ | Top-1 Shifted (%) ↓ | Top-1 净增益 (pp) ↑ |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| `Word-Only` | `40.64 ± 0.15` | `20.07 ± 0.16` | `+20.57 ± 0.04` | `6.64 ± 0.13` | `1.97 ± 0.11` | `+4.67 ± 0.23` |
+| `Full-Context (Joint)` | `68.42 ± 0.42` | `61.14 ± 0.78` | `+7.28 ± 1.17` | `20.74 ± 0.42` | `14.88 ± 1.01` | `+5.86 ± 1.34` |
+| `+ Freeze CNN` | `64.33 ± 0.88` | `50.49 ± 3.45` | `+13.84 ± 2.61` | `17.24 ± 0.77` | `9.60 ± 1.29` | `+7.64 ± 0.54` |
+| `+ Debias (Full-Context)` | `57.95 ± 2.51` | `22.61 ± 0.63` | `+35.33 ± 3.14` | `13.58 ± 1.57` | `2.62 ± 0.13` | `+10.96 ± 1.69` |
+| **`+ Debias (Rolling-K2)`** | **`58.70 ± 1.02`** | `23.65 ± 0.17` | `+35.05 ± 1.17` | **`14.42 ± 0.35`** | `3.11 ± 0.11` | **`+11.31 ± 0.25`** |
 
-`L_batch = mean_d SigLIP_batch,d`。
+- **附录 A.1 核心消融锚点（同 $N_{50} = 7{,}440$ 口径）**：
+  - `Local-Window (R = 2)` 对称短窗：Top-10 Clean `61.46 ± 0.88%` / Shifted `29.96 ± 1.03%` / Net `+31.50 ± 0.23 pp`；
+  - `Rolling-K2 (w/o L_delta-null)`：Top-10 Clean `57.89 ± 1.15%` / Shifted `24.62 ± 0.44%` / Net `+33.27 ± 1.44 pp`；
+  - `Rolling-K2 + 测试在线均值扣除 (ema_decay=0.99, eta_eval=0.5)`：Top-10 Clean `58.42 ± 0.97%` / Shifted `23.74 ± 0.15%` / Net `+34.69 ± 1.10 pp`。
 
-负例库为原始批次的全部文本目标，相同候选屏蔽阈值为 0.999；温度和偏置初值分别为 10 和 −10，并参与学习。
-**本版不采用 v1 的按整轮事件数与延迟数进行的全局归一化。**
-批次大小和有效目标数不同时，不能将当前损失描述为整轮每个事件严格等权。
-逐轮核对 K0/K1/K2 的监督计数与预先确定的可用计数，并记录损失、耗时、成功更新及 AMP 跳步。
+### 3.2 句子解码主表与全测试集锚点（表 2 与表 B.1 口径，$k = 1, \eta_{\text{eval}} = 0.0$）
 
-## 4. 主选模、严格 50 候选诊断与完整词库
+| 解码策略 | 验证集 $\lambda_r$ | $\lvert V\rvert=100$ BLEU-1 (%) | $\lvert V\rvert=131$ BLEU-1 (%) | $\lvert V\rvert=131$ Top-1 (%) | $\lvert V\rvert=131$ 平均等待 (s) | 全集 $\lvert V\rvert=2{,}020$ BLEU-1 (%) | 全集平均等待 (s) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `Word-Only` | `0.13` | `15.90 ± 0.83` | `13.26 ± 0.47` | `6.43 ± 0.16` | `1.00` | `9.15 ± 0.56` | `1.00` |
+| `Rolling-K0` | `0.12` | `17.09 ± 0.83` | `14.78 ± 0.77` | `7.49 ± 0.58` | `1.00` | `12.20 ± 0.64` | `1.00` |
+| `Rolling-K1` | `0.08` | `20.15 ± 1.23` | `17.10 ± 0.59` | `10.38 ± 0.32` | `1.87` | `13.63 ± 0.32` | `1.89` |
+| **`Rolling-K2`** | `0.08` | **`21.74 ± 0.99`** | **`18.70 ± 0.94`** | **`12.10 ± 0.29`** | `2.61` | **`14.09 ± 0.42`** | `2.69` |
+| `Full-Context` | `0.37` | `20.90 ± 2.01` | `17.55 ± 1.75` | `10.51 ± 1.94` | `5.33` | `12.38 ± 0.97` | `8.31` |
 
-### 主选模保留已对齐的历史规则
+*(完整汇总导出报告源位于独立论文仓 `C:\Users\Administrator\Desktop\论文\笔记本\实验数据\`，局部单字长窗对照已存档于 `data/results/studies/single_word_long_window_test_v2/summary.csv`。)*
 
-- 词阶段：冻结词集合上的词类型 Macro Top-10。
-- 回修阶段：K0/K1/K2 共同可用词位上的 K2 词类型 Macro Top-10。
-- 主检查点保存为 `best.pt`，用于回修初始化和后续主要句子分析。
-- 历史检索函数会删除当前评价目标中未出现的候选。此函数在两边一致，但其实际候选数不同，不能称为严格固定 50 候选选模。
+---
 
-| 评价人口／候选规则 | Pallier2025 | ChineseEEG-2 |
-|---|---:|---:|
-| 全部合格验证事件 | 16,960 | 14,132 |
-| K0/K1/K2 共同可用事件 | 13,160 | 11,780 |
-| 冻结 50 词内全部验证查询 | 8,260 | 6,160 |
-| 冻结 50 词内共同查询 | 6,760 | 5,280 |
-| 历史词阶段实际候选数 | 50 | 47 |
-| 历史回修共同词位实际候选数 | 49 | 46 |
-| 严格诊断候选数 | 50 | 50 |
-| 完整训练词库规模 | 2,020 | 2,180 |
+## 4. 待办增量评估与消融路线图（不改变主线前提下的补强项）
 
-### 严格诊断与次要选模
-
-每轮另记录严格保留全部 50 个候选的指标，包括全部查询与共同查询两种人口。
-延迟增益只在同一共同查询集、同一严格 50 候选口径上计算 K2−K0；不与历史 49/46 候选指标相减。
-Pallier 既有单种子准入门槛用于先前开发对齐，不自动变为 ChineseEEG-2 或后续种子的绩效筛选条件。
-完整训练词库由全部合格训练词构成，无 top-250 截断；它不由验证或测试参考文本扩充。
-
-同时记录完整训练词库指标，未登录参考词保留为错误。
-词阶段按受试者等权的 K0 Top-10，回修按共同词位、先受试者等权再 K0/K1/K2 等权的 Top-10 保存 `best_full_vocab.pt`。
-该检查点是明确标记的次要分析产物，不替换 `best.pt`，不根据句子修正增益反向挑选主检查点。
-固定 50 词集合既不限制训练标签，也不限制句子输出词库。
-
-## 5. 12 项任务的复用与接续
-
-队列入口：`scripts/replications/run_unified_rolling_v2.py`。
-训练入口：`braindecoding.unified_rolling_v2_training`。
-新生成的多种子产物使用 `unified_rolling_v2` 输出组，已完成 seed 0 产物保留原目录和原来源记录。
-
-| 数据集 | seed | 阶段 | 处理 |
-|---|---:|---|---|
-| Pallier2025 | 0 | word、revision | 核验后复用已完成的 retry1 成功运行 |
-| ChineseEEG-2 | 0 | word、revision | 等当前两阶段成功结束且进程退出后核验复用 |
-| Pallier2025 | 1、2 | word、revision | 依各 seed 先词模型再回修，共 4 项 |
-| ChineseEEG-2 | 1、2 | word、revision | 依各 seed 先词模型再回修，共 4 项 |
-
-复用源目录：
-
-- Pallier word：`outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/main_word/seed-000`
-- Pallier revision：`outputs/word_decoding/pallier2025/baseline_alignment_bge_v1_retry1/sub01-10/local_window_rolling_revision_k2_d2/seed-000`
-- Chinese word：`outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/main_word/seed-000`
-- Chinese revision：`outputs/word_decoding/chineseeeg2_littleprince/baseline_alignment_bge_16x16_v1/sub01-08/local_window_rolling_revision_k2_d2_full_coverage/seed-000`
-
-存在目录或 `best.pt` 本身不足以视为完成。复用须核验完成摘要、主检查点、实际配置、数据集与 seed、BGE 目标和词向量来源、训练人口及回修初始化来源。
-新任务还须核验当前输入与源码哈希。已有兼容的完成任务跳过，不覆盖、不复制伪装为新运行。
-若当前 Chinese 运行失败或完成产物不兼容，队列停止并记录原因，不自动从头重跑该试验。
-不具备准确续训所需状态的未完成目录也不隐式续跑或覆盖。
-
-排队等待当前 Chinese 的过程不改写其冻结配置或源码，不重启原 v1 队列或此前的定时监控。
-按本版授权，Chinese 两阶段正常结束后由新队列自动接续其余任务，无需再次确认。
-
-## 6. 句子协议的继承范围与待冻结内容
-
-v2 仅确认此次共同神经训练规则。句子层面保留以下开发设计，不声称已校准或已有新结果：
-
-- 共同语言模型为 `Qwen/Qwen2.5-1.5B` 基础版，固定 revision `8faed761d45a263340a0528343f099c05c9a4323`。
-- 使用完整训练词库，神经候选数 20、束宽 5、神经余弦缩放 10、完整词全部子词评分和共同上下文上限。
-- 允许语言模型提出训练词库外完整词，并以相同 BGE 和神经表示评分；关闭补词为配对消融。
-- A 首次输出后固定；B 重搜最近三词但保留旧词 K0 脑表示；C 同样重搜并更新旧词的 K1/K2 表示。
-  B/C 均可按生成前缀更新语言候选；C−B 用于估计更新旧词脑表示的增量。
-- 语言权重仍需按共同网格 `[0, 0.025, 0.1, 0.5, 1.5]` 在 A 条件校准，再对 A/B/C、种子及错位对照冻结。
-- 错位映射、统计材料块、重复次数、指标主次和多重检验清单仍需冻结。纯语言基线不得继承真实脑信号筛选的候选。
-- 已反复用于开发的验证集不能称为独立确认集；测试集继续锁定。
-
-详细句子设计可参考 `unified_protocol_v1_draft.md` 第 5–8 节，但其中旧神经结构、全局损失加权、BF16、固定跑满预算及完整词库主选模已由本版取代。
-本次不修改论文正文，不把旧协议数值重新命名为本版结果。
+1. **P0 — 定性词检索与句子解码样本导出**（纯读已保存测试预测，无需重训）：抽取典型法语测试词的 Top-10 语义/近音邻域预测与代表性句子对比样本（`Word-Only`、`Rolling-K0/K2`、`Full-Context`，附中英文释义）。
+2. **P1 — `Joint Synthetic` 纯脉冲负对照与词长分布一致性诊断 ($\Delta_{\text{JS}}$)**：基于现有 `braindecoding/data/synthetic_timing_dataset.py`（$60/120/240\text{ ms}$ 平滑泊松脉冲）评估已训练模型并计算与高斯物理词长先验分布的 Jensen-Shannon 散度对齐度（对标 SimpleB2T Sec. 2.3 & App. A.2/A.5）。
+3. **P1/P2 — 跨受试者一致性范数加权与额外对照整理**：审查 `braindecoding/decoding/rolling_beam_search.py` 的 `_average_subject_score_rows_rms_preserved`（拟从逐词位逆 RMS 缩放改为统一标量加权平均以贴合 SimpleB2T Eq. 7–8 物理依据）；补充 `pallier2025_causal_null_space_prefix_revision.yaml`（纯前序 $\eta=0$ 简化训练）与 `single_word_long_window_test_v2`（$1.0\text{ s}/1.27\text{ s}/1.5\text{ s}$ 长窗对比）纳入附录核对。

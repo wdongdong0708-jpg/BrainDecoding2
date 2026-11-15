@@ -3,7 +3,7 @@
 ===C:/Users/Administrator/Desktop/BrainDecoding/===
 .gitattributes[FC3T]: F:声明Git文本文件统一使用LF行尾检出 | R:- | A:- | S:禁止改为autocrlf，否则Windows检出会重写字节导致AOCI全树Stale
 .gitignore[FC4T]: F:定义Git忽略规则，排除Python缓存、本地派生信号缓存、训练输出与打包归档、模型权重及本机MCP配置 | R:- | A:- | S:.mcp.json、workspace/、archives/及data/cache/含本机路径及GB级缓存与检查点，禁止入库
-AGENTS.md[SG7S]: F:定义仓库AOCI认知合同、按任务体量分级获取认知的速度分流及目录与文件命名规范 | R:code:aoci.txt,code:aoci.meta.txt,code:tests/core/test_repository_conventions.py | A:- | S:aoci区块由工具受管禁止篡改，小任务不跑全量overview，严禁新增顶层目录或生成散落json/md及含糊缩写文件名
+AGENTS.md[SG7S]: F:定义仓库AOCI认知合同、按任务体量分级获取认知的速度分流、目录与命名规范及论文科学主线防污染红线 | R:code:aoci.txt,code:aoci.meta.txt,code:tests/core/test_repository_conventions.py | A:- | S:aoci区块禁改；主线锁定r=2定稿与η_eval=0，禁重提C-Gated或屏幕改写；禁新顶层目录与散落json/md
 README.md[SG8S]: F:定义6顶层目录架构、5类configs子目录规范（含controls/负对照配置）、JSON/Markdown归口准则、文件命名规范与三阶段训练及评估双模工作流说明 | R:code:tests/core/test_repository_conventions.py,code:braindecoding/cli.py,code:braindecoding/training/workflow_runner.py | A:- | S:全仓仅允许保留README.md、AGENTS.md与unified_protocol_v2.md三个Markdown文件，违规会被门禁拦截
 pyproject.toml[FV8T]: F:Python项目构建元数据、含x-transformers与einops的核心科学计算依赖、brain-decoding命令行入口与pytest配置 | R:code:braindecoding/cli.py | A:build-system,project,tool | S:精确固定jieba==0.42.1以保证ChineseEEG-2分词确定性，并将pytest临时目录与缓存重定向至.cache/下以保持仓库根目录整洁
 
