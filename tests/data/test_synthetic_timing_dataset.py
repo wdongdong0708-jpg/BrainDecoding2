@@ -161,3 +161,21 @@ def test_real_and_other_condition_cnn_initialization_are_rejected(monkeypatch):
         with pytest.raises(ValueError, match="real checkpoints are forbidden"):
             control.validate_word_checkpoint(checkpoint, cfg, None, None)
     control.validate_word_checkpoint({"config": cfg}, cfg, None, None)
+
+
+def test_include_onset_seconds_passthrough():
+    onsets = (0.25, 0.75, 1.40)
+    ds_default = SyntheticTimingDataset(
+        fake_base(onsets=onsets), "shared", split="val", include_onset_seconds=False
+    )
+    ds_with_onset = SyntheticTimingDataset(
+        fake_base(onsets=onsets), "shared", split="val", include_onset_seconds=True
+    )
+    item_default = ds_default[1]
+    item_with_onset = ds_with_onset[1]
+    assert "onset_seconds" not in item_default
+    assert "onset_seconds" in item_with_onset
+    assert item_with_onset["onset_seconds"].dtype == np.float32 or str(item_with_onset["onset_seconds"].dtype) == "torch.float32"
+    assert float(item_with_onset["onset_seconds"]) == pytest.approx(0.75, abs=1e-6)
+    np.testing.assert_allclose(item_default["meg"].numpy(), item_with_onset["meg"].numpy(), atol=1e-6)
+

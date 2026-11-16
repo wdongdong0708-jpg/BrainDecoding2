@@ -167,7 +167,7 @@ def test_preflight_does_not_create_run_directory(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("command", ("run", "evaluate", "audit"))
 @pytest.mark.parametrize("selector", (
-    "chineseeeg2_littleprince/sub01-08/main_context_warmstart", "unified_protocol_v2",
+    "chineseeeg2_littleprince/sub01-08/main_context_warmstart", "local_context_decoding_protocol",
 ))
 def test_retired_execution_stops_before_loading_tasks_or_touching_outputs(
     command, selector, tmp_path, monkeypatch, capsys
@@ -274,7 +274,7 @@ def test_installed_console_script_lists_experiments_from_non_project_cwd(tmp_pat
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "unified_protocol_v2" in result.stdout
+    assert "local_context_decoding_protocol" in result.stdout
     assert "sequence_decoding_protocol" in result.stdout
     assert "synthetic_timing_v1" not in result.stdout
     assert "smn4lang" not in result.stdout

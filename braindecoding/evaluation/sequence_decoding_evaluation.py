@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 from collections import Counter, defaultdict
+import math
 from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
@@ -65,31 +66,107 @@ STRATEGY_DISPLAY_NAMES: dict[str, str] = {
     "Shifted-K2 (-75s)": "Shifted-K2 (-75s)",
     "S3_clean_c_gated": "Rolling-K2 (C-Gated)",
     "S3_shifted_neg75s_c_gated": "Shifted-K2 (-75s, C-Gated)",
+    "S0_brain_only": "Word-Only (Brain-Only)",
+    "Word-Only (Brain-Only)": "Word-Only (Brain-Only)",
+    "K0_brain_only": "Rolling-K0 (Brain-Only)",
+    "Rolling-K0 (Brain-Only)": "Rolling-K0 (Brain-Only)",
+    "Local (r = 0, Brain-Only)": "Rolling-K0 (Brain-Only)",
+    "K1_brain_only": "Rolling-K1 (Brain-Only)",
+    "Rolling-K1 (Brain-Only)": "Rolling-K1 (Brain-Only)",
+    "Local (r = 1, Brain-Only)": "Rolling-K1 (Brain-Only)",
+    "K2_brain_only": "Rolling-K2 (Brain-Only)",
+    "Rolling-K2 (Brain-Only)": "Rolling-K2 (Brain-Only)",
+    "Local (r = 2, Brain-Only)": "Rolling-K2 (Brain-Only)",
+    "F_brain_only": "Full-Context (Brain-Only)",
+    "Full-Context (Brain-Only)": "Full-Context (Brain-Only)",
+}
+
+PAPER_STRATEGY_DISPLAY_NAMES: dict[str, str] = {
+    "S0": "Word-Only",
+    "S0_clean": "Word-Only",
+    "Word-Only": "Word-Only",
+    "K0": "Local (r = 0)",
+    "K0_clean": "Local (r = 0)",
+    "Rolling-K0": "Local (r = 0)",
+    "Local (r = 0)": "Local (r = 0)",
+    "K1": "Local (r = 1)",
+    "K1_clean": "Local (r = 1)",
+    "Rolling-K1": "Local (r = 1)",
+    "Local (r = 1)": "Local (r = 1)",
+    "S3_clean": "Local (r = 2)",
+    "S3": "Local (r = 2)",
+    "K2": "Local (r = 2)",
+    "Rolling-K2": "Local (r = 2)",
+    "Local (r = 2)": "Local (r = 2)",
+    "F": "Full-Context",
+    "F_clean": "Full-Context",
+    "Full-Context": "Full-Context",
+    "LM-Only": "LM-Only",
+    "LM-Only_clean": "LM-Only",
+    "K0_shifted_neg75s": "Shifted Local (r = 0, -75s)",
+    "Shifted-K0 (-75s)": "Shifted Local (r = 0, -75s)",
+    "Shifted Local (r = 0, -75s)": "Shifted Local (r = 0, -75s)",
+    "S3_shifted_neg75s": "Shifted Local (r = 2, -75s)",
+    "Shifted-K2 (-75s)": "Shifted Local (r = 2, -75s)",
+    "Shifted Local (r = 2, -75s)": "Shifted Local (r = 2, -75s)",
+    "S0_brain_only": "Word-Only (Brain-Only)",
+    "Word-Only (Brain-Only)": "Word-Only (Brain-Only)",
+    "K0_brain_only": "Local (r = 0, Brain-Only)",
+    "Rolling-K0 (Brain-Only)": "Local (r = 0, Brain-Only)",
+    "Local (r = 0, Brain-Only)": "Local (r = 0, Brain-Only)",
+    "K1_brain_only": "Local (r = 1, Brain-Only)",
+    "Rolling-K1 (Brain-Only)": "Local (r = 1, Brain-Only)",
+    "Local (r = 1, Brain-Only)": "Local (r = 1, Brain-Only)",
+    "K2_brain_only": "Local (r = 2, Brain-Only)",
+    "Rolling-K2 (Brain-Only)": "Local (r = 2, Brain-Only)",
+    "Local (r = 2, Brain-Only)": "Local (r = 2, Brain-Only)",
+    "F_brain_only": "Full-Context (Brain-Only)",
+    "Full-Context (Brain-Only)": "Full-Context (Brain-Only)",
 }
 
 STRATEGY_STATE_KEYS: dict[str, str] = {
     "S0": "S0",
     "S0_clean": "S0",
     "Word-Only": "S0",
+    "S0_brain_only": "S0",
+    "Word-Only (Brain-Only)": "S0",
     "K0": "K0",
     "K0_clean": "K0",
     "Rolling-K0": "K0",
+    "Local (r = 0)": "K0",
+    "K0_brain_only": "K0",
+    "Rolling-K0 (Brain-Only)": "K0",
+    "Local (r = 0, Brain-Only)": "K0",
     "K1": "K1",
     "K1_clean": "K1",
     "Rolling-K1": "K1",
+    "Local (r = 1)": "K1",
+    "K1_brain_only": "K1",
+    "Rolling-K1 (Brain-Only)": "K1",
+    "Local (r = 1, Brain-Only)": "K1",
     "S3_clean": "K2",
     "S3": "K2",
     "K2": "K2",
     "Rolling-K2": "K2",
+    "Local (r = 2)": "K2",
+    "K2_brain_only": "K2",
+    "Rolling-K2 (Brain-Only)": "K2",
+    "Local (r = 2, Brain-Only)": "K2",
     "F": "F",
     "F_clean": "F",
     "Full-Context": "F",
+    "F_brain_only": "F",
+    "Full-Context (Brain-Only)": "F",
     "LM-Only": "LM-Only",
     "LM-Only_clean": "LM-Only",
     "K0_shifted_neg75s": "K0",
     "Shifted-K0 (-75s)": "K0",
+    "Shifted Local (r = 0, -75s)": "K0",
     "S3_shifted_neg75s": "K2",
     "Shifted-K2 (-75s)": "K2",
+    "Shifted Local (r = 2, -75s)": "K2",
+    "S3_clean_c_gated": "K2",
+    "S3_shifted_neg75s_c_gated": "K2",
 }
 
 
@@ -99,16 +176,42 @@ def canonical_strategy_display_name(condition_key: str) -> str:
     return STRATEGY_DISPLAY_NAMES.get(raw, raw)
 
 
+def paper_strategy_display_name(condition: str) -> str:
+    """将内部解码条件代号映射为论文统一术语（如 Local (r = 0/1/2)）。"""
+    raw = str(condition).strip()
+    return PAPER_STRATEGY_DISPLAY_NAMES.get(raw, raw)
+
+
+def _resolve_wait_strategy_state(condition: str | None) -> str:
+    raw = str(condition or "").strip()
+    if raw in STRATEGY_STATE_KEYS:
+        return STRATEGY_STATE_KEYS[raw]
+    disp = canonical_strategy_display_name(raw)
+    if disp in STRATEGY_STATE_KEYS:
+        return STRATEGY_STATE_KEYS[disp]
+    p_disp = paper_strategy_display_name(raw)
+    if p_disp in STRATEGY_STATE_KEYS:
+        return STRATEGY_STATE_KEYS[p_disp]
+    if "LM-Only" in raw or "LM-Only" in disp:
+        return "LM-Only"
+    if "Full-Context" in raw or "Full-Context" in disp:
+        return "F"
+    if "K2" in raw or "r = 2" in raw or "S3" in raw:
+        return "K2"
+    if "K1" in raw or "r = 1" in raw:
+        return "K1"
+    return "S0"
+
+
 def compute_mean_wait_seconds(
     segment_records: Sequence[Mapping[str, Any]],
     condition: str | None = None,
 ) -> float:
-    """计算给定策略在句段集合上的词均输入等待时间（秒）：c_i^(R) - tau_i（含 1.0s 自身词窗）。"""
-    cond = str(condition or "").strip()
-    disp = canonical_strategy_display_name(cond)
-    if disp == "LM-Only":
+    """计算给定策略在句段集合上的词均词窗等待时间（等效 1.0s 窗步数，含自身窗）。"""
+    state_key = _resolve_wait_strategy_state(condition)
+    if state_key == "LM-Only":
         return 0.0
-    if disp in ("Word-Only", "Rolling-K0", "Shifted-K0 (-75s)"):
+    if state_key in ("S0", "K0"):
         return 1.0
     lengths = [
         len(rec.get("reference_words") or rec.get("predicted_words") or ())
@@ -116,38 +219,90 @@ def compute_mean_wait_seconds(
     ]
     lengths = [L for L in lengths if L > 0]
     if not lengths:
-        if disp == "Rolling-K1":
+        if state_key == "K1":
             return 1.80
-        if disp in ("Rolling-K2", "Shifted-K2 (-75s)", "Rolling-K2 (C-Gated)", "Shifted-K2 (-75s, C-Gated)"):
+        if state_key == "K2":
             return 2.60
-        if disp == "Full-Context":
+        if state_key == "F":
             return 4.00
         return 1.0
     total_tokens = sum(lengths)
-    if disp == "Rolling-K1":
+    if state_key == "K1":
         wait_sum = sum(
             sum(1.0 + min(1, L - 1 - pos) for pos in range(L))
             for L in lengths
         )
         return round(float(wait_sum / total_tokens), 4)
-    if disp in (
-        "Rolling-K2",
-        "Shifted-K2 (-75s)",
-        "Rolling-K2 (C-Gated)",
-        "Shifted-K2 (-75s, C-Gated)",
-    ):
+    if state_key == "K2":
         wait_sum = sum(
             sum(1.0 + min(2, L - 1 - pos) for pos in range(L))
             for L in lengths
         )
         return round(float(wait_sum / total_tokens), 4)
-    if disp == "Full-Context":
+    if state_key == "F":
         wait_sum = sum(
             sum(1.0 + (L - 1 - pos) for pos in range(L))
             for L in lengths
         )
         return round(float(wait_sum / total_tokens), 4)
     return 1.0
+
+
+def compute_mean_physical_wait_seconds(
+    records: Sequence[Mapping[str, Any]],
+    strategy_or_state: str | None,
+    *,
+    window_seconds: float = 1.0,
+) -> float | None:
+    """基于真实词起始时刻 τ_i 计算词均物理输入等待时间（秒）：(τ_{min(L-1, i+r)} + T_win) - τ_i。"""
+    state_key = _resolve_wait_strategy_state(strategy_or_state)
+    if state_key == "LM-Only":
+        return 0.0
+    if state_key in ("S0", "K0"):
+        return round(float(window_seconds), 4)
+    lookahead_r: int | None
+    if state_key == "K1":
+        lookahead_r = 1
+    elif state_key == "K2":
+        lookahead_r = 2
+    elif state_key == "F":
+        lookahead_r = None
+    else:
+        return round(float(window_seconds), 4)
+
+    wait_sum = 0.0
+    token_count = 0
+    for rec in records:
+        ref_words = rec.get("reference_words") or rec.get("predicted_words") or ()
+        seg_len = len(ref_words)
+        onsets = rec.get("onset_seconds")
+        if seg_len <= 0:
+            if not isinstance(onsets, (list, tuple)) or len(onsets) == 0:
+                continue
+            seg_len = len(onsets)
+        if not isinstance(onsets, (list, tuple)) or len(onsets) != seg_len:
+            return None
+        try:
+            tau = [float(x) for x in onsets]
+        except (TypeError, ValueError):
+            return None
+        if not all(math.isfinite(t) for t in tau):
+            return None
+        last_idx = seg_len - 1
+        for pos in range(seg_len):
+            end_pos = (
+                last_idx
+                if lookahead_r is None
+                else min(last_idx, pos + lookahead_r)
+            )
+            wait_sum += max(
+                float(window_seconds),
+                (tau[end_pos] + float(window_seconds)) - tau[pos],
+            )
+            token_count += 1
+    if token_count <= 0:
+        return None
+    return round(float(wait_sum / token_count), 4)
 
 
 def _extract_canonical_material_id(
@@ -373,6 +528,51 @@ def is_content_word(word: str, language: str) -> bool:
     return not is_function_word(word, language)
 
 
+_POS4_NOUN_TAGS: frozenset[str] = frozenset(
+    {"NC", "NPP", "N", "NOM", "NOUN", "PROPN", "NN", "NNS", "NNP", "NNPS", "PROPER_NOUN", "SUBST"}
+)
+_POS4_VERB_TAGS: frozenset[str] = frozenset(
+    {"V", "VINF", "VPP", "VPR", "VS", "VIMP", "VER", "VERB", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ", "MD"}
+)
+_POS4_ADJ_ADV_TAGS: frozenset[str] = frozenset(
+    {"ADJ", "ADJWH", "ADV", "ADVWH", "A", "ADJECTIVE", "ADVERB", "JJ", "JJR", "JJS", "RB", "RBR", "RBS", "WRB"}
+)
+_POS4_FUNCTION_TAGS: frozenset[str] = frozenset(
+    {
+        "DET", "DETWH", "ART", "ADP", "P", "P+D", "P+PRO", "PRE", "PREP",
+        "PRON", "PRO", "PROREL", "PROWH", "CLS", "CLO", "CLR",
+        "CON", "KON", "CC", "CS", "CCONJ", "SCONJ", "PART", "CONJ",
+        "PREF", "INTJ", "I", "NUM", "IN", "DT", "PDT", "PRP", "PRP$",
+        "WP", "WP$", "WDT", "TO", "EX", "RP", "UH", "FW", "LIA",
+    }
+)
+
+
+def classify_part_of_speech_four_way(
+    pos_tag: Any, is_content_word: Any = None
+) -> str | None:
+    """将词性标签归一化为 4 类（noun / verb / adj_adv / function）。"""
+    raw = str(pos_tag or "").strip().upper()
+    if raw in {"PUNCT", "PONCT", "SYM", "SPACE"}:
+        return None
+    if raw in {"", "NONE", "NAN", "NULL"}:
+        return "function" if is_content_word is False else None
+    base = raw.split(":", 1)[0]
+    if base in _POS4_NOUN_TAGS or base.startswith(("NN", "NC", "NPP")):
+        return "noun"
+    if base in _POS4_VERB_TAGS or base.startswith(("VB", "VINF", "VPP", "VPR", "VIMP")):
+        return "verb"
+    if base == "AUX":
+        return "verb" if is_content_word is True else "function"
+    if base in _POS4_ADJ_ADV_TAGS or base.startswith(("JJ", "RB", "ADJ", "ADV")):
+        return "adj_adv"
+    if base in _POS4_FUNCTION_TAGS:
+        return "function"
+    if is_content_word is False:
+        return "function"
+    return None
+
+
 def _character_ngram_vector(word: str, dim: int = 256) -> np.ndarray:
     """为未登录词生成确定性字符 n-gram 单位向量（仅在缺少预计算词向量时作为 BERTScore 兜底）。"""
     text = f"<{str(word).strip().lower()}>"
@@ -548,7 +748,7 @@ def evaluate_six_dimensional_metrics(
     word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
     condition: str | None = None,
     compute_paired_stats: bool = True,
-) -> dict[str, float | int | str]:
+) -> dict[str, float | int | str | None]:
     """同步计算 S3 序列解码协议规定的 6 维核心评价指标：
 
     1. BLEU-1 (%)：含句段均值 `bleu1_pct` 与语料级 `corpus_bleu1_pct`
@@ -597,6 +797,8 @@ def evaluate_six_dimensional_metrics(
 
     per_subject_rows: dict[str, list[dict]] = defaultdict(list)
     block_content_stats: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0])
+    pos4_totals: dict[str, int] = {"noun": 0, "verb": 0, "adj_adv": 0, "function": 0}
+    pos4_correct: dict[str, int] = {"noun": 0, "verb": 0, "adj_adv": 0, "function": 0}
 
     for rec_idx, (rec, ref_seq, pred_seq) in enumerate(
         zip(segment_records, references, predictions)
@@ -664,6 +866,8 @@ def evaluate_six_dimensional_metrics(
 
         seg_hits = 0
         seg_c_tot = seg_c_hit = seg_f_tot = seg_f_hit = 0
+        seg_pos_tags = rec.get("pos_tags")
+        seg_icw_mask = rec.get("is_content_word_mask")
         for pos, (r_w, p_w) in enumerate(zip(ref_seq, pred_seq)):
             hit = int(r_w == p_w)
             seg_hits += hit
@@ -699,6 +903,20 @@ def evaluate_six_dimensional_metrics(
                 function_correct += hit
                 seg_f_tot += 1
                 seg_f_hit += hit
+            if isinstance(seg_pos_tags, (list, tuple)) and pos < len(seg_pos_tags):
+                icw_val = (
+                    bool(seg_icw_mask[pos])
+                    if isinstance(seg_icw_mask, (list, tuple))
+                    and pos < len(seg_icw_mask)
+                    and seg_icw_mask[pos] is not None
+                    else None
+                )
+                pos4_cls = classify_part_of_speech_four_way(
+                    seg_pos_tags[pos], is_content_word=icw_val
+                )
+                if pos4_cls in pos4_totals:
+                    pos4_totals[pos4_cls] += 1
+                    pos4_correct[pos4_cls] += hit
 
         if compute_paired_stats:
             b_key = block_ids[rec_idx]
@@ -829,14 +1047,19 @@ def evaluate_six_dimensional_metrics(
     else:
         cf_p_two = 1.0
     mean_wait_s = compute_mean_wait_seconds(segment_records, condition=condition)
+    mean_phys_wait_s = compute_mean_physical_wait_seconds(
+        segment_records, condition
+    )
 
-    res_dict: dict[str, float | int | str] = {
+    res_dict: dict[str, float | int | str | None] = {
         "segment_count": len(segment_records),
         "total_words": int(total_words),
         "content_word_count": int(content_total),
         "function_word_count": int(function_total),
         "in_vocabulary_word_count": int(in_vocab_total),
         "mean_wait_seconds": float(mean_wait_s),
+        "mean_wait_windows": float(mean_wait_s),
+        "mean_physical_wait_seconds": mean_phys_wait_s,
         "bleu1_pct": float(np.mean(subj_bleu1_list))
         if subj_bleu1_list
         else float(base["sentence_bleu1_mean"] * 100.0),
@@ -866,10 +1089,27 @@ def evaluate_six_dimensional_metrics(
         "bertscore_precision_pct": float(bert_scores["bertscore_precision_pct"]),
         "bertscore_recall_pct": float(bert_scores["bertscore_recall_pct"]),
     }
+    pos4_total_classified = sum(pos4_totals.values())
+    if pos4_total_classified > 0:
+        for cls_key, out_prefix in (
+            ("noun", "noun"),
+            ("verb", "verb"),
+            ("adj_adv", "adj_adv"),
+            ("function", "function_pos"),
+        ):
+            cls_tot = int(pos4_totals[cls_key])
+            cls_cor = int(pos4_correct[cls_key])
+            res_dict[f"{out_prefix}_words"] = cls_tot
+            res_dict[f"{out_prefix}_word_acc_pct"] = (
+                round(float(cls_cor / cls_tot * 100.0), 4)
+                if cls_tot > 0
+                else 0.0
+            )
     if condition:
         res_dict["strategy_display_name"] = canonical_strategy_display_name(
             condition
         )
+        res_dict["paper_display_name"] = paper_strategy_display_name(condition)
     return res_dict
 
 
@@ -1169,6 +1409,24 @@ def _top5_from_trajectory(traj: Mapping[str, object], fallback_word: str = "") -
     return [str(fallback_word)] if fallback_word else []
 
 
+def _copy_optional_segment_metadata(
+    dst: dict[str, Any], *sources: Mapping[str, Any]
+) -> dict[str, Any]:
+    for key in (
+        "event_ids",
+        "onset_seconds",
+        "offset_seconds",
+        "pos_tags",
+        "is_content_word_mask",
+    ):
+        for src in sources:
+            val = src.get(key)
+            if val is not None:
+                dst[key] = list(val) if isinstance(val, (list, tuple)) else val
+                break
+    return dst
+
+
 def _backfill_intermediate_and_shifted_bundles(
     decoded_bundles: Mapping[str, dict],
 ) -> dict[str, dict]:
@@ -1249,6 +1507,7 @@ def _backfill_intermediate_and_shifted_bundles(
                     ),
                 }
             )
+            _copy_optional_segment_metadata(k0_clean_records[-1], rec)
         if k0_clean_records:
             bundles["K0"] = {
                 "condition": "K0",
@@ -1342,6 +1601,7 @@ def _backfill_intermediate_and_shifted_bundles(
                         ),
                     }
                 )
+                _copy_optional_segment_metadata(k1_records[-1], hist, base_rec)
             bundles["K1"] = {
                 "condition": "K1",
                 "alignment": "clean",
@@ -1413,6 +1673,7 @@ def _backfill_intermediate_and_shifted_bundles(
                     ),
                 }
             )
+            _copy_optional_segment_metadata(k0_shifted_records[-1], rec)
         if k0_shifted_records:
             bundles["K0_shifted_neg75s"] = {
                 "condition": "K0",
@@ -1632,6 +1893,11 @@ def evaluate_high_coverage_core_subsets(
         "F",
         "K0_shifted_neg75s",
         "S3_shifted_neg75s",
+        "S0_brain_only",
+        "K0_brain_only",
+        "K1_brain_only",
+        "K2_brain_only",
+        "F_brain_only",
     )
 
     subsets_report: dict[str, Any] = {}
@@ -2631,6 +2897,11 @@ def evaluate_and_export_sequence_decoding(
         "LM-Only_clean",
         "K0_shifted_neg75s",
         "S3_shifted_neg75s",
+        "S0_brain_only",
+        "K0_brain_only",
+        "K1_brain_only",
+        "K2_brain_only",
+        "F_brain_only",
         "S3_clean_c_gated",
         "S3_shifted_neg75s_c_gated",
     )
@@ -3048,7 +3319,7 @@ def _aggregate_numeric_dicts_across_seeds(
             mean_v = float(np.mean(f_vals))
             std_v = float(np.std(f_vals, ddof=1 if len(f_vals) > 1 else 0))
             if all(isinstance(x, int) for x in vals) and k.endswith(
-                ("_count", "total_words", "blocks", "k_observations", "vocabulary_size")
+                ("_count", "total_words", "_words", "blocks", "k_observations", "vocabulary_size")
             ):
                 result[k] = int(round(mean_v))
             else:

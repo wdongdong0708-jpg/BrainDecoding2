@@ -67,7 +67,7 @@ def test_markdown_files_strictly_governed() -> None:
     allowed_md = {
         "README.md",
         "AGENTS.md",
-        "data/manifests/rolling_sentence/unified_protocol_v2.md",
+        "data/manifests/local_context_decoding_protocol.md",
     }
     assert md_files <= allowed_md and "README.md" in md_files, (
         f"检测到违规的 Markdown 文件: {sorted(md_files - allowed_md)}"

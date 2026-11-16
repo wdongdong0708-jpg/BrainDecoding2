@@ -1,6 +1,6 @@
 protocol:
   id: single_word_long_window_test_v2
-  parent: unified_protocol_v2
+  parent: local_context_decoding_protocol
   datasets: [pallier2025, chineseeeg2_littleprince]
   seeds: [0, 1, 2]
   train_splits: [train, val]

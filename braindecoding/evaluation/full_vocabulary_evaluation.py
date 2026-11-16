@@ -18,7 +18,7 @@ from braindecoding.word_paired_statistics_test_v2 import metadata, weighted_scor
 
 
 ID = "full_vocabulary_context_test_v2"
-PROTOCOL = ROOT / "data/manifests/rolling_sentence/unified_protocol_v2.md"
+PROTOCOL = ROOT / "data/manifests/local_context_decoding_protocol.md"
 MANIFEST = ROOT / f"data/manifests/rolling_sentence/{ID}.json"
 PARENT = ROOT / "data/manifests/rolling_sentence/heldout_test_v2.json"
 CONTEXT = PROTOCOL.with_name("context_heldout_test_v2.json")

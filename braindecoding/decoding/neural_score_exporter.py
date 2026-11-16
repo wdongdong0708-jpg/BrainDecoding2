@@ -19,6 +19,7 @@ import time
 from typing import Any, Iterable, Sequence
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.nn import functional as F_nn
 
@@ -134,6 +135,70 @@ def apply_historical_common_mode_subtraction(
     return _l2_normalize_tensor(debiased)
 
 
+def _first_present_column(
+    columns: Iterable[str], candidates: Sequence[str]
+) -> str | None:
+    col_set = set(str(c) for c in columns)
+    for cand in candidates:
+        if cand in col_set:
+            return cand
+    return None
+
+
+def _coerce_optional_bool(val: Any) -> bool | None:
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return None
+    try:
+        if pd.isna(val):
+            return None
+    except Exception:
+        pass
+    if isinstance(val, (bool, np.bool_)):
+        return bool(val)
+    if isinstance(val, (int, np.integer)):
+        return bool(int(val))
+    text = str(val).strip().lower()
+    if text in {"1", "true", "yes", "y", "是"}:
+        return True
+    if text in {"0", "false", "no", "n", "否"}:
+        return False
+    return None
+
+
+def _extract_segment_metadata_from_rows(rows: pd.DataFrame) -> dict[str, list]:
+    """从事件行片段提取词起止秒数与词性/实虚词标注（缺列时安全跳过）。"""
+    out: dict[str, list] = {}
+    cols = list(rows.columns)
+    onset_col = _first_present_column(cols, ("onset_seconds", "开始时间"))
+    if onset_col is not None:
+        vals = pd.to_numeric(rows[onset_col], errors="coerce").tolist()
+        if vals and all(np.isfinite(float(v)) for v in vals):
+            out["onset_seconds"] = [float(v) for v in vals]
+
+    offset_col = _first_present_column(cols, ("offset_seconds", "结束时间"))
+    if offset_col is not None:
+        vals = pd.to_numeric(rows[offset_col], errors="coerce").tolist()
+        if vals and all(np.isfinite(float(v)) for v in vals):
+            out["offset_seconds"] = [float(v) for v in vals]
+
+    pos_col = _first_present_column(cols, ("pos", "pos_tag", "词性"))
+    if pos_col is not None:
+        raw_pos = rows[pos_col].tolist()
+        tags = ["" if pd.isna(v) else str(v).strip() for v in raw_pos]
+        if tags and any(t != "" for t in tags):
+            out["pos_tags"] = tags
+
+    content_col = _first_present_column(
+        cols, ("is_content_word", "是否内容词", "content_word")
+    )
+    if content_col is not None:
+        coerced = [_coerce_optional_bool(v) for v in rows[content_col].tolist()]
+        if coerced and all(v is not None for v in coerced):
+            out["is_content_word_mask"] = [bool(v) for v in coerced]
+
+    return out
+
+
 def build_segment_inventory(
     dataset: str,
     table,
@@ -226,21 +291,22 @@ def build_segment_inventory(
 
         ref_words = rows[word_col].astype(str).tolist()
         in_vocab = [bool(w in vocab_set) for w in ref_words]
-        segments.append(
-            {
-                "segment_index": seg_idx,
-                "group_id": str(group_name),
-                "subject_id": str(rows[subj_col].iloc[0]),
-                "recording_id": str(rows[rec_col].iloc[0]),
-                "scope": scope,
-                "order": order,
-                "event_indices": row_indices,
-                "event_ids": rows[event_col].astype(str).tolist(),
-                "reference_words": ref_words,
-                "in_vocabulary_mask": in_vocab,
-                "_atoms": sorted(set(atoms)),
-            }
-        )
+        seg_record = {
+            "segment_index": seg_idx,
+            "group_id": str(group_name),
+            "subject_id": str(rows[subj_col].iloc[0]),
+            "recording_id": str(rows[rec_col].iloc[0]),
+            "scope": scope,
+            "order": order,
+            "event_indices": row_indices,
+            "event_ids": rows[event_col].astype(str).tolist(),
+            "reference_words": ref_words,
+            "in_vocabulary_mask": in_vocab,
+            "_atoms": sorted(set(atoms)),
+        }
+        seg_meta = _extract_segment_metadata_from_rows(rows)
+        seg_record.update(seg_meta)
+        segments.append(seg_record)
 
     components: dict[int, list[int]] = defaultdict(list)
     for idx in range(len(segments)):
@@ -1728,7 +1794,7 @@ def resolve_vocabulary_frequency_order(
             task = pallier_task if dataset == "pallier2025" else chinese_task
             from braindecoding.data.derived_cache import canonical_cache_paths
 
-            evt_path = Path(canonical_cache_paths(dataset)["event_table"])
+            evt_path = project_path(canonical_cache_paths(dataset)["event_table"])
             if evt_path.is_file():
                 train_df = task.dataset_module.load_event_table(
                     evt_path, split="train", trainable_only=True
@@ -1828,3 +1894,301 @@ def load_neural_vocabulary_scores(path: str | Path) -> dict:
     if missing:
         raise ValueError(f"S3 神经特征文件缺少必要字段 {sorted(missing)}：{pt_path}")
     return payload
+
+
+def enrich_segments_from_event_table(
+    segments: Sequence[dict],
+    event_table: pd.DataFrame,
+    *,
+    split: str | None = None,
+) -> list[dict]:
+    """零重跑向已缓存句段补充 onset_seconds / offset_seconds / pos_tags / is_content_word_mask。"""
+    seg_list = list(segments)
+    if not seg_list or event_table is None or len(event_table) == 0:
+        return seg_list
+
+    cols = list(event_table.columns)
+    event_col = _first_present_column(cols, ("event_id", "事件编号"))
+    subj_col = _first_present_column(cols, ("subject_id", "受试者"))
+    rec_col = _first_present_column(cols, ("recording_id", "记录编号"))
+    word_col = _first_present_column(cols, ("normalized_word", "标准词", "word", "词"))
+    split_col = _first_present_column(cols, ("data_split", "数据划分", "split"))
+    train_col = _first_present_column(
+        cols, ("is_trainable", "是否可训练", "trainable")
+    )
+    ctx_col = _first_present_column(
+        cols, ("runtime_context_uid", "sentence_uid", "context_id", "上下文编号")
+    )
+    sent_col = _first_present_column(cols, ("sentence_uid", "上下文编号"))
+    ord_col = _first_present_column(
+        cols, ("in_recording_index", "记录内序号", "original_seq_index", "序列原编号")
+    )
+    onset_col = _first_present_column(cols, ("onset_seconds", "开始时间"))
+    offset_col = _first_present_column(cols, ("offset_seconds", "结束时间"))
+    pos_col = _first_present_column(cols, ("pos", "pos_tag", "词性"))
+    content_col = _first_present_column(
+        cols, ("is_content_word", "是否内容词", "content_word")
+    )
+    if not any((onset_col, offset_col, pos_col, content_col)):
+        return seg_list
+
+    working = event_table.reset_index(drop=True)
+    event_table = working
+    n_rows = len(working)
+
+    def _row_payload(row_idx: int) -> dict[str, Any]:
+        item: dict[str, Any] = {}
+        if event_col is not None:
+            e = event_table.at[row_idx, event_col]
+            if not pd.isna(e):
+                item["event_id"] = str(e)
+        if subj_col is not None:
+            s = event_table.at[row_idx, subj_col]
+            if not pd.isna(s):
+                item["subject_id"] = str(s)
+        if word_col is not None:
+            w = event_table.at[row_idx, word_col]
+            item["word"] = "" if pd.isna(w) else str(w).strip().lower()
+        if onset_col is not None:
+            v = event_table.at[row_idx, onset_col]
+            try:
+                fv = float(v)
+                if np.isfinite(fv):
+                    item["onset_seconds"] = fv
+            except Exception:
+                pass
+        if offset_col is not None:
+            v = event_table.at[row_idx, offset_col]
+            try:
+                fv = float(v)
+                if np.isfinite(fv):
+                    item["offset_seconds"] = fv
+            except Exception:
+                pass
+        if pos_col is not None:
+            v = event_table.at[row_idx, pos_col]
+            if not pd.isna(v):
+                item["pos_tag"] = str(v).strip()
+            else:
+                item["pos_tag"] = ""
+        if content_col is not None:
+            b = _coerce_optional_bool(event_table.at[row_idx, content_col])
+            if b is not None:
+                item["is_content_word"] = b
+        return item
+
+    by_full_key: dict[tuple[str, str, str], int] = {}
+    by_event_id: dict[str, int] = {}
+    if event_col is not None:
+        ev_vals = working[event_col].astype(str).tolist()
+        subj_vals = (
+            working[subj_col].astype(str).tolist()
+            if subj_col is not None
+            else [""] * n_rows
+        )
+        rec_vals = (
+            working[rec_col].astype(str).tolist()
+            if rec_col is not None
+            else [""] * n_rows
+        )
+        for pos_i, (s_id, r_id, e_id) in enumerate(zip(subj_vals, rec_vals, ev_vals)):
+            if subj_col is not None and rec_col is not None:
+                by_full_key.setdefault((s_id, r_id, e_id), pos_i)
+            by_event_id.setdefault(e_id, pos_i)
+
+    # Filter trainable/split rows to align both relative event_indices and group_id lookups
+    cand_mask = np.ones(n_rows, dtype=bool)
+    if split is not None and split_col is not None:
+        cand_mask &= (working[split_col].astype(str) == str(split)).to_numpy()
+    if train_col is not None:
+        tr_bool = np.asarray(
+            [bool(_coerce_optional_bool(v)) for v in working[train_col].tolist()],
+            dtype=bool,
+        )
+        if bool((cand_mask & tr_bool).any()):
+            cand_mask &= tr_bool
+    split_row_positions: list[int] = np.flatnonzero(cand_mask).tolist()
+
+    by_group_key: dict[str, list[int]] = {}
+    if split_row_positions and (ctx_col is not None or sent_col is not None):
+        sub_df = working.iloc[split_row_positions].copy()
+        sub_df["_orig_row_pos"] = split_row_positions
+        sort_order_cols = [c for c in (ord_col, onset_col) if c is not None]
+        if sort_order_cols:
+            sub_df = sub_df.sort_values(sort_order_cols, kind="mergesort")
+        rec_sub = (
+            sub_df[rec_col].astype(str).tolist()
+            if rec_col is not None
+            else [""] * len(sub_df)
+        )
+        ctx_sub = (
+            sub_df[ctx_col].astype(str).tolist()
+            if ctx_col is not None
+            else [""] * len(sub_df)
+        )
+        sent_sub = (
+            sub_df[sent_col].astype(str).tolist()
+            if sent_col is not None
+            else [""] * len(sub_df)
+        )
+        orig_sub = sub_df["_orig_row_pos"].tolist()
+        for r_v, c_v, s_v, row_pos in zip(rec_sub, ctx_sub, sent_sub, orig_sub):
+            pos_int = int(row_pos)
+            row_gkeys: list[str] = []
+            if c_v:
+                row_gkeys.append(c_v)
+            if s_v and r_v and f"{r_v}::{s_v}" not in row_gkeys:
+                row_gkeys.append(f"{r_v}::{s_v}")
+            if c_v and r_v and "::" not in c_v and f"{r_v}::{c_v}" not in row_gkeys:
+                row_gkeys.append(f"{r_v}::{c_v}")
+            for gk in row_gkeys:
+                by_group_key.setdefault(gk, []).append(pos_int)
+
+    payload_cache: dict[int, dict[str, Any]] = {}
+
+    def _get_row(pos_i: int) -> dict[str, Any]:
+        cached = payload_cache.get(pos_i)
+        if cached is None:
+            cached = _row_payload(pos_i)
+            payload_cache[pos_i] = cached
+        return cached
+
+    meta_keys = (
+        "onset_seconds",
+        "offset_seconds",
+        "pos_tags",
+        "is_content_word_mask",
+    )
+    for seg in seg_list:
+        ref_words = [str(w).strip().lower() for w in (seg.get("reference_words") or ())]
+        n_words = len(ref_words)
+        if n_words == 0:
+            continue
+        if all(len(seg.get(k) or []) == n_words for k in meta_keys):
+            continue
+
+        matched_rows: list[dict[str, Any]] | None = None
+        ev_ids = seg.get("event_ids")
+        if (
+            isinstance(ev_ids, (list, tuple))
+            and len(ev_ids) == n_words
+            and event_col is not None
+        ):
+            s_id = str(seg.get("subject_id", ""))
+            r_id = str(seg.get("recording_id", ""))
+            indices: list[int] = []
+            ok = True
+            for e_id in ev_ids:
+                e_str = str(e_id)
+                idx = by_full_key.get((s_id, r_id, e_str))
+                if idx is None:
+                    idx = by_event_id.get(e_str)
+                if idx is None:
+                    ok = False
+                    break
+                indices.append(idx)
+            if ok:
+                matched_rows = [_get_row(i) for i in indices]
+
+        if matched_rows is None and by_group_key and seg.get("group_id"):
+            raw_gid = re.sub(r"^k\d+::", "", str(seg.get("group_id", ""))).strip()
+            rec_id = str(seg.get("recording_id", "")).strip()
+            cand_keys: list[str] = []
+            if raw_gid:
+                if rec_id and "::" not in raw_gid:
+                    cand_keys.append(f"{rec_id}::{raw_gid}")
+                cand_keys.append(raw_gid)
+            for gk in cand_keys:
+                pos_list = by_group_key.get(gk)
+                if pos_list is not None and len(pos_list) == n_words:
+                    cand_rows = [_get_row(p) for p in pos_list]
+                    if word_col is None or all(
+                        cand_rows[k].get("word") == ref_words[k]
+                        for k in range(n_words)
+                    ):
+                        matched_rows = cand_rows
+                        break
+
+        if matched_rows is None:
+            ev_indices = seg.get("event_indices")
+            if isinstance(ev_indices, (list, tuple)) and len(ev_indices) == n_words:
+                s_id = str(seg.get("subject_id", ""))
+                is_multi_subj = s_id.startswith("multi_subject_")
+                n_split = len(split_row_positions)
+                if all(
+                    isinstance(i, (int, np.integer)) and 0 <= int(i) < n_split
+                    for i in ev_indices
+                ):
+                    cand_rows = [
+                        _get_row(split_row_positions[int(i)]) for i in ev_indices
+                    ]
+                    words_ok = word_col is None or all(
+                        cand_rows[k].get("word") == ref_words[k]
+                        for k in range(n_words)
+                    )
+                    subj_ok = (
+                        is_multi_subj
+                        or not s_id
+                        or subj_col is None
+                        or all(
+                            cand_rows[k].get("subject_id") == s_id
+                            for k in range(n_words)
+                        )
+                    )
+                    if words_ok and subj_ok:
+                        matched_rows = cand_rows
+
+                if matched_rows is None and all(
+                    isinstance(i, (int, np.integer)) and 0 <= int(i) < n_rows
+                    for i in ev_indices
+                ):
+                    cand_rows = [_get_row(int(i)) for i in ev_indices]
+                    words_ok = word_col is None or all(
+                        cand_rows[k].get("word") == ref_words[k]
+                        for k in range(n_words)
+                    )
+                    subj_ok = (
+                        is_multi_subj
+                        or not s_id
+                        or subj_col is None
+                        or all(
+                            cand_rows[k].get("subject_id") == s_id
+                            for k in range(n_words)
+                        )
+                    )
+                    if words_ok and subj_ok:
+                        matched_rows = cand_rows
+
+        if not matched_rows:
+            continue
+
+        if (
+            not seg.get("event_ids")
+            and not str(seg.get("subject_id", "")).startswith("multi_subject_")
+            and all("event_id" in r for r in matched_rows)
+        ):
+            seg["event_ids"] = [str(r["event_id"]) for r in matched_rows]
+        if len(seg.get("onset_seconds") or []) != n_words and all(
+            "onset_seconds" in r for r in matched_rows
+        ):
+            seg["onset_seconds"] = [float(r["onset_seconds"]) for r in matched_rows]
+        if len(seg.get("offset_seconds") or []) != n_words and all(
+            "offset_seconds" in r for r in matched_rows
+        ):
+            seg["offset_seconds"] = [
+                float(r["offset_seconds"]) for r in matched_rows
+            ]
+        if (
+            len(seg.get("pos_tags") or []) != n_words
+            and all("pos_tag" in r for r in matched_rows)
+            and any(str(r["pos_tag"]) != "" for r in matched_rows)
+        ):
+            seg["pos_tags"] = [str(r["pos_tag"]) for r in matched_rows]
+        if len(seg.get("is_content_word_mask") or []) != n_words and all(
+            "is_content_word" in r for r in matched_rows
+        ):
+            seg["is_content_word_mask"] = [
+                bool(r["is_content_word"]) for r in matched_rows
+            ]
+
+    return seg_list

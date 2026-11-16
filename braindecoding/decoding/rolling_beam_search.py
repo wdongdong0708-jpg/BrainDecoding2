@@ -1652,6 +1652,27 @@ def decode_segments_streaming_batched(
 
 
 STATIC_DECODE_CONDITIONS: frozenset[str] = frozenset({"S0", "K0", "K1", "K2", "F"})
+BRAIN_ONLY_CONDITION_MAP: dict[str, str] = {
+    "BRAIN_ONLY": "K2",
+    "S3_BRAIN_ONLY": "K2",
+    "S0_BRAIN_ONLY": "S0",
+    "K0_BRAIN_ONLY": "K0",
+    "K1_BRAIN_ONLY": "K1",
+    "K2_BRAIN_ONLY": "K2",
+    "F_BRAIN_ONLY": "F",
+}
+
+
+def _resolve_brain_only_state(condition: str, *, brain_only: bool = False) -> str | None:
+    """将 *_brain_only / Brain-Only 条件名映射至底层状态键（S0/K0/K1/K2/F）。"""
+    norm = str(condition or "").strip().upper().replace("-", "_")
+    if norm in BRAIN_ONLY_CONDITION_MAP:
+        return BRAIN_ONLY_CONDITION_MAP[norm]
+    if brain_only:
+        return "K2" if norm in ("S3", "S3_CLEAN") else (
+            norm if norm in STATIC_DECODE_CONDITIONS else None
+        )
+    return None
 
 
 def _resolve_job_vocabulary(
@@ -1697,7 +1718,7 @@ def _resolve_job_vocabulary(
 
 
 def _segment_record_base(seg: dict) -> dict:
-    return {
+    base = {
         "segment_index": seg["segment_index"],
         "group_id": seg["group_id"],
         "subject_id": seg["subject_id"],
@@ -1707,11 +1728,74 @@ def _segment_record_base(seg: dict) -> dict:
         "block_id": seg.get("block_id", seg["scope"]),
         "reference_words": list(seg["reference_words"]),
     }
+    for meta_key in (
+        "event_ids",
+        "onset_seconds",
+        "offset_seconds",
+        "pos_tags",
+        "is_content_word_mask",
+    ):
+        if meta_key in seg and seg[meta_key] is not None:
+            base[meta_key] = list(seg[meta_key])
+    return base
+
+
+def _decode_brain_only_segment_records(
+    score_matrix: torch.Tensor | np.ndarray,
+    vocabulary: Sequence[str],
+    segments: Sequence[dict],
+    *,
+    active_vocab_indices: Sequence[int] | None = None,
+    active_vocab_set: set[str] | None = None,
+    top_k_save: int = 5,
+) -> tuple[list[dict], float]:
+    """零语言模型纯神经（λ = 0）argmax 与 Top-K 词表检索解码，支持全词表与受限子词表。"""
+    started = time.perf_counter()
+    if isinstance(score_matrix, np.ndarray):
+        mat = torch.from_numpy(score_matrix).float()
+    else:
+        mat = score_matrix.detach().cpu().float()
+    if active_vocab_indices is not None:
+        idx_list = [int(i) for i in active_vocab_indices]
+        idx_tensor = torch.as_tensor(idx_list, dtype=torch.long)
+        vocab_view = [str(vocabulary[i]) for i in idx_list]
+    else:
+        idx_tensor = None
+        vocab_view = [str(w) for w in vocabulary]
+    n_cand = len(vocab_view)
+    k_eff = min(max(1, int(top_k_save)), max(1, n_cand))
+
+    records: list[dict] = []
+    for seg in segments:
+        t0 = time.perf_counter()
+        ev = seg["event_indices"]
+        sub = mat[ev] if idx_tensor is None else mat[ev][:, idx_tensor]
+        seg_len = int(sub.shape[0])
+        if seg_len == 0 or n_cand == 0:
+            pred_words: list[str] = []
+            top5_rows: list[list[str]] = []
+        else:
+            _, top_cols = torch.topk(sub, k=k_eff, dim=-1, largest=True, sorted=True)
+            top_cols_list = top_cols.tolist()
+            pred_words = [vocab_view[int(row[0])] for row in top_cols_list]
+            top5_rows = [[vocab_view[int(c)] for c in row] for row in top_cols_list]
+        rec = _segment_record_base(seg)
+        rec.update(
+            {
+                "predicted_words": pred_words,
+                "beam_candidates": [list(pred_words)] if pred_words else [],
+                "top5_words_per_pos": top5_rows,
+                "in_vocabulary_mask": _job_in_vocab_mask(seg, active_vocab_set),
+                "elapsed_seconds": round(time.perf_counter() - t0, 6),
+            }
+        )
+        records.append(rec)
+    return records, time.perf_counter() - started
 
 
 def decode_dataset_segment_jobs(
     exported_payload: dict,
-    scorer: CachedVocabularyLanguageScorer,
+    scorer: CachedVocabularyLanguageScorer | None,
     hyperparameters: dict,
     jobs: dict[str, dict],
     *,
@@ -1771,18 +1855,74 @@ def decode_dataset_segment_jobs(
     stream_items: list[tuple[int, int, str, dict[str, np.ndarray], int]] = []
     job_meta: dict[str, dict] = {}
     lm_only_jobs: list[str] = []
+    brain_only_jobs: list[str] = []
 
     for job_order, (job_key, job) in enumerate(jobs.items()):
         condition = str(job.get("condition", "S3"))
         cond_upper = condition.upper()
         alignment = str(job.get("alignment", "clean"))
         include_screen = bool(job.get("include_screen_history", True))
+        brain_only_state = _resolve_brain_only_state(
+            condition, brain_only=bool(job.get("brain_only", False))
+        )
+        if brain_only_state is not None:
+            active_idx, active_set, eff_vocab_size = _resolve_job_vocabulary(
+                exported_payload,
+                vocab_size_limit=job.get("vocab_size_limit"),
+                allowed_vocab_indices=job.get("allowed_vocab_indices"),
+            )
+            score_bank = (
+                exported_payload["clean_scores"]
+                if alignment == "clean"
+                else exported_payload["shifted_scores"]
+            )
+            if brain_only_state not in score_bank:
+                raise KeyError(
+                    f"得分矩阵中缺少 Brain-Only 状态 {brain_only_state!r} (alignment={alignment!r})"
+                )
+            job_seg_indices = job.get("segment_indices")
+            job_seg_set = (
+                {int(i) for i in job_seg_indices}
+                if job_seg_indices is not None
+                else None
+            )
+            sel_segments = [
+                seg
+                for seg_pos, seg in enumerate(segments)
+                if job_seg_set is None
+                or seg_pos in job_seg_set
+                or int(seg.get("segment_index", -1)) in job_seg_set
+            ]
+            rec_list, bo_elapsed = _decode_brain_only_segment_records(
+                score_bank[brain_only_state],
+                vocabulary,
+                sel_segments,
+                active_vocab_indices=active_idx,
+                active_vocab_set=active_set,
+            )
+            n_bo = len(rec_list)
+            results[job_key] = {
+                "condition": condition,
+                "alignment": alignment,
+                "vocabulary_size": eff_vocab_size,
+                "segment_count": n_bo,
+                "total_elapsed_seconds": round(bo_elapsed, 4),
+                "mean_seconds_per_segment": round(bo_elapsed / max(1, n_bo), 4),
+                "final_sentences": rec_list,
+                "screen_histories": [],
+            }
+            brain_only_jobs.append(job_key)
+            continue
+        if scorer is None:
+            raise ValueError(
+                f"解码条件 {condition!r}（非 Brain-Only）必须提供非空语言模型 scorer。"
+            )
         if cond_upper == "LM-ONLY":
             lm_only_jobs.append(job_key)
             continue
         if cond_upper != "S3" and cond_upper not in STATIC_DECODE_CONDITIONS:
             raise ValueError(
-                f"不支持的解码条件 {condition!r}，可选：'S3', 'S0', 'K0', 'K1', 'K2', 'F', 'LM-Only'"
+                f"不支持的解码条件 {condition!r}，可选：'S3', 'S0', 'K0', 'K1', 'K2', 'F', 'LM-Only' 及 *_brain_only"
             )
         active_idx, active_set, eff_vocab_size = _resolve_job_vocabulary(
             exported_payload,
@@ -2009,6 +2149,8 @@ def decode_dataset_segment_jobs(
             pbar.close()
 
     for job_key in jobs:
+        if job_key in brain_only_jobs:
+            continue
         if job_key in lm_only_jobs:
             job = jobs[job_key]
             results[job_key] = decode_dataset_segments(
@@ -2053,7 +2195,7 @@ def _job_in_vocab_mask(seg: dict, active_set: set[str] | None) -> list[bool]:
 
 def decode_dataset_segments(
     exported_payload: dict,
-    scorer: CachedVocabularyLanguageScorer,
+    scorer: CachedVocabularyLanguageScorer | None,
     hyperparameters: dict,
     *,
     condition: str = "S3",
@@ -2330,6 +2472,17 @@ def decode_dataset_segments(
     }
 
 
+def _coerce_subject_score_tensors(
+    subject_score_matrices: Sequence[torch.Tensor | np.ndarray],
+) -> list[torch.Tensor]:
+    return [
+        m.detach().cpu().float()
+        if isinstance(m, torch.Tensor)
+        else torch.from_numpy(np.asarray(m, dtype=np.float32))
+        for m in subject_score_matrices
+    ]
+
+
 def _average_subject_score_rows_rms_preserved(
     subject_score_matrices: Sequence[torch.Tensor | np.ndarray],
 ) -> torch.Tensor:
@@ -2339,12 +2492,7 @@ def _average_subject_score_rows_rms_preserved(
     通过按单受试者平均 RMS 重新对齐行模长，既 100% 保持每词位的跨受试者平均候选排序不变，
     又避免将温度 T_r 变相放大 sqrt(k) 倍。
     """
-    tensors = [
-        m.detach().cpu().float()
-        if isinstance(m, torch.Tensor)
-        else torch.from_numpy(np.asarray(m, dtype=np.float32))
-        for m in subject_score_matrices
-    ]
+    tensors = _coerce_subject_score_tensors(subject_score_matrices)
     if len(tensors) == 1:
         return tensors[0]
     stacked = torch.stack(tensors, dim=0)  # [k, L, |V|]
@@ -2359,11 +2507,46 @@ def _average_subject_score_rows_rms_preserved(
     return mean_mat * scale
 
 
+def _average_subject_score_rows_agreement_weighted(
+    subject_score_matrices: Sequence[torch.Tensor | np.ndarray],
+    *,
+    agreement_alpha: float = 2.0,
+) -> torch.Tensor:
+    """遵循 SimpleB2T 式 (7)-(8) 的跨被试一致性加权神经得分聚合：
+
+        r_i = || (1/k) sum_j s_{i,j} / ||s_{i,j}||_2 ||_2,
+        A_i = (1 + alpha * r_i) * u_i,
+
+    其中 u_i 为保持单受试者 RMS 尺度的共识得分向量；跨被试高度一致时放大分布锐度，
+    分歧较大时保留平滑不确定性以利语言模型与束搜索消歧（alpha=0 时退化为 RMS 保持均值）。
+    """
+    tensors = _coerce_subject_score_tensors(subject_score_matrices)
+    if len(tensors) == 1:
+        return tensors[0]
+    stacked = torch.stack(tensors, dim=0)  # [k, L, |V|]
+    row_norms = torch.linalg.vector_norm(stacked, dim=-1, keepdim=True).clamp(min=1e-12)
+    unit_rows = stacked / row_norms
+    agreement_r = torch.linalg.vector_norm(
+        unit_rows.mean(dim=0), dim=-1, keepdim=True
+    ).clamp(0.0, 1.0)
+    consensus_u = _average_subject_score_rows_rms_preserved(tensors)
+    return consensus_u * (1.0 + float(agreement_alpha) * agreement_r)
+
+
 def aggregate_multi_subject_payload(
     exported_payload: dict,
     k_observations: int,
+    *,
+    aggregation_mode: str = "rms_preserved",
+    agreement_alpha: float = 2.0,
 ) -> dict:
     """构造跨 k 名受试者神经观测聚合的合成 .pt 载荷（对标 d'Ascoli 2024 / SimpleB2T 2026）。"""
+    mode = str(aggregation_mode or "rms_preserved").strip().lower()
+    if mode not in ("rms_preserved", "agreement_weighted"):
+        raise ValueError(
+            f"未知的多被试得分聚合模式 {aggregation_mode!r}，可选：'rms_preserved', 'agreement_weighted'"
+        )
+    alpha_val = float(agreement_alpha)
     k_req = max(1, int(k_observations))
     all_segments = list(exported_payload.get("segments") or [])
     grouped: dict[tuple, list[dict]] = {}
@@ -2410,7 +2593,11 @@ def aggregate_multi_subject_payload(
                 clean_bank[s][member["event_indices"]] for member in chosen
             ]
             agg_clean_lists[s].append(
-                _average_subject_score_rows_rms_preserved(c_rows)
+                _average_subject_score_rows_agreement_weighted(
+                    c_rows, agreement_alpha=alpha_val
+                )
+                if mode == "agreement_weighted"
+                else _average_subject_score_rows_rms_preserved(c_rows)
             )
             if s in shifted_bank:
                 sh_rows = [
@@ -2418,7 +2605,11 @@ def aggregate_multi_subject_payload(
                     for member in chosen
                 ]
                 agg_shifted_lists[s].append(
-                    _average_subject_score_rows_rms_preserved(sh_rows)
+                    _average_subject_score_rows_agreement_weighted(
+                        sh_rows, agreement_alpha=alpha_val
+                    )
+                    if mode == "agreement_weighted"
+                    else _average_subject_score_rows_rms_preserved(sh_rows)
                 )
 
         new_indices = list(range(cursor, cursor + seg_len))
@@ -2426,28 +2617,36 @@ def aggregate_multi_subject_payload(
         subj_label = f"avg_k{k_eff}(" + "+".join(
             str(c.get("subject_id", "")) for c in chosen
         ) + ")"
-        agg_segments.append(
-            {
-                "segment_index": len(agg_segments),
-                "group_id": f"k{k_eff}::{template.get('group_id', len(agg_segments))}",
-                "subject_id": f"multi_subject_k{k_eff}",
-                "subject_group_members": [
-                    str(c.get("subject_id", "")) for c in chosen
-                ],
-                "k_observations": int(k_eff),
-                "recording_id": str(template.get("recording_id", "")),
-                "scope": str(template.get("scope", "")),
-                "block_id": str(
-                    template.get("block_id", template.get("scope", ""))
-                ),
-                "material_id": str(template.get("material_id", "")),
-                "partition": str(template.get("partition", "evaluation")),
-                "event_indices": new_indices,
-                "reference_words": list(template["reference_words"]),
-                "in_vocabulary_mask": list(template["in_vocabulary_mask"]),
-                "subject_combination_label": subj_label,
-            }
-        )
+        agg_seg = {
+            "segment_index": len(agg_segments),
+            "group_id": f"k{k_eff}::{template.get('group_id', len(agg_segments))}",
+            "subject_id": f"multi_subject_k{k_eff}",
+            "subject_group_members": [
+                str(c.get("subject_id", "")) for c in chosen
+            ],
+            "k_observations": int(k_eff),
+            "recording_id": str(template.get("recording_id", "")),
+            "scope": str(template.get("scope", "")),
+            "block_id": str(
+                template.get("block_id", template.get("scope", ""))
+            ),
+            "material_id": str(template.get("material_id", "")),
+            "partition": str(template.get("partition", "evaluation")),
+            "event_indices": new_indices,
+            "reference_words": list(template["reference_words"]),
+            "in_vocabulary_mask": list(template["in_vocabulary_mask"]),
+            "subject_combination_label": subj_label,
+        }
+        for meta_key in (
+            "event_ids",
+            "onset_seconds",
+            "offset_seconds",
+            "pos_tags",
+            "is_content_word_mask",
+        ):
+            if meta_key in template and template[meta_key] is not None:
+                agg_seg[meta_key] = list(template[meta_key])
+        agg_segments.append(agg_seg)
 
     vocab_size = len(exported_payload["vocabulary"])
     agg_clean = {
@@ -2470,6 +2669,8 @@ def aggregate_multi_subject_payload(
     return {
         **exported_payload,
         "k_observations": k_req,
+        "aggregation_mode": mode,
+        "agreement_alpha": alpha_val,
         "segments": agg_segments,
         "clean_scores": agg_clean,
         "shifted_scores": agg_shifted,
@@ -2621,9 +2822,30 @@ def _resolve_l5_closed_set_scales(
     return [specs_by_size[k] for k in sorted(specs_by_size.keys())]
 
 
+def _append_brain_only_jobs(
+    jobs: dict[str, dict],
+    available_clean: dict,
+    *,
+    states: Sequence[str] = ("S0", "K0", "K2", "F"),
+    allowed_vocab_indices: Sequence[int] | None = None,
+    existing_map: dict[str, dict] | None = None,
+) -> None:
+    for st in states:
+        job_key = f"{st}_brain_only"
+        if (
+            st in available_clean
+            and (existing_map is None or job_key not in existing_map)
+            and job_key not in jobs
+        ):
+            job: dict = {"condition": job_key, "alignment": "clean"}
+            if allowed_vocab_indices is not None:
+                job["allowed_vocab_indices"] = allowed_vocab_indices
+            jobs[job_key] = job
+
+
 def run_multi_subject_observation_sweep(
     exported_payload: dict,
-    scorer: CachedVocabularyLanguageScorer,
+    scorer: CachedVocabularyLanguageScorer | None,
     hyperparameters: dict,
     *,
     k_values: Sequence[int] = (1, 2, 5, 10),
@@ -2632,6 +2854,9 @@ def run_multi_subject_observation_sweep(
     min_sentence_length: int | None = None,
     condition: str = "S3",
     alignment: str = "clean",
+    aggregation_mode: str = "agreement_weighted",
+    agreement_alpha: float = 2.0,
+    include_brain_only: bool = False,
     single_subject_s3_bundle: dict | None = None,
     single_subject_full_vocab_bundles: dict[str, dict] | None = None,
     single_subject_vocab_scaling_bundles: dict[str, dict] | None = None,
@@ -2679,7 +2904,12 @@ def run_multi_subject_observation_sweep(
             agg_payload = (
                 exported_payload
                 if k_eff == 1
-                else aggregate_multi_subject_payload(exported_payload, k_eff)
+                else aggregate_multi_subject_payload(
+                    exported_payload,
+                    k_eff,
+                    aggregation_mode=aggregation_mode,
+                    agreement_alpha=agreement_alpha,
+                )
             )
             available_clean = agg_payload.get("clean_scores") or {}
             available_shifted = agg_payload.get("shifted_scores") or {}
@@ -2744,6 +2974,11 @@ def run_multi_subject_observation_sweep(
                     "F",
                     "K1",
                     "K0_shifted_neg75s",
+                    "S0_brain_only",
+                    "K0_brain_only",
+                    "K1_brain_only",
+                    "K2_brain_only",
+                    "F_brain_only",
                 ):
                     if c_key in single_subject_full_vocab_bundles:
                         conds_full[c_key] = dict(
@@ -2755,6 +2990,40 @@ def run_multi_subject_observation_sweep(
                 ):
                     conds_full["S0"] = dict(
                         single_subject_full_vocab_bundles["S0_clean"]
+                    )
+                extra_k1_jobs: dict[str, dict] = {}
+                if "F" not in conds_full and "F" in available_clean:
+                    extra_k1_jobs["F"] = {
+                        "condition": "F",
+                        "alignment": "clean",
+                        "allowed_vocab_indices": full_allowed_indices,
+                    }
+                if include_brain_only:
+                    _append_brain_only_jobs(
+                        extra_k1_jobs,
+                        available_clean,
+                        states=("S0", "K0", "K2", "F"),
+                        allowed_vocab_indices=full_allowed_indices,
+                        existing_map=conds_full,
+                    )
+                if extra_k1_jobs:
+                    conds_full.update(
+                        decode_dataset_segment_jobs(
+                            agg_payload,
+                            scorer,
+                            hyperparameters,
+                            extra_k1_jobs,
+                            beam_width=beam_width,
+                            candidate_top_k=candidate_top_k,
+                            segment_batch_size=segment_batch_size,
+                            segment_indices=full_seg_indices,
+                            max_segments=max_segments,
+                            show_progress=show_progress,
+                            progress_desc=(
+                                f"S3 Multi-Subject [k={k_int} (eff={k_eff}) | full L>=5 extra | "
+                                f"{len(extra_k1_jobs)} conditions]"
+                            ),
+                        )
                     )
             else:
                 full_jobs: dict[str, dict] = {}
@@ -2768,13 +3037,20 @@ def run_multi_subject_observation_sweep(
                         "include_screen_history": False,
                         "allowed_vocab_indices": full_allowed_indices,
                     }
-                for st_key in ("S0", "K0"):
+                for st_key in ("S0", "K0", "F"):
                     if st_key in available_clean:
                         full_jobs[st_key] = {
                             "condition": st_key,
                             "alignment": "clean",
                             "allowed_vocab_indices": full_allowed_indices,
                         }
+                if include_brain_only:
+                    _append_brain_only_jobs(
+                        full_jobs,
+                        available_clean,
+                        states=("S0", "K0", "K2", "F"),
+                        allowed_vocab_indices=full_allowed_indices,
+                    )
                 if "K2" in available_shifted:
                     full_jobs["S3_shifted_neg75s"] = {
                         "condition": "S3",
@@ -2833,9 +3109,43 @@ def run_multi_subject_observation_sweep(
                     and isinstance(single_subject_vocab_scaling_bundles, dict)
                     and v_key in single_subject_vocab_scaling_bundles
                 ):
-                    by_vocab[v_key] = dict(
-                        single_subject_vocab_scaling_bundles[v_key]
-                    )
+                    reused_v = dict(single_subject_vocab_scaling_bundles[v_key])
+                    reused_v_conds = dict(reused_v.get("conditions") or {})
+                    extra_v_jobs: dict[str, dict] = {}
+                    if "F" not in reused_v_conds and "F" in available_clean:
+                        extra_v_jobs["F"] = {
+                            "condition": "F",
+                            "alignment": "clean",
+                            "allowed_vocab_indices": spec["allowed_vocab_indices"],
+                        }
+                    if include_brain_only:
+                        _append_brain_only_jobs(
+                            extra_v_jobs,
+                            available_clean,
+                            states=("S0", "K0", "K2", "F"),
+                            allowed_vocab_indices=spec["allowed_vocab_indices"],
+                            existing_map=reused_v_conds,
+                        )
+                    if extra_v_jobs:
+                        reused_v_conds.update(
+                            decode_dataset_segment_jobs(
+                                agg_payload,
+                                scorer,
+                                hyperparameters,
+                                extra_v_jobs,
+                                beam_width=beam_width,
+                                candidate_top_k=candidate_top_k,
+                                segment_batch_size=segment_batch_size,
+                                segment_indices=spec["segment_indices"],
+                                max_segments=max_segments,
+                                show_progress=show_progress,
+                                progress_desc=(
+                                    f"S3 Multi-Subject [k={k_int} (eff={k_eff}) | V={eff_v} extra]"
+                                ),
+                            )
+                        )
+                        reused_v["conditions"] = reused_v_conds
+                    by_vocab[v_key] = reused_v
                     continue
 
                 active_indices = spec["allowed_vocab_indices"]
@@ -2848,13 +3158,20 @@ def run_multi_subject_observation_sweep(
                         "include_screen_history": False,
                         "allowed_vocab_indices": active_indices,
                     }
-                for st_key in ("S0", "K0"):
+                for st_key in ("S0", "K0", "F"):
                     if st_key in available_clean:
                         v_jobs[st_key] = {
                             "condition": st_key,
                             "alignment": "clean",
                             "allowed_vocab_indices": active_indices,
                         }
+                if include_brain_only:
+                    _append_brain_only_jobs(
+                        v_jobs,
+                        available_clean,
+                        states=("S0", "K0", "K2", "F"),
+                        allowed_vocab_indices=active_indices,
+                    )
                 if "K2" in available_shifted:
                     v_jobs["S3_shifted_neg75s"] = {
                         "condition": "S3",
@@ -2890,6 +3207,8 @@ def run_multi_subject_observation_sweep(
 
             bundle["k_observations"] = k_int
             bundle["effective_k_observations"] = k_eff
+            bundle["aggregation_mode"] = str(aggregation_mode)
+            bundle["agreement_alpha"] = float(agreement_alpha)
             bundle["conditions"] = conds_full
             if by_vocab:
                 bundle["by_vocabulary_size"] = by_vocab
@@ -2933,7 +3252,12 @@ def run_multi_subject_observation_sweep(
         agg_payload = (
             exported_payload
             if k_eff == 1
-            else aggregate_multi_subject_payload(exported_payload, k_eff)
+            else aggregate_multi_subject_payload(
+                exported_payload,
+                k_eff,
+                aggregation_mode=aggregation_mode,
+                agreement_alpha=agreement_alpha,
+            )
         )
         available_clean = agg_payload.get("clean_scores") or {}
         available_shifted = agg_payload.get("shifted_scores") or {}
@@ -2966,11 +3290,50 @@ def run_multi_subject_observation_sweep(
                 )
             bundle = reuse_bundle
             conds_full: dict[str, dict] = {"S3_clean": dict(bundle)}
-            for c_key in ("S0", "K0", "S3_shifted_neg75s", "F", "K1", "K0_shifted_neg75s"):
+            for c_key in (
+                "S0",
+                "K0",
+                "S3_shifted_neg75s",
+                "F",
+                "K1",
+                "K0_shifted_neg75s",
+                "S0_brain_only",
+                "K0_brain_only",
+                "K1_brain_only",
+                "K2_brain_only",
+                "F_brain_only",
+            ):
                 if c_key in single_subject_full_vocab_bundles:
                     conds_full[c_key] = dict(single_subject_full_vocab_bundles[c_key])
             if "S0" not in conds_full and "S0_clean" in single_subject_full_vocab_bundles:
                 conds_full["S0"] = dict(single_subject_full_vocab_bundles["S0_clean"])
+            extra_k1_legacy_jobs: dict[str, dict] = {}
+            if "F" not in conds_full and "F" in available_clean:
+                extra_k1_legacy_jobs["F"] = {"condition": "F", "alignment": "clean"}
+            if include_brain_only:
+                _append_brain_only_jobs(
+                    extra_k1_legacy_jobs,
+                    available_clean,
+                    states=("S0", "K0", "K2", "F"),
+                    existing_map=conds_full,
+                )
+            if extra_k1_legacy_jobs:
+                conds_full.update(
+                    decode_dataset_segment_jobs(
+                        agg_payload,
+                        scorer,
+                        hyperparameters,
+                        extra_k1_legacy_jobs,
+                        beam_width=beam_width,
+                        candidate_top_k=candidate_top_k,
+                        segment_batch_size=segment_batch_size,
+                        max_segments=max_segments,
+                        show_progress=show_progress,
+                        progress_desc=(
+                            f"S3 Multi-Subject [k={k_int} (eff={k_eff}) | full vocab extra]"
+                        ),
+                    )
+                )
         else:
             full_jobs: dict[str, dict] = {}
             has_s3_clean = all(
@@ -2982,9 +3345,15 @@ def run_multi_subject_observation_sweep(
                     "alignment": alignment,
                     "include_screen_history": False,
                 }
-            for st_key in ("S0", "K0"):
+            for st_key in ("S0", "K0", "F"):
                 if st_key in available_clean:
                     full_jobs[st_key] = {"condition": st_key, "alignment": "clean"}
+            if include_brain_only:
+                _append_brain_only_jobs(
+                    full_jobs,
+                    available_clean,
+                    states=("S0", "K0", "K2", "F"),
+                )
             if "K2" in available_shifted:
                 full_jobs["S3_shifted_neg75s"] = {
                     "condition": "S3",
@@ -3040,9 +3409,42 @@ def run_multi_subject_observation_sweep(
                 and isinstance(single_subject_vocab_scaling_bundles, dict)
                 and v_key in single_subject_vocab_scaling_bundles
             ):
-                by_vocab[v_key] = dict(
-                    single_subject_vocab_scaling_bundles[v_key]
-                )
+                reused_v = dict(single_subject_vocab_scaling_bundles[v_key])
+                reused_v_conds = dict(reused_v.get("conditions") or {})
+                extra_v_legacy_jobs: dict[str, dict] = {}
+                if "F" not in reused_v_conds and "F" in available_clean:
+                    extra_v_legacy_jobs["F"] = {
+                        "condition": "F",
+                        "alignment": "clean",
+                        "allowed_vocab_indices": freq_indices[:eff_v],
+                    }
+                if include_brain_only:
+                    _append_brain_only_jobs(
+                        extra_v_legacy_jobs,
+                        available_clean,
+                        states=("S0", "K0", "K2", "F"),
+                        allowed_vocab_indices=freq_indices[:eff_v],
+                        existing_map=reused_v_conds,
+                    )
+                if extra_v_legacy_jobs:
+                    reused_v_conds.update(
+                        decode_dataset_segment_jobs(
+                            agg_payload,
+                            scorer,
+                            hyperparameters,
+                            extra_v_legacy_jobs,
+                            beam_width=beam_width,
+                            candidate_top_k=candidate_top_k,
+                            segment_batch_size=segment_batch_size,
+                            max_segments=max_segments,
+                            show_progress=show_progress,
+                            progress_desc=(
+                                f"S3 Multi-Subject [k={k_int} (eff={k_eff}) | V={eff_v} extra]"
+                            ),
+                        )
+                    )
+                    reused_v["conditions"] = reused_v_conds
+                by_vocab[v_key] = reused_v
                 continue
 
             active_indices = freq_indices[:eff_v]
@@ -3054,13 +3456,20 @@ def run_multi_subject_observation_sweep(
                     "include_screen_history": False,
                     "allowed_vocab_indices": active_indices,
                 }
-            for st_key in ("S0", "K0"):
+            for st_key in ("S0", "K0", "F"):
                 if st_key in available_clean:
                     v_jobs[st_key] = {
                         "condition": st_key,
                         "alignment": "clean",
                         "allowed_vocab_indices": active_indices,
                     }
+            if include_brain_only:
+                _append_brain_only_jobs(
+                    v_jobs,
+                    available_clean,
+                    states=("S0", "K0", "K2", "F"),
+                    allowed_vocab_indices=active_indices,
+                )
             if "K2" in available_shifted:
                 v_jobs["S3_shifted_neg75s"] = {
                     "condition": "S3",
@@ -3095,6 +3504,8 @@ def run_multi_subject_observation_sweep(
 
         bundle["k_observations"] = k_int
         bundle["effective_k_observations"] = k_eff
+        bundle["aggregation_mode"] = str(aggregation_mode)
+        bundle["agreement_alpha"] = float(agreement_alpha)
         bundle["conditions"] = conds_full
         if by_vocab:
             bundle["by_vocabulary_size"] = by_vocab
@@ -3113,12 +3524,13 @@ DEFAULT_VOCABULARY_SCALING_SIZES: tuple[int | str, ...] = (
 
 def run_vocabulary_scaling_sweep(
     exported_payload: dict,
-    scorer: CachedVocabularyLanguageScorer,
+    scorer: CachedVocabularyLanguageScorer | None,
     hyperparameters: dict,
     *,
     vocab_sizes: Sequence[int | str] = DEFAULT_VOCABULARY_SCALING_SIZES,
     core_vocab_size: int | str | None = 250,
     min_sentence_length: int | None = None,
+    include_brain_only: bool = False,
     full_vocab_bundles: dict[str, dict] | None = None,
     existing_scaling_bundles: dict[str, dict] | None = None,
     beam_width: int = 5,
@@ -3202,6 +3614,10 @@ def run_vocabulary_scaling_sweep(
             if "K2" in available_shifted:
                 required_keys.append("S3_shifted_neg75s")
             required_keys.append("LM-Only")
+            if include_brain_only:
+                for bo_st in ("S0", "K0", "K1", "K2", "F"):
+                    if bo_st in available_clean:
+                        required_keys.append(f"{bo_st}_brain_only")
 
             if existing_conds and all(rk in existing_conds for rk in required_keys):
                 reused_conds = _backfill_intermediate_and_shifted_bundles(
@@ -3252,6 +3668,11 @@ def run_vocabulary_scaling_sweep(
                     "LM-Only",
                     "K0_shifted_neg75s",
                     "S3_shifted_neg75s",
+                    "S0_brain_only",
+                    "K0_brain_only",
+                    "K1_brain_only",
+                    "K2_brain_only",
+                    "F_brain_only",
                 ):
                     if (
                         k in full_vocab_bundles
@@ -3296,6 +3717,31 @@ def run_vocabulary_scaling_sweep(
                         show_progress=show_progress,
                         progress_desc=f"S3 VocabScale [V={eff_n} | LM-Only]",
                     )
+                if include_brain_only:
+                    extra_bo_jobs: dict[str, dict] = {}
+                    _append_brain_only_jobs(
+                        extra_bo_jobs,
+                        available_clean,
+                        states=("S0", "K0", "K1", "K2", "F"),
+                        allowed_vocab_indices=active_indices,
+                        existing_map=raw_reused,
+                    )
+                    if extra_bo_jobs:
+                        raw_reused.update(
+                            decode_dataset_segment_jobs(
+                                exported_payload,
+                                scorer,
+                                hyperparameters,
+                                extra_bo_jobs,
+                                beam_width=beam_width,
+                                candidate_top_k=candidate_top_k,
+                                segment_batch_size=segment_batch_size,
+                                segment_indices=seg_indices,
+                                max_segments=max_segments,
+                                show_progress=show_progress,
+                                progress_desc=f"S3 VocabScale [V={eff_n} | Brain-Only]",
+                            )
+                        )
                 reused_conds = _backfill_intermediate_and_shifted_bundles(
                     raw_reused
                 )
@@ -3344,6 +3790,13 @@ def run_vocabulary_scaling_sweep(
                     "alignment": "shifted",
                     "include_screen_history": False,
                 }
+            if include_brain_only:
+                _append_brain_only_jobs(
+                    scale_jobs,
+                    available_clean,
+                    states=("S0", "K0", "K1", "K2", "F"),
+                    existing_map=cond_map,
+                )
             if scale_jobs:
                 for job in scale_jobs.values():
                     job["allowed_vocab_indices"] = active_indices
@@ -3502,6 +3955,11 @@ def run_vocabulary_scaling_sweep(
             required_keys.append("K0")
         if "K2" in available_shifted:
             required_keys.append("S3_shifted_neg75s")
+        bo_states = (
+            ("S0", "K0", "K1", "K2", "F")
+            if (is_core_benchmark_scale or eff_n == full_v_size)
+            else ("S0", "K0", "K2")
+        )
         if is_core_benchmark_scale or eff_n == full_v_size:
             if "K1" in available_clean:
                 required_keys.append("K1")
@@ -3510,6 +3968,10 @@ def run_vocabulary_scaling_sweep(
             if "K0" in available_shifted:
                 required_keys.append("K0_shifted_neg75s")
             required_keys.append("LM-Only")
+        if include_brain_only:
+            for bo_st in bo_states:
+                if bo_st in available_clean:
+                    required_keys.append(f"{bo_st}_brain_only")
         if existing_conds and all(rk in existing_conds for rk in required_keys):
             continue
 
@@ -3534,6 +3996,11 @@ def run_vocabulary_scaling_sweep(
                 "LM-Only",
                 "K0_shifted_neg75s",
                 "S3_shifted_neg75s",
+                "S0_brain_only",
+                "K0_brain_only",
+                "K1_brain_only",
+                "K2_brain_only",
+                "F_brain_only",
             ):
                 if k in full_vocab_bundles:
                     raw_reused[k] = full_vocab_bundles[k]
@@ -3569,6 +4036,29 @@ def run_vocabulary_scaling_sweep(
                     show_progress=show_progress,
                     progress_desc=f"S3 VocabScale [V={eff_n} | LM-Only]",
                 )
+            if include_brain_only:
+                extra_legacy_bo_jobs: dict[str, dict] = {}
+                _append_brain_only_jobs(
+                    extra_legacy_bo_jobs,
+                    available_clean,
+                    states=bo_states,
+                    existing_map=raw_reused,
+                )
+                if extra_legacy_bo_jobs:
+                    raw_reused.update(
+                        decode_dataset_segment_jobs(
+                            exported_payload,
+                            scorer,
+                            hyperparameters,
+                            extra_legacy_bo_jobs,
+                            beam_width=beam_width,
+                            candidate_top_k=candidate_top_k,
+                            segment_batch_size=segment_batch_size,
+                            max_segments=max_segments,
+                            show_progress=show_progress,
+                            progress_desc=f"S3 VocabScale [V={eff_n} | Brain-Only]",
+                        )
+                    )
             reused_conds = _backfill_intermediate_and_shifted_bundles(
                 raw_reused
             )
@@ -3622,6 +4112,13 @@ def run_vocabulary_scaling_sweep(
                 "alignment": "shifted",
                 "include_screen_history": False,
             }
+        if include_brain_only:
+            _append_brain_only_jobs(
+                scale_jobs,
+                available_clean,
+                states=bo_states,
+                existing_map=cond_map,
+            )
         if scale_jobs:
             for job in scale_jobs.values():
                 job["allowed_vocab_indices"] = active_indices

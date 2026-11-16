@@ -42,11 +42,11 @@ def write_index(path, payload):
 def test_current_scope_is_one_primary_and_one_named_supplement():
     records = discover_protocols()
     assert {record["id"]: record["role"] for record in records} == {
-        "unified_protocol_v2": "primary",
+        "local_context_decoding_protocol": "primary",
         "sequence_decoding_protocol": "supplement",
     }
-    primary = resolve_protocol("unified_protocol_v2")
-    assert primary["protocol"] == "data/manifests/rolling_sentence/unified_protocol_v2.md"
+    primary = resolve_protocol("local_context_decoding_protocol")
+    assert primary["protocol"] == "data/manifests/local_context_decoding_protocol.md"
     assert primary["config"] == "configs/training/rolling_revision_protocol.yaml"
     assert {dataset for record in records for dataset in record["datasets"]} == {
         "pallier2025", "chineseeeg2_littleprince",
@@ -125,7 +125,7 @@ def test_corrupt_runtime_is_reported_without_falling_back_to_success(index_fixtu
 
 
 @pytest.mark.parametrize("identifier", (
-    "unified_protocol_v2", "sequence_decoding_protocol",
+    "local_context_decoding_protocol", "sequence_decoding_protocol",
 ))
 def test_current_queries_do_not_load_tasks_or_create_outputs(identifier, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_load_task_config", lambda record: pytest.fail("加载了训练任务"))
@@ -144,7 +144,7 @@ def test_current_cli_queries_do_not_import_torch_in_a_fresh_process(tmp_path):
     code = (
         "import sys; from braindecoding.cli import main; "
         "assert main(['list']) == 0; assert main(['status']) == 0; "
-        "assert main(['show', 'unified_protocol_v2']) == 0; "
+        "assert main(['show', 'local_context_decoding_protocol']) == 0; "
         "assert 'torch' not in sys.modules"
     )
     result = subprocess.run(

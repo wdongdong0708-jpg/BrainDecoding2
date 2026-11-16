@@ -3021,25 +3021,35 @@ _S3_STRATEGY_DISPLAY_NAMES: dict[str, str] = {
     "Shifted (-75s)": "Shifted-K2 (-75s)",
     "S3_clean_c_gated": "Rolling-K2 (C-Gated)",
     "S3_shifted_neg75s_c_gated": "Shifted-K2 (-75s, C-Gated)",
+    "S0_brain_only": "Word-Only (Brain-Only)",
+    "K0_brain_only": "Rolling-K0 (Brain-Only)",
+    "K1_brain_only": "Rolling-K1 (Brain-Only)",
+    "K2_brain_only": "Rolling-K2 (Brain-Only)",
+    "F_brain_only": "Full-Context (Brain-Only)",
 }
 
 _S3_STRATEGY_STATE_KEYS: dict[str, str] = {
     "S0": "S0",
     "S0_clean": "S0",
     "Word-Only": "S0",
+    "S0_brain_only": "S0",
     "K0": "K0",
     "K0_clean": "K0",
     "Rolling-K0": "K0",
+    "K0_brain_only": "K0",
     "K1": "K1",
     "K1_clean": "K1",
     "Rolling-K1": "K1",
+    "K1_brain_only": "K1",
     "S3_clean": "K2",
     "S3": "K2",
     "K2": "K2",
     "Rolling-K2": "K2",
+    "K2_brain_only": "K2",
     "F": "F",
     "F_clean": "F",
     "Full-Context": "F",
+    "F_brain_only": "F",
     "LM-Only": "LM-Only",
     "K0_shifted_neg75s": "K0",
     "Shifted-K0 (-75s)": "K0",
@@ -3056,6 +3066,8 @@ def _s3_format_lambda_temp(
     cond_key: str,
     state_hp: Mapping[str, Any] | None,
 ) -> str:
+    if str(cond_key).endswith("_brain_only"):
+        return "0.00 (-)"
     st_key = _S3_STRATEGY_STATE_KEYS.get(
         str(cond_key), _s3_strategy_name(cond_key)
     )

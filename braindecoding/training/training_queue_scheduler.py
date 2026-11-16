@@ -226,7 +226,7 @@ def freeze_sources():
             resolved = worker.build_config(dataset, 1, stage)
             resolved["training"].pop("pretrained_brain_encoder_checkpoint", None)
             paths.update(Path(p) for p in worker.source_hashes(resolved, adapter))
-    paths.add(PROJECT_ROOT / "data/manifests/rolling_sentence/unified_protocol_v2.md")
+    paths.add(PROJECT_ROOT / "data/manifests/local_context_decoding_protocol.md")
     result = {p.relative_to(PROJECT_ROOT).as_posix(): file_sha256(p) for p in paths}
     if any(digest is None for digest in result.values()):
         raise FileNotFoundError("A source needed to freeze this queue is missing.")

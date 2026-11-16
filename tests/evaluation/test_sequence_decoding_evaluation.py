@@ -631,3 +631,76 @@ def test_mode_one_l5_closed_set_evaluation_and_single_0pct_oov_reporting(
     assert "All Segs (n=" not in cb_csv_content
 
 
+def test_paper_nomenclature_physical_wait_four_way_pos_and_brain_only() -> None:
+    """验证论文标准命名、事件物理等待时长、4 类词性细化与 *_brain_only 评估聚合。"""
+    from braindecoding.evaluation.sequence_decoding_evaluation import (
+        _aggregate_numeric_dicts_across_seeds,
+        classify_part_of_speech_four_way,
+        compute_mean_physical_wait_seconds,
+        paper_strategy_display_name,
+    )
+
+    assert paper_strategy_display_name("S0") == "Word-Only"
+    assert paper_strategy_display_name("K0") == "Local (r = 0)"
+    assert paper_strategy_display_name("K1") == "Local (r = 1)"
+    assert paper_strategy_display_name("K2") == "Local (r = 2)"
+    assert paper_strategy_display_name("S3_clean") == "Local (r = 2)"
+    assert paper_strategy_display_name("F") == "Full-Context"
+    assert paper_strategy_display_name("K2_brain_only") == "Local (r = 2, Brain-Only)"
+
+    assert classify_part_of_speech_four_way("NC") == "noun"
+    assert classify_part_of_speech_four_way("NPP") == "noun"
+    assert classify_part_of_speech_four_way("V") == "verb"
+    assert classify_part_of_speech_four_way("ADJ") == "adj_adv"
+    assert classify_part_of_speech_four_way("ADV") == "adj_adv"
+    assert classify_part_of_speech_four_way("DET") == "function"
+    assert classify_part_of_speech_four_way("NOUN") == "noun"
+    assert classify_part_of_speech_four_way("VERB") == "verb"
+    assert classify_part_of_speech_four_way("ADP") == "function"
+    assert classify_part_of_speech_four_way(None, is_content_word=False) == "function"
+
+    recs = [
+        {
+            "segment_index": 0,
+            "reference_words": ["le", "petit", "prince", "parle"],
+            "predicted_words": ["le", "petit", "prince", "parle"],
+            "onset_seconds": [0.0, 0.4, 0.9, 1.5],
+            "pos_tags": ["DET", "ADJ", "NC", "V"],
+        }
+    ]
+    assert compute_mean_physical_wait_seconds(recs, "S0") == pytest.approx(1.0)
+    assert compute_mean_physical_wait_seconds(recs, "K0") == pytest.approx(1.0)
+    assert compute_mean_physical_wait_seconds(recs, "K2") == pytest.approx(
+        (1.9 + 2.1 + 1.6 + 1.0) / 4.0
+    )
+    assert compute_mean_physical_wait_seconds(recs, "F") == pytest.approx(
+        (2.5 + 2.1 + 1.6 + 1.0) / 4.0
+    )
+
+    m6 = evaluate_six_dimensional_metrics(
+        recs,
+        language="fr",
+        condition="K2_brain_only",
+        compute_paired_stats=False,
+    )
+    assert m6["paper_display_name"] == "Local (r = 2, Brain-Only)"
+    assert m6["mean_physical_wait_seconds"] == pytest.approx((1.9 + 2.1 + 1.6 + 1.0) / 4.0)
+    assert m6["noun_word_acc_pct"] == pytest.approx(100.0)
+    assert m6["verb_word_acc_pct"] == pytest.approx(100.0)
+    assert m6["adj_adv_word_acc_pct"] == pytest.approx(100.0)
+    assert m6["function_pos_word_acc_pct"] == pytest.approx(100.0)
+    assert m6["noun_words"] == 1
+    assert m6["verb_words"] == 1
+    assert m6["adj_adv_words"] == 1
+    assert m6["function_pos_words"] == 1
+
+    agg = _aggregate_numeric_dicts_across_seeds(
+        [
+            {"bleu1_pct": 18.0, "noun_words": 10},
+            {"bleu1_pct": 20.0, "noun_words": 12},
+        ]
+    )
+    assert agg["noun_words"] == 11
+
+
+

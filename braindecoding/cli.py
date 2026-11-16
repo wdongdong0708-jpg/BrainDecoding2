@@ -120,7 +120,7 @@ def _retired_execution(command: str, identifier: str | None = None) -> int:
             print(f"  {entrypoint}", file=sys.stderr)
     else:
         print("  brain-decoding list", file=sys.stderr)
-        print("  brain-decoding show unified_protocol_v2", file=sys.stderr)
+        print("  brain-decoding show local_context_decoding_protocol", file=sys.stderr)
     return 2
 
 

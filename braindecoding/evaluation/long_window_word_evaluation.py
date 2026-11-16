@@ -29,7 +29,7 @@ import hashlib
 
 ID = "single_word_long_window_test_v2"
 CONFIG = ROOT / "configs/evaluation/long_window_word_evaluation.yaml"
-PROTOCOL = ROOT / "data/manifests/rolling_sentence/unified_protocol_v2.md"
+PROTOCOL = ROOT / "data/manifests/local_context_decoding_protocol.md"
 MANIFEST = ROOT / f"data/manifests/rolling_sentence/{ID}.json"
 PARENT = ROOT / "data/manifests/rolling_sentence/heldout_test_v2.json"
 RUNTIME = ROOT / f".cache/runs/{ID}"

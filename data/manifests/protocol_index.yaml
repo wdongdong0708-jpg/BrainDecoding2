@@ -1,13 +1,13 @@
 version: 1
-primary: unified_protocol_v2
+primary: local_context_decoding_protocol
 protocols:
-- id: unified_protocol_v2
+- id: local_context_decoding_protocol
   role: primary
-  title: 延迟滚动词／句子解码共同协议 v2
+  title: 局部跨词连续语流编码与解码主协议
   datasets:
   - pallier2025
   - chineseeeg2_littleprince
-  protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
+  protocol: data/manifests/local_context_decoding_protocol.md
   config: configs/training/rolling_revision_protocol.yaml
   entrypoints:
   - python scripts/decode_sentences.py --help
@@ -40,12 +40,12 @@ protocols:
   - .cache/runs/unified_context_baselines_v2/plan.json
 - id: sequence_decoding_protocol
   role: supplement
-  parent: unified_protocol_v2
+  parent: local_context_decoding_protocol
   title: 序列解码协议（S3：闭集 Top-K、KV-Cache 单遍定稿主干与状态自适应校准）
   datasets:
   - pallier2025
   - chineseeeg2_littleprince
-  protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
+  protocol: data/manifests/local_context_decoding_protocol.md
   config: configs/decoding/sequence_decoding_protocol.yaml
   entrypoints:
   - python scripts/decode_sentences.py --help

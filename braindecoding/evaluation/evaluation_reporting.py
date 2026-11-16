@@ -1474,13 +1474,23 @@ def _filter_main_latency_conditions(
         m = conds_map.get(k)
         if not isinstance(m, Mapping):
             continue
-        if k == "F_local" or str(k).endswith("_c_gated") or bool(m.get("is_online_screen_gate")):
+        if (
+            k == "F_local"
+            or str(k).endswith("_c_gated")
+            or str(k).endswith("_brain_only")
+            or bool(m.get("is_online_screen_gate"))
+        ):
             continue
         filtered[str(k)] = m
     for k, m in conds_map.items():
         if str(k) in filtered or not isinstance(m, Mapping):
             continue
-        if str(k) == "F_local" or str(k).endswith("_c_gated") or bool(m.get("is_online_screen_gate")):
+        if (
+            str(k) == "F_local"
+            or str(k).endswith("_c_gated")
+            or str(k).endswith("_brain_only")
+            or bool(m.get("is_online_screen_gate"))
+        ):
             continue
         filtered[str(k)] = m
     return filtered

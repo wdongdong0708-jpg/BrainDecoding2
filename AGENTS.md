@@ -139,5 +139,5 @@ Entry 的语义必须来自模型对真实证据的理解。不得仅依据路�
 
 - **`[ACTIVE]` 科学主线不变量**：自然连续语流词对齐解码（固定词窗 `1.0 s`）；第一阶段独立训练并全程冻结单窗卷积基座（`Word-Only`），第二阶段引入同词间间隔错位脑信号窗口抑制相邻重叠窗口的隐式时长捷径，测试与推理阶段统一采用无错位支路的单次前向计算（`η_eval = 0.0`）；局部跨词联合编码（`Rolling-K2`）仅利用已到达前序词与最多 `r = 2` 个后续词窗直接定稿每个词的最终神经表征，并接入冻结 `Qwen3-8B-Base` 从左到右束搜索解码句子。
 - **`[DEPRECATED]` 严禁复活支线**：除非用户显式要求维护历史兼容测试，严禁在新实验设计、评估导出或论文协作中重提“边蹦字边改写 / 屏幕闪烁”“置信度门控 `C-Gated` / 阈值 `tau_gate`”“初判/回修/有害覆写”以及已废弃的 `BGE-M3 + Qwen2.5-1.5B + A/B/C 句子修正` 草案；代码中保留的 `prefix_revision`、`sweep_confidence_gate_pareto`、`common_mode_subtraction` 等历史命名仅用于旧检查点与 CLI 兼容。
-- **单一事实源与跨仓隔离**：当前唯一生效的实验协议、配置路径与权威主表锚点以 `data/manifests/rolling_sentence/unified_protocol_v2.md` 为准（原地覆写更新，不追加流水账）；论文写作与制图位于独立仓库 `C:\Users\Administrator\Desktop\论文`，两仓通过导出数据单向只读衔接。
+- **单一事实源与跨仓隔离**：当前唯一生效的实验协议、配置路径与权威主表锚点以 `data/manifests/local_context_decoding_protocol.md` 为准（原地覆写更新，不追加流水账）；论文写作与制图位于独立仓库 `C:\Users\Administrator\Desktop\论文`，两仓通过导出数据单向只读衔接。
 

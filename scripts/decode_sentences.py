@@ -714,6 +714,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
         _normalize_s3_cms_mode,
         _normalize_s3_shift_mode,
         _same_checkpoint_path,
+        enrich_segments_from_event_table,
         export_neural_vocabulary_scores,
         load_neural_vocabulary_scores,
         resolve_stage_checkpoints,
@@ -1055,6 +1056,127 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     )
     show_progress = not bool(getattr(args, "no_progress", False))
     plot_enabled = not bool(getattr(args, "no_plot", False))
+    include_brain_only = bool(dec_cfg.get("include_brain_only", False))
+    multi_subject_aggregation_mode = str(
+        dec_cfg.get("multi_subject_aggregation_mode", "agreement_weighted")
+    )
+    multi_subject_agreement_alpha = float(
+        dec_cfg.get("multi_subject_agreement_alpha", 2.0)
+    )
+
+    _cached_event_table_box: dict[str, Any] = {}
+
+    def _load_cached_event_table() -> Any:
+        if "df" not in _cached_event_table_box:
+            try:
+                from braindecoding.config import project_path
+                from braindecoding.data.derived_cache import (
+                    canonical_cache_paths,
+                    restore_legacy_columns,
+                )
+
+                ev_rel = canonical_cache_paths(args.dataset)["event_table"]
+                ev_path = project_path(ev_rel)
+                if ev_path.is_file():
+                    df_ev = pd.read_csv(ev_path, low_memory=False)
+                    _aux_ev_cols = {
+                        "onset_seconds": "开始时间",
+                        "offset_seconds": "结束时间",
+                        "in_recording_index": "记录内序号",
+                        "pos": "词性",
+                        "is_content_word": "是否内容词",
+                    }
+                    _cached_event_table_box["df"] = restore_legacy_columns(
+                        df_ev, _aux_ev_cols
+                    )
+                else:
+                    _cached_event_table_box["df"] = None
+            except Exception:
+                _cached_event_table_box["df"] = None
+        return _cached_event_table_box.get("df")
+
+    def _enrich_record_list_if_needed(segs: Any) -> bool:
+        if not isinstance(segs, list) or not segs:
+            return False
+        needs = any(
+            isinstance(s, dict)
+            and (
+                "onset_seconds" not in s
+                or "pos_tags" not in s
+                or "is_content_word_mask" not in s
+            )
+            for s in segs
+        )
+        if not needs:
+            return False
+        ev_df = _load_cached_event_table()
+        if ev_df is None:
+            return False
+        before_missing = sum(
+            1
+            for s in segs
+            if isinstance(s, dict)
+            and (
+                "onset_seconds" not in s
+                or "pos_tags" not in s
+                or "is_content_word_mask" not in s
+            )
+        )
+        enrich_segments_from_event_table(segs, ev_df, split=args.split)
+        after_missing = sum(
+            1
+            for s in segs
+            if isinstance(s, dict)
+            and (
+                "onset_seconds" not in s
+                or "pos_tags" not in s
+                or "is_content_word_mask" not in s
+            )
+        )
+        return after_missing < before_missing
+
+    def _try_enrich_payload_segments(payload: dict[str, Any] | None) -> None:
+        if isinstance(payload, dict):
+            _enrich_record_list_if_needed(payload.get("segments"))
+
+    def _enrich_bundle_tree(
+        decoded_map: dict[str, Any] | None,
+        ms_map: dict[str, Any] | None,
+        vs_map: dict[str, Any] | None,
+    ) -> bool:
+        changed = False
+        for cond_b in (decoded_map or {}).values():
+            if isinstance(cond_b, dict) and _enrich_record_list_if_needed(
+                cond_b.get("final_sentences")
+            ):
+                changed = True
+        for ms_b in (ms_map or {}).values():
+            if not isinstance(ms_b, dict):
+                continue
+            if _enrich_record_list_if_needed(ms_b.get("final_sentences")):
+                changed = True
+            for c_b in (ms_b.get("conditions") or {}).values():
+                if isinstance(c_b, dict) and _enrich_record_list_if_needed(
+                    c_b.get("final_sentences")
+                ):
+                    changed = True
+            for v_blk in (ms_b.get("by_vocabulary_size") or {}).values():
+                if not isinstance(v_blk, dict):
+                    continue
+                for c_b in (v_blk.get("conditions") or {}).values():
+                    if isinstance(c_b, dict) and _enrich_record_list_if_needed(
+                        c_b.get("final_sentences")
+                    ):
+                        changed = True
+        for sc_b in (vs_map or {}).values():
+            if not isinstance(sc_b, dict):
+                continue
+            for c_b in (sc_b.get("conditions") or {}).values():
+                if isinstance(c_b, dict) and _enrich_record_list_if_needed(
+                    c_b.get("final_sentences")
+                ):
+                    changed = True
+        return changed
 
     paths = resolve_default_paths(
         args.dataset,
@@ -1370,6 +1492,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             out_pt = _run_export_for_split(args.split, export_path)
             export_was_regenerated = True
         exported_payload = load_neural_vocabulary_scores(out_pt)
+        _try_enrich_payload_segments(exported_payload)
         results_summary["export_path"] = str(out_pt)
         results_summary["vocabulary_size"] = int(exported_payload["vocabulary_size"])
 
@@ -1612,6 +1735,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 _run_export_for_split("val", val_export_path)
                 cal_source_path = val_export_path
             val_payload = load_neural_vocabulary_scores(cal_source_path)
+            _try_enrich_payload_segments(val_payload)
             val_clean = dict(val_payload.get("clean_scores") or {})
             val_prov = dict(val_payload.get("checkpoint_provenance") or {})
             if not required_cal_states:
@@ -1725,6 +1849,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             _run_export_for_split(args.split, export_path)
             export_was_regenerated = True
         split_payload = load_neural_vocabulary_scores(export_path)
+        _try_enrich_payload_segments(split_payload)
         available_clean = split_payload.get("clean_scores", {})
         available_shifted = split_payload.get("shifted_scores", {})
         ckpt_prov = dict(split_payload.get("checkpoint_provenance") or {})
@@ -1943,9 +2068,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         return False
                     if cond_name == "LM-Only":
                         return True
-                    if cond_name in ("S0", "S0_clean"):
+                    if cond_name in ("S0", "S0_clean", "S0_brain_only"):
                         return word_ok
-                    if cond_name in ("F", "F_clean"):
+                    if cond_name in ("F", "F_clean", "F_brain_only"):
                         return ctx_ok
                     if cond_name in (
                         "K0",
@@ -1953,6 +2078,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                         "S3_clean",
                         "K0_shifted_neg75s",
                         "S3_shifted_neg75s",
+                        "K0_brain_only",
+                        "K1_brain_only",
+                        "K2_brain_only",
                     ):
                         return rev_ok
                     return False
@@ -2070,6 +2198,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             if not has_real_context:
                 decoded_bundles.pop("F", None)
                 decoded_bundles.pop("F_clean", None)
+            _enrich_bundle_tree(
+                decoded_bundles, multi_subject_bundles, vocabulary_scaling_bundles
+            )
             bundle_obj = {
                 "schema_version": "s3-decoding-bundle/v2",
                 "protocol_mode": resolved_protocol_mode,
@@ -2155,11 +2286,34 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 "allowed_vocab_indices": full_l5_vocab_indices,
                 "include_screen_history": "K0" not in available_shifted,
             }
+        if include_brain_only:
+            for bo_state in ("S0", "K0", "K1", "K2"):
+                bo_key = f"{bo_state}_brain_only"
+                if bo_state in available_clean and bo_key not in decoded_bundles:
+                    main_jobs[bo_key] = {
+                        "condition": bo_key,
+                        "alignment": "clean",
+                        "allowed_vocab_indices": full_l5_vocab_indices,
+                    }
+            if (
+                has_real_context
+                and "F" in available_clean
+                and "F_brain_only" not in decoded_bundles
+            ):
+                main_jobs["F_brain_only"] = {
+                    "condition": "F_brain_only",
+                    "alignment": "clean",
+                    "allowed_vocab_indices": full_l5_vocab_indices,
+                }
         if main_jobs:
+            main_all_brain_only = all(
+                str(spec.get("condition", "")).endswith("_brain_only")
+                for spec in main_jobs.values()
+            )
             decoded_bundles.update(
                 decode_dataset_segment_jobs(
                     split_payload,
-                    _ensure_scorer(),
+                    None if main_all_brain_only else _ensure_scorer(),
                     hyperparameters,
                     main_jobs,
                     beam_width=beam_width,
@@ -2179,6 +2333,26 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
             _persist_decoding_bundle()
 
         if len(vocab_sizes) > 0:
+            def _conds_complete(
+                conds_map: dict[str, Any],
+                req_keys: list[str],
+                expected_n: int,
+            ) -> bool:
+                return all(
+                    rk in conds_map
+                    and isinstance(conds_map[rk], dict)
+                    and int(conds_map[rk].get("segment_count", -1)) == expected_n
+                    for rk in req_keys
+                )
+
+            req_bo_scale: list[str] = []
+            if include_brain_only:
+                for st_k in ("S0", "K0", "K1", "K2"):
+                    if st_k in available_clean:
+                        req_bo_scale.append(f"{st_k}_brain_only")
+                if has_real_context and "F" in available_clean:
+                    req_bo_scale.append("F_brain_only")
+
             if is_open_segment_protocol:
                 open_sizes = sorted(
                     {
@@ -2200,23 +2374,26 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     open_req_conds.append("K0_shifted_neg75s")
                 if "K2" in available_shifted:
                     open_req_conds.append("S3_shifted_neg75s")
-                needs_truncated_decode = not all(
+                needs_lm_truncated_decode = not all(
                     f"V={v_n}" in vocabulary_scaling_bundles
-                    and all(
-                        rk in (vocabulary_scaling_bundles[f"V={v_n}"].get("conditions") or {})
-                        and isinstance(
-                            vocabulary_scaling_bundles[f"V={v_n}"]["conditions"][rk],
-                            dict,
-                        )
-                        and int(
-                            vocabulary_scaling_bundles[f"V={v_n}"]["conditions"][rk].get(
-                                "segment_count", -1
-                            )
-                        )
-                        == expected_seg_count
-                        for rk in open_req_conds
+                    and _conds_complete(
+                        vocabulary_scaling_bundles[f"V={v_n}"].get("conditions") or {},
+                        open_req_conds,
+                        expected_seg_count,
                     )
                     for v_n in open_sizes
+                )
+                needs_bo_truncated_decode = bool(req_bo_scale) and not all(
+                    f"V={v_n}" in vocabulary_scaling_bundles
+                    and _conds_complete(
+                        vocabulary_scaling_bundles[f"V={v_n}"].get("conditions") or {},
+                        req_bo_scale,
+                        expected_seg_count,
+                    )
+                    for v_n in open_sizes
+                )
+                needs_truncated_decode = (
+                    needs_lm_truncated_decode or needs_bo_truncated_decode
                 )
             else:
                 scale_specs = _resolve_l5_closed_set_scales(
@@ -2226,39 +2403,43 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     max_segments=args.max_segments,
                 )
 
-                def _scale_spec_needs_decode(spec: dict[str, Any]) -> bool:
+                def _scale_spec_needs_conds(
+                    spec: dict[str, Any], req_keys: list[str]
+                ) -> bool:
                     s_key = str(spec["scale_key"])
                     n_scale_segs = len(spec["segment_indices"])
                     if s_key not in vocabulary_scaling_bundles:
                         return True
                     conds = vocabulary_scaling_bundles[s_key].get("conditions") or {}
-                    req: list[str] = []
-                    if has_s3_clean:
-                        req.append("S3_clean")
-                    if "S0" in available_clean:
-                        req.append("S0")
-                    if "K0" in available_clean:
-                        req.append("K0")
-                    if "K1" in available_clean:
-                        req.append("K1")
-                    if has_real_context and "F" in available_clean:
-                        req.append("F")
-                    if "K0" in available_shifted:
-                        req.append("K0_shifted_neg75s")
-                    if "K2" in available_shifted:
-                        req.append("S3_shifted_neg75s")
-                    req.append("LM-Only")
-                    return not all(
-                        r_k in conds
-                        and isinstance(conds[r_k], dict)
-                        and int(conds[r_k].get("segment_count", -1)) == n_scale_segs
-                        for r_k in req
-                    )
+                    return not _conds_complete(conds, req_keys, n_scale_segs)
 
-                needs_truncated_decode = any(
-                    _scale_spec_needs_decode(spec) for spec in scale_specs
+                req_lm_scale: list[str] = []
+                if has_s3_clean:
+                    req_lm_scale.append("S3_clean")
+                if "S0" in available_clean:
+                    req_lm_scale.append("S0")
+                if "K0" in available_clean:
+                    req_lm_scale.append("K0")
+                if "K1" in available_clean:
+                    req_lm_scale.append("K1")
+                if has_real_context and "F" in available_clean:
+                    req_lm_scale.append("F")
+                if "K0" in available_shifted:
+                    req_lm_scale.append("K0_shifted_neg75s")
+                if "K2" in available_shifted:
+                    req_lm_scale.append("S3_shifted_neg75s")
+                req_lm_scale.append("LM-Only")
+
+                needs_lm_truncated_decode = any(
+                    _scale_spec_needs_conds(spec, req_lm_scale) for spec in scale_specs
                 )
-            active_scorer = _ensure_scorer() if needs_truncated_decode else scorer
+                needs_bo_truncated_decode = bool(req_bo_scale) and any(
+                    _scale_spec_needs_conds(spec, req_bo_scale) for spec in scale_specs
+                )
+                needs_truncated_decode = (
+                    needs_lm_truncated_decode or needs_bo_truncated_decode
+                )
+            active_scorer = _ensure_scorer() if needs_lm_truncated_decode else scorer
 
             def _on_scale_completed(
                 scale_key: str, scale_bundle: dict[str, Any]
@@ -2274,6 +2455,7 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 min_sentence_length=eff_min_sentence_length,
                 full_vocab_bundles=decoded_bundles,
                 existing_scaling_bundles=vocabulary_scaling_bundles,
+                include_brain_only=include_brain_only,
                 beam_width=beam_width,
                 candidate_top_k=top_k,
                 segment_batch_size=segment_batch_size,
@@ -2304,12 +2486,36 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 req_ms.append("K0")
             if "K2" in available_shifted:
                 req_ms.append("S3_shifted_neg75s")
+            if has_real_context and "F" in available_clean:
+                req_ms.append("F")
+            if include_brain_only:
+                for st_k in ("S0", "K0", "K1", "K2"):
+                    if st_k in available_clean:
+                        req_ms.append(f"{st_k}_brain_only")
+                if has_real_context and "F" in available_clean:
+                    req_ms.append("F_brain_only")
             for k_key in expected_k_keys:
                 if k_key not in multi_subject_bundles:
                     return False
                 ms_entry = multi_subject_bundles[k_key]
                 if not isinstance(ms_entry, dict):
                     return False
+                k_val = int(str(k_key).split("=", 1)[1]) if "=" in str(k_key) else 1
+                if k_val >= 2:
+                    if (
+                        str(ms_entry.get("aggregation_mode", "rms_preserved"))
+                        != multi_subject_aggregation_mode
+                    ):
+                        return False
+                    if (
+                        multi_subject_aggregation_mode == "agreement_weighted"
+                        and abs(
+                            float(ms_entry.get("agreement_alpha", -1.0))
+                            - float(multi_subject_agreement_alpha)
+                        )
+                        > 1e-6
+                    ):
+                        return False
                 ms_conds = ms_entry.get("conditions") or {}
                 if not all(c_k in ms_conds for c_k in req_ms):
                     return False
@@ -2335,6 +2541,9 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                 single_subject_s3_bundle=decoded_bundles.get("S3_clean"),
                 single_subject_full_vocab_bundles=decoded_bundles,
                 single_subject_vocab_scaling_bundles=vocabulary_scaling_bundles,
+                aggregation_mode=multi_subject_aggregation_mode,
+                agreement_alpha=multi_subject_agreement_alpha,
+                include_brain_only=include_brain_only,
                 beam_width=beam_width,
                 candidate_top_k=top_k,
                 segment_batch_size=segment_batch_size,
@@ -2412,6 +2621,26 @@ def run_sequence_decoding_pipeline(args: argparse.Namespace) -> dict[str, Any]:
                     vocabulary_scaling_bundles_map[sk] = sb_copy
                 else:
                     vocabulary_scaling_bundles_map[sk] = sb
+            was_enriched = _enrich_bundle_tree(
+                decoded_bundles_map,
+                multi_subject_bundles_map,
+                vocabulary_scaling_bundles_map,
+            )
+            if was_enriched:
+                bundle_updated = dict(bundle)
+                bundle_updated["decoded_bundles"] = decoded_bundles_map
+                bundle_updated["multi_subject_bundles"] = multi_subject_bundles_map
+                bundle_updated["vocabulary_scaling_bundles"] = (
+                    vocabulary_scaling_bundles_map
+                )
+                try:
+                    decoding_path.write_text(
+                        json.dumps(bundle_updated, ensure_ascii=False, indent=2)
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass
 
         word_embedding_map = None
         eval_pt_path = (

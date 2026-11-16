@@ -30,7 +30,7 @@ from braindecoding.training.runtime import cpu_state_dict, load_checkpoint, save
 from braindecoding.training.word import encode_loader, make_loader, train_one_epoch
 
 CONFIG = ROOT / "configs/training/synthetic_timing_recovery.yaml"
-PROTOCOL = ROOT / "data/manifests/rolling_sentence/unified_protocol_v2.md"
+PROTOCOL = ROOT / "data/manifests/local_context_decoding_protocol.md"
 MANIFEST = PROTOCOL.with_suffix(".json")
 REPORT = study_report_dir(None, "synthetic_timing_v2")
 RUNTIME = ROOT / ".cache/runs/synthetic_timing_v2"

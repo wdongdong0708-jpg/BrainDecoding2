@@ -21,7 +21,7 @@ from braindecoding.experiment import file_sha256 as sha256
 from braindecoding.training.runtime import load_checkpoint, set_seed
 from braindecoding.training.word import make_loader, encode_loader
 
-PROTOCOL = ROOT / 'data/manifests/rolling_sentence/unified_protocol_v2.md'
+PROTOCOL = ROOT / 'data/manifests/local_context_decoding_protocol.md'
 MANIFEST = PROTOCOL.with_suffix('.json')
 PARENT_MANIFEST = ROOT / 'data/manifests/rolling_sentence/heldout_test_v2.json'
 HELDOUT_REPORT = ROOT / 'data/results/studies/unified_heldout_test_v2'

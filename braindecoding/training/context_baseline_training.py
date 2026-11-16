@@ -24,7 +24,7 @@ from braindecoding.training.word import encode_loader, train_one_epoch
 from braindecoding.unified_rolling_v2_queue import verify_completed
 
 CONFIG = PROJECT_ROOT / "configs/training/context_window_baselines.yaml"
-PROTOCOL = PROJECT_ROOT / "data/manifests/rolling_sentence/unified_protocol_v2.md"
+PROTOCOL = PROJECT_ROOT / "data/manifests/local_context_decoding_protocol.md"
 RUNTIME = PROJECT_ROOT / ".cache/runs/unified_context_baselines_v2"
 REPORT = PROJECT_ROOT / "data/results/studies/unified_context_baselines_v2"
 

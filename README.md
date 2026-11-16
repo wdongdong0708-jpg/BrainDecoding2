@@ -42,7 +42,7 @@ BrainDecoding/
 针对科研代码库常见的“JSON 和 Markdown 随处生成导致目录失控”问题，本仓库执行以下硬性限制：
 
 1. **Markdown 零散落原则**：
-   - 全仓库仅保留 **2 个 `.md` 文件**：根目录 `README.md` 与主实验协议契约 `data/manifests/rolling_sentence/unified_protocol_v2.md`。
+   - 全仓库仅保留 **2 个 `.md` 文件**：根目录 `README.md` 与主实验协议契约 `data/manifests/local_context_decoding_protocol.md`。
    - 严禁在子目录中创建临时说明文档、审计笔记或实验过程 `.md` 报告；所有模块说明统一写入 Python docstring，使用规范统一写入本 `README.md`。
 2. **JSON 严格归口 `data/` 原则**：
    - `braindecoding/`、`configs/`、`scripts/`、`paper/`、`tests/` 及仓库根目录下**严禁存放任何 `.json` 文件**。

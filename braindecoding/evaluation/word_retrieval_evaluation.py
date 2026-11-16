@@ -2667,7 +2667,16 @@ def _build_common_horizon_event_filter(
                     source_df
                 )
 
-    if source_df is not None and "event_id" in source_df.columns:
+    eid_col = (
+        None
+        if source_df is None
+        else (
+            "event_id"
+            if "event_id" in source_df.columns
+            else ("事件编号" if "事件编号" in source_df.columns else None)
+        )
+    )
+    if source_df is not None and eid_col is not None:
         grp_col = next(
             (
                 col
@@ -2699,7 +2708,7 @@ def _build_common_horizon_event_filter(
         )
         if grp_col is not None:
             for _, grp_df in source_df.groupby(grp_col, sort=False):
-                eids = grp_df["event_id"].astype(str).tolist()
+                eids = grp_df[eid_col].astype(str).tolist()
                 blks = (
                     grp_df[blk_col].astype(str).tolist()
                     if blk_col is not None and blk_col in grp_df.columns

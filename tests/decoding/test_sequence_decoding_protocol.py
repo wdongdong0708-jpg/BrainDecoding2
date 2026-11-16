@@ -1545,7 +1545,7 @@ def test_open_segment_sequence_decoding_reuses_simple_sequence_decoding_cache(
                 "shifted_scores": {k: v for k, v in clean_scores.items() if k != "S0"},
                 "segments": segments,
                 "checkpoint_provenance": {"revision_stage": "prefix_revision"},
-                "cms_metadata": {"subtraction_eta": 0.8},
+                "cms_metadata": {"subtraction_eta": 0.5},
             },
             pt_p,
         )
@@ -1586,6 +1586,191 @@ def test_open_segment_sequence_decoding_reuses_simple_sequence_decoding_cache(
     assert saved_dec["protocol_mode"] == "open_segment_full_vocabulary"
     assert saved_dec["decoded_bundles"]["S3_clean"]["segment_count"] == 2
     assert res["conditions"]["S3_clean"]["segment_count"] == 2
+
+
+def test_enrich_segments_from_event_table_adds_timing_and_pos_metadata() -> None:
+    """验证 enrich_segments_from_event_table 为既有段记录补齐 onset/offset/pos_tags/is_content_word_mask。"""
+    import pandas as pd
+    from braindecoding.decoding.neural_score_exporter import (
+        enrich_segments_from_event_table,
+    )
+
+    event_table = pd.DataFrame(
+        {
+            "subject_id": ["sub-01", "sub-01", "sub-01"],
+            "onset_seconds": [1.0, 1.35, 1.9],
+            "offset_seconds": [1.2, 1.7, 2.4],
+            "pos": ["DET", "ADJ", "NC"],
+            "is_content_word": [False, True, True],
+        }
+    )
+    segs = [
+        {
+            "segment_index": 0,
+            "subject_id": "sub-01",
+            "event_indices": [0, 1, 2],
+            "reference_words": ["le", "petit", "prince"],
+        }
+    ]
+    enriched = enrich_segments_from_event_table(segs, event_table)
+    assert len(enriched) == 1
+    assert enriched[0]["onset_seconds"] == [1.0, 1.35, 1.9]
+    assert enriched[0]["offset_seconds"] == [1.2, 1.7, 2.4]
+    assert enriched[0]["pos_tags"] == ["DET", "ADJ", "NC"]
+    assert enriched[0]["is_content_word_mask"] == [False, True, True]
+
+
+def test_brain_only_decoding_without_language_scorer_and_guard() -> None:
+    """验证 *_brain_only 支持 scorer=None 纯神经 argmax 解码，非 *_brain_only 缺 scorer 时报错。"""
+    import pytest
+    from braindecoding.decoding.rolling_beam_search import decode_dataset_segment_jobs
+
+    vocab = ["le", "petit", "prince", "ami"]
+    k2_scores = torch.tensor(
+        [
+            [0.9, 0.1, 0.0, -0.2],
+            [0.0, 0.8, 0.2, 0.1],
+            [-0.1, 0.2, 0.95, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    f_scores = torch.tensor(
+        [
+            [0.1, 0.1, 0.1, 0.9],
+            [0.9, 0.1, 0.1, 0.1],
+            [0.1, 0.9, 0.1, 0.1],
+        ],
+        dtype=torch.float32,
+    )
+    payload = {
+        "vocabulary": vocab,
+        "clean_scores": {
+            "S0": k2_scores,
+            "K0": k2_scores,
+            "K1": k2_scores,
+            "K2": k2_scores,
+            "F": f_scores,
+        },
+        "shifted_scores": {"K0": k2_scores, "K1": k2_scores, "K2": k2_scores, "F": f_scores},
+        "segments": [
+            {
+                "segment_index": 0,
+                "group_id": "sub-01_run-01:0",
+                "subject_id": "sub-01",
+                "recording_id": "run-01",
+                "scope": "run-01",
+                "block_id": "run-01|block-000",
+                "partition": "evaluation",
+                "event_indices": [0, 1, 2],
+                "reference_words": ["le", "petit", "prince"],
+                "in_vocabulary_mask": [True, True, True],
+            }
+        ],
+    }
+    res = decode_dataset_segment_jobs(
+        payload,
+        None,
+        {},
+        {
+            "K2_brain_only": {"condition": "K2_brain_only", "alignment": "clean"},
+            "F_brain_only": {"condition": "F_brain_only", "alignment": "clean"},
+        },
+    )
+    assert res["K2_brain_only"]["final_sentences"][0]["predicted_words"] == [
+        "le",
+        "petit",
+        "prince",
+    ]
+    assert res["F_brain_only"]["final_sentences"][0]["predicted_words"] == [
+        "ami",
+        "le",
+        "petit",
+    ]
+    with pytest.raises(ValueError, match="scorer"):
+        decode_dataset_segment_jobs(
+            payload,
+            None,
+            {},
+            {"S3_clean": {"condition": "S3", "alignment": "clean"}},
+        )
+
+
+def test_aggregate_multi_subject_payload_agreement_weighted() -> None:
+    """验证 agreement_weighted (alpha=2.0) 会抑制与多数受试者相反的离群受试者，并同时聚合状态 F。"""
+    import pytest
+    from braindecoding.decoding.rolling_beam_search import aggregate_multi_subject_payload
+
+    vocab = ["a", "b", "c", "d"]
+    n_events = 6
+    # 构建 3 个受试者 x 2 个序列事件：sub-01 与 sub-02 一致偏向 'a'(列0)，sub-03 反向偏向 'd'(列3)
+    good_vec = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    bad_vec = np.array([-0.2, -0.2, 0.0, 1.0], dtype=np.float32)
+    rows_clean = np.stack([good_vec, good_vec, good_vec, good_vec, bad_vec, bad_vec], axis=0)
+    payload = {
+        "vocabulary": vocab,
+        "clean_scores": {
+            "S0": torch.from_numpy(rows_clean.copy()),
+            "K0": torch.from_numpy(rows_clean.copy()),
+            "K1": torch.from_numpy(rows_clean.copy()),
+            "K2": torch.from_numpy(rows_clean.copy()),
+            "F": torch.from_numpy(rows_clean.copy()),
+        },
+        "shifted_scores": {
+            "K0": torch.from_numpy(rows_clean.copy()),
+            "K1": torch.from_numpy(rows_clean.copy()),
+            "K2": torch.from_numpy(rows_clean.copy()),
+            "F": torch.from_numpy(rows_clean.copy()),
+        },
+        "segments": [
+            {
+                "segment_index": 0,
+                "group_id": "sub-01_run-01:0",
+                "material_id": "run-01:0",
+                "subject_id": "sub-01",
+                "partition": "evaluation",
+                "event_indices": [0, 1],
+                "reference_words": ["a", "a"],
+                "in_vocabulary_mask": [True, True],
+            },
+            {
+                "segment_index": 1,
+                "group_id": "sub-02_run-01:0",
+                "material_id": "run-01:0",
+                "subject_id": "sub-02",
+                "partition": "evaluation",
+                "event_indices": [2, 3],
+                "reference_words": ["a", "a"],
+                "in_vocabulary_mask": [True, True],
+            },
+            {
+                "segment_index": 2,
+                "group_id": "sub-03_run-01:0",
+                "material_id": "run-01:0",
+                "subject_id": "sub-03",
+                "partition": "evaluation",
+                "event_indices": [4, 5],
+                "reference_words": ["a", "a"],
+                "in_vocabulary_mask": [True, True],
+            },
+        ],
+    }
+
+    agg_rms = aggregate_multi_subject_payload(
+        payload, 3, aggregation_mode="rms_preserved"
+    )
+    agg_aw = aggregate_multi_subject_payload(
+        payload, 3, aggregation_mode="agreement_weighted", agreement_alpha=2.0
+    )
+    assert "F" in agg_aw["clean_scores"]
+    assert agg_aw["aggregation_mode"] == "agreement_weighted"
+    assert agg_aw["agreement_alpha"] == 2.0
+    # agreement_weighted 抑制离群 sub-03，使得第一列 'a' 与第四列 'd' 的优势高于等权 rms_preserved
+    aw_gap = float(agg_aw["clean_scores"]["K2"][0, 0] - agg_aw["clean_scores"]["K2"][0, 3])
+    rms_gap = float(agg_rms["clean_scores"]["K2"][0, 0] - agg_rms["clean_scores"]["K2"][0, 3])
+    assert aw_gap > rms_gap
+    assert pytest.approx(float(agg_aw["clean_scores"]["F"][0, 0]), rel=1e-4) == float(
+        agg_aw["clean_scores"]["K2"][0, 0]
+    )
 
 
 
