@@ -21,13 +21,15 @@ protocols:
     paths:
     - .cache/runs/unified_heldout_test_v2/status.json
   reports:
-  - data/results/protocols/unified_rolling_v2_queue_results.json
-  - data/results/studies/unified_heldout_test_v2
-  - data/results/studies/unified_context_baselines_v2
-  - data/results/studies/unified_context_heldout_test_v2
-  - data/results/studies/full_vocabulary_context_test_v2
-  - data/results/studies/word_paired_statistics_test_v2
-  - data/results/studies/single_word_long_window_test_v2
+  - data/results/studies/pallier2025/causal_fast_audit_summary
+  - data/results/studies/pallier2025/word_only
+  - data/results/studies/pallier2025/full_context_joint
+  - data/results/studies/pallier2025/full_context_freeze_cnn
+  - data/results/studies/pallier2025/full_context_freeze_cnn_debiased
+  - data/results/studies/pallier2025/rolling_prefix_revision
+  - data/results/studies/pallier2025/rolling_prefix_revision_no_delta_null
+  - data/results/studies/pallier2025/local_symmetric_window_r2
+  - data/results/studies/pallier2025/word_and_synthetic_diagnostics
   retained_dependencies:
   - configs/word_decoding/pallier2025
   - configs/word_decoding/chineseeeg2_littleprince
@@ -54,82 +56,7 @@ protocols:
     - .cache/runs/sequence_decoding_protocol/status.json
     - data/results/studies/sequence_decoding_protocol/results.json
   reports:
-  - data/results/studies/sequence_decoding_protocol
+  - data/results/studies/pallier2025/raw_simple_sequence_decoding
+  - data/results/studies/pallier2025/raw_sequence_decoding
   retained_dependencies:
   - configs/decoding/sequence_decoding_protocol.yaml
-- id: synthetic_timing_v1
-  role: supplement
-  parent: unified_protocol_v2
-  title: 词级时间捷径控制
-  datasets:
-  - pallier2025
-  protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/training/synthetic_timing_control.yaml
-  manifests:
-  - data/manifests/rolling_sentence/synthetic_timing_v1.json
-  entrypoints:
-  - python -m braindecoding.synthetic_timing_control --help
-  status_sources:
-  - name: synthetic_queue
-    paths:
-    - .cache/runs/synthetic_timing_v1/status.json
-    - data/results/studies/synthetic_timing_v1/results.json
-  reports:
-  - data/results/studies/synthetic_timing_v1
-  retained_dependencies:
-  - outputs/word_decoding/pallier2025/synthetic_timing_v1_shared
-  - outputs/word_decoding/pallier2025/synthetic_timing_v1_independent
-  - data/results/exports/unified_heldout_test_v2_word_by_seed.csv
-- id: synthetic_timing_v2
-  role: supplement
-  parent: unified_protocol_v2
-  title: 词级时间捷径控制恢复与中文 EEG 扩展
-  datasets:
-  - pallier2025
-  - chineseeeg2_littleprince
-  protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/training/synthetic_timing_recovery.yaml
-  manifests:
-  - data/manifests/rolling_sentence/synthetic_timing_v2.json
-  entrypoints:
-  - python -m braindecoding.synthetic_timing_recovery --help
-  status_sources:
-  - name: synthetic_queue
-    paths:
-    - .cache/runs/synthetic_timing_v2/status.json
-    - data/results/studies/synthetic_timing_v2/results.json
-  reports:
-  - data/results/studies/synthetic_timing_v2
-  retained_dependencies:
-  - outputs/word_decoding/pallier2025/synthetic_timing_v1_shared
-  - outputs/word_decoding/pallier2025/synthetic_timing_v1_independent
-  - outputs/word_decoding/pallier2025/synthetic_timing_v2_shared
-  - outputs/word_decoding/pallier2025/synthetic_timing_v2_independent
-  - outputs/word_decoding/chineseeeg2_littleprince/synthetic_timing_v2_shared
-  - outputs/word_decoding/chineseeeg2_littleprince/synthetic_timing_v2_independent
-  - data/results/exports/unified_heldout_test_v2_word_by_seed.csv
-- id: single_word_long_window_test_v2
-  role: supplement
-  parent: unified_protocol_v2
-  title: 单词长窗神经输入对照
-  datasets:
-  - pallier2025
-  - chineseeeg2_littleprince
-  protocol: data/manifests/rolling_sentence/unified_protocol_v2.md
-  config: configs/evaluation/long_window_word_evaluation.yaml
-  manifests:
-  - data/manifests/rolling_sentence/single_word_long_window_test_v2.json
-  entrypoints:
-  - python -m braindecoding.single_word_long_window_test_v2 --help
-  status_sources:
-  - name: long_window_training
-    paths:
-    - .cache/runs/single_word_long_window_test_v2/status.json
-    - data/results/studies/single_word_long_window_test_v2/results.json
-  reports:
-  - data/results/studies/single_word_long_window_test_v2
-  retained_dependencies:
-  - outputs/word_decoding/pallier2025/single_word_long_window_test_v2
-  - outputs/word_decoding/chineseeeg2_littleprince/single_word_long_window_test_v2
-  - outputs/heldout_test/single_word_long_window_test_v2
-  - outputs/heldout_test/unified_heldout_test_v2

@@ -1,0 +1,9 @@
+﻿method_id,method_label,metric_key,metric_label,is_ratio,mean_clean,std_clean,mean_control,std_control,p_control_vs_chance,sig_control_vs_chance,mean_net_gap,std_net_gap,p_net_gap,sig_net_gap
+raw,Raw Baseline (eta=0.0),vocab50_macro_top10,50-Word Word-Macro Top-10,True,67.01,0.65,60.34,0.24,1.1819159213789291e-09,,6.67,0.85,1.542080832506082e-06,
+raw,Raw Baseline (eta=0.0),vocab50_macro_top1,50-Word Word-Macro Top-1,True,20.39,0.53,15.01,0.79,2.7124635247202166e-06,,5.38,1.21,0.0001415001924294259,
+raw,Raw Baseline (eta=0.0),full_vocab_macro_top10,Full-Vocab Word-Macro Top-10,True,7.98,0.23,5.63,0.13,3.939448570788052e-08,,2.35,0.25,2.731137258536144e-07,
+raw,Raw Baseline (eta=0.0),full_vocab_macro_top1,Full-Vocab Word-Macro Top-1,True,1.91,0.03,1.41,0.1,6.7345648579504774e-06,,0.5,0.11,9.556112098250979e-05,
+cms:eta=0.5,LOO Common-Mode Subtraction (eta=0.5),vocab50_macro_top10,50-Word Word-Macro Top-10,True,61.52,0.37,50.68,0.98,1.1166701540243751e-07,,10.84,1.2,4.4279249524355756e-07,
+cms:eta=0.5,LOO Common-Mode Subtraction (eta=0.5),vocab50_macro_top1,50-Word Word-Macro Top-1,True,18.55,0.16,12.32,0.74,6.362945518732652e-06,,6.23,0.89,3.755676252823093e-06,
+cms:eta=0.5,LOO Common-Mode Subtraction (eta=0.5),full_vocab_macro_top10,Full-Vocab Word-Macro Top-10,True,5.95,0.11,4.56,0.16,3.646132499570508e-07,,1.4,0.17,1.2821336557863392e-06,
+cms:eta=0.5,LOO Common-Mode Subtraction (eta=0.5),full_vocab_macro_top1,Full-Vocab Word-Macro Top-1,True,1.75,0.02,1.13,0.09,1.1076342278304471e-05,,0.61,0.1,1.2524354668952526e-05,

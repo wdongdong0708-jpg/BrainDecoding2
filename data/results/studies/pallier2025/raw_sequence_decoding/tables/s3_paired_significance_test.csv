@@ -1,0 +1,163 @@
+﻿test_key,group_id,comparison,scale,subset,metric,lhs_value_pct,rhs_value_pct,effect_pp,ci_lower_pp,ci_upper_pp,p_two_sided,p_holm,significance,blocks
+g1_V1000_all_corpus_bleu1,1,Rolling-K2 vs Word-Only,V=1000,All Segs,Corpus BLEU-1,14.07,9.36,4.72,3.94,5.55,0.0001,0.0033,**,194
+g1_V1000_all_sent_bleu1,1,Rolling-K2 vs Word-Only,V=1000,All Segs,Sent BLEU-1,12.43,7.78,4.65,3.73,5.6,0.0001,0.0033,**,194
+g1_V1000_all_wer,1,Rolling-K2 vs Word-Only,V=1000,All Segs,WER,91.62,96.38,-4.76,-5.57,-4.01,0.0001,0.0033,**,194
+g1_V1000_core_corpus_bleu1,1,Rolling-K2 vs Word-Only,V=1000,0% OOV,Corpus BLEU-1,15.22,9.06,6.16,3.59,8.88,0.0002,0.0038,**,41
+g1_V1000_core_sent_bleu1,1,Rolling-K2 vs Word-Only,V=1000,0% OOV,Sent BLEU-1,13.22,7.95,5.26,3.08,7.64,0.0002,0.0036,**,41
+g1_V1000_core_wer,1,Rolling-K2 vs Word-Only,V=1000,0% OOV,WER,88.83,94.62,-5.78,-8.23,-3.46,0.0001,0.0033,**,41
+g1_V100_all_corpus_bleu1,1,Rolling-K2 vs Word-Only,V=100,All Segs,Corpus BLEU-1,14.92,11.02,3.89,3.07,4.73,0.0001,0.0033,**,194
+g1_V100_all_sent_bleu1,1,Rolling-K2 vs Word-Only,V=100,All Segs,Sent BLEU-1,13.16,9.42,3.74,2.83,4.67,0.0001,0.0033,**,194
+g1_V100_all_wer,1,Rolling-K2 vs Word-Only,V=100,All Segs,WER,91.26,95.53,-4.27,-5.07,-3.53,0.0001,0.0033,**,194
+g1_V100_core_corpus_bleu1,1,Rolling-K2 vs Word-Only,V=100,0% OOV,Corpus BLEU-1,23.02,19.21,3.81,-2.74,10.02,0.5417,1.0,ns,5
+g1_V100_core_sent_bleu1,1,Rolling-K2 vs Word-Only,V=100,0% OOV,Sent BLEU-1,21.51,17.72,3.79,-2.02,9.61,0.5,1.0,ns,5
+g1_V100_core_wer,1,Rolling-K2 vs Word-Only,V=100,0% OOV,WER,79.21,86.51,-7.3,-14.6,1.67,0.2917,1.0,ns,5
+g1_V2020_all_corpus_bleu1,1,Rolling-K2 vs Word-Only,V=2020,0% OOV / All Segs,Corpus BLEU-1,14.09,9.15,4.93,4.13,5.78,0.0001,0.0033,**,194
+g1_V2020_all_sent_bleu1,1,Rolling-K2 vs Word-Only,V=2020,0% OOV / All Segs,Sent BLEU-1,12.44,7.6,4.83,3.89,5.79,0.0001,0.0033,**,194
+g1_V2020_all_wer,1,Rolling-K2 vs Word-Only,V=2020,0% OOV / All Segs,WER,91.66,96.46,-4.8,-5.6,-4.04,0.0001,0.0033,**,194
+g1_V250_all_corpus_bleu1,1,Rolling-K2 vs Word-Only,V=250,All Segs,Corpus BLEU-1,14.43,10.17,4.26,3.49,5.07,0.0001,0.0033,**,194
+g1_V250_all_sent_bleu1,1,Rolling-K2 vs Word-Only,V=250,All Segs,Sent BLEU-1,12.75,8.51,4.25,3.32,5.22,0.0001,0.0033,**,194
+g1_V250_all_wer,1,Rolling-K2 vs Word-Only,V=250,All Segs,WER,91.47,96.02,-4.56,-5.36,-3.81,0.0001,0.0033,**,194
+g1_V250_core_corpus_bleu1,1,Rolling-K2 vs Word-Only,V=250,0% OOV,Corpus BLEU-1,16.2,10.24,5.96,0.82,10.76,0.1452,0.4954,ns,19
+g1_V250_core_sent_bleu1,1,Rolling-K2 vs Word-Only,V=250,0% OOV,Sent BLEU-1,12.48,8.52,3.97,0.64,7.74,0.1111,0.4776,ns,19
+g1_V250_core_wer,1,Rolling-K2 vs Word-Only,V=250,0% OOV,WER,88.04,93.53,-5.49,-9.4,-1.29,0.0563,0.4392,ns,19
+g1_V500_all_corpus_bleu1,1,Rolling-K2 vs Word-Only,V=500,All Segs,Corpus BLEU-1,14.2,9.84,4.36,3.6,5.17,0.0001,0.0033,**,194
+g1_V500_all_sent_bleu1,1,Rolling-K2 vs Word-Only,V=500,All Segs,Sent BLEU-1,12.52,8.21,4.31,3.4,5.25,0.0001,0.0033,**,194
+g1_V500_all_wer,1,Rolling-K2 vs Word-Only,V=500,All Segs,WER,91.56,96.15,-4.59,-5.38,-3.85,0.0001,0.0033,**,194
+g1_V500_core_corpus_bleu1,1,Rolling-K2 vs Word-Only,V=500,0% OOV,Corpus BLEU-1,15.9,9.83,6.08,2.69,9.44,0.0042,0.0462,ns,31
+g1_V500_core_sent_bleu1,1,Rolling-K2 vs Word-Only,V=500,0% OOV,Sent BLEU-1,12.6,8.09,4.5,1.87,7.35,0.0077,0.0775,ns,31
+g1_V500_core_wer,1,Rolling-K2 vs Word-Only,V=500,0% OOV,WER,88.06,94.2,-6.14,-9.13,-3.15,0.0013,0.0155,*,31
+g1_V50_all_corpus_bleu1,1,Rolling-K2 vs Word-Only,V=50,All Segs,Corpus BLEU-1,15.36,11.96,3.4,2.58,4.22,0.0001,0.0033,**,194
+g1_V50_all_sent_bleu1,1,Rolling-K2 vs Word-Only,V=50,All Segs,Sent BLEU-1,13.5,10.45,3.05,2.18,3.96,0.0001,0.0033,**,194
+g1_V50_all_wer,1,Rolling-K2 vs Word-Only,V=50,All Segs,WER,91.03,95.1,-4.07,-4.8,-3.38,0.0001,0.0033,**,194
+g1_V50_core_corpus_bleu1,1,Rolling-K2 vs Word-Only,V=50,0% OOV,Corpus BLEU-1,27.92,31.25,-3.33,-10.0,3.33,0.8333,1.0,ns,2
+g1_V50_core_sent_bleu1,1,Rolling-K2 vs Word-Only,V=50,0% OOV,Sent BLEU-1,27.92,31.25,-3.33,-10.0,3.33,0.8333,1.0,ns,2
+g1_V50_core_wer,1,Rolling-K2 vs Word-Only,V=50,0% OOV,WER,73.33,75.83,-2.5,-11.67,6.67,1.0,1.0,ns,2
+g2_V1000_all_corpus_bleu1,2,Rolling-K0 vs Word-Only,V=1000,All Segs,Corpus BLEU-1,12.24,9.36,2.88,2.18,3.59,0.0001,0.0022,**,194
+g2_V1000_all_in_vocab_top1,2,Rolling-K0 vs Word-Only,V=1000,All Segs,In-Vocab Top-1,7.2,4.49,2.7,2.02,3.43,0.0001,0.0022,**,192
+g2_V1000_core_corpus_bleu1,2,Rolling-K0 vs Word-Only,V=1000,0% OOV,Corpus BLEU-1,11.17,9.06,2.11,-0.09,4.16,0.1868,0.672,ns,41
+g2_V1000_core_in_vocab_top1,2,Rolling-K0 vs Word-Only,V=1000,0% OOV,In-Vocab Top-1,6.64,5.34,1.3,-0.38,3.1,0.2285,0.8429,ns,41
+g2_V100_all_corpus_bleu1,2,Rolling-K0 vs Word-Only,V=100,All Segs,Corpus BLEU-1,13.03,11.02,2.01,1.24,2.74,0.0002,0.0028,**,194
+g2_V100_all_in_vocab_top1,2,Rolling-K0 vs Word-Only,V=100,All Segs,In-Vocab Top-1,10.14,7.42,2.72,1.73,3.74,0.0001,0.0022,**,191
+g2_V100_core_corpus_bleu1,2,Rolling-K0 vs Word-Only,V=100,0% OOV,Corpus BLEU-1,13.49,19.21,-5.71,-11.26,0.14,0.3542,1.0,ns,5
+g2_V100_core_in_vocab_top1,2,Rolling-K0 vs Word-Only,V=100,0% OOV,In-Vocab Top-1,10.32,13.33,-3.02,-5.8,1.27,0.3542,1.0,ns,5
+g2_V2020_all_corpus_bleu1,2,Rolling-K0 vs Word-Only,V=2020,0% OOV / All Segs,Corpus BLEU-1,12.2,9.15,3.05,2.34,3.75,0.0001,0.0022,**,194
+g2_V2020_all_in_vocab_top1,2,Rolling-K0 vs Word-Only,V=2020,0% OOV / All Segs,In-Vocab Top-1,6.86,4.21,2.65,1.99,3.36,0.0001,0.0022,**,192
+g2_V250_all_corpus_bleu1,2,Rolling-K0 vs Word-Only,V=250,All Segs,Corpus BLEU-1,12.67,10.17,2.5,1.8,3.19,0.0001,0.0022,**,194
+g2_V250_all_in_vocab_top1,2,Rolling-K0 vs Word-Only,V=250,All Segs,In-Vocab Top-1,8.54,5.66,2.88,2.07,3.74,0.0001,0.0022,**,191
+g2_V250_core_corpus_bleu1,2,Rolling-K0 vs Word-Only,V=250,0% OOV,Corpus BLEU-1,10.75,10.24,0.51,-3.11,3.84,0.5685,1.0,ns,19
+g2_V250_core_in_vocab_top1,2,Rolling-K0 vs Word-Only,V=250,0% OOV,In-Vocab Top-1,6.82,6.43,0.39,-1.74,2.5,0.7184,1.0,ns,19
+g2_V500_all_corpus_bleu1,2,Rolling-K0 vs Word-Only,V=500,All Segs,Corpus BLEU-1,12.22,9.84,2.38,1.69,3.06,0.0001,0.0024,**,194
+g2_V500_all_in_vocab_top1,2,Rolling-K0 vs Word-Only,V=500,All Segs,In-Vocab Top-1,7.54,5.02,2.51,1.82,3.26,0.0001,0.0022,**,192
+g2_V500_core_corpus_bleu1,2,Rolling-K0 vs Word-Only,V=500,0% OOV,Corpus BLEU-1,11.18,9.83,1.35,-1.28,3.65,0.4749,0.8275,ns,31
+g2_V500_core_in_vocab_top1,2,Rolling-K0 vs Word-Only,V=500,0% OOV,In-Vocab Top-1,6.62,5.77,0.85,-1.1,2.92,0.5108,1.0,ns,31
+g2_V50_all_corpus_bleu1,2,Rolling-K0 vs Word-Only,V=50,All Segs,Corpus BLEU-1,13.55,11.96,1.59,0.8,2.35,0.0131,0.1448,**,194
+g2_V50_all_in_vocab_top1,2,Rolling-K0 vs Word-Only,V=50,All Segs,In-Vocab Top-1,12.71,9.72,2.99,1.88,4.11,0.0004,0.0051,**,188
+g2_V50_core_corpus_bleu1,2,Rolling-K0 vs Word-Only,V=50,0% OOV,Corpus BLEU-1,18.75,31.25,-12.5,-19.17,-5.83,0.6667,1.0,ns,2
+g2_V50_core_in_vocab_top1,2,Rolling-K0 vs Word-Only,V=50,0% OOV,In-Vocab Top-1,15.0,22.5,-7.5,-14.17,-0.83,0.6667,1.0,ns,2
+g3_V100_all_corpus_bleu1,3,Rolling-K2 vs Full-Context,V=100,All Segs,Corpus BLEU-1,14.92,13.12,1.79,0.97,2.63,0.0362,0.3343,**,194
+g3_V100_all_wer,3,Rolling-K2 vs Full-Context,V=100,All Segs,WER,91.26,93.02,-1.75,-2.51,-1.03,0.2318,0.3343,**,194
+g3_V100_core_corpus_bleu1,3,Rolling-K2 vs Full-Context,V=100,0% OOV,Corpus BLEU-1,23.02,17.14,5.87,-2.46,15.83,0.4167,1.0,ns,5
+g3_V100_core_wer,3,Rolling-K2 vs Full-Context,V=100,0% OOV,WER,79.21,87.3,-8.1,-16.39,0.3,0.2292,0.9167,ns,5
+g3_V2020_all_corpus_bleu1,3,Rolling-K2 vs Full-Context,V=2020,0% OOV / All Segs,Corpus BLEU-1,14.09,12.38,1.71,0.85,2.6,0.0354,0.3343,**,194
+g3_V2020_all_wer,3,Rolling-K2 vs Full-Context,V=2020,0% OOV / All Segs,WER,91.66,93.13,-1.47,-2.2,-0.76,0.1823,0.3343,**,194
+g3_V250_all_corpus_bleu1,3,Rolling-K2 vs Full-Context,V=250,All Segs,Corpus BLEU-1,14.43,12.86,1.57,0.74,2.41,0.0628,0.3343,**,194
+g3_V250_all_wer,3,Rolling-K2 vs Full-Context,V=250,All Segs,WER,91.47,92.88,-1.42,-2.16,-0.7,0.1508,0.3343,**,194
+g3_V250_core_corpus_bleu1,3,Rolling-K2 vs Full-Context,V=250,0% OOV,Corpus BLEU-1,16.2,13.41,2.78,-3.54,7.9,0.4044,1.0,ns,19
+g3_V250_core_wer,3,Rolling-K2 vs Full-Context,V=250,0% OOV,WER,88.04,90.78,-2.75,-7.98,3.51,0.4033,1.0,ns,19
+g3_V50_all_corpus_bleu1,3,Rolling-K2 vs Full-Context,V=50,All Segs,Corpus BLEU-1,15.36,13.59,1.78,0.97,2.56,0.0539,0.3343,**,194
+g3_V50_all_wer,3,Rolling-K2 vs Full-Context,V=50,All Segs,WER,91.03,92.56,-1.53,-2.26,-0.82,0.0882,0.3343,**,194
+g3_V50_core_corpus_bleu1,3,Rolling-K2 vs Full-Context,V=50,0% OOV,Corpus BLEU-1,27.92,21.67,6.25,2.5,10.0,0.5,1.0,ns,2
+g3_V50_core_wer,3,Rolling-K2 vs Full-Context,V=50,0% OOV,WER,73.33,88.33,-15.0,-20.83,-9.17,0.5,1.0,ns,2
+g4_V1000_all_corpus_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=1000,All Segs,Corpus BLEU-1,14.07,12.24,1.83,1.23,2.47,0.0001,0.0022,**,194
+g4_V1000_all_in_vocab_top1,4,Rolling-K2 vs Rolling-K0 (Clean),V=1000,All Segs,In-Vocab Top-1,10.52,7.2,3.32,2.7,3.98,0.0001,0.0022,**,192
+g4_V1000_core_corpus_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=1000,0% OOV,Corpus BLEU-1,15.22,11.17,4.05,2.06,6.1,0.0006,0.0052,**,41
+g4_V1000_core_in_vocab_top1,4,Rolling-K2 vs Rolling-K0 (Clean),V=1000,0% OOV,In-Vocab Top-1,11.05,6.64,4.41,2.47,6.46,0.0002,0.0028,**,41
+g4_V100_all_corpus_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=100,All Segs,Corpus BLEU-1,14.92,13.03,1.89,1.26,2.54,0.0001,0.0022,**,194
+g4_V100_all_in_vocab_top1,4,Rolling-K2 vs Rolling-K0 (Clean),V=100,All Segs,In-Vocab Top-1,14.67,10.14,4.53,3.68,5.42,0.0001,0.0022,**,191
+g4_V100_core_corpus_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=100,0% OOV,Corpus BLEU-1,23.02,13.49,9.52,2.51,15.69,0.1667,0.6667,ns,5
+g4_V100_core_in_vocab_top1,4,Rolling-K2 vs Rolling-K0 (Clean),V=100,0% OOV,In-Vocab Top-1,20.32,10.32,10.0,1.67,16.78,0.1875,0.6667,ns,5
+g4_V2020_all_corpus_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=2020,0% OOV / All Segs,Corpus BLEU-1,14.09,12.2,1.89,1.28,2.51,0.0001,0.0022,**,194
+g4_V2020_all_in_vocab_top1,4,Rolling-K2 vs Rolling-K0 (Clean),V=2020,0% OOV / All Segs,In-Vocab Top-1,9.98,6.86,3.12,2.51,3.77,0.0001,0.0022,**,192
+g4_V250_all_corpus_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=250,All Segs,Corpus BLEU-1,14.43,12.67,1.77,1.16,2.41,0.0001,0.0022,**,194
+g4_V250_all_in_vocab_top1,4,Rolling-K2 vs Rolling-K0 (Clean),V=250,All Segs,In-Vocab Top-1,12.32,8.54,3.78,3.06,4.54,0.0001,0.0022,**,191
+g4_V250_core_corpus_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=250,0% OOV,Corpus BLEU-1,16.2,10.75,5.45,1.58,8.93,0.0285,0.1708,ns,19
+g4_V250_core_in_vocab_top1,4,Rolling-K2 vs Rolling-K0 (Clean),V=250,0% OOV,In-Vocab Top-1,11.76,6.82,4.94,1.41,8.58,0.0394,0.1971,ns,19
+g4_V500_all_corpus_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=500,All Segs,Corpus BLEU-1,14.2,12.22,1.98,1.38,2.64,0.0001,0.0022,**,194
+g4_V500_all_in_vocab_top1,4,Rolling-K2 vs Rolling-K0 (Clean),V=500,All Segs,In-Vocab Top-1,11.14,7.54,3.61,2.93,4.31,0.0001,0.0022,**,192
+g4_V500_core_corpus_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=500,0% OOV,Corpus BLEU-1,15.9,11.18,4.73,2.08,7.32,0.0045,0.0315,ns,31
+g4_V500_core_in_vocab_top1,4,Rolling-K2 vs Rolling-K0 (Clean),V=500,0% OOV,In-Vocab Top-1,11.83,6.62,5.21,2.65,7.82,0.0013,0.0105,*,31
+g4_V50_all_corpus_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=50,All Segs,Corpus BLEU-1,15.36,13.55,1.82,1.19,2.47,0.0001,0.0022,**,194
+g4_V50_all_in_vocab_top1,4,Rolling-K2 vs Rolling-K0 (Clean),V=50,All Segs,In-Vocab Top-1,18.23,12.71,5.52,4.51,6.61,0.0001,0.0022,**,188
+g4_V50_core_corpus_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=50,0% OOV,Corpus BLEU-1,27.92,18.75,9.17,8.33,10.0,0.5,1.0,ns,2
+g4_V50_core_in_vocab_top1,4,Rolling-K2 vs Rolling-K0 (Clean),V=50,0% OOV,In-Vocab Top-1,25.42,15.0,10.42,8.33,12.5,0.5,1.0,ns,2
+s3_clean_vs_k0_bleu1,4,Rolling-K2 vs Rolling-K0 (Clean),V=2020,All Segs,BLEU-1 (%),12.44,10.27,2.17,1.5,2.88,0.0001,0.0001,***,194
+s3_clean_vs_k0_word_acc,4,Rolling-K2 vs Rolling-K0 (Clean),V=2020,All Segs,Word Acc (%),8.23,5.66,2.57,2.06,3.12,0.0001,0.0001,***,194
+g5_V100_all_corpus_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=100,All Segs,Corpus BLEU-1,7.84,7.74,0.11,-0.37,0.59,0.4499,1.0,ns,194
+g5_V100_all_sent_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=100,All Segs,Sent BLEU-1,6.58,6.39,0.19,-0.26,0.65,0.4168,1.0,ns,194
+g5_V100_core_corpus_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=100,0% OOV,Corpus BLEU-1,7.62,9.05,-1.43,-5.99,2.28,0.5208,1.0,ns,5
+g5_V100_core_sent_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=100,0% OOV,Sent BLEU-1,7.62,9.81,-2.19,-6.39,2.03,0.5,1.0,ns,5
+g5_V2020_all_corpus_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=2020,0% OOV / All Segs,Corpus BLEU-1,4.69,4.36,0.33,0.01,0.65,0.0612,0.6614,ns,194
+g5_V2020_all_sent_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=2020,0% OOV / All Segs,Sent BLEU-1,3.82,3.53,0.29,-0.02,0.61,0.0973,0.7429,ns,194
+g5_V250_all_corpus_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=250,All Segs,Corpus BLEU-1,7.01,6.95,0.06,-0.37,0.48,0.3489,1.0,ns,194
+g5_V250_all_sent_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=250,All Segs,Sent BLEU-1,5.83,5.67,0.16,-0.23,0.57,0.2556,1.0,ns,194
+g5_V250_core_corpus_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=250,0% OOV,Corpus BLEU-1,5.76,4.94,0.82,-1.11,2.78,0.5887,1.0,ns,19
+g5_V250_core_sent_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=250,0% OOV,Sent BLEU-1,4.71,4.36,0.34,-1.49,2.43,0.5628,1.0,ns,19
+g5_V50_all_corpus_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=50,All Segs,Corpus BLEU-1,8.14,8.34,-0.2,-0.68,0.29,0.0994,0.7203,ns,194
+g5_V50_all_sent_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=50,All Segs,Sent BLEU-1,7.02,7.29,-0.27,-0.74,0.2,0.082,0.6825,*,194
+g5_V50_core_corpus_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=50,0% OOV,Corpus BLEU-1,10.83,15.83,-5.0,-7.5,-2.5,0.8333,1.0,ns,2
+g5_V50_core_sent_bleu1,5,Shifted-K2 vs Shifted-K0 (-75s),V=50,0% OOV,Sent BLEU-1,10.83,15.83,-5.0,-7.5,-2.5,0.8333,1.0,ns,2
+g6_V1000_all_corpus_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=1000,All Segs,Corpus BLEU-1,14.07,4.97,9.1,8.07,10.15,0.0001,0.0022,**,194
+g6_V1000_all_in_vocab_top1,6,Rolling-K2 vs Shifted-K2 (-75s),V=1000,All Segs,In-Vocab Top-1,10.52,1.64,8.88,7.78,10.06,0.0001,0.0022,**,192
+g6_V1000_core_corpus_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=1000,0% OOV,Corpus BLEU-1,15.22,4.42,10.79,7.54,13.93,0.0001,0.0022,**,41
+g6_V1000_core_in_vocab_top1,6,Rolling-K2 vs Shifted-K2 (-75s),V=1000,0% OOV,In-Vocab Top-1,11.05,1.67,9.37,6.68,12.29,0.0001,0.0022,**,41
+g6_V100_all_corpus_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=100,All Segs,Corpus BLEU-1,14.92,7.84,7.07,6.08,8.08,0.0001,0.0022,**,194
+g6_V100_all_in_vocab_top1,6,Rolling-K2 vs Shifted-K2 (-75s),V=100,All Segs,In-Vocab Top-1,14.67,3.35,11.32,9.84,12.82,0.0001,0.0022,**,191
+g6_V100_core_corpus_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=100,0% OOV,Corpus BLEU-1,23.02,7.62,15.4,2.17,26.41,0.2083,0.6875,ns,5
+g6_V100_core_in_vocab_top1,6,Rolling-K2 vs Shifted-K2 (-75s),V=100,0% OOV,In-Vocab Top-1,20.32,2.22,18.1,5.51,28.12,0.125,0.5,ns,5
+g6_V2020_all_corpus_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=2020,0% OOV / All Segs,Corpus BLEU-1,14.09,4.69,9.39,8.36,10.46,0.0001,0.0022,**,194
+g6_V2020_all_in_vocab_top1,6,Rolling-K2 vs Shifted-K2 (-75s),V=2020,0% OOV / All Segs,In-Vocab Top-1,9.98,1.48,8.5,7.42,9.67,0.0001,0.0022,**,192
+g6_V250_all_corpus_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=250,All Segs,Corpus BLEU-1,14.43,7.01,7.42,6.4,8.43,0.0001,0.0022,**,194
+g6_V250_all_in_vocab_top1,6,Rolling-K2 vs Shifted-K2 (-75s),V=250,All Segs,In-Vocab Top-1,12.32,2.59,9.72,8.45,11.05,0.0001,0.0022,**,191
+g6_V250_core_corpus_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=250,0% OOV,Corpus BLEU-1,16.2,5.76,10.43,5.05,14.79,0.0049,0.0245,*,19
+g6_V250_core_in_vocab_top1,6,Rolling-K2 vs Shifted-K2 (-75s),V=250,0% OOV,In-Vocab Top-1,11.76,1.96,9.8,5.31,14.71,0.0018,0.0107,*,19
+g6_V500_all_corpus_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=500,All Segs,Corpus BLEU-1,14.2,5.52,8.68,7.65,9.7,0.0001,0.0022,**,194
+g6_V500_all_in_vocab_top1,6,Rolling-K2 vs Shifted-K2 (-75s),V=500,All Segs,In-Vocab Top-1,11.14,1.9,9.24,8.08,10.5,0.0001,0.0022,**,192
+g6_V500_core_corpus_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=500,0% OOV,Corpus BLEU-1,15.9,5.12,10.78,6.94,14.41,0.0002,0.0022,**,31
+g6_V500_core_in_vocab_top1,6,Rolling-K2 vs Shifted-K2 (-75s),V=500,0% OOV,In-Vocab Top-1,11.83,1.61,10.22,6.63,13.94,0.0001,0.0022,**,31
+g6_V50_all_corpus_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=50,All Segs,Corpus BLEU-1,15.36,8.14,7.22,6.15,8.25,0.0001,0.0022,**,194
+g6_V50_all_in_vocab_top1,6,Rolling-K2 vs Shifted-K2 (-75s),V=50,All Segs,In-Vocab Top-1,18.23,4.47,13.76,12.06,15.52,0.0001,0.0022,**,188
+g6_V50_core_corpus_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=50,0% OOV,Corpus BLEU-1,27.92,10.83,17.08,10.83,23.33,0.6667,1.0,ns,2
+g6_V50_core_in_vocab_top1,6,Rolling-K2 vs Shifted-K2 (-75s),V=50,0% OOV,In-Vocab Top-1,25.42,7.92,17.5,12.5,22.5,0.5,1.0,ns,2
+s3_clean_vs_shifted_bleu1,6,Rolling-K2 vs Shifted-K2 (-75s),V=2020,All Segs,BLEU-1 (%),12.44,3.82,8.62,7.43,9.81,0.0001,0.0001,***,194
+s3_clean_vs_shifted_word_acc,6,Rolling-K2 vs Shifted-K2 (-75s),V=2020,All Segs,Word Acc (%),8.23,1.22,7.01,6.1,8.01,0.0001,0.0001,***,194
+g7_V250_all_content_acc,7,Rolling-K2 Content vs Word-Only Content,V=250,All Segs,Content Acc,4.73,2.36,2.37,1.6,3.26,0.0001,0.0004,***,191
+g7_V250_all_content_minus_function,7,Rolling-K2 Content vs Function,V=250,All Segs,Content - Function,4.75,11.44,-6.69,-8.92,-5.92,0.0001,0.0004,***,188
+g7_V250_core100_content_acc,7,Rolling-K2 Content vs Word-Only Content,V=250,0% OOV,Content Acc,12.32,9.19,3.13,-1.3,7.54,0.328,0.5171,ns,19
+g7_V250_core100_content_minus_function,7,Rolling-K2 Content vs Function,V=250,0% OOV,Content - Function,12.32,11.41,0.91,-9.84,4.04,0.3863,0.5717,ns,19
+g8_k10_vs_k1_V100_in_vocab_top1,8,Multi-Subject k=10 vs k=1,V=100,All Segs,In-Vocab Top-1,23.48,14.67,8.8,6.99,10.66,0.0001,0.0027,**,191
+g8_k10_vs_k1_V100_sent_bleu1,8,Multi-Subject k=10 vs k=1,V=100,All Segs,Sent BLEU-1,17.02,13.16,3.87,2.45,5.34,0.0001,0.0027,**,194
+g8_k10_vs_k1_V100_wer,8,Multi-Subject k=10 vs k=1,V=100,All Segs,WER,86.23,91.26,-5.03,-6.18,-3.94,0.0001,0.0027,**,194
+g8_k10_vs_k1_V2020_in_vocab_top1,8,Multi-Subject k=10 vs k=1,V=2020,All Segs,In-Vocab Top-1,16.29,9.98,6.32,4.97,7.72,0.0001,0.0027,**,192
+g8_k10_vs_k1_V2020_sent_bleu1,8,Multi-Subject k=10 vs k=1,V=2020,All Segs,Sent BLEU-1,16.37,12.44,3.93,2.54,5.41,0.0001,0.0027,**,194
+g8_k10_vs_k1_V2020_wer,8,Multi-Subject k=10 vs k=1,V=2020,All Segs,WER,86.56,91.66,-5.1,-6.26,-4.0,0.0001,0.0027,**,194
+g8_k10_vs_k1_V250_in_vocab_top1,8,Multi-Subject k=10 vs k=1,V=250,All Segs,In-Vocab Top-1,19.41,12.32,7.09,5.51,8.67,0.0001,0.0027,**,191
+g8_k10_vs_k1_V250_sent_bleu1,8,Multi-Subject k=10 vs k=1,V=250,All Segs,Sent BLEU-1,16.32,12.75,3.57,2.16,5.04,0.0001,0.0027,**,194
+g8_k10_vs_k1_V250_wer,8,Multi-Subject k=10 vs k=1,V=250,All Segs,WER,86.76,91.47,-4.71,-5.83,-3.65,0.0001,0.0027,**,194
+g8_k2_vs_k1_V100_in_vocab_top1,8,Multi-Subject k=2 vs k=1,V=100,All Segs,In-Vocab Top-1,18.95,14.67,4.27,2.29,6.29,0.0002,0.0027,**,191
+g8_k2_vs_k1_V100_sent_bleu1,8,Multi-Subject k=2 vs k=1,V=100,All Segs,Sent BLEU-1,15.04,13.16,1.88,0.5,3.32,0.0136,0.0244,**,194
+g8_k2_vs_k1_V100_wer,8,Multi-Subject k=2 vs k=1,V=100,All Segs,WER,88.71,91.26,-2.55,-3.76,-1.41,0.0002,0.0028,**,194
+g8_k2_vs_k1_V2020_in_vocab_top1,8,Multi-Subject k=2 vs k=1,V=2020,All Segs,In-Vocab Top-1,13.01,9.98,3.03,1.63,4.53,0.0002,0.0027,**,192
+g8_k2_vs_k1_V2020_sent_bleu1,8,Multi-Subject k=2 vs k=1,V=2020,All Segs,Sent BLEU-1,14.55,12.44,2.12,0.7,3.57,0.0042,0.0118,**,194
+g8_k2_vs_k1_V2020_wer,8,Multi-Subject k=2 vs k=1,V=2020,All Segs,WER,89.12,91.66,-2.54,-3.75,-1.36,0.0001,0.0027,**,194
+g8_k2_vs_k1_V250_in_vocab_top1,8,Multi-Subject k=2 vs k=1,V=250,All Segs,In-Vocab Top-1,15.73,12.32,3.41,1.69,5.16,0.0015,0.0088,**,191
+g8_k2_vs_k1_V250_sent_bleu1,8,Multi-Subject k=2 vs k=1,V=250,All Segs,Sent BLEU-1,14.65,12.75,1.9,0.49,3.34,0.0157,0.0244,**,194
+g8_k2_vs_k1_V250_wer,8,Multi-Subject k=2 vs k=1,V=250,All Segs,WER,89.11,91.47,-2.36,-3.58,-1.2,0.0015,0.0088,**,194
+g8_k5_vs_k1_V100_in_vocab_top1,8,Multi-Subject k=5 vs k=1,V=100,All Segs,In-Vocab Top-1,22.24,14.67,7.57,5.65,9.58,0.0001,0.0027,**,191
+g8_k5_vs_k1_V100_sent_bleu1,8,Multi-Subject k=5 vs k=1,V=100,All Segs,Sent BLEU-1,16.56,13.16,3.4,2.01,4.88,0.0002,0.0027,**,194
+g8_k5_vs_k1_V100_wer,8,Multi-Subject k=5 vs k=1,V=100,All Segs,WER,86.88,91.26,-4.38,-5.58,-3.25,0.0001,0.0027,**,194
+g8_k5_vs_k1_V2020_in_vocab_top1,8,Multi-Subject k=5 vs k=1,V=2020,All Segs,In-Vocab Top-1,15.05,9.98,5.07,3.67,6.54,0.0001,0.0027,**,192
+g8_k5_vs_k1_V2020_sent_bleu1,8,Multi-Subject k=5 vs k=1,V=2020,All Segs,Sent BLEU-1,15.76,12.44,3.32,1.9,4.82,0.0002,0.0027,**,194
+g8_k5_vs_k1_V2020_wer,8,Multi-Subject k=5 vs k=1,V=2020,All Segs,WER,87.52,91.66,-4.14,-5.36,-2.99,0.0001,0.0027,**,194
+g8_k5_vs_k1_V250_in_vocab_top1,8,Multi-Subject k=5 vs k=1,V=250,All Segs,In-Vocab Top-1,18.56,12.32,6.24,4.49,8.02,0.0001,0.0027,**,191
+g8_k5_vs_k1_V250_sent_bleu1,8,Multi-Subject k=5 vs k=1,V=250,All Segs,Sent BLEU-1,16.13,12.75,3.37,1.95,4.83,0.0001,0.0027,**,194
+g8_k5_vs_k1_V250_wer,8,Multi-Subject k=5 vs k=1,V=250,All Segs,WER,87.26,91.47,-4.2,-5.42,-3.05,0.0001,0.0027,**,194

@@ -1,0 +1,29 @@
+dataset,split,model_id,condition_key,condition,condition_label,horizon,paper_display_name,text_embedding_model,n_seeds,query_count_n50,query_count_common,mean_top10_pct,sd_top10_pct,mean_top1_pct,sd_top1_pct,full_vocab_top10_pct,full_vocab_top10_sd_pct
+pallier2025,test,word_only,S0,clean,Real MEG (Clean 0s) | Word-Only,-1,Word-Only,t5-large,3,7440,14590,40.641,0.1889,6.6365,0.1571,2.8358,0.1437
+pallier2025,test,word_only,S0,shifted,Shifted MEG | Word-Only,-1,Word-Only,t5-large,3,7440,14590,20.0676,0.1989,1.97,0.1384,0.9964,0.0391
+pallier2025,test,word_only,S0,shared,Synthetic (shared) | Word-Only,-1,Word-Only,t5-large,3,7440,14590,20.9872,0.3458,2.1669,0.2762,0.9175,0.084
+pallier2025,test,word_only,S0,independent,Synthetic (independent) | Word-Only,-1,Word-Only,t5-large,3,7440,14590,20.5567,0.9903,2.1205,0.1425,0.8519,0.0111
+pallier2025,test,full_context_joint,F_joint_undebiased,clean,Real MEG (Clean 0s) | Full-Context (Joint),-1,Full-Context (Joint),t5-large,3,7440,14590,68.4241,0.5162,20.7379,0.51,7.9912,0.2807
+pallier2025,test,full_context_joint,F_joint_undebiased,shifted,Shifted MEG | Full-Context (Joint),-1,Full-Context (Joint),t5-large,3,7440,14590,61.1395,0.9553,14.8786,1.2337,6.5345,0.1559
+pallier2025,test,full_context_joint,F_joint_undebiased,shared,Synthetic (shared) | Full-Context (Joint),-1,Full-Context (Joint),t5-large,3,7440,14590,58.5139,1.4402,13.994,0.8524,6.1544,0.3594
+pallier2025,test,full_context_joint,F_joint_undebiased,independent,Synthetic (independent) | Full-Context (Joint),-1,Full-Context (Joint),t5-large,3,7440,14590,25.3332,0.6715,3.1864,0.2458,1.4985,0.2423
+pallier2025,test,full_context_freeze_cnn,F_freeze_undebiased,clean,Real MEG (Clean 0s) | + Freeze CNN,-1,+ Freeze CNN,t5-large,3,7440,14590,64.3295,1.0763,17.2395,0.943,7.1017,0.3707
+pallier2025,test,full_context_freeze_cnn,F_freeze_undebiased,shifted,Shifted MEG | + Freeze CNN,-1,+ Freeze CNN,t5-large,3,7440,14590,50.4875,4.2306,9.6027,1.5836,4.8448,0.655
+pallier2025,test,full_context_freeze_cnn,F_freeze_undebiased,shared,Synthetic (shared) | + Freeze CNN,-1,+ Freeze CNN,t5-large,3,7440,14590,49.3124,4.2949,9.0928,1.3847,4.6367,0.4428
+pallier2025,test,full_context_freeze_cnn,F_freeze_undebiased,independent,Synthetic (independent) | + Freeze CNN,-1,+ Freeze CNN,t5-large,3,7440,14590,24.9787,0.9855,3.1623,0.2772,1.5944,0.1686
+pallier2025,test,debiased_full_context,F_debiased,clean,"Real MEG (Clean 0s) | + Debias, Full-Context",-1,"+ Debias, Full-Context",t5-large,3,7440,14590,57.9481,3.0716,13.5784,1.9169,6.3955,0.3764
+pallier2025,test,debiased_full_context,F_debiased,shifted,"Shifted MEG | + Debias, Full-Context",-1,"+ Debias, Full-Context",t5-large,3,7440,14590,22.6135,0.775,2.6185,0.1566,0.9848,0.1851
+pallier2025,test,debiased_full_context,F_debiased,shared,"Synthetic (shared) | + Debias, Full-Context",-1,"+ Debias, Full-Context",t5-large,3,7440,14590,23.3874,1.0489,2.653,0.3879,1.032,0.1419
+pallier2025,test,debiased_full_context,F_debiased,independent,"Synthetic (independent) | + Debias, Full-Context",-1,"+ Debias, Full-Context",t5-large,3,7440,14590,20.0311,0.7753,2.1547,0.1479,0.6669,0.1884
+pallier2025,test,debiased_local_r2,K2,clean,"Real MEG (Clean 0s) | + Debias, Local (r = 2)",2,"+ Debias, Local (r = 2)",t5-large,3,7440,14590,57.8926,1.1933,14.3178,0.4433,6.4782,0.3194
+pallier2025,test,debiased_local_r2,K2,shifted,"Shifted MEG | + Debias, Local (r = 2)",2,"+ Debias, Local (r = 2)",t5-large,3,7440,14590,23.1338,0.2327,3.0949,0.1244,1.3167,0.0591
+pallier2025,test,debiased_local_r2,K2,shared,"Synthetic (shared) | + Debias, Local (r = 2)",2,"+ Debias, Local (r = 2)",t5-large,3,7440,14590,23.986,0.9552,3.1659,0.2656,1.371,0.0909
+pallier2025,test,debiased_local_r2,K2,independent,"Synthetic (independent) | + Debias, Local (r = 2)",2,"+ Debias, Local (r = 2)",t5-large,3,7440,14590,19.7464,0.6668,2.0232,0.152,0.8336,0.042
+pallier2025,test,debiased_local_r2_k0,K0,clean,Real MEG (Clean 0s) | Local (r = 0),0,Local (r = 0),t5-large,3,7440,14590,46.0162,0.3895,9.2444,0.0841,4.4486,0.0658
+pallier2025,test,debiased_local_r2_k0,K0,shifted,Shifted MEG | Local (r = 0),0,Local (r = 0),t5-large,3,7440,14590,21.2524,0.2914,2.5091,0.1827,1.0913,0.0627
+pallier2025,test,debiased_local_r2_k0,K0,shared,Synthetic (shared) | Local (r = 0),0,Local (r = 0),t5-large,3,7440,14590,21.9496,0.8124,2.6724,0.2421,1.129,0.0927
+pallier2025,test,debiased_local_r2_k0,K0,independent,Synthetic (independent) | Local (r = 0),0,Local (r = 0),t5-large,3,7440,14590,20.2151,1.0029,1.9606,0.3048,0.8441,0.0926
+pallier2025,test,debiased_local_r2_k1,K1,clean,Real MEG (Clean 0s) | Local (r = 1),1,Local (r = 1),t5-large,3,7440,14590,55.037,1.0045,13.6126,0.9504,6.0233,0.2393
+pallier2025,test,debiased_local_r2_k1,K1,shifted,Shifted MEG | Local (r = 1),1,Local (r = 1),t5-large,3,7440,14590,22.6241,0.4646,2.8871,0.1241,1.276,0.0608
+pallier2025,test,debiased_local_r2_k1,K1,shared,Synthetic (shared) | Local (r = 1),1,Local (r = 1),t5-large,3,7440,14590,23.6799,0.9417,3.0364,0.4309,1.3567,0.0619
+pallier2025,test,debiased_local_r2_k1,K1,independent,Synthetic (independent) | Local (r = 1),1,Local (r = 1),t5-large,3,7440,14590,19.8638,0.6825,2.1473,0.2414,0.8204,0.024

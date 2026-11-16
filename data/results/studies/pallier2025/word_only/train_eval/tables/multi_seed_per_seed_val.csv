@@ -1,0 +1,4 @@
+﻿seed,best_epoch,vocab50_macro_top10_pct,vocab50_micro_top10_pct,vocab50_macro_top5_pct,vocab50_macro_top1_pct,vocab50_micro_top1_pct,vocab50_mrr,vocab50_median_rank,strict_vocab50_macro_top10_pct,full_vocab_macro_top10_pct,full_vocab_subject_macro_top10_pct,full_vocab_micro_top10_pct,full_vocab_macro_top1_pct,full_vocab_micro_top1_pct,full_vocab_mrr,full_vocab_median_rank
+0,18,38.84,42.11,23.17,6.67,9.71,0.204,14.0,38.84,9.68,0.0,0.0,0.0,0.0,0.0,1010.0
+1,13,38.81,42.52,22.51,6.54,9.76,0.2029,13.0,38.81,2.37,9.47,9.47,0.43,3.2,0.0551,792.0
+2,17,38.98,42.17,22.21,6.24,9.53,0.2009,14.0,38.98,2.47,9.86,9.86,0.52,3.54,0.0585,735.5

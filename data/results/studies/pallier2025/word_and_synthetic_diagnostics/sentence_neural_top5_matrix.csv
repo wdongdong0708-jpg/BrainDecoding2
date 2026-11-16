@@ -1,0 +1,7 @@
+segment_index,state,position,reference_word,true_word_rank,hit_top1,hit_top5,top5_words
+149,K2,0,le,1,True,True,le(0.151) | les(0.007) | leva(0.006) | leçon(0.005) | la(0.003)
+149,K2,1,petit,1,True,True,petit(0.221) | petits(0.014) | petite(0.004) | petites(0.004) | grand(0.002)
+149,K2,2,prince,1,True,True,prince(0.261) | garçon(0.002) | beau(0.001) | serpent(0.001) | heureux(0.001)
+149,K2,3,ne,2,False,True,n(0.004) | ne(0.004) | a(0.003) | s(0.003) | est(0.002)
+149,K2,4,répondit,302,False,False,jamais(0.002) | bien(0.001) | pas(0.001) | encore(0.001) | finissait(0.001)
+149,K2,5,rien,16,False,False,pas(0.021) | passait(0.003) | jamais(0.002) | passe(0.001) | plus(0.001)

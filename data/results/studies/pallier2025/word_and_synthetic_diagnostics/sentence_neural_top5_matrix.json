@@ -1,0 +1,281 @@
+{
+  "state": "K2",
+  "paper_display_name": "Local (r = 2)",
+  "segment_index": 149,
+  "group_id": "pallier2025|sub-01|run-06|pallier2025|run-06|sequence-149",
+  "subject_id": "sub-01",
+  "reference_words": [
+    "le",
+    "petit",
+    "prince",
+    "ne",
+    "répondit",
+    "rien"
+  ],
+  "positions": [
+    {
+      "position": 0,
+      "reference_word": "le",
+      "true_word_rank": 1,
+      "hit_top1": true,
+      "hit_top5": true,
+      "top_candidates": [
+        {
+          "rank": 1,
+          "word": "le",
+          "score": 0.67868,
+          "prob": 0.151111,
+          "is_target": true
+        },
+        {
+          "rank": 2,
+          "word": "les",
+          "score": 0.461096,
+          "prob": 0.006751,
+          "is_target": false
+        },
+        {
+          "rank": 3,
+          "word": "leva",
+          "score": 0.453217,
+          "prob": 0.006032,
+          "is_target": false
+        },
+        {
+          "rank": 4,
+          "word": "leçon",
+          "score": 0.438784,
+          "prob": 0.004908,
+          "is_target": false
+        },
+        {
+          "rank": 5,
+          "word": "la",
+          "score": 0.394934,
+          "prob": 0.002623,
+          "is_target": false
+        }
+      ]
+    },
+    {
+      "position": 1,
+      "reference_word": "petit",
+      "true_word_rank": 1,
+      "hit_top1": true,
+      "hit_top5": true,
+      "top_candidates": [
+        {
+          "rank": 1,
+          "word": "petit",
+          "score": 0.735838,
+          "prob": 0.220607,
+          "is_target": true
+        },
+        {
+          "rank": 2,
+          "word": "petits",
+          "score": 0.540945,
+          "prob": 0.013629,
+          "is_target": false
+        },
+        {
+          "rank": 3,
+          "word": "petite",
+          "score": 0.458017,
+          "prob": 0.004168,
+          "is_target": false
+        },
+        {
+          "rank": 4,
+          "word": "petites",
+          "score": 0.446381,
+          "prob": 0.00353,
+          "is_target": false
+        },
+        {
+          "rank": 5,
+          "word": "grand",
+          "score": 0.422196,
+          "prob": 0.002499,
+          "is_target": false
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "reference_word": "prince",
+      "true_word_rank": 1,
+      "hit_top1": true,
+      "hit_top5": true,
+      "top_candidates": [
+        {
+          "rank": 1,
+          "word": "prince",
+          "score": 0.75492,
+          "prob": 0.26079,
+          "is_target": true
+        },
+        {
+          "rank": 2,
+          "word": "garçon",
+          "score": 0.403842,
+          "prob": 0.00173,
+          "is_target": false
+        },
+        {
+          "rank": 3,
+          "word": "beau",
+          "score": 0.385504,
+          "prob": 0.001332,
+          "is_target": false
+        },
+        {
+          "rank": 4,
+          "word": "serpent",
+          "score": 0.384955,
+          "prob": 0.001321,
+          "is_target": false
+        },
+        {
+          "rank": 5,
+          "word": "heureux",
+          "score": 0.382711,
+          "prob": 0.001279,
+          "is_target": false
+        }
+      ]
+    },
+    {
+      "position": 3,
+      "reference_word": "ne",
+      "true_word_rank": 2,
+      "hit_top1": false,
+      "hit_top5": true,
+      "top_candidates": [
+        {
+          "rank": 1,
+          "word": "n",
+          "score": 0.472921,
+          "prob": 0.003721,
+          "is_target": false
+        },
+        {
+          "rank": 2,
+          "word": "ne",
+          "score": 0.471578,
+          "prob": 0.003651,
+          "is_target": true
+        },
+        {
+          "rank": 3,
+          "word": "a",
+          "score": 0.453249,
+          "prob": 0.00281,
+          "is_target": false
+        },
+        {
+          "rank": 4,
+          "word": "s",
+          "score": 0.448137,
+          "prob": 0.002612,
+          "is_target": false
+        },
+        {
+          "rank": 5,
+          "word": "est",
+          "score": 0.425432,
+          "prob": 0.001888,
+          "is_target": false
+        }
+      ]
+    },
+    {
+      "position": 4,
+      "reference_word": "répondit",
+      "true_word_rank": 302,
+      "hit_top1": false,
+      "hit_top5": false,
+      "top_candidates": [
+        {
+          "rank": 1,
+          "word": "jamais",
+          "score": 0.444146,
+          "prob": 0.001637,
+          "is_target": false
+        },
+        {
+          "rank": 2,
+          "word": "bien",
+          "score": 0.424571,
+          "prob": 0.001238,
+          "is_target": false
+        },
+        {
+          "rank": 3,
+          "word": "pas",
+          "score": 0.423813,
+          "prob": 0.001225,
+          "is_target": false
+        },
+        {
+          "rank": 4,
+          "word": "encore",
+          "score": 0.417229,
+          "prob": 0.001115,
+          "is_target": false
+        },
+        {
+          "rank": 5,
+          "word": "finissait",
+          "score": 0.416985,
+          "prob": 0.001111,
+          "is_target": false
+        }
+      ]
+    },
+    {
+      "position": 5,
+      "reference_word": "rien",
+      "true_word_rank": 16,
+      "hit_top1": false,
+      "hit_top5": false,
+      "top_candidates": [
+        {
+          "rank": 1,
+          "word": "pas",
+          "score": 0.596103,
+          "prob": 0.021287,
+          "is_target": false
+        },
+        {
+          "rank": 2,
+          "word": "passait",
+          "score": 0.465807,
+          "prob": 0.003309,
+          "is_target": false
+        },
+        {
+          "rank": 3,
+          "word": "jamais",
+          "score": 0.445355,
+          "prob": 0.002471,
+          "is_target": false
+        },
+        {
+          "rank": 4,
+          "word": "passe",
+          "score": 0.405698,
+          "prob": 0.001402,
+          "is_target": false
+        },
+        {
+          "rank": 5,
+          "word": "plus",
+          "score": 0.399559,
+          "prob": 0.001284,
+          "is_target": false
+        }
+      ]
+    }
+  ]
+}

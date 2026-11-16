@@ -1,0 +1,7 @@
+﻿scale_key,label,candidate_count,query_count,in_vocabulary_coverage_pct,seed_count,mean_macro_top10_pct,std_macro_top10_pct,mean_micro_top10_pct,std_micro_top10_pct,mean_subject_macro_top10_pct,std_subject_macro_top10_pct,mean_macro_top5_pct,std_macro_top5_pct,mean_macro_top1_pct,std_macro_top1_pct,mean_micro_top1_pct,std_micro_top1_pct,mean_mrr,std_mrr,mean_median_rank,std_median_rank,mean_fold_over_chance_top10
+N20,Top-20 Vocab,20,5580,30.24,3,81.06,1.45,80.01,1.53,81.06,1.45,60.08,1.86,22.06,1.97,22.79,1.96,0.3961,0.0201,4.33,0.47,1.621
+N50,Top-50 Vocab,50,8930,48.4,3,57.01,2.32,58.71,2.42,57.01,2.32,40.31,2.88,13.28,1.62,16.57,1.8,0.2976,0.0207,7.33,0.94,2.85
+N50_strict,Top-50 Strict (OOV=Miss),50,8930,0.0,3,56.52,2.35,58.19,2.45,56.65,2.37,0.0,0.0,13.22,1.61,16.48,1.78,0.2956,0.0204,7.67,0.47,2.826
+N100,Top-100 Vocab,100,10820,58.64,3,39.83,2.35,47.02,2.6,39.83,2.35,25.97,2.09,7.56,0.89,12.94,1.46,0.2381,0.0176,12.0,1.41,3.983
+N150,Top-150 Vocab,150,11540,62.55,3,34.12,1.84,43.29,2.62,34.12,1.84,21.42,1.37,6.37,0.38,12.1,1.32,0.2211,0.0164,14.33,1.7,5.118
+full_vocab,Full Vocab (2020),2020,18450,82.49,3,5.54,0.25,22.24,1.72,22.24,1.72,3.73,0.25,1.32,0.12,7.22,0.82,0.1202,0.0106,353.17,55.43,34.135

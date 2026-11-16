@@ -39,14 +39,11 @@ def write_index(path, payload):
     path.write_text(yaml.safe_dump(payload), encoding="utf-8")
 
 
-def test_current_scope_is_one_primary_and_two_named_supplements():
+def test_current_scope_is_one_primary_and_one_named_supplement():
     records = discover_protocols()
     assert {record["id"]: record["role"] for record in records} == {
         "unified_protocol_v2": "primary",
         "sequence_decoding_protocol": "supplement",
-        "synthetic_timing_v1": "supplement",
-        "synthetic_timing_v2": "supplement",
-        "single_word_long_window_test_v2": "supplement",
     }
     primary = resolve_protocol("unified_protocol_v2")
     assert primary["protocol"] == "data/manifests/rolling_sentence/unified_protocol_v2.md"
@@ -55,7 +52,7 @@ def test_current_scope_is_one_primary_and_two_named_supplements():
         "pallier2025", "chineseeeg2_littleprince",
     }
     with pytest.raises(ValueError, match="相近候选"):
-        resolve_protocol("synthetic_timing_v")
+        resolve_protocol("sequence_decoding_protoco")
 
 
 @pytest.mark.parametrize("mutation", ("duplicate", "parent", "missing", "outside", "primary"))
@@ -128,7 +125,7 @@ def test_corrupt_runtime_is_reported_without_falling_back_to_success(index_fixtu
 
 
 @pytest.mark.parametrize("identifier", (
-    "unified_protocol_v2", "synthetic_timing_v1", "sequence_decoding_protocol",
+    "unified_protocol_v2", "sequence_decoding_protocol",
 ))
 def test_current_queries_do_not_load_tasks_or_create_outputs(identifier, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_load_task_config", lambda record: pytest.fail("加载了训练任务"))

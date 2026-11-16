@@ -73,7 +73,7 @@
 | **`Rolling-K2`** | `0.08` | **`21.74 ± 0.99`** | **`18.70 ± 0.94`** | **`12.10 ± 0.29`** | `2.61` | **`14.09 ± 0.42`** | `2.69` |
 | `Full-Context` | `0.37` | `20.90 ± 2.01` | `17.55 ± 1.75` | `10.51 ± 1.94` | `5.33` | `12.38 ± 0.97` | `8.31` |
 
-*(完整汇总导出报告源位于独立论文仓 `C:\Users\Administrator\Desktop\论文\笔记本\实验数据\`，局部单字长窗对照已存档于 `data/results/studies/single_word_long_window_test_v2/summary.csv`。)*
+*(完整汇总导出报告源位于独立论文仓 `C:\Users\Administrator\Desktop\论文\笔记本\实验数据\`，代码仓轻量化结构表已归档于 `data/results/studies/pallier2025/`，含 7 组核心实验 `tables/*.csv`、`causal_fast_audit_summary/`、`raw_*_sequence_decoding/tables/*.csv` 与 `word_and_synthetic_diagnostics/`。)*
 
 ---
 
@@ -81,4 +81,4 @@
 
 1. **P0 — 定性词检索与句子解码样本导出**（纯读已保存测试预测，无需重训）：抽取典型法语测试词的 Top-10 语义/近音邻域预测与代表性句子对比样本（`Word-Only`、`Rolling-K0/K2`、`Full-Context`，附中英文释义）。
 2. **P1 — `Joint Synthetic` 纯脉冲负对照与词长分布一致性诊断 ($\Delta_{\text{JS}}$)**：基于现有 `braindecoding/data/synthetic_timing_dataset.py`（$60/120/240\text{ ms}$ 平滑泊松脉冲）评估已训练模型并计算与高斯物理词长先验分布的 Jensen-Shannon 散度对齐度（对标 SimpleB2T Sec. 2.3 & App. A.2/A.5）。
-3. **P1/P2 — 跨受试者一致性范数加权与额外对照整理**：审查 `braindecoding/decoding/rolling_beam_search.py` 的 `_average_subject_score_rows_rms_preserved`（拟从逐词位逆 RMS 缩放改为统一标量加权平均以贴合 SimpleB2T Eq. 7–8 物理依据）；补充 `pallier2025_causal_null_space_prefix_revision.yaml`（纯前序 $\eta=0$ 简化训练）与 `single_word_long_window_test_v2`（$1.0\text{ s}/1.27\text{ s}/1.5\text{ s}$ 长窗对比）纳入附录核对。
+3. **P1/P2 — 跨受试者一致性范数加权与额外对照整理**：审查 `braindecoding/decoding/rolling_beam_search.py` 的 `_average_subject_score_rows_rms_preserved`（拟从逐词位逆 RMS 缩放改为统一标量加权平均以贴合 SimpleB2T Eq. 7–8 物理依据）；补充 `pallier2025_causal_null_space_prefix_revision.yaml`（纯前序 $\eta=0$ 简化训练）与长窗对比诊断 `word_and_synthetic_diagnostics/long_window_comparison.csv`（$1.0\text{ s}/1.27\text{ s}/1.5\text{ s}$）纳入附录核对。

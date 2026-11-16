@@ -95,9 +95,13 @@ def require(condition, message):
 
 
 def configure_environment():
-    parent = read(PARENT)
-    cfg = next(j["config"] for j in parent["checkpoints"] if j["dataset"] == "pallier2025")
-    os.environ.setdefault("BRAINDATA_ROOT", str(Path(cfg["dataset"]["root"]).parent))
+    if PARENT.is_file():
+        parent = read(PARENT)
+        cfg = next(j["config"] for j in parent["checkpoints"] if j["dataset"] == "pallier2025")
+        os.environ.setdefault("BRAINDATA_ROOT", str(Path(cfg["dataset"]["root"]).parent))
+    else:
+        from braindecoding.config import DEFAULT_BRAINDATA_ROOT
+        os.environ.setdefault("BRAINDATA_ROOT", DEFAULT_BRAINDATA_ROOT)
     from braindecoding.config import DEFAULT_MODEL_ROOT
     os.environ.setdefault("BRAINDECODING_MODEL_ROOT", DEFAULT_MODEL_ROOT)
 
