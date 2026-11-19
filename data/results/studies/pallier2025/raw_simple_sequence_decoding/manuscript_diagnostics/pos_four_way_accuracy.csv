@@ -1,6 +1,0 @@
-condition,paper_display_name,noun_words,noun_word_acc_pct,verb_words,verb_word_acc_pct,adj_adv_words,adj_adv_word_acc_pct,function_pos_words,function_pos_word_acc_pct
-S0_brain_only,Word-Only (Brain-Only),360,13.0556,450,4.0,340,10.0,1150,3.1304
-K0_brain_only,"Local (r = 0, Brain-Only)",360,11.9444,450,8.0,340,7.3529,1150,4.9565
-K1_brain_only,"Local (r = 1, Brain-Only)",360,14.4444,450,10.6667,340,13.5294,1150,7.913
-K2_brain_only,"Local (r = 2, Brain-Only)",360,14.1667,450,9.5556,340,14.7059,1150,10.6087
-F_brain_only,Full-Context (Brain-Only),360,13.3333,450,11.7778,340,12.0588,1150,8.7826

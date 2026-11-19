@@ -162,7 +162,7 @@ def resolve_experiment_config(config, output_root=None):
         "pallier2025",
     }:
         # 只有 canonical 词级配置改用 derived；legacy 配置仍保留原缓存路径。
-        from braindecoding.data.derived import canonical_cache_paths
+        from braindecoding.data.derived_cache import canonical_cache_paths
 
         resolved.setdefault("cache", {}).update(canonical_cache_paths(dataset_name))
         if dataset_name in {

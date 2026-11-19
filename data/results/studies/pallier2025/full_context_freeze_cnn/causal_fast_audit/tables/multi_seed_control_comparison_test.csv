@@ -1,9 +1,0 @@
-﻿method_id,method_label,metric_key,metric_label,is_ratio,mean_clean,std_clean,mean_control,std_control,p_control_vs_chance,sig_control_vs_chance,mean_net_gap,std_net_gap,p_net_gap,sig_net_gap
-raw,Raw Baseline (eta=0.0),vocab50_macro_top10,50-Word Word-Macro Top-10,True,64.33,0.88,50.49,3.45,5.854214730974823e-05,,13.84,2.61,3.703415487351178e-05,
-raw,Raw Baseline (eta=0.0),vocab50_macro_top1,50-Word Word-Macro Top-1,True,17.24,0.77,9.6,1.29,0.0004110303363362959,,7.64,0.54,8.392866513454806e-09,
-raw,Raw Baseline (eta=0.0),full_vocab_macro_top10,Full-Vocab Word-Macro Top-10,True,7.1,0.3,4.84,0.53,8.705474764133213e-05,,2.26,0.23,2.6099022943631466e-07,
-raw,Raw Baseline (eta=0.0),full_vocab_macro_top1,Full-Vocab Word-Macro Top-1,True,1.75,0.11,0.99,0.16,0.0004340683908675172,,0.76,0.07,5.494248670627558e-08,
-causal_cms:eta=0.5,"Causal EMA-CMS (eta=0.5, alpha=0.99)",vocab50_macro_top10,50-Word Word-Macro Top-10,True,64.19,0.71,50.6,3.48,5.954760034162848e-05,,13.59,2.77,6.8495584217062e-05,
-causal_cms:eta=0.5,"Causal EMA-CMS (eta=0.5, alpha=0.99)",vocab50_macro_top1,50-Word Word-Macro Top-1,True,17.05,0.94,9.71,1.32,0.0004275246344346512,,7.34,0.42,1.5419466564202525e-09,
-causal_cms:eta=0.5,"Causal EMA-CMS (eta=0.5, alpha=0.99)",full_vocab_macro_top10,Full-Vocab Word-Macro Top-10,True,6.89,0.35,4.67,0.57,0.0001472859000765168,,2.22,0.23,2.100593017487411e-07,
-causal_cms:eta=0.5,"Causal EMA-CMS (eta=0.5, alpha=0.99)",full_vocab_macro_top1,Full-Vocab Word-Macro Top-1,True,1.72,0.11,0.98,0.15,0.0003288458052402576,,0.74,0.04,1.2579820370987132e-09,

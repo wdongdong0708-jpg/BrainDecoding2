@@ -13,21 +13,24 @@ import time
 
 import numpy as np
 import pandas as pd
-import psutil
+try:
+    import psutil
+except ImportError:  # pragma: no cover - optional process lock check
+    psutil = None
 import torch
 import yaml
 
-from braindecoding import synthetic_timing_control as old
-from braindecoding import unified_rolling_v2_training as neural
+from braindecoding.training import synthetic_timing_control as old
+from braindecoding.training import protocol_stage_training as neural
 from braindecoding.config import PROJECT_ROOT as ROOT
-from braindecoding.data.synthetic_timing import CONDITIONS, SyntheticTimingDataset
-from braindecoding.data.text import text_embedding_signature
+from braindecoding.data.synthetic_timing_dataset import CONDITIONS, SyntheticTimingDataset
+from braindecoding.data.text_embeddings import text_embedding_signature
 from braindecoding.experiment import file_sha256
-from braindecoding.pallier_alignment_trial import strict_bank_metrics
-from braindecoding.reporting import study_report_dir
-from braindecoding.training import epoch_recovery as recovery
-from braindecoding.training.runtime import cpu_state_dict, load_checkpoint, save_checkpoint, set_seed
-from braindecoding.training.word import encode_loader, make_loader, train_one_epoch
+from braindecoding.evaluation.retrieval_metrics import strict_bank_metrics
+from braindecoding.results import study_report_dir
+from braindecoding.training import training_runtime as recovery
+from braindecoding.training.training_runtime import cpu_state_dict, load_checkpoint, save_checkpoint, set_seed
+from braindecoding.training.word_encoder_training import encode_loader, make_loader, train_one_epoch
 
 CONFIG = ROOT / "configs/training/synthetic_timing_recovery.yaml"
 PROTOCOL = ROOT / "data/manifests/local_context_decoding_protocol.md"

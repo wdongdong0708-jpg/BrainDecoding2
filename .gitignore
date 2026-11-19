@@ -23,6 +23,8 @@ data/cache/runs/
 data/cache/artifacts/*
 !data/cache/artifacts/annotations/
 !data/cache/artifacts/annotations/**
+data/results/studies/
+data/results/exports/
 paper/manuscript/build/
 *.log
 *.pid

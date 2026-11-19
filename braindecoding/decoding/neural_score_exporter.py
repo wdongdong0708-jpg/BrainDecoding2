@@ -31,8 +31,7 @@ from braindecoding.config import (
     resolve_config_path,
     results_root,
 )
-from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import train as chinese_task
-from braindecoding.tasks.word_decoding.pallier2025 import train as pallier_task
+from braindecoding.training import meg_word_task
 from braindecoding.training.protocol_stage_training import CONFIG_PATH, group_column
 from braindecoding.training.training_runtime import (
     choose_device,
@@ -427,23 +426,15 @@ def _encode_stage_with_shifts(
     train_table=None,
     show_progress: bool = True,
 ) -> dict:
-    """加载单个阶段的检查点，提取 Clean (0s) 与 Shifted (-75s)（支持在线因果 EMA-CMS 或历史共模扣除）特征。"""
-    from braindecoding.evaluation.common_mode_subtraction_evaluation import (
-        apply_causal_ema_subtraction_to_encoded,
-        apply_position_causal_ema_subtraction_to_encoded,
-    )
+    """加载单个阶段的检查点，提取 Clean (0s) 与 Shifted (-75s) 神经表征（统一单次前向 η_eval=0.0）。"""
     from braindecoding.models import build_brain_embedding_model
-    from braindecoding.training.siamese_debiased_training import (
-        compute_causal_cms_mu0_from_encoded,
-    )
 
     norm_cms_mode = _normalize_s3_cms_mode(cms_mode)
     norm_shift_mode = _normalize_s3_shift_mode(shift_mode)
 
     dataset = cfg["experiment"]["dataset"]
     tc = cfg["training"]
-    task = pallier_task if dataset == "pallier2025" else chinese_task
-    build_fn = task.build_dataset
+    build_fn = meg_word_task.build_dataset
     grp_col = group_column(cfg)
     eval_bs = int(tc.get("eval_batch_size", tc["batch_size"]))
 
@@ -610,36 +601,10 @@ def _encode_stage_with_shifts(
     )
     hist_encoded_list: list[dict] = []
     if norm_cms_mode in {"causal_ema", "pos_causal_ema"}:
-        if (
-            mu0_payload is None
-            and abs(float(subtraction_eta)) > 1e-12
-            and train_table is not None
-            and len(train_table) > 0
-        ):
-            train_ds_mu0 = build_fn(
-                cfg,
-                train_table,
-                shift_mode=norm_shift_mode,
-                preroll_seconds=float(preroll_seconds),
+        if abs(float(subtraction_eta)) > 1e-12:
+            raise ValueError(
+                "已移除后验共模扣除 (CMS)，导出与评测统一采用单次前向 η_eval=0.0。"
             )
-            train_loader_mu0, _ = make_loader(
-                train_ds_mu0,
-                tc,
-                shuffle=False,
-                group_column=grp_col,
-                batch_size=eval_bs,
-            )
-            train_encoded_mu0 = encode_loader(
-                model,
-                train_loader_mu0,
-                device,
-                amp=amp_enabled,
-                amp_dtype=amp_dtype,
-                show_progress=show_progress,
-                progress_desc=f"S3 Export [{stage} | train mu0]",
-            )
-            mu0_payload = compute_causal_cms_mu0_from_encoded(train_encoded_mu0)
-            del train_encoded_mu0, train_loader_mu0, train_ds_mu0
     else:
         use_cms = bool(background_shift_seconds) and abs(float(subtraction_eta)) > 1e-12
         if use_cms:
@@ -656,38 +621,8 @@ def _encode_stage_with_shifts(
         torch.cuda.empty_cache()
 
     if norm_cms_mode in {"causal_ema", "pos_causal_ema"}:
-        if norm_cms_mode == "pos_causal_ema":
-            clean_debiased = apply_position_causal_ema_subtraction_to_encoded(
-                clean_encoded,
-                mu0_payload=mu0_payload,
-                eta=float(subtraction_eta),
-                ema_decay=float(cms_ema_decay),
-                eval_table=ds_table,
-                stream_keys=canonical_stream_keys,
-            )
-            control_debiased = apply_position_causal_ema_subtraction_to_encoded(
-                control_encoded,
-                mu0_payload=mu0_payload,
-                eta=float(subtraction_eta),
-                ema_decay=float(cms_ema_decay),
-                eval_table=ds_table,
-                stream_keys=canonical_stream_keys,
-            )
-        else:
-            clean_debiased = apply_causal_ema_subtraction_to_encoded(
-                clean_encoded,
-                mu0_payload=mu0_payload,
-                eta=float(subtraction_eta),
-                ema_decay=float(cms_ema_decay),
-                stream_keys=canonical_stream_keys,
-            )
-            control_debiased = apply_causal_ema_subtraction_to_encoded(
-                control_encoded,
-                mu0_payload=mu0_payload,
-                eta=float(subtraction_eta),
-                ema_decay=float(cms_ema_decay),
-                stream_keys=canonical_stream_keys,
-            )
+        clean_debiased = clean_encoded
+        control_debiased = control_encoded
         if stage in ("revision", "prefix_revision") and "revision_predictions" in clean_debiased:
             clean_states: dict[str, torch.Tensor] = {}
             shifted_states: dict[str, torch.Tensor] = {}
@@ -1413,8 +1348,7 @@ def export_neural_vocabulary_scores(
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
-    task = pallier_task if dataset == "pallier2025" else chinese_task
-    read_fn = task.dataset_module.load_event_table
+    read_fn = meg_word_task.load_event_table
     selected_subjects = rev_cfg["dataset"]["subjects"]
 
     train_table = read_fn(
@@ -1791,12 +1725,11 @@ def resolve_vocabulary_frequency_order(
 
     if not counts:
         try:
-            task = pallier_task if dataset == "pallier2025" else chinese_task
             from braindecoding.data.derived_cache import canonical_cache_paths
 
             evt_path = project_path(canonical_cache_paths(dataset)["event_table"])
             if evt_path.is_file():
-                train_df = task.dataset_module.load_event_table(
+                train_df = meg_word_task.load_event_table(
                     evt_path, split="train", trainable_only=True
                 )
                 w_col = (
@@ -1804,32 +1737,18 @@ def resolve_vocabulary_frequency_order(
                     if "normalized_word" in train_df.columns
                     else "标准词"
                 )
-                if dataset == "pallier2025":
-                    r_col = (
-                        "运行编号"
-                        if "运行编号" in train_df.columns
-                        else "recording_id"
-                    )
-                    b_col = (
-                        "BIDS事件行号"
-                        if "BIDS事件行号" in train_df.columns
-                        else "event_index"
-                    )
-                    if r_col in train_df.columns and b_col in train_df.columns:
-                        train_df = train_df.drop_duplicates([r_col, b_col])
-                else:
-                    v_col = (
-                        "音频版本"
-                        if "音频版本" in train_df.columns
-                        else "voice_version"
-                    )
-                    s_col = (
-                        "源词编号"
-                        if "源词编号" in train_df.columns
-                        else "source_word_id"
-                    )
-                    if v_col in train_df.columns and s_col in train_df.columns:
-                        train_df = train_df.drop_duplicates([v_col, s_col])
+                r_col = (
+                    "运行编号"
+                    if "运行编号" in train_df.columns
+                    else "recording_id"
+                )
+                b_col = (
+                    "BIDS事件行号"
+                    if "BIDS事件行号" in train_df.columns
+                    else ("原事件行号" if "原事件行号" in train_df.columns else "event_index")
+                )
+                if r_col in train_df.columns and b_col in train_df.columns:
+                    train_df = train_df.drop_duplicates([r_col, b_col])
                 counts = {
                     str(k): int(v)
                     for k, v in train_df[w_col]
@@ -1841,13 +1760,8 @@ def resolve_vocabulary_frequency_order(
         except Exception:
             counts = {}
 
-    if not counts:
-        manifest_dir = (
-            "pallier2025" if dataset == "pallier2025" else "chineseeeg2"
-        )
-        n150_path = project_path(
-            f"data/manifests/{manifest_dir}/vocabulary_N150.json"
-        )
+    if not counts and dataset == "pallier2025":
+        n150_path = project_path("data/manifests/pallier2025/vocabulary_N150.json")
         if n150_path.is_file():
             try:
                 n150_obj = json.loads(n150_path.read_text(encoding="utf-8"))

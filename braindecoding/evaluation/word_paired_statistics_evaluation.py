@@ -11,7 +11,7 @@ import time
 
 import numpy as np
 
-from braindecoding.evaluation.retrieval import retrieval_ranks, summarize_retrieval
+from braindecoding.evaluation.retrieval_metrics import retrieval_ranks, summarize_retrieval
 
 from braindecoding.config import PROJECT_ROOT as ROOT
 PROTOCOL = ROOT / 'data/manifests/local_context_decoding_protocol.md'

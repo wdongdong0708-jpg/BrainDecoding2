@@ -6,9 +6,9 @@ import pandas as pd
 import pytest
 import torch
 
-from braindecoding import unified_context_baselines_v2 as worker
+from braindecoding.training import context_baseline_training as worker
 from braindecoding.models import GroupedTransformerEncoder
-from braindecoding.training.word import SentenceBatchSampler
+from braindecoding.training.word_encoder_training import SentenceBatchSampler
 
 
 @pytest.fixture(autouse=True)

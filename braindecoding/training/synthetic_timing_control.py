@@ -18,19 +18,22 @@ import time
 
 import numpy as np
 import pandas as pd
-import psutil
+try:
+    import psutil
+except ImportError:  # pragma: no cover - optional process lock check
+    psutil = None
 import torch
 import yaml
 
-from braindecoding import unified_rolling_v2_training as neural
+from braindecoding.training import protocol_stage_training as neural
 from braindecoding.config import PROJECT_ROOT as ROOT
-from braindecoding.data.synthetic_timing import (
+from braindecoding.data.synthetic_timing_dataset import (
     CONDITIONS, GENERATOR_VERSION, SyntheticTimingDataset, overlap_statistics,
 )
 from braindecoding.experiment import file_sha256
-from braindecoding.pallier_alignment_trial import strict_bank_metrics
-from braindecoding.training.runtime import load_checkpoint, set_seed
-from braindecoding.training.word import make_loader, train_one_epoch, encode_loader
+from braindecoding.evaluation.retrieval_metrics import strict_bank_metrics
+from braindecoding.training.training_runtime import load_checkpoint, set_seed
+from braindecoding.training.word_encoder_training import make_loader, train_one_epoch, encode_loader
 
 CONFIG = ROOT / "configs/training/synthetic_timing_control.yaml"
 PROTOCOL = ROOT / "data/manifests/local_context_decoding_protocol.md"

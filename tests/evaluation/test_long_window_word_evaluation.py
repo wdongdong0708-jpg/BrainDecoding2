@@ -5,10 +5,10 @@ import pandas as pd
 import pytest
 import torch
 
-from braindecoding.data.single_word_long_window import SingleWordLongWindowDataset, open_signal, window_spec
+from braindecoding.data.long_window_dataset import SingleWordLongWindowDataset, open_signal, window_spec
 from braindecoding.models import build_brain_embedding_model
-from braindecoding.single_word_long_window_test_v2 import build_config, timing_rows
-from braindecoding.single_word_long_window_test_v2_results import budget_mask, holm, subject_scores
+from braindecoding.evaluation.long_window_word_evaluation import build_config, timing_rows
+from braindecoding.evaluation.long_window_word_evaluation import budget_mask, holm, subject_scores
 
 
 def fake_base(tmp_path, *, meg=False, sample_count=250):
@@ -86,7 +86,7 @@ def test_duration_budget_uses_integer_boundaries_and_real_availability(tmp_path)
     open_signal.cache_clear()
 
 
-@pytest.mark.parametrize("dataset", ["pallier2025", "chineseeeg2_littleprince"])
+@pytest.mark.parametrize("dataset", ["pallier2025"])
 def test_long_window_training_retains_word_rules_and_uses_separate_outputs(dataset):
     a = build_config(dataset, 1, "long_1p27")
     b = build_config(dataset, 1, "long_1p5")
@@ -147,8 +147,8 @@ def test_duration_selection_does_not_use_labels_or_predictions():
 
 def test_holm_primary_family_and_full_rng_recovery(tmp_path, monkeypatch):
     import random
-    from braindecoding.single_word_long_window_test_v2 import rng_state, restore_rng
-    from braindecoding.training.runtime import load_checkpoint, save_checkpoint
+    from braindecoding.evaluation.long_window_word_evaluation import rng_state, restore_rng
+    from braindecoding.training.training_runtime import load_checkpoint, save_checkpoint
     assert np.allclose(holm([.03, .01, .001, .2]), [.06, .03, .004, .2])
     monkeypatch.setattr(torch.cuda, "get_rng_state_all", lambda: [])
     monkeypatch.setattr(torch.cuda, "set_rng_state_all", lambda states: None)
@@ -166,8 +166,8 @@ def test_holm_primary_family_and_full_rng_recovery(tmp_path, monkeypatch):
 
 
 def test_full_export_keeps_four_primary_comparisons_and_six_model_rows(tmp_path, monkeypatch):
-    from braindecoding import single_word_long_window_test_v2 as study
-    from braindecoding import single_word_long_window_test_v2_results as results
+    from braindecoding.evaluation import long_window_word_evaluation as study
+    from braindecoding.evaluation import long_window_word_evaluation as results
     monkeypatch.setattr(study, "REPORT", tmp_path / "reports")
     monkeypatch.setattr(study, "verify_manifest", lambda m: None)
     monkeypatch.setattr(study, "verify_sources", lambda m, **kw: None)
@@ -200,10 +200,9 @@ def test_full_export_keeps_four_primary_comparisons_and_six_model_rows(tmp_path,
         settings=dict(statistics=dict(random_seed=161803, bootstrap_repetitions=200, sign_flip_repetitions=200)))
     output = results.export(m)
     primary = [r for r in output["comparisons"] if r["population"] == "within_long_window_budget"]
-    assert len(output["comparisons"]) == 8 and len(primary) == 4
+    assert len(output["comparisons"]) == 4 and len(primary) == 2
     assert all(r["top10"]["effect"] == pytest.approx(.5) for r in primary)
     assert all("p_holm" in r["top10"] for r in primary)
     assert len([r for r in output["summaries"] if r["population"] == "common_words"
-                and r["candidates"] == "full_training_vocabulary"]) == 12
-    assert (study.REPORT / "long_window_comparison.png").is_file()
+                and r["candidates"] == "full_training_vocabulary"]) == 6
     assert (study.REPORT / "audit.json").is_file()

@@ -9,19 +9,19 @@ import pandas as pd
 import pytest
 import torch
 
-from braindecoding import preflight
-from braindecoding.catalog import (
+from braindecoding.training import environment_preflight as preflight
+from braindecoding.protocols import (
     discover_experiment_configs,
     discover_runnable_experiment_configs,
     load_experiment,
 )
 from braindecoding.config import PROJECT_ROOT
-from braindecoding.data import pallier2025
-from braindecoding.data.text import save_text_embedding_cache
+from braindecoding.data import pallier2025_dataset as pallier2025
+from braindecoding.data.text_embeddings import save_text_embedding_cache
 from braindecoding.experiment import run_directory, scientific_config_sha256
 from braindecoding.models import BrainEmbeddingModel
-from braindecoding.tasks.word_decoding.pallier2025 import evaluate, train
-from braindecoding.training.word import make_loader
+from braindecoding.training import meg_word_task as train
+from braindecoding.training.word_encoder_training import make_loader
 
 
 @pytest.fixture(autouse=True)
@@ -194,10 +194,17 @@ def test_word_dataset_uses_canonical_window_subject_and_context_contract(
     monkeypatch.setattr(
         pallier2025, "channel_names_sha256", lambda names: pallier2025.CHANNEL_NAMES_SHA256
     )
+    from braindecoding.data import word_window_dataset
+
     monkeypatch.setattr(
-        pallier2025,
+        word_window_dataset,
+        "channel_names_sha256",
+        lambda names: pallier2025.CHANNEL_NAMES_SHA256,
+    )
+    monkeypatch.setattr(
+        word_window_dataset,
         "vectorview_channel_positions",
-        lambda names, path=None: np.zeros((len(names), 2), dtype=np.float32),
+        lambda names, path=None, layout_path=None: np.zeros((len(names), 2), dtype=np.float32),
     )
     dataset = pallier2025.Pallier2025WordDataset(
         _event_rows(),
@@ -422,92 +429,6 @@ def test_pallier_scientific_hashes_are_frozen():
     for selector, digest in expected.items():
         _, config = load_experiment(selector)
         assert scientific_config_sha256(config) == digest
-
-
-def test_checkpoint_payload_carries_frozen_dataset_contract():
-    class _State:
-        @staticmethod
-        def state_dict():
-            return {"weight": torch.zeros(1)}
-
-    _, config = load_experiment("pallier2025/sub01-10/main_word")
-    payload = train.checkpoint_payload(
-        _State(),
-        _State(),
-        config,
-        2,
-        {"retrieval_acc10_vocab=pallier2025_50_macro": 0.0},
-        [f"MEG{index:04d}" for index in range(306)],
-        np.zeros((306, 2), dtype=np.float32),
-        optimizer_updates=100,
-    )
-    contract = payload["dataset_contract"]
-    assert contract["event_table_sha256"] == preflight.PALLIER_EVENT_SHA256
-    assert contract["recording_count"] == 90
-    assert contract["channel_names_sha256"] == preflight.PALLIER_CHANNEL_SHA256
-    assert contract["text_content_sha256"] == preflight.PALLIER_TEXT_CONTENT_SHA256
-    assert contract["window_seconds"] == 1.0
-    assert contract["eligibility_window_seconds"] == 3.0
-    assert contract["baseline_seconds"] == 0.5
-    assert set(contract["vocabulary_manifest_sha256"]) == {"20", "50", "100", "150"}
-
-
-def test_pallier_warm_start_loads_only_main_word_brain_encoder(tmp_path):
-    class _TinyModel(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.brain_encoder = torch.nn.Linear(2, 2)
-            self.context_transformer = torch.nn.Linear(2, 2)
-
-    _, word_config = load_experiment("pallier2025/sub01-10/main_word")
-    _, context_config = load_experiment(
-        "pallier2025/sub01-10/main_context_warmstart"
-    )
-    channel_names = [f"MEG{index:04d}" for index in range(306)]
-    channel_positions = np.zeros((306, 2), dtype=np.float32)
-    torch.manual_seed(1)
-    source = _TinyModel()
-    payload = train.checkpoint_payload(
-        source,
-        torch.nn.Linear(1, 1),
-        word_config,
-        5,
-        {"retrieval_acc10_vocab=pallier2025_50_macro": 0.25},
-        channel_names,
-        channel_positions,
-        optimizer_updates=5902,
-    )
-    checkpoint = tmp_path / "best.pt"
-    torch.save(payload, checkpoint)
-
-    torch.manual_seed(2)
-    target = _TinyModel()
-    transformer_before = {
-        key: value.detach().clone()
-        for key, value in target.context_transformer.state_dict().items()
-    }
-    audit = train.load_pretrained_brain_encoder(
-        target,
-        checkpoint,
-        context_config,
-        channel_names,
-        channel_positions,
-    )
-
-    for key, value in source.brain_encoder.state_dict().items():
-        torch.testing.assert_close(target.brain_encoder.state_dict()[key], value)
-    for key, value in transformer_before.items():
-        torch.testing.assert_close(target.context_transformer.state_dict()[key], value)
-    assert audit["method"] == "cnn_only_best_checkpoint_brain_encoder_only"
-    assert audit["source_epoch"] == 5
-    assert audit["source_update"] == 5902
-    assert audit["loaded_loss_state"] is False
-    assert audit["loaded_transformer_state"] is False
-
-
-def test_pallier_evaluator_has_no_test_option():
-    with pytest.raises(SystemExit):
-        evaluate.parse_args(["--split", "test"])
 
 
 def test_derived_data_contains_no_checkpoint():

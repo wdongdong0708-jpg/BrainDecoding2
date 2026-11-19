@@ -25,9 +25,6 @@ import numpy as np
 import torch
 from torch.nn import functional as F_nn
 
-from braindecoding.evaluation.evaluation_exports import (
-    export_sequence_decoding_tables_and_markdown,
-)
 from braindecoding.evaluation.statistical_significance import (
     edit_distance,
     holm_adjust,
@@ -1381,15 +1378,6 @@ def sweep_confidence_gate_pareto(
         "baseline_quality_score": round(base_quality, 4),
         "pareto_curve": curve_points,
     }
-
-
-from braindecoding.evaluation.evaluation_figures import (
-    plot_baseline_and_shifted_comparison,
-    plot_confidence_gate_pareto_curve,
-    plot_multi_subject_observation_curve,
-    plot_vocabulary_scaling_curve,
-)
-
 
 
 def _top5_from_trajectory(traj: Mapping[str, object], fallback_word: str = "") -> list[str]:
@@ -2878,13 +2866,6 @@ def evaluate_and_export_sequence_decoding(
             c_gated_online_stability[f"{key}_c_gated"] = gated_entry
             condition_summaries[f"{key}_c_gated"] = gated_entry
 
-            if plot and key in {"S3_clean", "S3"}:
-                figure_paths.update(
-                    plot_confidence_gate_pareto_curve(
-                        pareto, out_dir, dataset=dataset, split=split
-                    )
-                )
-
     canonical_order = (
         "S0",
         "S0_clean",
@@ -3066,16 +3047,6 @@ def evaluate_and_export_sequence_decoding(
             )[-1]
             core_vocabulary_benchmark = core_vocabulary_benchmarks[first_k]
 
-        if plot and len(vocabulary_scaling_summaries) >= 2:
-            figure_paths.update(
-                plot_vocabulary_scaling_curve(
-                    vocabulary_scaling_summaries,
-                    out_dir,
-                    dataset=dataset,
-                    split=split,
-                )
-            )
-
     if multi_subject_bundles:
         for raw_key, ms_bundle in multi_subject_bundles.items():
             ms_records = ms_bundle.get("final_sentences") or []
@@ -3194,23 +3165,6 @@ def evaluate_and_export_sequence_decoding(
                         if ck not in k1_conds:
                             k1_conds[ck] = copy.deepcopy(cm)
 
-        if plot and len(multi_subject_summaries) >= 2:
-            figure_paths.update(
-                plot_multi_subject_observation_curve(
-                    multi_subject_summaries,
-                    out_dir,
-                    dataset=dataset,
-                    split=split,
-                )
-            )
-
-    if plot and condition_summaries:
-        figure_paths.update(
-            plot_baseline_and_shifted_comparison(
-                condition_summaries, out_dir, dataset=dataset, split=split
-            )
-        )
-
     per_subject, per_subject_summary = _compute_s3_per_subject_breakdown(
         expanded_bundles,
         language=language,
@@ -3256,20 +3210,11 @@ def evaluate_and_export_sequence_decoding(
     if f_condition_mode is not None:
         report["f_condition_mode"] = str(f_condition_mode)
 
-    s3_exports = export_sequence_decoding_tables_and_markdown(
-        report,
-        out_dir,
-        decoded_bundles=expanded_bundles,
-    )
-    report["exports"] = s3_exports
-    report["tables"] = s3_exports.get("tables", {})
-    report["markdown"] = s3_exports.get("markdown", "")
-    report["report_path"] = s3_exports.get("markdown", "")
-    save_json(out_dir / f"s3_evaluation_summary_{split}.json", report)
-    report_txt = format_sequence_decoding_report(report, verbose=True)
-    (out_dir / f"s3_evaluation_report_{split}.txt").write_text(
-        report_txt + "\n", encoding="utf-8"
-    )
+    report["exports"] = {}
+    report["tables"] = {}
+    summary_path = out_dir / f"s3_evaluation_summary_{split}.json"
+    save_json(summary_path, report)
+    report["report_path"] = str(summary_path)
     return report
 
 
@@ -3442,79 +3387,45 @@ def summarize_and_export_multi_seed_sequence_decoding(
     if resolved_tag is not None:
         agg_report["exp_tag"] = resolved_tag
 
-    s3_exports = export_sequence_decoding_tables_and_markdown(
-        agg_report,
-        seq_root,
-    )
-    agg_report["exports"] = s3_exports
-    agg_report["tables"] = s3_exports.get("tables", {})
-    agg_report["markdown"] = s3_exports.get("markdown", "")
-    agg_report["report_path"] = s3_exports.get("markdown", "")
-
-    figure_paths: dict[str, str] = {}
-    if plot:
-        conds = agg_report.get("conditions") or {}
-        pareto_map = agg_report.get("confidence_gate_pareto") or {}
-        vocab_sc = agg_report.get("vocabulary_scaling") or {}
-        ms_sc = agg_report.get("multi_subject_scaling") or {}
-        if conds:
-            figure_paths.update(
-                plot_baseline_and_shifted_comparison(
-                    conds, seq_root, dataset=ds_name, split=split
-                )
-            )
-        s3_p = pareto_map.get("S3_clean") or pareto_map.get("S3")
-        if isinstance(s3_p, dict) and s3_p.get("pareto_curve"):
-            figure_paths.update(
-                plot_confidence_gate_pareto_curve(
-                    s3_p, seq_root, dataset=ds_name, split=split
-                )
-            )
-        if len(vocab_sc) >= 2:
-            figure_paths.update(
-                plot_vocabulary_scaling_curve(
-                    vocab_sc, seq_root, dataset=ds_name, split=split
-                )
-            )
-        if len(ms_sc) >= 2:
-            figure_paths.update(
-                plot_multi_subject_observation_curve(
-                    ms_sc, seq_root, dataset=ds_name, split=split
-                )
-            )
-    agg_report["figures"] = figure_paths
+    agg_report["exports"] = {}
+    agg_report["tables"] = {}
+    agg_report["figures"] = {}
 
     multi_json_path = seq_root / f"multi_seed_sequence_decoding_{split}.json"
     summary_json_path = seq_root / f"s3_evaluation_summary_{split}.json"
     save_json(multi_json_path, agg_report)
     save_json(summary_json_path, agg_report)
 
-    report_txt = format_sequence_decoding_report(agg_report, verbose=True)
-    txt_s3_path = seq_root / f"s3_evaluation_report_{split}.txt"
-    txt_ms_path = seq_root / f"multi_seed_sequence_decoding_report_{split}.txt"
-    txt_s3_path.write_text(report_txt + "\n", encoding="utf-8")
-    txt_ms_path.write_text(report_txt + "\n", encoding="utf-8")
-
-    md_s3_path = seq_root / f"s3_evaluation_report_{split}.md"
-    md_ms_path = seq_root / f"multi_seed_sequence_decoding_report_{split}.md"
-    if md_s3_path.is_file():
-        md_ms_path.write_text(
-            md_s3_path.read_text(encoding="utf-8"), encoding="utf-8"
-        )
-
     agg_report["multi_seed_json_path"] = str(multi_json_path)
-    agg_report["multi_seed_report_md_path"] = str(md_ms_path)
-    agg_report["multi_seed_report_txt_path"] = str(txt_ms_path)
+    agg_report["report_path"] = str(multi_json_path)
     if print_report:
         print(format_sequence_decoding_report(agg_report, verbose=verbose), flush=True)
     return agg_report
 
 
-from braindecoding.evaluation.evaluation_reporting import (
-    _format_conditions_table,
-    _format_revision_gains_block,
-    format_sequence_decoding_executive_summary,
-    format_sequence_decoding_report,
-    print_sequence_decoding_report,
-)
+def format_sequence_decoding_report(
+    report: Mapping[str, Any], *, verbose: bool = False
+) -> str:
+    """紧凑输出序列解码评测摘要（用于 CLI 终端反馈）。"""
+    del verbose
+    ds = report.get("dataset", "unknown")
+    split = report.get("split", "val")
+    lines = [f"[Sequence Decoding] dataset={ds} split={split}"]
+    for cond_name, entry in (report.get("conditions") or {}).items():
+        if not isinstance(entry, Mapping):
+            continue
+        wer = entry.get("wer")
+        wa = entry.get("word_accuracy")
+        if wer is not None or wa is not None:
+            lines.append(
+                f"  - {cond_name}: WER={wer:.4f}" if isinstance(wer, (int, float))
+                else f"  - {cond_name}: word_acc={wa}"
+            )
+    return "\n".join(lines)
+
+
+def print_sequence_decoding_report(
+    report: Mapping[str, Any], *, verbose: bool = False
+) -> None:
+    print(format_sequence_decoding_report(report, verbose=verbose), flush=True)
 

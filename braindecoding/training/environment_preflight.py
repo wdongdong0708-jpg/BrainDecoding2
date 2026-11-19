@@ -8,10 +8,10 @@ import json
 import os
 from pathlib import Path
 
-from braindecoding.catalog import discover_runnable_experiment_configs
+from braindecoding.protocols import discover_runnable_experiment_configs
 from braindecoding.config import PROJECT_ROOT, project_path, load_yaml_with_extends
-from braindecoding.data.build import check_dataset
-from braindecoding.data.derived import stable_sha256
+from braindecoding.data.dataset_builder import check_dataset
+from braindecoding.data.derived_cache import stable_sha256
 from braindecoding.experiment import (
     experiment_identity,
     git_tracked_dirty,

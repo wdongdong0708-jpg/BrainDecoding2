@@ -120,7 +120,7 @@ class SyntheticTimingDataset(Dataset):
         self.group_keys = list(zip(self.table.subject_id.astype(str),
                                    self.table.recording_id.astype(str), self.table[group_column].astype(str)))
         if self.signal_key == "meg":
-            from braindecoding.data.pallier2025 import recording_onset_to_sample
+            from braindecoding.data.pallier2025_dataset import recording_onset_to_sample
             offset = float(base.dataset_config.get("window_start_offset_seconds", 0))
             absolute = np.asarray([recording_onset_to_sample(float(onset) + offset,
                 source_first_samp=base.signal_metadata[recording]["source_first_samp"],

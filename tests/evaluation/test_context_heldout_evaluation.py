@@ -3,8 +3,8 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
-from braindecoding.unified_context_heldout_test_v2 import subject_order
-from braindecoding.unified_context_baselines_v2 import common_mask
+from braindecoding.evaluation.context_heldout_evaluation import subject_order
+from braindecoding.training.context_baseline_training import common_mask
 
 
 def test_subject_parameter_order_follows_dataset_mapping():

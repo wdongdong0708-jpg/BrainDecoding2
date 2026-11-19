@@ -7,11 +7,11 @@ import pytest
 import torch
 
 from braindecoding.experiment import file_sha256
-from braindecoding.training.epoch_recovery import (
+from braindecoding.training.training_runtime import (
     capture_random_state, process_matches, protect_committed_best,
     restore_boundary, restore_random_state, save_boundary,
 )
-from braindecoding.training.runtime import save_checkpoint, set_seed
+from braindecoding.training.training_runtime import save_checkpoint, set_seed
 
 pytestmark = pytest.mark.current_protocol
 
@@ -91,7 +91,7 @@ def test_missing_rollback_and_pid_reuse_are_rejected(tmp_path):
     with pytest.raises(ValueError, match="No valid committed best"):
         restore_boundary(tmp_path, *modules(), identity="A")
     import os
-    import psutil
+    psutil = pytest.importorskip("psutil")
     created = psutil.Process().create_time()
     assert process_matches({"pid": os.getpid(), "created": created})
     assert not process_matches({"pid": os.getpid(), "created": created - 1})

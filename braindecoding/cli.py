@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from braindecoding.catalog import (
+from braindecoding.protocols import (
     discover_runnable_experiment_configs,
     resolve_selector,
 )
@@ -19,12 +19,20 @@ from braindecoding.experiment import (
     run_directory,
     warm_start_checkpoint,
 )
-from braindecoding.protocol_catalog import (
+from braindecoding.protocols import (
     discover_protocols,
     protocol_status,
     repository_path,
     resolve_protocol,
 )
+
+MEG_DATASET_CHOICES: tuple[str, ...] = (
+    "pallier2025",
+    "pallier2025_full",
+    "libribrain100",
+    "armeni2022",
+)
+DEFAULT_DATASET: str = "pallier2025"
 
 
 def _read_json(path: Path) -> dict | None:
@@ -125,25 +133,17 @@ def _retired_execution(command: str, identifier: str | None = None) -> int:
 
 
 def _task_modules(dataset: str):
-    """延迟导入数据集任务，list/status 不加载训练依赖。"""
-    if dataset == "chineseeeg2_littleprince":
-        from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import (
-            evaluate,
-            train,
-        )
+    """返回统一 MEG 任务辅助模块（已移除旧 tasks/word_decoding/ 子包）。"""
+    from braindecoding.training import meg_word_task
 
-        return train, evaluate
-    if dataset == "pallier2025":
-        from braindecoding.tasks.word_decoding.pallier2025 import evaluate, train
-
-        return train, evaluate
+    if dataset in {"pallier2025", "pallier2025_full", "libribrain100", "armeni2022"}:
+        return meg_word_task, None
     raise ValueError(f"当前 CLI 不支持数据集：{dataset}")
 
 
 def _load_task_config(record: dict) -> tuple[dict, object, object]:
     train, evaluate = _task_modules(record["identity"]["dataset"])
-    loader = getattr(train, "载入配置", None) or train.load_config
-    return loader(record["config_path"]), train, evaluate
+    return train.load_config(record["config_path"]), train, evaluate
 
 
 def _derived_status(dataset: str) -> str:
@@ -198,7 +198,7 @@ def _preflight(selector: str) -> int:
             f"请先查看 brain-decoding show {selector}。"
         )
     _legacy_notice()
-    from braindecoding.preflight import build_preflight_report
+    from braindecoding.training.environment_preflight import build_preflight_report
 
     record = resolve_selector(selector)
     report = build_preflight_report(config_paths=(record["relative_config"],))
@@ -256,7 +256,7 @@ def _print_status(selector: str | None, legacy: bool = False) -> int:
 
 
 def _data_check(dataset: str) -> int:
-    from braindecoding.data.build import check_dataset
+    from braindecoding.data.dataset_builder import check_dataset
 
     print(json.dumps(check_dataset(dataset), ensure_ascii=False, indent=2))
     return 0
@@ -269,7 +269,7 @@ def _data_build(args) -> int:
             f"历史数据集的构建入口已停用：{args.dataset}。"
             f"当前数据集：{', '.join(sorted(datasets))}。"
         )
-    from braindecoding.data.build import build_dataset
+    from braindecoding.data.dataset_builder import build_dataset
 
     selected = args.events or args.signals or args.text or args.all
     result = build_dataset(
@@ -326,20 +326,6 @@ def _report(args) -> int:
             target_input = str(single_json)
         elif multi_json.is_file():
             target_input = str(multi_json)
-        elif outer_dir.is_dir():
-            from braindecoding.evaluation.evaluation_reporting import (
-                upgrade_and_refresh_saved_multi_seed_reports,
-            )
-
-            upgrade_and_refresh_saved_multi_seed_reports(
-                outer_dir,
-                split=sp_arg,
-                control_method=getattr(args, "control_method", None),
-                control_metric=getattr(args, "control_metric", None),
-                verbose=bool(getattr(args, "verbose", False)),
-                print_to_stdout=True,
-            )
-            return 0
         else:
             target_input = str(multi_json)
 
@@ -352,29 +338,11 @@ def _report(args) -> int:
         or has_workflow_locator
         or candidate_path.exists()
     ):
-        from braindecoding.evaluation.evaluation_figures import (
-            replot_from_saved_json,
-        )
-        from braindecoding.evaluation.evaluation_reporting import (
-            render_saved_evaluation_report,
-        )
-
-        text = render_saved_evaluation_report(
-            candidate_path,
-            verbose=bool(getattr(args, "verbose", False)),
-            control_method=getattr(args, "control_method", None),
-            control_metric=getattr(args, "control_metric", None),
-        )
-        print(text, flush=True)
-        if bool(getattr(args, "replot", False)):
-            figs = replot_from_saved_json(
-                candidate_path,
-                output_dir=getattr(args, "output_dir", None),
-            )
-            print(f" [Replot Complete] Generated {len(figs)} figure asset(s):", flush=True)
-            for k, v in figs.items():
-                print(f"   - {k}: {v}", flush=True)
-        return 0
+        if candidate_path.is_file() and candidate_path.suffix.lower() == ".json":
+            payload = json.loads(candidate_path.read_text(encoding="utf-8"))
+            print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
+            return 0
+        raise FileNotFoundError(f"未找到评估 JSON 文件：{candidate_path}")
 
     selector = str(target_input)
     write = bool(getattr(args, "write", False))
@@ -467,9 +435,9 @@ def _add_training_workflow_args(
     )
     parser.add_argument(
         "--dataset",
-        choices=("chineseeeg2_littleprince", "pallier2025"),
+        choices=MEG_DATASET_CHOICES,
         default=None,
-        help="目标数据集（指定 --config 时自动从 YAML 读取；未指定时默认 chineseeeg2_littleprince）",
+        help="目标 MEG 数据集（指定 --config 时自动从 YAML 读取；未指定时默认 pallier2025）",
     )
     parser.add_argument(
         "--stage",
@@ -700,9 +668,9 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--dataset",
-        choices=("chineseeeg2_littleprince", "pallier2025"),
+        choices=MEG_DATASET_CHOICES,
         default=None,
-        help="目标数据集（指定 --config 时自动从 YAML 读取；未指定时默认 chineseeeg2_littleprince）",
+        help="目标 MEG 数据集（指定 --config 时自动从 YAML 读取；未指定时默认 pallier2025）",
     )
     parser.add_argument(
         "--stage",
@@ -892,7 +860,7 @@ def _workflow_cache(args) -> int:
 
     dataset = args.dataset
     if dataset is None and args.config is None:
-        dataset = "chineseeeg2_littleprince"
+        dataset = DEFAULT_DATASET
     report = run_cache_workflow(
         dataset,
         subject=args.subject,
@@ -911,7 +879,7 @@ def _workflow_train(args, *, mode: str) -> int:
 
     dataset = args.dataset
     if dataset is None and args.config is None:
-        dataset = "chineseeeg2_littleprince"
+        dataset = DEFAULT_DATASET
     seed_list = _resolve_seed_list(args)
     for idx, seed_val in enumerate(seed_list):
         if len(seed_list) > 1:
@@ -992,7 +960,7 @@ def _workflow_eval(args) -> int:
                 if isinstance(raw_ctrl, dict):
                     dataset = (raw_ctrl.get("workflow") or {}).get("dataset")
         if dataset is None:
-            dataset = "chineseeeg2_littleprince"
+            dataset = DEFAULT_DATASET
     seed_list = _resolve_seed_list(args)
     run_evaluation_workflow(
         dataset,
@@ -1084,9 +1052,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cache_cmd.add_argument(
         "--dataset",
-        choices=("chineseeeg2_littleprince", "pallier2025", "all"),
+        choices=(*MEG_DATASET_CHOICES, "all"),
         default=None,
-        help="要预热缓存的数据集（未传 --config 时默认 chineseeeg2_littleprince，支持 all）",
+        help="要预热缓存的数据集（未传 --config 时默认 pallier2025，支持 all）",
     )
     _add_subject_subset_args(cache_cmd)
     cache_cmd.add_argument(
@@ -1145,8 +1113,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     decode_cmd.add_argument(
         "--dataset",
-        choices=("pallier2025", "chineseeeg2_littleprince"),
-        default="pallier2025",
+        choices=MEG_DATASET_CHOICES,
+        default=DEFAULT_DATASET,
         help="目标数据集（默认：pallier2025）",
     )
     decode_cmd.add_argument(
@@ -1293,7 +1261,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report.add_argument(
         "--dataset",
-        choices=("chineseeeg2_littleprince", "pallier2025"),
+        choices=MEG_DATASET_CHOICES,
         default=None,
         help="可选：通过数据集名称定位已保存评估报告",
     )

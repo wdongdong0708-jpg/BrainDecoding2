@@ -11,13 +11,13 @@ import pytest
 import torch
 
 from braindecoding import cli
-from braindecoding.catalog import load_experiment
+from braindecoding.protocols import load_experiment
 from braindecoding.optimizers import (
     build_adamw_for_modules,
     build_cosine_annealing_scheduler,
 )
 from braindecoding.results import render_run_report, write_run_report
-from braindecoding.training.word import (
+from braindecoding.training.word_encoder_training import (
     brain_encoder_frozen_for_epoch,
     train_one_epoch,
     validation_patience_exhausted,
@@ -33,7 +33,6 @@ def configured_roots(monkeypatch):
 
 
 LEGACY_BASELINE_SCOPES = (
-    "chineseeeg2_littleprince/sub01-08",
     "pallier2025/sub01-10",
 )
 

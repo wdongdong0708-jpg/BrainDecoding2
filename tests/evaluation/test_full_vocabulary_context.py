@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from braindecoding import full_vocabulary_context_test_v2 as worker
+from braindecoding.evaluation import full_vocabulary_evaluation as worker
 
 
 def test_full_lexicon_keeps_oov_references_as_errors_in_macro_and_micro():

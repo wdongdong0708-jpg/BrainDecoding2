@@ -551,3 +551,97 @@ def recall_diagnostic(ids_by_delay, truths, vocabulary, train_words,
         "ranks": clean_ranks,
         "last_delay": last_delay,
     }
+
+
+def strict_bank_metrics(encoded, dataset, vocabulary):
+    """在固定词表候选库上计算全事件与共同视界事件检索指标（保留全部候选词）。"""
+    words = np.asarray(encoded["words"])
+    vocabulary = list(vocabulary)
+    bank = np.stack([dataset.embedding_map[w] for w in vocabulary])
+    eligible = np.isin(words, vocabulary)
+    common = np.logical_and.reduce(
+        [
+            mask.numpy().astype(bool)
+            for mask in encoded["revision_availability_masks"].values()
+        ]
+    )
+    subject_map = dict(zip(dataset.table.event_id, dataset.table.subject_id))
+    subjects = np.asarray([subject_map[e] for e in encoded["event_ids"]])
+    output = {}
+    for delay, predictions in encoded["revision_predictions"].items():
+        ranks = retrieval_ranks(predictions[eligible], words[eligible], bank, vocabulary)
+        per_delay = {}
+        for name, mask in (
+            ("all_targets", np.ones(eligible.sum(), dtype=bool)),
+            ("common_targets", common[eligible]),
+        ):
+            selected_words = words[eligible][mask]
+            selected_subjects = subjects[eligible][mask]
+            selected_ranks = ranks[mask]
+            item = summarize_retrieval(
+                selected_ranks, selected_words, len(vocabulary), top_ks=(1, 10)
+            )
+            item["per_subject"] = {
+                str(subject): summarize_retrieval(
+                    selected_ranks[selected_subjects == subject],
+                    selected_words[selected_subjects == subject],
+                    len(vocabulary),
+                    top_ks=(1, 10),
+                )
+                for subject in sorted(set(selected_subjects))
+            }
+            per_delay[name] = item
+        output[str(delay)] = per_delay
+    return output
+
+
+def full_vocabulary_metrics(encoded, ds, vocabulary):
+    """在完整训练词表上计算多视界受试者宏平均 Top-1/Top-10 检索指标。"""
+    bank = torch.nn.functional.normalize(
+        torch.tensor(
+            np.stack([ds.embedding_map[w] for w in vocabulary]), dtype=torch.float32
+        ),
+        dim=1,
+    )
+    index = {w: i for i, w in enumerate(vocabulary)}
+    targets = np.array([index.get(w, -1) for w in encoded["words"]])
+    subject_map = dict(zip(ds.table.event_id, ds.table.subject_id))
+    subjects = np.array([subject_map[event] for event in encoded["event_ids"]])
+    predictions = encoded.get("revision_predictions", {0: encoded["predictions"]})
+    masks = encoded.get(
+        "revision_availability_masks",
+        {0: torch.ones(len(targets), dtype=torch.bool)},
+    )
+    common = np.logical_and.reduce([mask.numpy() for mask in masks.values()])
+    result = {}
+    selection = []
+    for delay, matrix in predictions.items():
+        scores = torch.nn.functional.normalize(matrix.float(), dim=1) @ bank.T
+        top = scores.topk(min(10, len(vocabulary)), dim=1).indices.numpy()
+        correct10 = (top == targets[:, None]).any(axis=1)
+        correct1 = top[:, 0] == targets
+        per_subject = {}
+        for subject in sorted(set(subjects)):
+            use = common & (subjects == subject)
+            if not use.any():
+                raise ValueError("No common-horizon validation positions for a subject.")
+            per_subject[str(subject)] = {
+                "n": int(use.sum()),
+                "top1": float(correct1[use].mean()),
+                "top10": float(correct10[use].mean()),
+            }
+        macro = float(np.mean([v["top10"] for v in per_subject.values()]))
+        selection.append(macro)
+        result[f"k{delay}"] = {
+            "subject_macro_top10": macro,
+            "per_subject": per_subject,
+        }
+    return {
+        "selection_score": float(np.mean(selection)),
+        "horizons": result,
+        "candidate_count": len(vocabulary),
+        "all_reference_words_retained": True,
+        "reference_count": len(targets),
+        "common_count": int(common.sum()),
+        "reference_in_vocabulary": float((targets >= 0).mean()),
+    }

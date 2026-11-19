@@ -110,7 +110,7 @@ def evaluate_vocabulary_manifests(
     vocabulary_manifests,
 ):
     """用现有公共数学一次生成四个冻结词表的 canonical 结果块。"""
-    from braindecoding.evaluation.retrieval import fixed_vocabulary_retrieval_metrics
+    from braindecoding.evaluation.retrieval_metrics import fixed_vocabulary_retrieval_metrics
 
     results = {}
     for size in PRIMARY_VOCABULARY_SIZES:

@@ -94,7 +94,10 @@ import shutil
 import time
 
 import numpy as np
-import psutil
+try:
+    import psutil
+except ImportError:  # pragma: no cover - optional in minimal PNPL env
+    psutil = None
 import torch
 
 from braindecoding.experiment import file_sha256
@@ -105,6 +108,8 @@ BEST_FILES = ("best.pt", "best_full_vocab.pt")
 
 def process_matches(record):
     """A reused PID must not turn a stale lock into a live training process."""
+    if psutil is None:
+        return False
     try:
         return abs(psutil.Process(int(record["pid"])).create_time() - float(record["created"])) < 0.01
     except (KeyError, ValueError, TypeError, psutil.NoSuchProcess):

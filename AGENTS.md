@@ -124,16 +124,15 @@ Entry 的语义必须来自模型对真实证据的理解。不得仅依据路�
   - 仓库根目录仅允许保留 `README.md` 与 `AGENTS.md`，严禁在根目录或 `braindecoding/`、`scripts/`、`tests/` 中新建零散的 `.md` 说明文档或 `.json` 结果文件。
   - **数据与产物唯一合法归属**：
     - 冻结协议与实验清单 $\rightarrow$ `data/manifests/`
-    - 正式实验结果与统计表导出 $\rightarrow$ `data/results/studies/` 与 `data/results/exports/`
-    - 本地派生信号缓存与对齐产物 $\rightarrow$ `data/cache/`
-    - 临时调试输出、运行日志与模型权重 $\rightarrow$ `outputs/`、`tmp/` 或 `.cache/`（均由 `.gitignore` 忽略，不入 Git）
-- **职责分层**：核心算法与业务逻辑必须写在 `braindecoding/{data,models,training,decoding,evaluation,tasks}/` 对应子包中；`scripts/` 仅保留薄层入口脚本与 `scripts/colab/` 专用脚本。
+    - 本地派生信号缓存与对齐产物 $\rightarrow$ `data/cache/`（由 `.gitignore` 忽略，不入 Git）
+    - 实验结果导出、临时调试输出、运行日志与模型权重 $\rightarrow$ `data/results/studies/`、`data/results/exports/`、`outputs/`、`tmp/` 或 `.cache/`（均由 `.gitignore` 忽略，不入 Git）
+- **职责分层**：核心算法与业务逻辑必须写在 `braindecoding/{data,models,training,decoding,evaluation}/` 对应子包中；`scripts/` 仅保留薄层 CLI 入口与环境辅助脚本。
 
 ### 3. 文件与符号命名规范（见名知意，禁止含糊缩写）
 
-- **文件名必须自解释**：所有新增模块、脚本、配置与测试文件统一采用完整英文单词的 `snake_case` 命名，让人仅看文件名即可明确其职责与作用（例如使用 `word_language_model_rescorer.py`、`single_step_atomic_writer.py`，而非缩写代号）。
-- **禁止自造缩写与含糊命名**：严禁使用 `exp`、`res`、` util`、`cfg`、`tmp`、`helper`、`new`、`v1_fix` 或实验代号缩写命名代码文件（仅允许 `eeg`、`meg`、`llm`、`cli`、`io` 等领域通用标准词）。
-- **自动化门禁校验**：任何新增文件或结构调整完成后，必须确保 `pytest tests/core/test_repository_conventions.py` 全部通过。
+- **文件名必须自解释**：所有新增模块、脚本、配置与测试文件统一采用完整英文单词的 `snake_case` 命名，让人仅看文件名即可明确其职责与作用（例如使用 `word_window_dataset.py`、`pnpl_dataset_adapter.py`，而非缩写代号）。
+- **禁止自造缩写与含糊命名**：严禁使用 `exp`、`res`、`util`、`cfg`、`tmp`、`helper`、`new`、`v1_fix` 或实验代号缩写命名代码文件（仅允许 `eeg`、`meg`、`llm`、`cli`、`io`、`pnpl` 等领域通用标准词）。
+- **核心权重与防泄漏安全网**：任何模型、数据或训练改动完成后，必须确保 `pytest tests/core/test_checkpoint_state_dict_compat.py tests/data` 全部通过，严禁改动活跃 `nn.Module` 的 `state_dict` 参数键名。
 
 ### 4. 论文科学主线与废弃支线红线（防上下文污染）
 

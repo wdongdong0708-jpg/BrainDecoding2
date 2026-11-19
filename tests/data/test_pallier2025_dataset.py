@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from braindecoding.data import pallier2025
-from braindecoding.data import build as build_derived_data
-from braindecoding.events import CORE_EVENT_COLUMNS, validate_event_table
+from braindecoding.data import pallier2025_dataset as pallier2025
+from braindecoding.data import dataset_builder as build_derived_data
+from braindecoding.data.event_table import CORE_EVENT_COLUMNS, validate_event_table
 
 
 def _events(words):

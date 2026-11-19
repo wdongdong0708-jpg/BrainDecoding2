@@ -1,22 +1,3 @@
-"""braindecoding.training 子包。"""
+"""braindecoding.training 子包：词级基座训练、孪生错位去偏与工作流编排。"""
+
 from __future__ import annotations
-
-import importlib
-import sys
-
-
-def __getattr__(name: str):
-    from braindecoding import _MERGED_MODULE_ALIASES, _SUBPACKAGE_MAP
-    if name in _SUBPACKAGE_MAP:
-        target_sub = _SUBPACKAGE_MAP[name]
-        mod = importlib.import_module(f"braindecoding.{target_sub}.{name}")
-        globals()[name] = mod
-        return mod
-    if name in _MERGED_MODULE_ALIASES:
-        target_sub, target_stem = _MERGED_MODULE_ALIASES[name]
-        canonical = f"braindecoding.{target_sub}.{target_stem}" if target_sub else f"braindecoding.{target_stem}"
-        mod = importlib.import_module(canonical)
-        sys.modules[f"braindecoding.training.{name}"] = mod
-        globals()[name] = mod
-        return mod
-    raise AttributeError(f"module 'braindecoding.training' has no attribute {name!r}")

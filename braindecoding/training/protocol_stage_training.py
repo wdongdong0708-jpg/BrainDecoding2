@@ -20,22 +20,29 @@ import torch
 import yaml
 
 from braindecoding.config import PROJECT_ROOT, load_yaml_with_extends, project_path
-from braindecoding.data.text import text_embedding_signature
+from braindecoding.data.text_embeddings import text_embedding_signature
 from braindecoding.experiment import file_sha256, run_directory
 from braindecoding.losses import build_siglip_loss
 from braindecoding.models import build_brain_embedding_model
 from braindecoding.optimizers import build_adamw_for_modules, build_cosine_annealing_scheduler
-from braindecoding.pallier_alignment_trial import strict_bank_metrics
-from braindecoding.pallier_bge_trial import save_json
-from braindecoding.reporting import study_report_dir
-from braindecoding.tasks.word_decoding.pallier2025 import train as pallier
-from braindecoding.training.runtime import cpu_state_dict, load_checkpoint, save_checkpoint, set_seed
-from braindecoding.training.word import make_loader, train_one_epoch
-from braindecoding.unified_rolling_training import full_vocabulary_metrics
+from braindecoding.evaluation.retrieval_metrics import (
+    full_vocabulary_metrics,
+    strict_bank_metrics,
+)
+from braindecoding.results import study_report_dir
+from braindecoding.training import meg_word_task as pallier
+from braindecoding.training.training_runtime import (
+    cpu_state_dict,
+    load_checkpoint,
+    save_checkpoint,
+    save_json,
+    set_seed,
+)
+from braindecoding.training.word_encoder_training import make_loader, train_one_epoch
 
 
 CONFIG_PATH = PROJECT_ROOT / "configs/training/rolling_revision_protocol.yaml"
-DATASETS = ("pallier2025", "chineseeeg2_littleprince")
+DATASETS = ("pallier2025",)
 STAGES = ("word", "revision")
 COMMON_TRAINING_KEYS = (
     "device", "batch_size", "num_workers", "patience", "learning_rate",
@@ -63,8 +70,7 @@ def build_config(dataset, seed, stage, word_checkpoint=None):
     _identity(settings, dataset, seed, stage)
     adapter_stage = "revision" if stage == "prefix_revision" else stage
     adapter = settings["adapters"][dataset]
-    loader = pallier.load_config if dataset == "pallier2025" else chinese.load_config
-    cfg = loader(project_path(adapter[f"{adapter_stage}_source_config"]))
+    cfg = pallier.load_config(project_path(adapter[f"{adapter_stage}_source_config"]))
     cfg["experiment"]["output_group"] = settings["execution"]["output_group"]
     if stage == "prefix_revision":
         cfg["experiment"]["experiment_id"] = "full_history_prefix_revision"
@@ -134,21 +140,19 @@ def assert_ready(settings):
 
 
 def group_column(cfg):
-    if cfg["experiment"]["dataset"] == "pallier2025":
-        return pallier.loader_group_column(cfg)
-    return "sentence_uid"
+    return pallier.loader_group_column(cfg)
 
 
 def dataset_and_loader(cfg, split):
     if split not in ("train", "val"):
         raise ValueError("Only train and validation may be loaded.")
-    is_pallier = cfg["experiment"]["dataset"] == "pallier2025"
-    task = pallier if is_pallier else chinese
-    read = task.dataset_module.load_event_table
-    build = task.build_dataset
-    table = read(cfg["cache"]["event_table"], split=split,
-                 subjects=cfg["dataset"]["subjects"], trainable_only=True)
-    dataset = build(cfg, table)
+    table = pallier.load_event_table(
+        cfg["cache"]["event_table"],
+        split=split,
+        subjects=cfg["dataset"].get("subjects"),
+        trainable_only=True,
+    )
+    dataset = pallier.build_dataset(cfg, table)
     loader, sampler = make_loader(dataset, cfg["training"], shuffle=split == "train",
                                   group_column=group_column(cfg))
     return dataset, loader, sampler
@@ -168,8 +172,12 @@ def populations(cfg, train, val, adapter):
     manifest = json.loads(project_path(adapter["vocabulary_manifest"]).read_text(encoding="utf-8"))
     if vocabulary != manifest["vocabulary"] or len(vocabulary) != adapter["expected_train_vocabulary"]:
         raise ValueError("Training vocabulary changed.")
-    vocab50 = list(pallier.frozen_vocabulary() if cfg["experiment"]["dataset"] == "pallier2025"
-                   else chinese.frozen_vocabulary(cfg["cache"]["event_table"]))
+    vocab50 = list(
+        pallier.frozen_vocabulary(
+            dataset=cfg["experiment"]["dataset"],
+            train_words=train.table["normalized_word"].tolist(),
+        )
+    )
     if len(vocab50) != 50 or len(set(vocab50)) != 50 or not set(vocab50).issubset(vocabulary):
         raise ValueError("Frozen 50-word evaluation bank changed.")
     common = val.table.groupby(context_column, sort=False).cumcount(ascending=False).to_numpy() >= 2
@@ -191,10 +199,9 @@ def populations(cfg, train, val, adapter):
 
 def validate(model, loader, dataset, vocabulary, vocab50, cfg, adapter, revision):
     device = torch.device("cuda")
-    if cfg["experiment"]["dataset"] == "pallier2025":
-        metrics, encoded = pallier.evaluate_loader(model, loader, device, amp=True)
-    else:
-        metrics, encoded = chinese.evaluate_loader(model, loader, device, vocab50, amp=True)
+    metrics, encoded = pallier.evaluate_loader(
+        model, loader, device, amp=True, vocabulary=vocab50
+    )
     if len(encoded["event_ids"]) != len(dataset) or set(encoded["event_ids"]) != set(dataset.table.event_id):
         raise ValueError("Validation event population changed.")
     predictions = encoded.get("revision_predictions", {0: encoded["predictions"]})
@@ -263,12 +270,20 @@ def source_hashes(cfg, adapter):
     paths = {Path(__file__).resolve(), *list(_config_chain(CONFIG_PATH))}
     for key in ("word_source_config", "revision_source_config"):
         paths.update(_config_chain(project_path(adapter[key])))
-    sources = ["config.py", "experiment.py", "training/word.py", "training/runtime.py",
-               "models.py", "losses.py", "optimizers.py", "data/text.py",
-               "evaluation/retrieval.py", "results.py", "pallier_bge_trial.py",
-               "pallier_alignment_trial.py", "unified_rolling_training.py",
-               f"tasks/word_decoding/{dataset}/train.py",
-               "data/pallier2025.py" if dataset == "pallier2025" else "data/chineseeeg2.py"]
+    sources = [
+        "config.py",
+        "experiment.py",
+        "training/word_encoder_training.py",
+        "training/training_runtime.py",
+        "training/meg_word_task.py",
+        "losses.py",
+        "optimizers.py",
+        "data/text_embeddings.py",
+        "data/word_window_dataset.py",
+        "data/pallier2025_dataset.py",
+        "evaluation/retrieval_metrics.py",
+        "results.py",
+    ]
     paths.update(PROJECT_ROOT / "braindecoding" / item for item in sources)
     paths.update(Path(cfg["cache"][key]) for key in ("event_table", "text_embeddings"))
     paths.add(Path(cfg["cache"]["text_embeddings"]).with_suffix(".json"))
@@ -437,6 +452,79 @@ def run_stage(dataset, seed, stage, word_checkpoint=None):
         except OSError as save_error:
             print(f"Could not persist failed manifest: {save_error}", file=sys.stderr, flush=True)
         raise
+
+
+def _portable(value):
+    if isinstance(value, dict):
+        return {k: _portable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_portable(v) for v in value]
+    return value.replace("\\", "/") if isinstance(value, str) else value
+
+
+def scientific_rules(cfg, stage):
+    """Ignore run locations, but retain all effective scientific settings."""
+    tc = cfg["training"]
+    keys = (
+        "seed", "batch_size", "epochs", "patience", "learning_rate",
+        "weight_decay", "minimum_learning_rate", "max_grad_norm", "amp", "top_ks",
+    )
+    training = {key: tc[key] for key in keys}
+    training["amp_dtype"] = tc.get("amp_dtype", "float16")
+    training["preserve_complete_groups"] = tc.get("preserve_complete_groups", False)
+    if stage == "revision":
+        training["revision_cutoff_policy"] = tc.get("revision_cutoff_policy", "sample_one")
+        training["freeze_brain_encoder_epochs"] = tc.get("freeze_brain_encoder_epochs", 0)
+    return _portable({
+        "dataset": cfg["dataset"], "model": cfg["model"], "loss": cfg["loss"],
+        "text_embedding": cfg["text_embedding"], "training": training,
+        "selection_metric": cfg["evaluation"]["selection_metric"],
+        "cache": {k: cfg["cache"][k] for k in ("event_table", "text_embeddings")},
+    })
+
+
+def verify_completed(path, dataset, seed, stage, *, word_checkpoint=None, deep=True):
+    """核验已完成阶段目录的配置文件、摘要、源哈希与检查点一致性。"""
+    path = project_path(path)
+    required = ("run_manifest.json", "training_summary.json", "resolved_config.yaml", "best.pt")
+    if any(not (path / name).is_file() for name in required):
+        raise ValueError(f"Incomplete run; required artifacts missing: {path}")
+    manifest = json.loads((path / required[0]).read_text(encoding="utf-8"))
+    summary = json.loads((path / required[1]).read_text(encoding="utf-8"))
+    if manifest.get("status") != "completed" or summary.get("status") != "completed":
+        raise ValueError(f"Run is not completed: {path}")
+    actual = load_yaml_with_extends(path / "resolved_config.yaml")
+    expected = build_config(dataset, seed, stage, word_checkpoint=word_checkpoint)
+    if (
+        actual["experiment"]["dataset"] != dataset
+        or actual["training"]["seed"] != seed
+        or manifest.get("stage") != stage
+        or manifest.get("seed") != seed
+    ):
+        raise ValueError(f"Run identity mismatch: {path}")
+    if scientific_rules(actual, stage) != scientific_rules(expected, stage):
+        raise ValueError(f"Completed run uses different scientific rules: {path}")
+    checkpoint_digest = file_sha256(path / "best.pt")
+    best = summary["best"]["legacy50"]
+    history = summary["history"]
+    if deep:
+        cp = load_checkpoint(path / "best.pt")
+        if not cp.get("model_state") or not cp.get("channel_names"):
+            raise ValueError(f"Incomplete checkpoint payload: {path}")
+        del cp
+        gc.collect()
+    return {
+        "dataset": dataset,
+        "seed": seed,
+        "stage": stage,
+        "path": str(path),
+        "checkpoint": str(path / "best.pt"),
+        "checkpoint_sha256": checkpoint_digest,
+        "best_epoch": best["epoch"],
+        "completed_epochs": len(history),
+        "verification": "config_inputs_manifest_and_checkpoint" if deep else "config_inputs_and_manifest",
+        "test_evaluated": False,
+    }
 
 
 def main():

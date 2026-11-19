@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from braindecoding.candidate_recall import (
+from braindecoding.evaluation.retrieval_metrics import (
     horizon_masks,
     recall_diagnostic,
     target_ranks,

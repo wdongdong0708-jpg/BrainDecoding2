@@ -379,14 +379,6 @@ def test_train_one_epoch_tier_a_null_space_and_tier_b_amortized_timing():
             "configs/training/siamese_debiased/pallier2025_amortized_timing_prefix_revision.yaml",
             "amortized_timing",
         ),
-        (
-            "configs/training/siamese_debiased/chineseeeg2_causal_null_space_prefix_revision.yaml",
-            "null_space",
-        ),
-        (
-            "configs/training/siamese_debiased/chineseeeg2_amortized_timing_prefix_revision.yaml",
-            "amortized_timing",
-        ),
     ],
 )
 def test_new_causal_yaml_configs_build_workflow_cleanly(

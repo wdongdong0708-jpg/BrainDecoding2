@@ -6,8 +6,8 @@ import pandas as pd
 import pytest
 
 from scipy.ndimage import gaussian_filter1d
-from braindecoding.data.synthetic_timing import SyntheticTimingDataset, overlap_statistics, transform_window, synthetic_stream
-from braindecoding import synthetic_timing_control as control
+from braindecoding.data.synthetic_timing_dataset import SyntheticTimingDataset, overlap_statistics, transform_window, synthetic_stream
+from braindecoding.training import synthetic_timing_control as control
 
 pytestmark = pytest.mark.current_protocol
 

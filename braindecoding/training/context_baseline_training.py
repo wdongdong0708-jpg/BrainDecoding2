@@ -15,13 +15,13 @@ import numpy as np
 import torch
 import yaml
 
-from braindecoding import unified_rolling_v2_training as base
+from braindecoding.training import protocol_stage_training as base
 from braindecoding.config import PROJECT_ROOT, project_path
-from braindecoding.evaluation.retrieval import fixed_vocabulary_retrieval_metrics
+from braindecoding.evaluation.retrieval_metrics import fixed_vocabulary_retrieval_metrics
 from braindecoding.experiment import file_sha256
-from braindecoding.training.runtime import cpu_state_dict, load_checkpoint, save_checkpoint, set_seed
-from braindecoding.training.word import encode_loader, train_one_epoch
-from braindecoding.unified_rolling_v2_queue import verify_completed
+from braindecoding.training.training_runtime import cpu_state_dict, load_checkpoint, save_checkpoint, set_seed
+from braindecoding.training.word_encoder_training import encode_loader, train_one_epoch
+from braindecoding.training.protocol_stage_training import verify_completed
 
 CONFIG = PROJECT_ROOT / "configs/training/context_window_baselines.yaml"
 PROTOCOL = PROJECT_ROOT / "data/manifests/local_context_decoding_protocol.md"

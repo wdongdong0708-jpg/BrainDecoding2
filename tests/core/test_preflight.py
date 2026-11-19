@@ -3,10 +3,10 @@
 import json
 import pytest
 
-from braindecoding.catalog import discover_runnable_experiment_configs
-from braindecoding.data.derived import stable_sha256
+from braindecoding.protocols import discover_runnable_experiment_configs
+from braindecoding.data.derived_cache import stable_sha256
 from braindecoding.experiment import resolved_config_sha256, run_directory
-from braindecoding import preflight
+from braindecoding.training import environment_preflight as preflight
 
 pytestmark = pytest.mark.legacy_compatibility
 
@@ -82,7 +82,7 @@ def test_preflight_covers_supported_legacy_configs_without_side_effects(
         for item in report["scope"]["excluded_configs"]
     )
     assert {item["identity"]["dataset"] for item in report["experiments"]} == {
-        "chineseeeg2_littleprince", "pallier2025",
+        "pallier2025",
     }
     identities = [tuple(item["identity"].values()) for item in report["experiments"]]
     assert len(identities) == len(set(identities)) == len(expected)
@@ -156,7 +156,6 @@ def test_context_dependencies_wait_for_same_scope_main_word(tmp_path, monkeypatc
         for item in report["experiments"]
     }
     context_ids = {
-        "chineseeeg2_littleprince": "main_context_warmstart",
         "pallier2025": "main_context_warmstart",
     }
     for dataset, context_id in context_ids.items():

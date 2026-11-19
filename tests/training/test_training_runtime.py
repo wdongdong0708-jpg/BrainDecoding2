@@ -10,11 +10,9 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset
 
-from braindecoding.training import runtime, word
-from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import (
-    train as chineseeeg2_training,
-)
-from braindecoding.tasks.word_decoding.pallier2025 import train as legacy_training
+from braindecoding.training import training_runtime as runtime
+from braindecoding.training import word_encoder_training as word
+from braindecoding.training import training_runtime as legacy_training
 
 
 class _TinyWordDataset(Dataset):
@@ -210,7 +208,7 @@ def test_runtime_serialization_and_cpu_state_dict_keep_existing_contract(tmp_pat
 def test_make_loader_and_encode_loader_preserve_grouped_order():
     """公共 DataLoader 和编码结果保持组内顺序及元数据顺序。"""
     dataset = _TinyWordDataset()
-    loader, sampler = legacy_training.make_loader(
+    loader, sampler = word.make_loader(
         dataset,
         {"batch_size": 2, "seed": 13, "num_workers": 0},
         shuffle=False,
@@ -218,7 +216,7 @@ def test_make_loader_and_encode_loader_preserve_grouped_order():
 
     assert [list(batch) for batch in sampler] == [[0, 1], [2, 3]]
     model = _TinyBrainModel()
-    encoded = legacy_training.encode_loader(
+    encoded = word.encode_loader(
         model, loader, torch.device("cpu"), amp=False
     )
 
@@ -248,7 +246,7 @@ def test_train_one_epoch_keeps_single_batch_update_semantics():
         "sentence_index": torch.arange(2),
     }
 
-    loss = legacy_training.train_one_epoch(
+    loss = word.train_one_epoch(
         model,
         loss_module,
         [batch],
@@ -265,44 +263,4 @@ def test_train_one_epoch_keeps_single_batch_update_semantics():
         rtol=0,
         atol=1e-7,
     )
-
-
-def test_three_training_entries_use_the_public_training_modules():
-    """活动数据集入口都复用新的公共实现，而不是互相导入。"""
-    runtime_names = (
-        "set_seed",
-        "choose_device",
-        "save_json",
-        "limit_rows",
-        "cpu_state_dict",
-        "save_checkpoint",
-        "load_checkpoint",
-        "parameter_count",
-    )
-    for training in (legacy_training, chineseeeg2_training):
-        for name in runtime_names:
-            assert getattr(training, name) is getattr(runtime, name)
-        assert training.make_loader is word.make_loader
-
-    for name in ("move_batch", "train_one_epoch", "encode_loader"):
-        assert getattr(legacy_training, name) is getattr(word, name)
-
-
-def test_other_datasets_do_not_import_libribrain_training_as_a_library():
-    """静态锁定数据集训练入口之间不存在反向依赖。"""
-    project_root = Path(__file__).resolve().parents[2]
-    paths = (
-        project_root / "braindecoding/tasks/word_decoding/pallier2025/train.py",
-        project_root
-        / "braindecoding/tasks/word_decoding/chineseeeg2_littleprince/train.py",
-    )
-    forbidden = "braindecoding.tasks.word_decoding.libribrain100.train"
-    for path in paths:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        imported_modules = {
-            node.module
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom)
-        }
-        assert forbidden not in imported_modules
 

@@ -1,5 +1,0 @@
-horizon,paper_display_name,common_horizon_delay,query_count,mean_wait_windows,mean_wait_seconds,std_wait_seconds,p05_wait_seconds,p25_wait_seconds,median_wait_seconds,p75_wait_seconds,p95_wait_seconds
-r=0,Local (r = 0),2,14590,1.0,1.0,0.0,1.0,1.0,1.0,1.0,1.0
-r=1,Local (r = 1),2,14590,2.0,1.306556,0.25981,1.06,1.131,1.22,1.4,1.8681
-r=2,Local (r = 2),2,14590,3.0,1.606873,0.342021,1.2,1.35,1.54,1.763,2.27765
-full,Full-Context,2,14590,10.118574,3.89373,3.051936,1.35,1.91225,2.874,4.64,10.8223

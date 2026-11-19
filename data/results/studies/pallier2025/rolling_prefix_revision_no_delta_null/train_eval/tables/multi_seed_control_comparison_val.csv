@@ -1,9 +1,0 @@
-﻿method_id,method_label,metric_key,metric_label,is_ratio,mean_clean,std_clean,mean_control,std_control,mean_net_gap,std_net_gap
-raw,"Raw Temporal Shift [-15s, -30s, -45s, -60s, -90s, -120s] (eta=0.0)",vocab50_macro_top10,50-Word Macro Top-10,True,56.49,0.0,24.93,0.0,31.56,0.0
-raw,"Raw Temporal Shift [-15s, -30s, -45s, -60s, -90s, -120s] (eta=0.0)",vocab50_macro_top1,50-Word Macro Top-1,True,13.48,0.0,3.49,0.0,9.99,0.0
-raw,"Raw Temporal Shift [-15s, -30s, -45s, -60s, -90s, -120s] (eta=0.0)",full_vocab_macro_top10,Full-Vocab Word-Macro Top-10,True,6.2,0.0,1.32,0.0,4.88,0.0
-raw,"Raw Temporal Shift [-15s, -30s, -45s, -60s, -90s, -120s] (eta=0.0)",full_vocab_macro_top1,Full-Vocab Word-Macro Top-1,True,1.29,0.0,0.25,0.0,1.04,0.0
-cms:eta=0.5,LOO Common-Mode Subtraction (eta=0.5),vocab50_macro_top10,50-Word Macro Top-10,True,55.26,0.0,20.64,0.0,34.61,0.0
-cms:eta=0.5,LOO Common-Mode Subtraction (eta=0.5),vocab50_macro_top1,50-Word Macro Top-1,True,13.14,0.0,2.82,0.0,10.32,0.0
-cms:eta=0.5,LOO Common-Mode Subtraction (eta=0.5),full_vocab_macro_top10,Full-Vocab Word-Macro Top-10,True,6.06,0.0,1.24,0.0,4.82,0.0
-cms:eta=0.5,LOO Common-Mode Subtraction (eta=0.5),full_vocab_macro_top1,Full-Vocab Word-Macro Top-1,True,1.24,0.0,0.24,0.0,1.0,0.0

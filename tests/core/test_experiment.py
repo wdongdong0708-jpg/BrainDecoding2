@@ -26,19 +26,14 @@ CANONICAL_ROOTS = (
     PROJECT_ROOT / "configs" / "word_decoding",
 )
 CANONICAL_FILES = (
-    "word_decoding/chineseeeg2_littleprince/sub01-08/main_word.yaml",
-    "word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart.yaml",
     "word_decoding/pallier2025/sub01-10/main_word.yaml",
     "word_decoding/pallier2025/sub01-10/main_context_warmstart.yaml",
 )
 ACTIVE_SCIENTIFIC_SHA256 = {
-    "word_decoding/chineseeeg2_littleprince/sub01-08/main_word.yaml": "b099aaa3de516d2eeef84dbddb78d5700d2fd9e71efcb8462906f24731c4eb0a",
-    "word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart.yaml": "b528d9129c172ec63e32c5e5b47d1634adfb6b1f5dce28d9a9ded383cbb6e838",
     "word_decoding/pallier2025/sub01-10/main_word.yaml": "4ac0ff59831c4e15647806b2bd584935a9314534e3a31cde837af51309d5d242",
     "word_decoding/pallier2025/sub01-10/main_context_warmstart.yaml": "76ad3d30633d0f6aa3e59641d0f5295ac1ea7d415e85d3d896dd2080e238db70",
 }
 WARM_STARTS = {
-    "word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart.yaml": "main_word",
     "word_decoding/pallier2025/sub01-10/main_context_warmstart.yaml": "main_word",
 }
 @pytest.fixture(autouse=True)
@@ -77,7 +72,7 @@ def _science_signature(config):
 
 
 def test_canonical_inventory_and_identity_are_complete_and_unique():
-    assert len(CANONICAL_FILES) == 4
+    assert len(CANONICAL_FILES) == 2
     identities = []
     for path in _canonical_files():
         config = load_yaml_with_extends(path)
@@ -355,113 +350,25 @@ def test_run_directory_rejects_missing_manifest_and_changed_config(tmp_path):
 
 
 def test_task_loaders_inject_canonical_output_and_warm_start_paths():
-    from braindecoding.tasks.word_decoding.chineseeeg2_littleprince.train import 载入配置
-    from braindecoding.tasks.word_decoding.pallier2025.train import load_config as load_pallier
+    from braindecoding.training.meg_word_task import load_config as load_pallier
 
-    cases = (
-        (
-            载入配置,
-            "word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart.yaml",
-            "word_decoding/chineseeeg2_littleprince/sub01-08/main_context_warmstart/seed-000",
-            "word_decoding/chineseeeg2_littleprince/sub01-08/main_word/seed-000/best.pt",
-        ),
-        (
-            load_pallier,
-            "word_decoding/pallier2025/sub01-10/main_context_warmstart.yaml",
-            "word_decoding/pallier2025/sub01-10/main_context_warmstart/seed-000",
-            "word_decoding/pallier2025/sub01-10/main_word/seed-000/best.pt",
-        ),
+    config = load_pallier(
+        PROJECT_ROOT / "configs" / "word_decoding/pallier2025/sub01-10/main_context_warmstart.yaml"
     )
-    for loader, relative, output_suffix, checkpoint_suffix in cases:
-        config = loader(PROJECT_ROOT / "configs" / relative)
-        assert Path(config["training"]["output_dir"]) == PROJECT_ROOT / "outputs" / output_suffix
-        assert Path(config["training"]["pretrained_brain_encoder_checkpoint"]) == (
-            PROJECT_ROOT / "outputs" / checkpoint_suffix
-        )
-
-    chinese_word = 载入配置(
-        PROJECT_ROOT
-        / "configs/word_decoding/chineseeeg2_littleprince/all_subjects/main_word.yaml"
+    assert Path(config["training"]["output_dir"]) == (
+        PROJECT_ROOT / "outputs" / "word_decoding/pallier2025/sub01-10/main_context_warmstart/seed-000"
     )
-    assert Path(chinese_word["training"]["output_dir"]) == (
-        PROJECT_ROOT
-        / "outputs/word_decoding/chineseeeg2_littleprince/sub01-08/main_word/seed-000"
+    assert Path(config["training"]["pretrained_brain_encoder_checkpoint"]) == (
+        PROJECT_ROOT / "outputs" / "word_decoding/pallier2025/sub01-10/main_word/seed-000/best.pt"
     )
-    assert "pretrained_brain_encoder_checkpoint" not in chinese_word["training"]
 
 
 def test_canonical_base_files_are_explicitly_non_runnable():
     bases = [path for root in CANONICAL_ROOTS for path in root.rglob("base.yaml")]
-    assert len(bases) == 2
+    assert len(bases) == 1
     for path in bases:
         config = load_yaml_with_extends(path)
         with pytest.raises(ValueError, match="缺少 experiment"):
             experiment_identity(config)
-
-
-@pytest.mark.parametrize(
-    "module_name,loader_name,runner_name,printer_name",
-    (
-        (
-            "braindecoding.tasks.word_decoding.chineseeeg2_littleprince.train",
-            "载入配置",
-            "执行训练",
-            "打印训练摘要",
-        ),
-    ),
-)
-def test_canonical_cli_records_running_then_completed_without_real_training(
-    monkeypatch,
-    tmp_path,
-    module_name,
-    loader_name,
-    runner_name,
-    printer_name,
-):
-    module = importlib.import_module(module_name)
-    config = _minimal_config()
-    statuses = []
-
-    monkeypatch.setattr(module, loader_name, lambda path: copy.deepcopy(config))
-    monkeypatch.setattr(
-        module,
-        "initialize_run_directory",
-        lambda loaded, command: (tmp_path / "run", {"status": "running"}),
-    )
-    monkeypatch.setattr(
-        module,
-        "update_run_status",
-        lambda output, status: statuses.append((output, status)),
-    )
-    monkeypatch.setattr(module, runner_name, lambda loaded, **kwargs: {})
-    monkeypatch.setattr(module, printer_name, lambda *args, **kwargs: None)
-
-    module.main(["--config", "unused.yaml"])
-    assert statuses == [(tmp_path / "run", "completed")]
-
-
-def test_canonical_cli_marks_failed_run_without_real_training(monkeypatch, tmp_path):
-    module = importlib.import_module("braindecoding.tasks.word_decoding.chineseeeg2_littleprince.train")
-    config = _minimal_config()
-    statuses = []
-    monkeypatch.setattr(module, "载入配置", lambda path: copy.deepcopy(config))
-    monkeypatch.setattr(
-        module,
-        "initialize_run_directory",
-        lambda loaded, command: (tmp_path / "run", {"status": "running"}),
-    )
-    monkeypatch.setattr(
-        module,
-        "update_run_status",
-        lambda output, status: statuses.append((output, status)),
-    )
-
-    def fail_without_training(loaded, **kwargs):
-        raise RuntimeError("synthetic failure")
-
-    monkeypatch.setattr(module, "执行训练", fail_without_training)
-    with pytest.raises(RuntimeError, match="synthetic failure"):
-        module.main(["--config", "unused.yaml"])
-    assert statuses == [(tmp_path / "run", "failed")]
 
 

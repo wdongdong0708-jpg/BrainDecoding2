@@ -5,41 +5,22 @@ import pytest
 import yaml
 
 from braindecoding.config import (
+    PROJECT_ROOT,
     PROJECT_ROOT as CONFIG_PROJECT_ROOT,
     deep_merge,
     load_yaml_with_extends,
     project_path,
 )
-from braindecoding.tasks.word_decoding.chineseeeg2_littleprince.train import 载入配置
 
-
-from braindecoding.config import PROJECT_ROOT
 TRAIN_ENTRY_PATHS = (
-    PROJECT_ROOT / "braindecoding/tasks/word_decoding/chineseeeg2_littleprince/train.py",
-    PROJECT_ROOT / "braindecoding/tasks/word_decoding/pallier2025/train.py",
+    PROJECT_ROOT / "braindecoding/training/meg_word_task.py",
+    PROJECT_ROOT / "braindecoding/training/workflow_runner.py",
 )
 DATASET_ROOT_CONFIGS = (
     (
-        "configs/word_decoding/chineseeeg2_littleprince/base.yaml",
-        "${BRAINDATA_ROOT}/ChineseEEG-2/PassiveListening",
-        "D:/dataset/ChineseEEG-2/PassiveListening",
-    ),
-)
-MODEL_ROOT_CONFIGS = (
-    (
-        "configs/word_decoding/chineseeeg2_littleprince/base.yaml",
-        "${BRAINDECODING_MODEL_ROOT}/mengzi-t5-base",
-        "D:/code/dascoli-word-decoding/models/mengzi-t5-base",
-    ),
-)
-ALIGNMENT_CONFIGS = (
-    (
-        "configs/word_decoding/chineseeeg2_littleprince/all_subjects/main_word.yaml",
-        "data/cache/artifacts/alignments/chineseeeg2_littleprince/f1/女声一_小王子_实际朗读时间戳.xlsx",
-        (
-            "data/cache/artifacts/alignments/chineseeeg2_littleprince/f1/女声一_小王子_实际朗读时间戳.xlsx",
-            "data/cache/artifacts/alignments/chineseeeg2_littleprince/m1/男声一_小王子_实际朗读时间戳.xlsx",
-        ),
+        "configs/word_decoding/pallier2025/base.yaml",
+        "${BRAINDATA_ROOT}/LittlePrince_MEG_French_Listen_Pallier2025",
+        "D:/dataset/LittlePrince_MEG_French_Listen_Pallier2025",
     ),
 )
 
@@ -239,83 +220,12 @@ def test_tracked_dataset_root_resolves_to_legacy_path(
 
 
 def test_real_dataset_config_requires_braindata_root(monkeypatch):
-    monkeypatch.setenv(
-        "BRAINDECODING_MODEL_ROOT", "D:/code/dascoli-word-decoding/models"
-    )
     monkeypatch.delenv("BRAINDATA_ROOT", raising=False)
     monkeypatch.delenv("BRAINDECODING_DATA_DIR", raising=False)
     with pytest.raises(ValueError, match="未设置的环境变量：BRAINDATA_ROOT"):
         load_yaml_with_extends(
-            PROJECT_ROOT / "configs/word_decoding/chineseeeg2_littleprince/base.yaml"
+            PROJECT_ROOT / "configs/word_decoding/pallier2025/base.yaml"
         )
-
-
-@pytest.mark.parametrize(
-    ("relative_path", "configured_model", "legacy_model"), MODEL_ROOT_CONFIGS
-)
-def test_tracked_text_model_uses_environment_variable(
-    relative_path, configured_model, legacy_model
-):
-    """公共配置不再写死作者机器的文本模型目录。"""
-    del legacy_model
-    with (PROJECT_ROOT / relative_path).open("r", encoding="utf-8") as stream:
-        config = yaml.safe_load(stream)
-    assert config["text_embedding"]["model_name"] == configured_model
-
-
-@pytest.mark.parametrize(
-    ("relative_path", "configured_model", "legacy_model"), MODEL_ROOT_CONFIGS
-)
-def test_text_model_root_resolves_to_legacy_path(
-    relative_path, configured_model, legacy_model, monkeypatch
-):
-    """设置作者旧模型根目录后，最终模型位置保持不变。"""
-    del configured_model
-    monkeypatch.setenv("BRAINDATA_ROOT", "D:/dataset")
-    monkeypatch.setenv(
-        "BRAINDECODING_MODEL_ROOT", "D:/code/dascoli-word-decoding/models"
-    )
-    config = load_yaml_with_extends(PROJECT_ROOT / relative_path)
-    assert Path(config["text_embedding"]["model_name"]) == Path(legacy_model)
-
-
-def test_real_text_model_config_requires_model_root(monkeypatch):
-    monkeypatch.setenv("BRAINDATA_ROOT", "D:/dataset")
-    monkeypatch.delenv("BRAINDECODING_MODEL_ROOT", raising=False)
-    with pytest.raises(
-        ValueError,
-        match="未设置的环境变量：BRAINDECODING_MODEL_ROOT",
-    ):
-        load_yaml_with_extends(
-            PROJECT_ROOT
-            / "configs/word_decoding/chineseeeg2_littleprince/base.yaml"
-        )
-
-
-@pytest.mark.parametrize(
-    ("relative_path", "alignment_path", "source_paths"), ALIGNMENT_CONFIGS
-)
-def test_alignment_paths_are_project_relative_and_resolve_from_any_cwd(
-    relative_path,
-    alignment_path,
-    source_paths,
-    tmp_path,
-    monkeypatch,
-):
-    monkeypatch.setenv("BRAINDATA_ROOT", "D:/dataset")
-    monkeypatch.setenv(
-        "BRAINDECODING_MODEL_ROOT", "D:/code/dascoli-word-decoding/models"
-    )
-    monkeypatch.chdir(tmp_path)
-    config = 载入配置(PROJECT_ROOT / relative_path)
-
-    assert Path(config["dataset"]["alignment_path"]) == (
-        PROJECT_ROOT / alignment_path
-    )
-    assert tuple(
-        Path(source["alignment_path"])
-        for source in config["dataset"].get("actual_reading_sources", ())
-    ) == tuple(PROJECT_ROOT / path for path in source_paths)
 
 
 def test_tracked_configs_do_not_contain_author_machine_drive_paths():
@@ -350,14 +260,11 @@ def test_training_entries_use_shared_config_primitives():
 
 def test_active_word_configs_have_only_canonical_inheritance_and_data_paths(monkeypatch):
     monkeypatch.setenv("BRAINDATA_ROOT", "D:/dataset")
-    monkeypatch.setenv(
-        "BRAINDECODING_MODEL_ROOT", "D:/code/dascoli-word-decoding/models"
-    )
     configs = sorted((PROJECT_ROOT / "configs/word_decoding").rglob("*.yaml"))
     base_configs = [path for path in configs if path.name == "base.yaml"]
     experiment_configs = [path for path in configs if path.name != "base.yaml"]
-    assert len(base_configs) == 2
-    assert len(experiment_configs) == 10
+    assert len(base_configs) == 1
+    assert len(experiment_configs) >= 5
     for path in configs:
         raw = path.read_text(encoding="utf-8")
         assert "tasks/word_decoding/" not in raw

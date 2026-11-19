@@ -1,7 +1,0 @@
-﻿horizon,label,mean_vocab50_macro_top10_pct,std_vocab50_macro_top10_pct,mean_vocab50_micro_top10_pct,std_vocab50_micro_top10_pct,mean_vocab50_macro_top1_pct,std_vocab50_macro_top1_pct,mean_vocab50_micro_top1_pct,std_vocab50_micro_top1_pct,mean_vocab50_mrr,std_vocab50_mrr,mean_full_vocab_macro_top10_pct,std_full_vocab_macro_top10_pct,mean_full_vocab_subject_macro_top10_pct,std_full_vocab_subject_macro_top10_pct,mean_full_vocab_micro_top10_pct,std_full_vocab_micro_top10_pct,mean_full_vocab_macro_top1_pct,std_full_vocab_macro_top1_pct,mean_full_vocab_micro_top1_pct,std_full_vocab_micro_top1_pct,mean_full_vocab_mrr,std_full_vocab_mrr
-K0,K0 (+0w),44.9,0.0,44.34,0.0,8.99,0.0,10.99,0.0,0.2177,0.0,4.22,0.0,15.37,0.0,15.37,0.0,0.8,0.0,4.94,0.0,0.0837,0.0
-K1,K1 (+1w),52.81,0.0,52.34,0.0,12.58,0.0,14.72,0.0,0.2671,0.0,5.81,0.0,21.45,0.0,21.45,0.0,1.18,0.0,6.83,0.0,0.1146,0.0
-K2,K2 (+2w),55.76,0.0,55.86,0.0,13.35,0.0,15.69,0.0,0.2822,0.0,6.2,0.0,23.0,0.0,23.0,0.0,1.29,0.0,7.36,0.0,0.1231,0.0
-K1_minus_K0,K1_minus_K0,7.92,0.0,8.0,0.0,3.59,0.0,3.72,0.0,0.0493,0.0,1.59,0.0,6.07,0.0,6.07,0.0,0.38,0.0,1.89,0.0,0.0309,0.0
-K2_minus_K0,K2_minus_K0,10.86,0.0,11.52,0.0,4.36,0.0,4.69,0.0,0.0645,0.0,1.98,0.0,7.63,0.0,7.63,0.0,0.5,0.0,2.42,0.0,0.0394,0.0
-K2_minus_K1,K2_minus_K1,2.95,0.0,3.52,0.0,0.77,0.0,0.97,0.0,0.0152,0.0,0.39,0.0,1.56,0.0,1.56,0.0,0.12,0.0,0.53,0.0,0.0085,0.0

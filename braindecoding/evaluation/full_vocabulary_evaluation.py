@@ -11,10 +11,10 @@ import time
 import numpy as np
 
 from braindecoding.config import PROJECT_ROOT as ROOT
-from braindecoding.data.text import load_text_embedding_cache
-from braindecoding.evaluation.retrieval import mean_by_target, retrieval_ranks, summarize_retrieval
+from braindecoding.data.text_embeddings import load_text_embedding_cache
+from braindecoding.evaluation.retrieval_metrics import mean_by_target, retrieval_ranks, summarize_retrieval
 from braindecoding.experiment import file_sha256 as sha256
-from braindecoding.word_paired_statistics_test_v2 import metadata, weighted_scores, bootstrap_weights
+from braindecoding.evaluation.word_paired_statistics_evaluation import metadata, weighted_scores, bootstrap_weights
 
 
 ID = "full_vocabulary_context_test_v2"

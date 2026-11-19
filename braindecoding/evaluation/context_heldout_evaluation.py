@@ -14,12 +14,12 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import torch
 
-from braindecoding import unified_context_baselines_v2 as development
-from braindecoding import unified_rolling_v2_training as neural
+from braindecoding.training import context_baseline_training as development
+from braindecoding.training import protocol_stage_training as neural
 from braindecoding.config import PROJECT_ROOT as ROOT
 from braindecoding.experiment import file_sha256 as sha256
-from braindecoding.training.runtime import load_checkpoint, set_seed
-from braindecoding.training.word import make_loader, encode_loader
+from braindecoding.training.training_runtime import load_checkpoint, set_seed
+from braindecoding.training.word_encoder_training import make_loader, encode_loader
 
 PROTOCOL = ROOT / 'data/manifests/local_context_decoding_protocol.md'
 MANIFEST = PROTOCOL.with_suffix('.json')

@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from braindecoding.evaluation import retrieval, vocabulary
+from braindecoding.evaluation import retrieval_metrics as retrieval
+from braindecoding.evaluation import vocabulary_coverage as vocabulary
 
 
 def _embeddings():
@@ -140,14 +141,12 @@ def test_frozen_vocabulary_validation_and_metadata():
 
 
 def test_word_training_evaluators_reach_the_same_retrieval_implementation():
-    from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import train as chinese
-    from braindecoding.tasks.word_decoding.pallier2025 import train as pallier
+    from braindecoding.training import meg_word_task
 
-    for module in (chinese, pallier):
-        assert (
-            module.fixed_vocabulary_retrieval_metrics
-            is retrieval.fixed_vocabulary_retrieval_metrics
-        )
+    assert (
+        meg_word_task.fixed_vocabulary_retrieval_metrics
+        is retrieval.fixed_vocabulary_retrieval_metrics
+    )
 
 
 def _make_synthetic_multi_seed_model_summary(
@@ -330,8 +329,9 @@ def _make_synthetic_multi_seed_model_summary(
 
 
 def test_cross_model_paired_comparison_and_standalone_export(tmp_path):
-    from braindecoding.evaluation.evaluation_reporting import (
-        export_and_print_cross_model_comparison_report,
+    del tmp_path
+    from braindecoding.evaluation.word_retrieval_evaluation import (
+        build_cross_model_paired_comparison,
     )
 
     models_map = {
@@ -389,12 +389,7 @@ def test_cross_model_paired_comparison_and_standalone_export(tmp_path):
         ),
     }
 
-    res = export_and_print_cross_model_comparison_report(
-        models_map,
-        output_dir=tmp_path,
-        split="test",
-        print_to_stdout=False,
-    )
+    res = build_cross_model_paired_comparison(models_map, split="test")
     assert res["model_count"] == 4
     htests = {h["hypothesis_id"]: h for h in res["hypothesis_tests"]}
     assert set(htests.keys()) == {
@@ -403,13 +398,11 @@ def test_cross_model_paired_comparison_and_standalone_export(tmp_path):
         "H3_prefix_revision_vs_debiased_context",
     }
 
-    # Test 1: Unfrozen CNN vs Word-Only -> Net Gap delta < 0 and p < 0.05
     h1_prim = htests["H1_unfrozen_context_vs_word_only"]["primary_row"]
     assert h1_prim["delta_mean"] < 0.0
     assert h1_prim["p_value"] < 0.05
     assert h1_prim["hypothesis_supported"] is True
 
-    # Test 2: Debiased Context vs Word-Only -> Net Gap & Top-1 delta > 0 and p < 0.001
     h2_rows = {
         (r["metric_key"], r["quantity"]): r
         for r in htests["H2_debiased_context_vs_word_only"]["rows"]
@@ -419,21 +412,10 @@ def test_cross_model_paired_comparison_and_standalone_export(tmp_path):
     assert h2_rows[("vocab50_macro_top1", "clean")]["delta_mean"] > 0.0
     assert h2_rows[("vocab50_macro_top1", "clean")]["p_value"] < 0.001
 
-    # Test 3: Prefix-Revision vs Debiased Context -> p > 0.05 (no significant loss) + >50% wait reduction
     h3 = htests["H3_prefix_revision_vs_debiased_context"]
     assert h3["lookahead_saving_pct"] > 50.0
     assert h3["primary_row"]["p_value"] > 0.05
     assert h3["primary_row"]["significance"] == "ns"
     assert h3["primary_row"]["hypothesis_supported"] is True
-
-    # Check exported standalone files
-    md_file = tmp_path / "multi_seed_cross_model_comparison_test.md"
-    txt_file = tmp_path / "multi_seed_cross_model_comparison_report_test.txt"
-    json_file = tmp_path / "multi_seed_cross_model_comparison_test.json"
-    sum_csv = tmp_path / "tables" / "multi_seed_cross_model_summary_test.csv"
-    pair_csv = tmp_path / "tables" / "multi_seed_cross_model_paired_tests_test.csv"
-    for f in (md_file, txt_file, json_file, sum_csv, pair_csv):
-        assert f.is_file()
-        assert f.stat().st_size > 0
 
 

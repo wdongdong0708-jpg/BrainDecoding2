@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from braindecoding.synthetic_timing_recovery import smoke_segment
+from braindecoding.training.synthetic_timing_recovery import smoke_segment
 
 pytestmark = pytest.mark.current_protocol
 

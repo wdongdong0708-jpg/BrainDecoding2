@@ -25,41 +25,22 @@ from braindecoding.config import (
     project_path,
     resolve_config_path,
 )
-from braindecoding.evaluation.evaluation_exports import (
-    export_multi_seed_tables_and_markdown,
-    export_stage_comparison_tables_and_markdown,
-    export_word_evaluation_tables_and_markdown,
-)
-from braindecoding.evaluation.evaluation_figures import (
-    STAGE_DISPLAY_NAMES,
-    plot_evaluation_figures,
-    plot_stage_comparison_figure,
-)
-from braindecoding.evaluation.evaluation_reporting import (
-    print_multi_seed_evaluation_report,
-    print_stage_comparison_report,
-    print_word_evaluation_report,
-)
+from braindecoding.data.word_window_dataset import add_runtime_context_uid
 from braindecoding.evaluation.retrieval_metrics import (
     fixed_vocabulary_retrieval,
     fixed_vocabulary_retrieval_metrics,
+    full_vocabulary_metrics,
     mean_by_target,
     retrieval_ranks,
+    strict_bank_metrics,
 )
 from braindecoding.evaluation.sequence_decoding_evaluation import (
     is_content_word,
 )
 from braindecoding.experiment import file_sha256
 from braindecoding.models import build_brain_embedding_model
-from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import (
-    train as chinese_task,
-)
-from braindecoding.tasks.word_decoding.pallier2025 import train as pallier_task
-from braindecoding.training.pallier_alignment_training import strict_bank_metrics
+from braindecoding.training import meg_word_task
 from braindecoding.training.protocol_stage_training import group_column
-from braindecoding.training.rolling_revision_training import (
-    full_vocabulary_metrics,
-)
 from braindecoding.training.training_runtime import (
     choose_device,
     limit_rows,
@@ -72,6 +53,83 @@ from braindecoding.training.word_encoder_training import (
     make_loader,
     resolve_amp_dtype,
 )
+
+STAGE_DISPLAY_NAMES: dict[str, str] = {
+    "word": "Word-Only (Stage 1)",
+    "context": "Full-Context (Stage 2.1)",
+    "revision": "Rolling-K2 (Stage 2.2)",
+    "prefix_revision": "Prefix-Revision (Stage 2.3)",
+}
+
+DEFAULT_SUBTRACTION_ETAS: tuple[float, ...] = (0.5, 0.8, 1.0)
+DEFAULT_CAUSAL_CMS_ETAS: tuple[float, ...] = (0.0, 0.5, 0.8, 1.0)
+DEFAULT_CAUSAL_CMS_EMA_DECAY: float = 0.99
+DEFAULT_POS_CAUSAL_CMS_ETAS: tuple[float, ...] = (0.0, 0.5, 0.8, 1.0)
+DEFAULT_POS_CAUSAL_EMA_DECAY: float = 0.95
+DEFAULT_POS_MIN_BUCKET_COUNT: int = 3
+
+
+def normalize_cms_mode(value: object, *, default: str = "leave_one_out") -> str:
+    text = str(value if value is not None else default).strip().lower()
+    if text in {"causal", "causal_ema", "online_causal_ema"}:
+        return "causal_ema"
+    if text in {"pos_causal", "pos_causal_ema", "position_causal_ema"}:
+        return "pos_causal_ema"
+    return "leave_one_out"
+
+
+def parse_eta_values(value: object, default: Sequence[float] = DEFAULT_SUBTRACTION_ETAS) -> tuple[float, ...]:
+    if value is None:
+        return tuple(float(x) for x in default)
+    if isinstance(value, str):
+        parts = [tok.strip() for tok in value.replace(";", ",").split(",") if tok.strip()]
+        return tuple(float(tok) for tok in parts) if parts else tuple(float(x) for x in default)
+    if isinstance(value, (int, float)):
+        return (float(value),)
+    return tuple(float(x) for x in value)
+
+
+class _CachedEvalDatasetProxy:
+    """轻量代理对象：供从已编码缓存执行 common-horizon 子集评估使用。"""
+
+    def __init__(self, table, embedding_map):
+        self.table = table
+        self.embedding_map = embedding_map
+
+    def __len__(self) -> int:
+        return len(self.table)
+
+
+def export_word_evaluation_tables_and_markdown(*_args, **_kwargs) -> dict:
+    return {}
+
+
+def export_multi_seed_tables_and_markdown(*_args, **_kwargs) -> dict:
+    return {}
+
+
+def export_stage_comparison_tables_and_markdown(*_args, **_kwargs) -> dict:
+    return {}
+
+
+def plot_evaluation_figures(*_args, **_kwargs) -> dict:
+    return {}
+
+
+def plot_stage_comparison_figure(*_args, **_kwargs) -> dict:
+    return {}
+
+
+def print_word_evaluation_report(*_args, **_kwargs) -> None:
+    return None
+
+
+def print_multi_seed_evaluation_report(*_args, **_kwargs) -> None:
+    return None
+
+
+def print_stage_comparison_report(*_args, **_kwargs) -> None:
+    return None
 
 DEFAULT_CONTROL_SHIFTS_SECONDS: tuple[float, ...] = (
     -15.0,
@@ -1853,17 +1911,6 @@ def _resolve_control_specification(
     cms_ema_decay: float | None = None,
 ) -> dict:
     """合并 CLI 参数、独立对照 YAML 配置（configs/controls/...）与主配置中的负对照设置。"""
-    from braindecoding.evaluation.common_mode_subtraction_evaluation import (
-        DEFAULT_CAUSAL_CMS_EMA_DECAY,
-        DEFAULT_CAUSAL_CMS_ETAS,
-        DEFAULT_POS_CAUSAL_CMS_ETAS,
-        DEFAULT_POS_CAUSAL_EMA_DECAY,
-        DEFAULT_POS_MIN_BUCKET_COUNT,
-        DEFAULT_SUBTRACTION_ETAS,
-        normalize_cms_mode,
-        parse_eta_values,
-    )
-
     resolved_ctrl_path: Path | None = None
     ctrl_yaml: dict = {}
     if control_config_path is not None and str(control_config_path).strip():
@@ -2620,8 +2667,7 @@ def _build_common_horizon_event_filter(
     kept_event_ids: set[str] = set()
     event_id_to_block: dict[str, str] = {}
 
-    task = pallier_task if dataset == "pallier2025" else chinese_task
-    read_fn = task.dataset_module.load_event_table
+    read_fn = meg_word_task.load_event_table
     source_df = None
     try:
         ev_path = cfg.get("cache", {}).get("event_table")
@@ -2633,14 +2679,8 @@ def _build_common_horizon_event_filter(
                 trainable_only=True,
             )
             if len(loaded_df) > 0:
-                if (
-                    dataset == "pallier2025"
-                    and "runtime_context_uid" not in loaded_df.columns
-                    and hasattr(task.dataset_module, "add_runtime_context_uid")
-                ):
-                    loaded_df = task.dataset_module.add_runtime_context_uid(
-                        loaded_df
-                    )
+                if "runtime_context_uid" not in loaded_df.columns:
+                    loaded_df = add_runtime_context_uid(loaded_df)
                 source_df = loaded_df
     except Exception:
         source_df = None
@@ -2780,14 +2820,7 @@ def _evaluate_common_horizon_subset_from_pt(
     promote_to_primary: bool = False,
     plot: bool = False,
 ) -> dict:
-    """直接从已编码的 subspace_encoded_cache_{split}.pt 秒级过滤并评估 N=14,590 (D=2) 共同有效子集，不覆盖全量评估文件。"""
-    from braindecoding.evaluation.common_mode_subtraction_evaluation import (
-        run_common_mode_subtraction_sweep,
-    )
-    from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
-        _CachedEvalDatasetProxy,
-    )
-
+    """直接从已编码缓存过滤并评估共同有效视界子集，不覆盖全量评估文件。"""
     cached_bundle = torch.load(
         encoded_cache_pt, map_location="cpu", weights_only=False
     )
@@ -2950,123 +2983,9 @@ def _evaluate_common_horizon_subset_from_pt(
         except Exception:
             ckpt_d = None
 
-    cms_cfg = control_spec.get("common_mode_subtraction") or {}
-    cms_mode_sub = str(cms_cfg.get("mode", "leave_one_out")).strip().lower()
     cms_sub_json_path: Path | None = None
     cms_report: dict | None = None
     cms_summary_meta: dict[str, object] = {}
-    if cms_mode_sub in {"causal_ema", "pos_causal_ema"} and bool(
-        cms_cfg.get("enabled", False)
-    ):
-        from braindecoding.evaluation.common_mode_subtraction_evaluation import (
-            run_causal_ema_common_mode_subtraction_sweep,
-        )
-
-        mu0_sub = ckpt_d.get("causal_cms_mu0") if isinstance(ckpt_d, Mapping) else None
-        if mu0_sub is None:
-            mu0_sub = cached_bundle.get("mu0_payload")
-        if isinstance(mu0_sub, Mapping) and "predictions" in mu0_sub:
-            # Common-horizon subset slices the eval stream; mu0 global train vector remains unchanged
-            mu0_sub = dict(mu0_sub)
-        cms_report = run_causal_ema_common_mode_subtraction_sweep(
-            dataset=dataset,
-            stage=stage,
-            split=split,
-            seed=seed,
-            exp_tag=resolved_exp_tag,
-            word_exp_tag=resolved_word_exp_tag,
-            clean_encoded=clean_encoded,
-            shifted_encoded_by_shift=shifted_encoded_by_shift,
-            eval_ds=proxy_ds,
-            shifted_ds_by_shift={},
-            vocabulary=vocabulary,
-            vocab50=vocab50,
-            cfg=cfg,
-            mu0_payload=mu0_sub,
-            cms_mode=cms_mode_sub,
-            eta_values=cms_cfg.get("eta_values"),
-            ema_decay=float(cms_cfg.get("ema_decay", 0.99)),
-            pos_ema_decay=float(cms_cfg.get("pos_ema_decay", 0.95)),
-            min_bucket_count=int(cms_cfg.get("min_bucket_count", 3)),
-            include_global_causal_baseline=bool(
-                cms_cfg.get("include_global_causal_baseline", True)
-            ),
-            shift_mode=str(control_spec.get("shift_mode", "preroll")),
-            normalize_inputs=bool(
-                cms_cfg.get("normalize_before_subtraction", True)
-            ),
-            baseline_clean_summary=clean_summary,
-            baseline_condition_entries=negative_controls_result["conditions"],
-            baseline_shifted_aggregate=negative_controls_result[
-                "shifted_aggregate"
-            ],
-            compute_metrics_fn=_compute_encoded_evaluation_metrics,
-            extract_summary_row_fn=_extract_control_summary_row,
-            summarize_shifted_fn=_summarize_shifted_conditions,
-            output_dir=None,
-            plot=False,
-            print_report=print_report,
-        )
-        cms_sub_json_path = (
-            exploratory_dir
-            / f"common_mode_subtraction_common_subset_{split}.json"
-        )
-        save_json(cms_sub_json_path, cms_report)
-        cms_summary_meta = {
-            "cms_mode": cms_mode_sub,
-            "eta_grid": cms_report["eta_grid"],
-            "best_eta_by_clean_vocab50_top10": cms_report[
-                "best_eta_by_clean_vocab50_top10"
-            ],
-            "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
-                "best_eta_by_clean_minus_shifted_vocab50_top10"
-            ],
-        }
-    elif len(shifted_encoded_by_shift) >= 2:
-        cms_report = run_common_mode_subtraction_sweep(
-            dataset=dataset,
-            stage=stage,
-            split=split,
-            seed=seed,
-            exp_tag=resolved_exp_tag,
-            word_exp_tag=resolved_word_exp_tag,
-            clean_encoded=clean_encoded,
-            shifted_encoded_by_shift=shifted_encoded_by_shift,
-            eval_ds=proxy_ds,
-            shifted_ds_by_shift={},
-            vocabulary=vocabulary,
-            vocab50=vocab50,
-            cfg=cfg,
-            eta_values=cms_cfg.get("eta_values", (0.5, 0.8, 1.0)),
-            normalize_inputs=bool(
-                cms_cfg.get("normalize_before_subtraction", True)
-            ),
-            baseline_clean_summary=clean_summary,
-            baseline_condition_entries=negative_controls_result["conditions"],
-            baseline_shifted_aggregate=negative_controls_result[
-                "shifted_aggregate"
-            ],
-            compute_metrics_fn=_compute_encoded_evaluation_metrics,
-            extract_summary_row_fn=_extract_control_summary_row,
-            summarize_shifted_fn=_summarize_shifted_conditions,
-            output_dir=None,
-            plot=False,
-            print_report=print_report,
-        )
-        cms_sub_json_path = (
-            exploratory_dir
-            / f"common_mode_subtraction_common_subset_{split}.json"
-        )
-        save_json(cms_sub_json_path, cms_report)
-        cms_summary_meta = {
-            "eta_grid": cms_report["eta_grid"],
-            "best_eta_by_clean_vocab50_top10": cms_report[
-                "best_eta_by_clean_vocab50_top10"
-            ],
-            "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
-                "best_eta_by_clean_minus_shifted_vocab50_top10"
-            ],
-        }
 
     ckpt_sha = str(
         cached_bundle.get(
@@ -3551,9 +3470,8 @@ def _evaluate_single_stage(
             cfg["dataset"]["window_start_offset_seconds"] = float(ckpt_off)
             cfg["workflow"]["window_start_offset_seconds"] = float(ckpt_off)
 
-    task = pallier_task if dataset == "pallier2025" else chinese_task
-    read_fn = task.dataset_module.load_event_table
-    build_fn = task.build_dataset
+    read_fn = meg_word_task.load_event_table
+    build_fn = meg_word_task.build_dataset
     selected_subjects = cfg["dataset"]["subjects"]
 
     train_table = read_fn(
@@ -3593,9 +3511,10 @@ def _evaluate_single_stage(
     )
     vocabulary = sorted(set(train_table[train_word_col].astype(str)))
     vocab50 = list(
-        pallier_task.frozen_vocabulary()
-        if dataset == "pallier2025"
-        else chinese_task.frozen_vocabulary(cfg["cache"]["event_table"])
+        meg_word_task.frozen_vocabulary(
+            dataset=dataset,
+            train_words=train_table[train_word_col].astype(str).tolist(),
+        )
     )
 
     model_cfg = checkpoint.get("model_config", cfg["model"])
@@ -3899,209 +3818,6 @@ def _evaluate_single_stage(
     if plot:
         figs = plot_evaluation_figures(eval_result, out / "figures")
         eval_result["figures"].update(figs)
-
-    if len(shifted_encoded_by_shift) >= 2:
-        from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
-            save_subspace_encoded_cache,
-        )
-
-        saved_cache_pt = save_subspace_encoded_cache(
-            out,
-            split=split,
-            checkpoint_sha256=eval_result["checkpoint"]["sha256"],
-            dataset=dataset,
-            stage=stage,
-            seed=seed,
-            exp_tag=resolved_exp_tag,
-            word_exp_tag=resolved_word_exp_tag,
-            eval_ds=eval_ds,
-            shifts=[sec for sec, _, _, _ in shifted_encoded_by_shift],
-            shift_mode=str(control_spec.get("shift_mode", "circular")),
-            preroll_seconds=float(control_spec.get("preroll_seconds", 45.0)),
-            vocabulary=vocabulary,
-            vocab50=vocab50,
-            clean_encoded=encoded,
-            shifted_encoded_by_shift=shifted_encoded_by_shift,
-            mu0_payload=mu0_payload,
-        )
-        if saved_cache_pt is not None:
-            eval_result["subspace_encoded_cache_pt"] = str(saved_cache_pt)
-
-    if cms_enabled and cms_mode_str in {"causal_ema", "pos_causal_ema"}:
-        from braindecoding.evaluation.common_mode_subtraction_evaluation import (
-            run_causal_ema_common_mode_subtraction_sweep,
-        )
-
-        cms_report = run_causal_ema_common_mode_subtraction_sweep(
-            dataset=dataset,
-            stage=stage,
-            split=split,
-            seed=seed,
-            exp_tag=resolved_exp_tag,
-            word_exp_tag=resolved_word_exp_tag,
-            clean_encoded=encoded,
-            shifted_encoded_by_shift=shifted_encoded_by_shift,
-            eval_ds=eval_ds,
-            shifted_ds_by_shift=shifted_ds_by_shift,
-            vocabulary=vocabulary,
-            vocab50=vocab50,
-            cfg=cfg,
-            mu0_payload=mu0_payload,
-            cms_mode=cms_mode_str,
-            eta_values=cms_cfg.get("eta_values"),
-            ema_decay=float(cms_cfg.get("ema_decay", 0.99)),
-            pos_ema_decay=float(cms_cfg.get("pos_ema_decay", 0.95)),
-            min_bucket_count=int(cms_cfg.get("min_bucket_count", 3)),
-            include_global_causal_baseline=bool(
-                cms_cfg.get("include_global_causal_baseline", True)
-            ),
-            shift_mode=ctrl_shift_mode,
-            normalize_inputs=bool(
-                cms_cfg.get("normalize_before_subtraction", True)
-            ),
-            baseline_clean_summary=negative_controls_result["clean_reference"],
-            baseline_condition_entries=negative_controls_result["conditions"],
-            baseline_shifted_aggregate=negative_controls_result[
-                "shifted_aggregate"
-            ],
-            compute_metrics_fn=_compute_encoded_evaluation_metrics,
-            extract_summary_row_fn=_extract_control_summary_row,
-            summarize_shifted_fn=_summarize_shifted_conditions,
-            output_dir=out,
-            plot=plot,
-            print_report=print_report,
-        )
-        eval_result["exploratory_common_mode_subtraction_json"] = (
-            cms_report.get("exploratory_json")
-        )
-        eval_result["exploratory_common_mode_subtraction_summary"] = {
-            "cms_mode": cms_mode_str,
-            "ema_decay": float(cms_cfg.get("ema_decay", 0.99)),
-            "pos_ema_decay": float(cms_cfg.get("pos_ema_decay", 0.95)),
-            "min_bucket_count": int(cms_cfg.get("min_bucket_count", 3)),
-            "eta_grid": cms_report["eta_grid"],
-            "best_eta_by_clean_vocab50_top10": cms_report[
-                "best_eta_by_clean_vocab50_top10"
-            ],
-            "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
-                "best_eta_by_clean_minus_shifted_vocab50_top10"
-            ],
-        }
-        eval_result["figures"].update(cms_report.get("figures", {}))
-    elif cms_enabled and len(shifted_encoded_by_shift) >= 2:
-        from braindecoding.evaluation.common_mode_subtraction_evaluation import (
-            run_common_mode_subtraction_sweep,
-        )
-
-        cms_report = run_common_mode_subtraction_sweep(
-            dataset=dataset,
-            stage=stage,
-            split=split,
-            seed=seed,
-            exp_tag=resolved_exp_tag,
-            word_exp_tag=resolved_word_exp_tag,
-            clean_encoded=encoded,
-            shifted_encoded_by_shift=shifted_encoded_by_shift,
-            eval_ds=eval_ds,
-            shifted_ds_by_shift=shifted_ds_by_shift,
-            vocabulary=vocabulary,
-            vocab50=vocab50,
-            cfg=cfg,
-            eta_values=cms_cfg.get("eta_values", (0.5, 0.8, 1.0)),
-            normalize_inputs=bool(
-                cms_cfg.get("normalize_before_subtraction", True)
-            ),
-            baseline_clean_summary=negative_controls_result[
-                "clean_reference"
-            ],
-            baseline_condition_entries=negative_controls_result[
-                "conditions"
-            ],
-            baseline_shifted_aggregate=negative_controls_result[
-                "shifted_aggregate"
-            ],
-            compute_metrics_fn=_compute_encoded_evaluation_metrics,
-            extract_summary_row_fn=_extract_control_summary_row,
-            summarize_shifted_fn=_summarize_shifted_conditions,
-            output_dir=out,
-            plot=plot,
-            print_report=print_report,
-        )
-        eval_result["exploratory_common_mode_subtraction_json"] = (
-            cms_report.get("exploratory_json")
-        )
-        eval_result["exploratory_common_mode_subtraction_summary"] = {
-            "eta_grid": cms_report["eta_grid"],
-            "best_eta_by_clean_vocab50_top10": cms_report[
-                "best_eta_by_clean_vocab50_top10"
-            ],
-            "best_eta_by_clean_minus_shifted_vocab50_top10": cms_report[
-                "best_eta_by_clean_minus_shifted_vocab50_top10"
-            ],
-        }
-        eval_result["figures"].update(cms_report.get("figures", {}))
-
-    if sub_enabled and len(shifted_encoded_by_shift) >= 2:
-        from braindecoding.evaluation.subspace_coherence_debiasing_evaluation import (
-            run_subspace_coherence_debiasing_sweep,
-        )
-
-        gate_raw = sub_cfg.get("use_coherence_gate", "both")
-        if isinstance(gate_raw, bool):
-            gate_modes = [False, True]
-        else:
-            g_str = str(gate_raw).strip().lower()
-            if g_str in {"true", "on", "1", "yes"}:
-                gate_modes = [True]
-            elif g_str in {"false", "off", "0", "no"}:
-                gate_modes = [False]
-            else:
-                gate_modes = [False, True]
-
-        sub_report = run_subspace_coherence_debiasing_sweep(
-            dataset=dataset,
-            stage=stage,
-            split=split,
-            seed=seed,
-            exp_tag=resolved_exp_tag,
-            word_exp_tag=resolved_word_exp_tag,
-            clean_encoded=encoded,
-            shifted_encoded_by_shift=shifted_encoded_by_shift,
-            eval_ds=eval_ds,
-            vocabulary=vocabulary,
-            vocab50=vocab50,
-            eta_values=sub_cfg.get("eta_values", (0.8, 1.0, 1.2)),
-            rank_k_values=sub_cfg.get("rank_k_values", (8, 12, 16, 24)),
-            coherence_gate_modes=gate_modes,
-            full_loo_etas=sub_cfg.get(
-                "full_loo_eta_values", (0.5, 0.8, 1.0)
-            ),
-            center_svd=bool(sub_cfg.get("center_svd", True)),
-            coherence_low=float(sub_cfg.get("coherence_low", 0.35)),
-            coherence_high=float(sub_cfg.get("coherence_high", 0.65)),
-            gate_min=float(sub_cfg.get("gate_min", 0.2)),
-            gate_max=float(sub_cfg.get("gate_max", 1.2)),
-            normalize_inputs=bool(
-                sub_cfg.get("normalize_before_subtraction", True)
-            ),
-            output_dir=out,
-            plot=plot,
-            print_report=print_report,
-            verbose=verbose,
-        )
-        eval_result["exploratory_subspace_coherence_debiasing_json"] = (
-            sub_report.get("exploratory_json")
-        )
-        eval_result["exploratory_subspace_coherence_debiasing_summary"] = {
-            "grid": sub_report.get("grid"),
-            "best_by_net_gap_vocab50": (
-                sub_report.get("best_by_net_gap_vocab50") or {}
-            ).get("label"),
-            "best_by_clean_preservation_vocab50": (
-                sub_report.get("best_by_clean_preservation_vocab50") or {}
-            ).get("label"),
-        }
-        eval_result["figures"].update(sub_report.get("figures", {}))
 
     shifted_encoded_by_shift.clear()
     shifted_ds_by_shift.clear()

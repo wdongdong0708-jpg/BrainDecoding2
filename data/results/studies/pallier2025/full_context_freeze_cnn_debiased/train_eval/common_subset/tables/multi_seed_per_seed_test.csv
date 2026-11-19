@@ -1,4 +1,0 @@
-﻿seed,best_epoch,vocab50_macro_top10_pct,vocab50_micro_top10_pct,vocab50_macro_top5_pct,vocab50_macro_top1_pct,vocab50_micro_top1_pct,vocab50_mrr,vocab50_median_rank,strict_vocab50_macro_top10_pct,full_vocab_macro_top10_pct,full_vocab_subject_macro_top10_pct,full_vocab_micro_top10_pct,full_vocab_macro_top1_pct,full_vocab_micro_top1_pct,full_vocab_mrr,full_vocab_median_rank,control_vocab50_macro_top10_pct,clean_minus_control_vocab50_macro_top10_pp,control_full_vocab_macro_top10_pct,clean_minus_control_full_vocab_macro_top10_pp
-0,9,58.38,57.1,41.13,13.71,15.75,0.2878,8.0,57.44,6.47,22.99,22.99,1.46,7.36,0.1233,317.0,21.69,35.38,1.19,5.28
-1,24,54.68,55.52,37.41,11.6,14.14,0.2703,9.0,53.95,5.99,21.15,21.15,1.31,6.39,0.1115,355.0,22.94,31.2,0.84,5.15
-2,8,60.78,61.02,45.29,15.43,18.48,0.3204,7.0,60.11,6.73,25.87,25.87,1.51,8.58,0.1404,224.0,21.49,38.33,1.04,5.68

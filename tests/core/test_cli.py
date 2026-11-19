@@ -12,7 +12,7 @@ import sys
 import pytest
 
 from braindecoding import cli
-from braindecoding.catalog import (
+from braindecoding.protocols import (
     discover_experiment_configs,
     discover_runnable_experiment_configs,
     resolve_selector,
@@ -21,16 +21,12 @@ from braindecoding.config import PROJECT_ROOT
 
 
 SELECTORS = {
-    "chineseeeg2_littleprince/sub01-08/main_word",
-    "chineseeeg2_littleprince/sub01-08/main_context_warmstart",
     "pallier2025/sub01-10/main_word",
     "pallier2025/sub01-10/main_context_warmstart",
 }
 
 DEVELOPMENT_SELECTORS = {
     "pallier2025/sub01-10/local_window_rolling_revision_k2_d2",
-    "chineseeeg2_littleprince/sub01-08/local_window_rolling_revision_k2_d2",
-    "chineseeeg2_littleprince/sub01-08/local_window_rolling_revision_k2_d2_full_coverage",
 }
 
 
@@ -97,15 +93,14 @@ def test_explicit_legacy_list_preserves_configuration_queries(capsys):
     assert cli.main(["list", "--legacy"]) == 0
     captured = capsys.readouterr()
     assert "历史配置查询" in captured.err
-    assert "chineseeeg2_littleprince" in captured.out
     assert "pallier2025" in captured.out
 
 
 def test_selector_resolution_and_nearby_error():
-    selector = "chineseeeg2_littleprince/sub01-08/main_context_warmstart"
+    selector = "pallier2025/sub01-10/main_context_warmstart"
     assert resolve_selector(selector)["selector"] == selector
     with pytest.raises(ValueError, match="相近候选"):
-        resolve_selector("chineseeeg2_littleprince/sub01-08/main_contex")
+        resolve_selector("pallier2025/sub01-10/main_contex")
 
 
 def test_show_and_status_do_not_create_output(tmp_path, monkeypatch, capsys):
@@ -143,7 +138,7 @@ def test_status_marks_implementation_diagnostic_without_changing_run_manifest(
 
 
 def test_preflight_does_not_create_run_directory(tmp_path, monkeypatch):
-    import braindecoding.preflight as preflight
+    import braindecoding.training.environment_preflight as preflight
 
     selector = "pallier2025/sub01-10/main_word"
     record = resolve_selector(selector)
@@ -235,14 +230,14 @@ def test_legacy_execution_does_not_import_workers(argv, tmp_path, monkeypatch, c
 
 
 def test_data_check_reuses_package_builder(monkeypatch, capsys):
-    import braindecoding.data.build as build
+    import braindecoding.data.dataset_builder as build
 
     monkeypatch.setattr(
         build,
         "check_dataset",
         lambda dataset: {"dataset": dataset, "status": "complete"},
     )
-    assert cli.main(["data", "check", "chineseeeg2_littleprince"]) == 0
+    assert cli.main(["data", "check", "pallier2025"]) == 0
     assert '"status": "complete"' in capsys.readouterr().out
 
 
@@ -257,7 +252,7 @@ def test_python_module_cli_works_from_non_project_cwd(tmp_path):
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "chineseeeg2_littleprince" in result.stdout
+    assert "pallier2025" in result.stdout or "local_context_decoding_protocol" in result.stdout
 
 
 def test_installed_console_script_lists_experiments_from_non_project_cwd(tmp_path):
@@ -265,10 +260,15 @@ def test_installed_console_script_lists_experiments_from_non_project_cwd(tmp_pat
         "Scripts/brain-decoding.exe" if sys.platform == "win32" else "brain-decoding"
     )
     assert executable.is_file(), "请先执行 pip install -e ."
+    env = os.environ.copy()
+    existing_pp = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{PROJECT_ROOT}{os.pathsep}{existing_pp}" if existing_pp else str(PROJECT_ROOT)
+    )
     result = subprocess.run(
         [executable, "list"],
         cwd=tmp_path,
-        env=os.environ.copy(),
+        env=env,
         capture_output=True,
         text=True,
         check=False,

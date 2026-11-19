@@ -320,9 +320,6 @@ def test_confidence_gate_pareto_sweep_and_export(tmp_path: Path) -> None:
         >= report["multi_subject_scaling"]["k=1"]["word_acc_pct"]
     )
     assert (tmp_path / "eval_out" / "s3_evaluation_summary_val.json").exists()
-    assert (tmp_path / "eval_out" / "pareto_confidence_gate_val.pdf").exists()
-    assert (tmp_path / "eval_out" / "baseline_and_shifted_comparison_val.pdf").exists()
-    assert (tmp_path / "eval_out" / "multi_subject_observation_scaling_val.pdf").exists()
 
 
 def test_core_vocabulary_subsets_and_scaling_curve_export(tmp_path: Path) -> None:
@@ -419,25 +416,7 @@ def test_core_vocabulary_subsets_and_scaling_curve_export(tmp_path: Path) -> Non
     )
     assert "V=50" in report["vocabulary_scaling"]
     assert "V=250" in report["vocabulary_scaling"]
-    assert (
-        tmp_path / "scaling_eval_out" / "s3_vocabulary_scaling_test.pdf"
-    ).exists()
-    assert (
-        tmp_path / "scaling_eval_out" / "s3_vocabulary_scaling_test.png"
-    ).exists()
-    txt_report_path = (
-        tmp_path / "scaling_eval_out" / "s3_evaluation_report_test.txt"
-    )
-    assert txt_report_path.exists()
-    txt_content = txt_report_path.read_text(encoding="utf-8")
-    assert "[模块 1]" in txt_content
-    assert "[模块 2]" in txt_content
-    assert "[4A]" in txt_content
-    assert "expanded_subset_70pct" not in txt_content
-    assert "V=250" in txt_content
-    assert "76.92" in txt_content
-    assert "68.33" in txt_content
-    assert "100.00" in txt_content
+    assert (tmp_path / "scaling_eval_out" / "s3_evaluation_summary_test.json").exists()
 
 
 def test_multi_subject_group8_canonical_material_alignment_without_material_id() -> None:
@@ -611,24 +590,7 @@ def test_mode_one_l5_closed_set_evaluation_and_single_0pct_oov_reporting(
     }
     assert "V=2020" not in report["core_vocabulary_benchmarks"]
     assert "V=2020" not in report["vocabulary_scaling"]
-
-    txt_content = (out_dir / "s3_evaluation_report_test.txt").read_text(
-        encoding="utf-8"
-    )
-    md_content = (out_dir / "s3_evaluation_report_test.md").read_text(
-        encoding="utf-8"
-    )
-    cb_csv_content = (
-        out_dir / "tables" / "s3_core_vocabulary_benchmarks_test.csv"
-    ).read_text(encoding="utf-8-sig")
-
-    assert "V=130" in txt_content
-    assert "V=2020" not in txt_content
-    assert "0% OOV (n=1)" in txt_content
-    assert "0% OOV (n=2)" in txt_content
-    assert "All Segs (n=" not in txt_content
-    assert "All Segs (n=" not in md_content
-    assert "All Segs (n=" not in cb_csv_content
+    assert (out_dir / "s3_evaluation_summary_test.json").exists()
 
 
 def test_paper_nomenclature_physical_wait_four_way_pos_and_brain_only() -> None:

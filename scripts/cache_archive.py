@@ -23,12 +23,12 @@ STREAM_BUFFER_BYTES = 16 * 1024 * 1024
 
 
 MODALITY_TO_DATASET = {
-    "eeg": "chineseeeg2_littleprince",
-    "chineseeeg2": "chineseeeg2_littleprince",
-    "chineseeeg2_littleprince": "chineseeeg2_littleprince",
     "meg": "pallier2025",
     "pallier": "pallier2025",
     "pallier2025": "pallier2025",
+    "pallier2025_full": "pallier2025_full",
+    "libribrain100": "libribrain100",
+    "armeni2022": "armeni2022",
     "all": "all",
 }
 
@@ -47,12 +47,12 @@ def resolve_archive_path(
     archive: str | Path | None,
     *,
     archive_dir: str | Path | None = None,
-    modality: str = "eeg",
+    modality: str = "meg",
 ) -> Path:
     if archive:
         return Path(archive).resolve()
     base_dir = Path(archive_dir) if archive_dir else Path("archives")
-    clean_mod = str(modality or "eeg").strip().lower()
+    clean_mod = str(modality or "meg").strip().lower()
     return (base_dir / f"features_{clean_mod}.tar").resolve()
 
 
@@ -97,7 +97,7 @@ def pack_cache(
     archive: str | Path | None = None,
     *,
     archive_dir: str | Path | None = None,
-    modality: str = "eeg",
+    modality: str = "meg",
 ) -> dict:
     """将本地缓存目录打包为单一未压缩 .tar 归档（16 MiB 大缓冲单遍流式写入）。"""
     started = time.perf_counter()
@@ -239,7 +239,7 @@ def unpack_cache(
     cache_dir: str | Path | None = None,
     *,
     archive_dir: str | Path | None = None,
-    modality: str = "eeg",
+    modality: str = "meg",
     skip_existing: bool = False,
 ) -> dict:
     """将云盘上的单一 .tar 归档单遍流式高速解包到本地缓存目录（零预扫描，16 MiB 顺序缓冲）。"""
@@ -400,7 +400,7 @@ def build_parser() -> argparse.ArgumentParser:
     pack_p.add_argument(
         "--archive",
         default=None,
-        help="输出 .tar 归档完整路径（如 /content/drive/MyDrive/BrainDecoding/archives/features_eeg.tar）",
+        help="输出 .tar 归档完整路径（如 /content/drive/MyDrive/BrainDecoding/archives/features_meg.tar）",
     )
     pack_p.add_argument(
         "--archive-dir",
@@ -409,8 +409,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pack_p.add_argument(
         "--modality",
-        default="eeg",
-        help="模态或数据集标识（eeg / meg / chineseeeg2_littleprince / pallier2025 / all）",
+        default="meg",
+        help="模态或数据集标识（meg / pallier2025 / pallier2025_full / libribrain100 / armeni2022 / all）",
     )
 
     unpack_p = subparsers.add_parser(
@@ -433,8 +433,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     unpack_p.add_argument(
         "--modality",
-        default="eeg",
-        help="模态或数据集标识（eeg / meg / chineseeeg2_littleprince / pallier2025 / all）",
+        default="meg",
+        help="模态或数据集标识（meg / pallier2025 / pallier2025_full / libribrain100 / armeni2022 / all）",
     )
     unpack_p.add_argument(
         "--skip-existing",

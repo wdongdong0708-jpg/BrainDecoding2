@@ -17,12 +17,12 @@ import numpy as np
 import torch
 import yaml
 
-from braindecoding import unified_rolling_v2_training as neural
+from braindecoding.training import protocol_stage_training as neural
 from braindecoding.config import PROJECT_ROOT as ROOT
-from braindecoding.data.single_word_long_window import SingleWordLongWindowDataset, window_spec
+from braindecoding.data.long_window_dataset import SingleWordLongWindowDataset, window_spec
 from braindecoding.experiment import file_sha256 as sha256
-from braindecoding.training.runtime import cpu_state_dict, load_checkpoint, save_checkpoint, set_seed
-from braindecoding.training.word import encode_loader, train_one_epoch
+from braindecoding.training.training_runtime import cpu_state_dict, load_checkpoint, save_checkpoint, set_seed
+from braindecoding.training.word_encoder_training import encode_loader, train_one_epoch
 import csv
 import hashlib
 
@@ -683,8 +683,8 @@ import time
 
 import numpy as np
 
-from braindecoding.full_vocabulary_context_test_v2 import full_vocab_ranks, score_ranks
-from braindecoding.word_paired_statistics_test_v2 import bootstrap_weights, metadata
+from braindecoding.evaluation.full_vocabulary_evaluation import full_vocab_ranks, score_ranks
+from braindecoding.evaluation.word_paired_statistics_evaluation import bootstrap_weights, metadata
 study = sys.modules[__name__]
 
 
@@ -798,7 +798,7 @@ def load_dataset(m, parent, dataset):
             full, covered = full_vocab_ranks(query, words, bank, info["vocabulary"])
             selected = np.isin(words, info["vocabulary50"])
             strict = np.full(len(ids), np.inf)
-            from braindecoding.evaluation.retrieval import retrieval_ranks
+            from braindecoding.evaluation.retrieval_metrics import retrieval_ranks
             strict[selected] = retrieval_ranks(query[selected], words[selected], bank50, info["vocabulary50"])
             ranks.append(full)
             diagnostic.append(strict)
@@ -883,7 +883,7 @@ def export(m):
             sources.update(data["sources"])
             sources[str(rank_path)] = study.sha256(rank_path)
     primary = [r for r in comparisons if r["population"] == "within_long_window_budget"]
-    study.require(len(primary) == 4, "Primary comparison family incomplete")
+    study.require(len(primary) == 2 * len(study.neural.DATASETS), "Primary comparison family incomplete")
     for row, pvalue in zip(primary, holm([r["top10"]["p_raw"] for r in primary])):
         row["top10"]["p_holm"] = float(pvalue)
         row["top10"]["significant_holm_05"] = bool(pvalue < .05)

@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from braindecoding import unified_rolling_v2_training as worker
-from braindecoding.training.word import train_one_epoch
+from braindecoding.training import protocol_stage_training as worker
+from braindecoding.training.word_encoder_training import train_one_epoch
 
 pytestmark = pytest.mark.current_protocol
 

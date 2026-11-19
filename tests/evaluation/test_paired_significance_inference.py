@@ -1,6 +1,6 @@
 import numpy as np
 
-from braindecoding.jayalath_significance import (
+from braindecoding.evaluation.statistical_significance import (
     cluster_bleu_differences,
     cluster_sentence_bleu_differences,
     holm_adjust,

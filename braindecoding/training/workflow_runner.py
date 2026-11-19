@@ -41,24 +41,24 @@ from braindecoding.config import (
     resolve_config_path,
     results_root,
 )
-from braindecoding.data import chineseeeg2_dataset as chineseeeg2
 from braindecoding.data import pallier2025_dataset as pallier2025
 from braindecoding.data import text_embeddings as text_data
-from braindecoding.data.derived_cache import sha256_file, stable_sha256
-from braindecoding.evaluation.evaluation_figures import (
-    STAGE_DISPLAY_NAMES,
-    plot_evaluation_figures,
-    plot_negative_control_figures,
-    plot_stage_comparison_figure,
-    plot_stage_control_comparison_figure,
+from braindecoding.data.derived_cache import (
+    canonical_cache_paths,
+    sha256_file,
+    stable_sha256,
 )
-from braindecoding.evaluation.evaluation_reporting import (
-    print_word_evaluation_report as _print_evaluation_report,
+from braindecoding.data.word_window_dataset import (
+    RUNTIME_CONTEXT_COLUMN,
+    extract_ordered_subjects,
+    format_subject_id,
 )
 from braindecoding.evaluation.retrieval_metrics import (
     fixed_vocabulary_retrieval_metrics,
+    full_vocabulary_metrics,
     mean_by_target,
     retrieval_ranks,
+    strict_bank_metrics,
 )
 from braindecoding.evaluation.word_retrieval_evaluation import (
     _build_enriched_full_vocabulary_metrics,
@@ -81,17 +81,19 @@ from braindecoding.optimizers import (
     build_adamw_for_modules,
     build_cosine_annealing_scheduler,
 )
-from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import train as chinese_task
-from braindecoding.tasks.word_decoding.pallier2025 import train as pallier_task
-from braindecoding.training.pallier_alignment_training import strict_bank_metrics
+from braindecoding.training import meg_word_task
 from braindecoding.training.protocol_stage_training import (
     COMMON_TRAINING_KEYS,
     CONFIG_PATH,
-    DATASETS,
     STAGES,
     group_column,
 )
-from braindecoding.training.rolling_revision_training import full_vocabulary_metrics
+DATASETS: tuple[str, ...] = (
+    "pallier2025",
+    "pallier2025_full",
+    "libribrain100",
+    "armeni2022",
+)
 from braindecoding.training.training_runtime import (
     capture_random_state,
     choose_device,
@@ -111,10 +113,18 @@ from braindecoding.training.word_encoder_training import (
     train_one_epoch,
 )
 
+STAGE_DISPLAY_NAMES: dict[str, str] = {
+    "word": "Word-Only (Stage 1)",
+    "context": "Full-Context (Stage 2.1)",
+    "revision": "Rolling-K2 (Stage 2.2)",
+    "prefix_revision": "Prefix-Revision (Stage 2.3)",
+}
 
-CANONICAL_SUBJECTS: dict[str, tuple[str, ...]] = {
-    "chineseeeg2_littleprince": tuple(f"sub-{index:02d}" for index in range(1, 9)),
+_FALLBACK_SUBJECTS: dict[str, tuple[str, ...]] = {
     "pallier2025": tuple(pallier2025.SUBJECTS),
+    "pallier2025_full": tuple(pallier2025.SUBJECTS),
+    "libribrain100": ("sub-0",),
+    "armeni2022": ("sub-001", "sub-002", "sub-003"),
 }
 
 WORKFLOW_STAGES: tuple[str, ...] = (
@@ -155,10 +165,6 @@ DEFAULT_STAGE_CONFIGS: dict[tuple[str, str], str] = {
     ("pallier2025", "context"): "configs/training/pallier2025_context_transformer.yaml",
     ("pallier2025", "revision"): "configs/training/pallier2025_rolling_revision.yaml",
     ("pallier2025", "prefix_revision"): "configs/training/pallier2025_prefix_revision.yaml",
-    ("chineseeeg2_littleprince", "word"): "configs/training/chineseeeg2_word_encoder.yaml",
-    ("chineseeeg2_littleprince", "context"): "configs/training/chineseeeg2_context_transformer.yaml",
-    ("chineseeeg2_littleprince", "revision"): "configs/training/chineseeeg2_rolling_revision.yaml",
-    ("chineseeeg2_littleprince", "prefix_revision"): "configs/training/chineseeeg2_prefix_revision.yaml",
 }
 
 
@@ -176,13 +182,25 @@ def normalize_workflow_stage(stage: str | None) -> str:
     )
 
 
-def canonical_subjects_for_dataset(dataset: str) -> tuple[str, ...]:
-    """返回指定数据集的标准受试者有序元组。"""
-    if dataset not in CANONICAL_SUBJECTS:
-        raise ValueError(
-            f"不支持的数据集 {dataset!r}，可选值：{sorted(CANONICAL_SUBJECTS)}"
-        )
-    return CANONICAL_SUBJECTS[dataset]
+def canonical_subjects_for_dataset(
+    dataset: str, *, event_table_path: str | Path | None = None
+) -> tuple[str, ...]:
+    """动态从已物化 ``events.csv`` 提取有序受试者列表；缓存未物化时回退默认列表。"""
+    if dataset not in DATASETS:
+        raise ValueError(f"不支持的数据集 {dataset!r}，可选值：{list(DATASETS)}")
+    csv_path = (
+        Path(event_table_path)
+        if event_table_path is not None
+        else project_path(canonical_cache_paths(dataset)["event_table"])
+    )
+    if csv_path.is_file():
+        import pandas as pd
+
+        col_df = pd.read_csv(csv_path, usecols=["受试者"], keep_default_na=False)
+        discovered = extract_ordered_subjects(col_df)
+        if discovered:
+            return discovered
+    return _FALLBACK_SUBJECTS[dataset]
 
 
 def _normalize_subject_token(token: str, canonical: tuple[str, ...]) -> str:
@@ -191,15 +209,15 @@ def _normalize_subject_token(token: str, canonical: tuple[str, ...]) -> str:
         raise ValueError("受试者标识不能为空。")
     if text in canonical:
         return text
-    if text.isdigit():
-        candidate = f"sub-{int(text):02d}"
-        if candidate in canonical:
-            return candidate
-    lowered = text.lower()
-    if lowered.startswith("sub") and lowered[3:].lstrip("-_").isdigit():
-        candidate = f"sub-{int(lowered[3:].lstrip('-_')):02d}"
-        if candidate in canonical:
-            return candidate
+    formatted = format_subject_id(text)
+    if formatted in canonical:
+        return formatted
+    digits = text.lower().removeprefix("sub").lstrip("-_")
+    if digits.isdigit():
+        for width in (1, 2, 3):
+            candidate = f"sub-{int(digits):0{width}d}"
+            if candidate in canonical:
+                return candidate
     raise ValueError(
         f"未知受试者标识 {token!r}，合法范围：{canonical[0]}..{canonical[-1]}"
     )
@@ -651,16 +669,15 @@ def build_workflow_config(
     )
 
     settings = load_yaml_with_extends(CONFIG_PATH)
-    adapter = settings["adapters"][dataset]
-    loader = (
-        pallier_task.load_config
-        if dataset == "pallier2025"
-        else chinese_task.load_config
-    )
+    adapter = settings["adapters"].get(dataset) or settings["adapters"]["pallier2025"]
+    loader = meg_word_task.load_config
     adapter_stage = "revision" if stage == "prefix_revision" else stage
     default_source_rel = DEFAULT_STAGE_CONFIGS.get(
         (dataset, stage),
-        adapter.get(f"{adapter_stage}_source_config", adapter["word_source_config"]),
+        DEFAULT_STAGE_CONFIGS.get(
+            ("pallier2025", stage),
+            adapter.get(f"{adapter_stage}_source_config", adapter["word_source_config"]),
+        ),
     )
     default_config_path = resolve_config_path(project_path(default_source_rel))
     active_config_path = (
@@ -811,7 +828,19 @@ def build_workflow_config(
     if active_yaml is None or "loss" not in active_yaml:
         cfg["loss"] = copy.deepcopy(settings["loss"])
     if active_yaml is None or not active_yaml.get("cache", {}).get("text_embeddings"):
-        cfg["cache"]["text_embeddings"] = str(project_path(adapter["embedding_cache"]))
+        if dataset in settings["adapters"]:
+            cfg["cache"]["text_embeddings"] = str(project_path(adapter["embedding_cache"]))
+        else:
+            canon_paths = canonical_cache_paths(dataset)
+            for ckey, crel in canon_paths.items():
+                cfg["cache"][ckey] = str(project_path(crel))
+    elif dataset != "pallier2025":
+        canon_paths = canonical_cache_paths(dataset)
+        for ckey, crel in canon_paths.items():
+            if not active_yaml.get("cache", {}).get(ckey):
+                cfg["cache"][ckey] = str(project_path(crel))
+    cfg["experiment"]["dataset"] = dataset
+    cfg["dataset"]["id"] = dataset
 
     text_cache_norm = str(cfg["cache"].get("text_embeddings", "")).replace("\\", "/")
     if "t5_large_layer_0_5" in text_cache_norm or str(
@@ -1146,78 +1175,50 @@ def verify_cache_ready(cfg: dict, *, splits: tuple[str, ...] = ("train", "val"))
             f"[require-cache] 文本向量缓存校验失败（{text_path}）：{exc}"
         ) from exc
 
-    if dataset == "chineseeeg2_littleprince":
-        signal_dir = Path(cfg["cache"]["eeg_dir"])
-        frames = [
-            chineseeeg2.load_event_table(
-                event_path, split=sp, subjects=subjects, trainable_only=True
-            )
-            for sp in splits
-        ]
-        table = (
-            frames[0]
-            if len(frames) == 1
-            else chineseeeg2.pd.concat(frames, ignore_index=True)
+    import pandas as pd
+
+    signal_dir = Path(cfg["cache"]["meg_dir"])
+    frames = [
+        meg_word_task.load_event_table(
+            event_path, split=sp, subjects=subjects, trainable_only=True
         )
-        missing_words = sorted(
-            set(table["normalized_word"].astype(str)) - set(embedding_map)
+        for sp in splits
+    ]
+    table = frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True)
+    missing_words = sorted(set(table["标准词"].astype(str)) - set(embedding_map))
+    if missing_words:
+        raise FileNotFoundError(
+            f"[require-cache] 文本向量缓存缺少所选子集词型：{missing_words[:5]}"
         )
-        if missing_words:
-            raise FileNotFoundError(
-                f"[require-cache] 文本向量缓存缺少所选子集词型：{missing_words[:5]}"
-            )
-        root = Path(cfg["dataset"]["root"])
+    checked_signals = []
+    if "信号相对路径" in table.columns:
         recordings = (
-            table[["recording_id", "vhdr_relpath"]]
+            table[["记录编号", "信号相对路径"]]
             .drop_duplicates()
             .itertuples(index=False)
         )
-        checked_signals = []
-        for recording_id, vhdr_relpath in recordings:
-            source_path = root / str(vhdr_relpath)
-            located = chineseeeg2.locate_recording_signal(
-                source_path, cfg["dataset"], signal_dir
-            )
-            if located is None:
+        for recording_id, relpath in recordings:
+            signal_path = signal_dir / str(relpath)
+            sidecar_path = signal_path.with_suffix(".json")
+            if not signal_path.is_file() or not sidecar_path.is_file():
                 raise FileNotFoundError(
-                    f"[require-cache] ChineseEEG-2 信号缓存未命中（{recording_id}, {source_path}）。"
-                    "请检查 BRAINDECODING_DATA_DIR 软链接路径与 BRAINDECODING_CACHE_DIR 是否已解包。"
+                    f"[require-cache] {dataset} 信号缓存未命中（{recording_id}: {signal_path}）。"
+                    "请先运行 PNPL 缓存物化或解包缓存归档。"
                 )
-            output_path, _ = located
-            checked_signals.append(str(output_path))
+            checked_signals.append(str(signal_path))
     else:
-        signal_dir = Path(cfg["cache"]["meg_dir"])
-        frames = [
-            pallier2025.load_event_table(
-                event_path, split=sp, subjects=subjects, trainable_only=True
-            )
-            for sp in splits
-        ]
-        table = (
-            frames[0]
-            if len(frames) == 1
-            else pallier2025.pd.concat(frames, ignore_index=True)
-        )
-        missing_words = sorted(
-            set(table["标准词"].astype(str)) - set(embedding_map)
-        )
-        if missing_words:
-            raise FileNotFoundError(
-                f"[require-cache] 文本向量缓存缺少所选子集词型：{missing_words[:5]}"
-            )
         recordings = (
             table[["记录编号", "受试者", "运行编号"]]
             .drop_duplicates()
             .itertuples(index=False)
         )
-        checked_signals = []
         for recording_id, subj, run in recordings:
             signal_path, sidecar_path = pallier2025._signal_product_paths(
                 signal_dir, str(subj), str(run)
             )
             if not signal_path.is_file() or not sidecar_path.is_file():
                 raise FileNotFoundError(
-                    f"[require-cache] Pallier2025 信号缓存未命中（{recording_id}: {signal_path}）。"
+                    f"[require-cache] {dataset} 信号缓存未命中（{recording_id}: {signal_path}）。"
                     "请先运行 cache 预热或解包缓存归档。"
                 )
             checked_signals.append(str(signal_path))
@@ -1235,20 +1236,16 @@ def verify_cache_ready(cfg: dict, *, splits: tuple[str, ...] = ("train", "val"))
 
 
 def _load_subset_datasets_and_loaders(cfg: dict):
-    """加载所选受试者子集的 train 与 val 数据集及 DataLoader。"""
-    dataset = cfg["experiment"]["dataset"]
-    task = pallier_task if dataset == "pallier2025" else chinese_task
-    read_fn = task.dataset_module.load_event_table
-    build_fn = task.build_dataset
+    """加载所选受试者子集的 train 与 val 数据集及 DataLoader（统一 WordWindowDataset 主干）。"""
     subjects = cfg["dataset"]["subjects"]
 
-    train_table = read_fn(
+    train_table = meg_word_task.load_event_table(
         cfg["cache"]["event_table"],
         split="train",
         subjects=subjects,
         trainable_only=True,
     )
-    val_table = read_fn(
+    val_table = meg_word_task.load_event_table(
         cfg["cache"]["event_table"],
         split="val",
         subjects=subjects,
@@ -1257,8 +1254,8 @@ def _load_subset_datasets_and_loaders(cfg: dict):
     train_table = limit_rows(train_table, cfg["training"].get("max_train_rows"))
     val_table = limit_rows(val_table, cfg["training"].get("max_val_rows"))
 
-    train_ds = build_fn(cfg, train_table)
-    val_ds = build_fn(cfg, val_table)
+    train_ds = meg_word_task.build_dataset(cfg, train_table)
+    val_ds = meg_word_task.build_dataset(cfg, val_table)
     grp_col = group_column(cfg)
     train_loader, train_sampler = make_loader(
         train_ds, cfg["training"], shuffle=True, group_column=grp_col
@@ -1306,9 +1303,7 @@ def validate_subset_population(cfg: dict, train_ds, val_ds) -> tuple:
     if set(train_ds.table["event_id"]) & set(val_ds.table["event_id"]):
         raise ValueError("训练集与验证集存在重叠 event_id。")
 
-    settings = load_yaml_with_extends(CONFIG_PATH)
-    adapter = settings["adapters"][dataset]
-    context_column = adapter["group_column"]
+    context_column = RUNTIME_CONTEXT_COLUMN
     for ds in (train_ds, val_ds):
         groups = ds.table.groupby(context_column, sort=False)
         if (
@@ -1319,12 +1314,13 @@ def validate_subset_population(cfg: dict, train_ds, val_ds) -> tuple:
 
     vocabulary = sorted(set(train_ds.table["normalized_word"].astype(str)))
     vocab50 = list(
-        pallier_task.frozen_vocabulary()
-        if dataset == "pallier2025"
-        else chinese_task.frozen_vocabulary(cfg["cache"]["event_table"])
+        meg_word_task.frozen_vocabulary(
+            dataset=dataset,
+            train_words=train_ds.table["normalized_word"].astype(str).tolist(),
+        )
     )
-    if len(vocab50) != 50 or len(set(vocab50)) != 50:
-        raise ValueError("冻结 50 词评测候选词表异常。")
+    if len(vocab50) == 0 or len(set(vocab50)) != len(vocab50):
+        raise ValueError("冻结评测候选词表异常。")
 
     common_mask = (
         val_ds.table.groupby(context_column, sort=False)
@@ -1413,9 +1409,9 @@ def _evaluate_subset_validation(
 
     top_ks = tuple(cfg["training"].get("top_ks", (1, 10)))
     vocab_name = (
-        pallier_task.SELECTION_VOCABULARY_NAME
+        meg_word_task.SELECTION_VOCABULARY_NAME
         if dataset == "pallier2025"
-        else "chineseeeg2_littleprince50"
+        else f"{dataset}_50"
     )
     legacy_metrics = fixed_vocabulary_retrieval_metrics(
         encoded["predictions"],
@@ -1559,72 +1555,42 @@ def run_cache_workflow(
         splits = ("train", "val", "test") if include_test else ("train", "val")
         event_path = Path(cfg["cache"]["event_table"])
 
-        if ds_name == "chineseeeg2_littleprince":
-            if force or not event_path.is_file():
-                event_table = chineseeeg2.build_event_table(cfg["dataset"])
-                audit = chineseeeg2.audit_event_table(event_table, cfg["dataset"])
-                chineseeeg2.save_event_table(event_table, event_path, audit)
-            frames = [
-                chineseeeg2.load_event_table(
-                    event_path,
-                    split=sp,
-                    subjects=selected_subjects,
-                    trainable_only=True,
-                )
-                for sp in splits
-            ]
-            subset_table = chineseeeg2.pd.concat(frames, ignore_index=True)
-            all_trainable = chineseeeg2.load_event_table(
-                event_path, trainable_only=True
-            )
-            text_words = (
-                all_trainable["normalized_word"]
-                if len(all_trainable) > 0
-                else subset_table["normalized_word"]
-            )
-            if force and Path(cfg["cache"]["text_embeddings"]).is_file():
-                Path(cfg["cache"]["text_embeddings"]).unlink(missing_ok=True)
-            text_data.ensure_text_embedding_cache(
-                text_words,
-                cfg["text_embedding"],
-                cfg["cache"]["text_embeddings"],
-            )
-            chineseeeg2.ensure_recording_signals(
-                subset_table,
-                cfg["dataset"],
-                cfg["cache"]["eeg_dir"],
-                force=force,
-            )
-        else:
+        import pandas as pd
+
+        if ds_name == "pallier2025":
             if force or not event_path.is_file():
                 from braindecoding.data.dataset_builder import build_dataset
 
                 build_dataset("pallier2025", events=True, force=force)
-            frames = [
-                pallier2025.load_event_table(
-                    event_path,
-                    split=sp,
-                    subjects=selected_subjects,
-                    trainable_only=True,
-                )
-                for sp in splits
-            ]
-            subset_table = pallier2025.pd.concat(frames, ignore_index=True)
-            all_trainable = pallier2025.load_event_table(
-                event_path, trainable_only=True
+        elif not event_path.is_file():
+            raise FileNotFoundError(
+                f"PNPL 派生事件表尚未物化：{event_path}。"
+                f"请先运行 `python -m braindecoding.data.pnpl_dataset_adapter --dataset {ds_name} --pnpl-root <dir>`。"
             )
-            text_words = (
-                all_trainable["标准词"]
-                if len(all_trainable) > 0
-                else subset_table["标准词"]
+        frames = [
+            meg_word_task.load_event_table(
+                event_path,
+                split=sp,
+                subjects=selected_subjects,
+                trainable_only=True,
             )
-            if force and Path(cfg["cache"]["text_embeddings"]).is_file():
-                Path(cfg["cache"]["text_embeddings"]).unlink(missing_ok=True)
-            text_data.ensure_text_embedding_cache(
-                text_words,
-                cfg["text_embedding"],
-                cfg["cache"]["text_embeddings"],
-            )
+            for sp in splits
+        ]
+        subset_table = pd.concat(frames, ignore_index=True)
+        all_trainable = meg_word_task.load_event_table(event_path, trainable_only=True)
+        text_words = (
+            all_trainable["标准词"]
+            if len(all_trainable) > 0
+            else subset_table["标准词"]
+        )
+        if force and Path(cfg["cache"]["text_embeddings"]).is_file():
+            Path(cfg["cache"]["text_embeddings"]).unlink(missing_ok=True)
+        text_data.ensure_text_embedding_cache(
+            text_words,
+            cfg["text_embedding"],
+            cfg["cache"]["text_embeddings"],
+        )
+        if ds_name == "pallier2025" and "信号相对路径" not in subset_table.columns:
             raw_root = Path(cfg["dataset"]["root"])
             recordings = (
                 subset_table[["受试者", "运行编号", "记录编号"]]
@@ -2025,7 +1991,7 @@ def run_training_workflow(
             train_one_epoch_siamese_debiased,
         )
 
-        pallier_task.set_brain_encoder_trainable(model, False)
+        meg_word_task.set_brain_encoder_trainable(model, False)
         word_ckpt_sha = ""
         if initialization and initialization.get("sha256"):
             word_ckpt_sha = str(initialization["sha256"])
@@ -2085,7 +2051,7 @@ def run_training_workflow(
         epoch_started = time.perf_counter()
         train_sampler.set_epoch(epoch)
         frozen = warm_start_stage and epoch < int(tc.get("freeze_brain_encoder_epochs", 0))
-        pallier_task.set_brain_encoder_trainable(model, not frozen)
+        meg_word_task.set_brain_encoder_trainable(model, not frozen)
         epoch_lr = float(optimizer.param_groups[0]["lr"])
 
         if preextracted_cache is not None and frozen:

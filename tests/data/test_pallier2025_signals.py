@@ -9,8 +9,8 @@ import numpy as np
 import pytest
 from sklearn.preprocessing import RobustScaler
 
-from braindecoding.data import pallier2025
-from braindecoding.data.derived import sha256_file
+from braindecoding.data import pallier2025_dataset as pallier2025
+from braindecoding.data.derived_cache import sha256_file
 
 
 class _FakeRaw:
