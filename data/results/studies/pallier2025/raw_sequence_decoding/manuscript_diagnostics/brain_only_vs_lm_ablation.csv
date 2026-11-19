@@ -1,0 +1,14 @@
+condition,paper_display_name,mode,segment_count,total_words,bleu1_pct,corpus_bleu1_pct,word_acc_pct,in_vocabulary_word_acc_pct,word_acc_top5_pct,wer_pct,bertscore_f1_pct,mean_wait_windows,mean_physical_wait_seconds
+S0,Word-Only,Brain+LM,1940,18450,8.0948,9.7453,3.6098,4.3758,8.3089,96.3144,67.3808,1.0,1.0
+K0,Local (r = 0),Brain+LM,1940,18450,10.7457,12.7805,6.0434,7.3259,13.0786,93.8211,68.7437,1.0,1.0
+K1,Local (r = 1),Brain+LM,1940,18450,12.1176,14.0,7.9133,9.5926,17.2954,91.9675,69.1451,1.8949,
+S3_clean,Local (r = 2),Brain+LM,1940,18450,12.6814,14.5257,8.439,10.23,18.6504,91.4201,69.3349,2.6856,
+F,Full-Context,Brain+LM,1940,18450,9.759,12.1355,6.1463,7.4507,16.3577,93.7344,68.7539,8.3149,
+S0_brain_only,Word-Only (Brain-Only),Brain-Only,1940,18450,7.4157,8.8184,3.1545,3.8239,7.1491,96.8022,66.807,1.0,1.0
+K0_brain_only,"Local (r = 0, Brain-Only)",Brain-Only,1940,18450,10.3783,12.3089,5.7398,6.958,12.7209,94.168,68.6056,1.0,1.0
+K1_brain_only,"Local (r = 1, Brain-Only)",Brain-Only,1940,18450,11.9503,13.8482,7.7886,9.4415,16.8889,92.1355,69.0944,1.8949,1.2646
+K2_brain_only,"Local (r = 2, Brain-Only)",Brain-Only,1940,18450,12.6896,14.5312,8.4986,10.3022,18.206,91.393,69.3535,2.6856,1.5021
+F_brain_only,Full-Context (Brain-Only),Brain-Only,1940,18450,10.7671,12.5041,7.1382,8.6531,16.4336,92.8564,68.7935,8.3149,3.3105
+LM-Only,LM-Only,LM-Only,1940,18450,6.0274,8.9973,0.7588,0.9198,3.523,99.0786,65.7698,0.0,0.0
+K0_shifted_neg75s,"Shifted Local (r = 0, -75s)",Brain+LM,1940,18450,3.5689,4.4878,0.916,1.1104,2.7805,99.0244,65.2602,1.0,1.0
+S3_shifted_neg75s,"Shifted Local (r = 2, -75s)",Brain+LM,1940,18450,3.9302,4.8835,1.4038,1.7017,3.8699,98.5637,65.3227,2.6856,
