@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-11-16T03:44:20Z",
+  "updated_at": "2026-11-19T08:55:15Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "94bad95a81e7af4d509ec038091647bf099546f9cb3b328568e4b6dc6d84659b",
-      "size": 46787,
-      "normalized_sha256": "94bad95a81e7af4d509ec038091647bf099546f9cb3b328568e4b6dc6d84659b"
+      "sha256": "a3583c65985c1e2c8e243b7438e69e20f8b000e6ef2e45fd5cbf023b0b97f046",
+      "size": 47642,
+      "normalized_sha256": "a3583c65985c1e2c8e243b7438e69e20f8b000e6ef2e45fd5cbf023b0b97f046"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -47,9 +47,9 @@
     },
     "braindecoding/__init__.py": {
       "role": "index",
-      "sha256": "e964327b86075384eb8565593a4c2783b9bdf90cdf33f4d68757b3b9abc194b1",
-      "size": 9978,
-      "normalized_sha256": "e964327b86075384eb8565593a4c2783b9bdf90cdf33f4d68757b3b9abc194b1"
+      "sha256": "4f2362d706529339453cbc0c7acd6237092b9047047102b174db01f7d334d5ca",
+      "size": 10014,
+      "normalized_sha256": "4f2362d706529339453cbc0c7acd6237092b9047047102b174db01f7d334d5ca"
     },
     "braindecoding/__main__.py": {
       "role": "index",
@@ -89,9 +89,9 @@
     },
     "braindecoding/data/derived_cache.py": {
       "role": "index",
-      "sha256": "21a28461dda5cb7d62a2e4b12a849da2cd9cd8c645066d69f887feb8e9de3470",
-      "size": 10880,
-      "normalized_sha256": "b69d70dae1614de74a8be2b7ce03b39526460d8e3909a1c4b94240ff198f12fc"
+      "sha256": "608d7d6863df06026874eb23b951722e6baad863ce74d59cb7bd8fc0e9338282",
+      "size": 11272,
+      "normalized_sha256": "cf1142c5592d8c664eb17e5afd8dcaf7eaa52f58423a8556502ffa8ca08f5cce"
     },
     "braindecoding/data/event_table.py": {
       "role": "index",
@@ -110,6 +110,12 @@
       "sha256": "058cebadb582aef85c5a6c4df13638c4c267d6a505f16b08a5ce62b4af7e2df7",
       "size": 113307,
       "normalized_sha256": "058cebadb582aef85c5a6c4df13638c4c267d6a505f16b08a5ce62b4af7e2df7"
+    },
+    "braindecoding/data/pnpl_dataset_adapter.py": {
+      "role": "index",
+      "sha256": "b4561cca9b6f64a1cc53a91b0f7a239efbf14421158c1d7caf02a24a6d913bab",
+      "size": 79650,
+      "normalized_sha256": "b4561cca9b6f64a1cc53a91b0f7a239efbf14421158c1d7caf02a24a6d913bab"
     },
     "braindecoding/data/sensor_coordinates.py": {
       "role": "index",

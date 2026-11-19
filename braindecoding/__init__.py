@@ -39,6 +39,7 @@ _SUBPACKAGE_MAP: dict[str, str] = {
     "neural_score_exporter": "decoding",
     "pallier2025_dataset": "data",
     "pallier_alignment_training": "training",
+    "pnpl_dataset_adapter": "data",
     "protocol_coverage_audit": "training",
     "protocol_stage_training": "training",
     "retrieval_metrics": "evaluation",
