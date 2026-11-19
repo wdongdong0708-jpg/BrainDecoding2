@@ -13,10 +13,6 @@ import torch
 from braindecoding.decoding.language_model_scoring import (
     CachedVocabularyLanguageScorer,
 )
-from braindecoding.decoding.rolling_beam_search import (
-    decode_dataset_segment_jobs,
-    decode_dataset_segments,
-)
 
 
 def _coerce_subject_score_tensors(
@@ -414,6 +410,11 @@ def run_multi_subject_observation_sweep(
     show_progress: bool = False,
 ) -> dict[str, dict]:
     """扫描 k in {1, 2, 5, 10} 跨受试者多观测神经聚合下的序列解码结果（同时支持全词库与 |V| in {50, 100, |V_full|} 受限核心词表）。"""
+    from braindecoding.decoding.rolling_beam_search import (
+        decode_dataset_segment_jobs,
+        decode_dataset_segments,
+    )
+
     from braindecoding.decoding.neural_score_exporter import (
         resolve_vocabulary_frequency_order,
     )
@@ -1079,6 +1080,11 @@ def run_vocabulary_scaling_sweep(
     on_scale_completed: Callable[[str, dict], None] | None = None,
 ) -> dict[str, dict]:
     """多尺度候选词表统一束搜索解码表现扫描（支持模式一 L>=5 句表同源闭集协议及传统词频截断）。"""
+    from braindecoding.decoding.rolling_beam_search import (
+        decode_dataset_segment_jobs,
+        decode_dataset_segments,
+    )
+
     from braindecoding.decoding.neural_score_exporter import (
         resolve_vocabulary_frequency_order,
     )
