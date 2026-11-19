@@ -19,7 +19,6 @@ import sys
 
 _PKG_DIR = Path(__file__).resolve().parent
 _SUBPACKAGE_MAP: dict[str, str] = {
-    "chineseeeg2_dataset": "data",
     "common_mode_subtraction_evaluation": "evaluation",
     "context_baseline_training": "training",
     "context_heldout_evaluation": "evaluation",
@@ -62,6 +61,7 @@ _SUBPACKAGE_MAP: dict[str, str] = {
     "word_encoder_training": "training",
     "word_paired_statistics_evaluation": "evaluation",
     "word_retrieval_evaluation": "evaluation",
+    "word_window_dataset": "data",
     "workflow_runner": "training",
 }
 _MERGED_MODULE_ALIASES: dict[str, tuple[str, str]] = {
@@ -69,7 +69,6 @@ _MERGED_MODULE_ALIASES: dict[str, tuple[str, str]] = {
     "build": ("data", "dataset_builder"),
     "candidate_recall": ("evaluation", "retrieval_metrics"),
     "catalog": ("", "protocols"),
-    "chineseeeg2": ("data", "chineseeeg2_dataset"),
     "derived": ("data", "derived_cache"),
     "epoch_recovery": ("training", "training_runtime"),
     "events": ("data", "event_table"),

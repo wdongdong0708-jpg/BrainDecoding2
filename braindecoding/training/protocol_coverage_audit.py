@@ -14,7 +14,7 @@ import pandas as pd
 import torch
 
 from braindecoding.config import PROJECT_ROOT, load_yaml_with_extends, project_path
-from braindecoding.data import chineseeeg2, pallier2025
+from braindecoding.data import pallier2025_dataset as pallier2025
 from braindecoding.data.text import load_text_embedding_cache
 from braindecoding.reporting import REPORT_AUDITS_ROOT
 from braindecoding.training.word import SentenceBatchSampler

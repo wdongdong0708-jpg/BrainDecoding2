@@ -18,7 +18,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from braindecoding.config import PROJECT_ROOT, load_yaml_with_extends, project_path
-from braindecoding.data import chineseeeg2, pallier2025
+from braindecoding.data import pallier2025_dataset as pallier2025
 from braindecoding.data.text import encode_words, load_text_model, save_text_embedding_cache
 from braindecoding.losses import build_siglip_loss
 from braindecoding.models import build_brain_embedding_model

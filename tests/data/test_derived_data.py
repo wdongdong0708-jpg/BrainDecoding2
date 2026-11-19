@@ -7,8 +7,8 @@ import pandas as pd
 import pytest
 
 from braindecoding.config import load_yaml_with_extends
-from braindecoding.data import chineseeeg2
-from braindecoding.data.derived import (
+from braindecoding.data import dataset_builder as build_derived_data
+from braindecoding.data.derived_cache import (
     CORE_LEGACY_COLUMNS,
     canonical_cache_paths,
     canonical_event_table,
@@ -18,9 +18,8 @@ from braindecoding.data.derived import (
     validate_event_product,
     write_event_product,
 )
-from braindecoding.events import CORE_EVENT_COLUMNS
+from braindecoding.data.event_table import CORE_EVENT_COLUMNS
 from braindecoding.experiment import resolve_experiment_config
-from braindecoding.data import build as build_derived_data
 
 
 def _event_table():
@@ -123,8 +122,10 @@ def test_signal_cache_subject_directory_is_explicit():
 @pytest.mark.parametrize(
     ("dataset", "expected_event"),
     [
-        ("chineseeeg2_littleprince", "events/events.csv"),
         ("pallier2025", "events/events.csv"),
+        ("pallier2025_full", "events/events.csv"),
+        ("libribrain100", "events/events.csv"),
+        ("armeni2022", "events/events.csv"),
     ],
 )
 def test_canonical_cache_paths_never_use_task_local_cache(dataset, expected_event):
@@ -172,39 +173,10 @@ def test_build_entry_has_no_legacy_cache_fallback():
     assert "last.pt" not in source
 
 
-def test_local_canonical_manifests_when_materialized():
-    root = Path(__file__).resolve().parents[2]
-    products = {
-        "chineseeeg2_littleprince": "events.csv",
-    }
-    for dataset, filename in products.items():
-        path = root / "derived" / dataset / "events" / filename
-        if not path.exists():
-            continue
-        columns = pd.read_csv(path, nrows=0).columns
-        assert tuple(columns[:14]) == CORE_EVENT_COLUMNS
-        assert not set(CORE_LEGACY_COLUMNS).intersection(columns)
-        manifest = validate_event_product(path)
-        assert manifest["dataset"] == dataset
-        assert manifest["event_count"] > 0
-
-
 def _require_local_products(*paths):
     missing = [str(path) for path in paths if not Path(path).exists()]
     if missing:
         pytest.skip(f"本机尚未物化 integration 数据：{missing}")
-
-
-def test_local_chineseeeg2_event_product_is_complete_and_loadable():
-    root = Path(__file__).resolve().parents[2]
-    canonical_path = root / "data/cache/derived/chineseeeg2_littleprince/events/events.csv"
-    _require_local_products(canonical_path)
-    manifest = validate_event_product(canonical_path)
-    restored = chineseeeg2.载入事件表(canonical_path, trainable_only=False)
-    assert len(restored) == manifest["event_count"]
-    assert manifest["subjects"] == [f"sub-{index:02d}" for index in range(1, 9)]
-    assert restored["event_id"].tolist() == restored["事件编号"].tolist()
-    assert restored["split"].tolist() == restored["数据划分"].tolist()
 
 
 def test_derived_tree_contains_no_model_checkpoint():
@@ -268,41 +240,13 @@ def test_check_cli_is_read_only(monkeypatch, capsys):
         "build_dataset",
         lambda *args, **kwargs: pytest.fail("--check 不应进入构建路径"),
     )
-    build_derived_data.main(["--dataset", "chineseeeg2_littleprince", "--check"])
-    assert checked == ["chineseeeg2_littleprince"]
+    build_derived_data.main(["--dataset", "pallier2025", "--check"])
+    assert checked == ["pallier2025"]
     assert '"status": "complete"' in capsys.readouterr().out
 
 
 def test_check_cli_rejects_build_flags():
     with pytest.raises(SystemExit):
         build_derived_data.main(
-            ["--dataset", "chineseeeg2_littleprince", "--check", "--signals"]
+            ["--dataset", "pallier2025", "--check", "--signals"]
         )
-
-
-@pytest.mark.parametrize(
-    ("dataset", "expected_recordings", "expected_channels"),
-    [
-        ("chineseeeg2_littleprince", 216, 128),
-    ],
-)
-def test_local_complete_derived_dataset_passes_common_check(
-    dataset, expected_recordings, expected_channels, monkeypatch
-):
-    root = Path(__file__).resolve().parents[2]
-    _require_local_products(root / "derived" / dataset / "manifest.json")
-    monkeypatch.setenv("BRAINDATA_ROOT", "D:/dataset")
-    monkeypatch.setenv(
-        "BRAINDECODING_MODEL_ROOT", "D:/code/dascoli-word-decoding/models"
-    )
-    result = build_derived_data.check_dataset(dataset)
-    assert result["status"] == "complete"
-    assert result["signal_coverage"] == {
-        "expected_recordings": expected_recordings,
-        "signal_products": expected_recordings,
-        "missing": 0,
-        "extra": 0,
-        "channel_count": expected_channels,
-        "trainable_windows_in_range": True,
-    }
-    assert result["test_model_evaluation_performed"] is False

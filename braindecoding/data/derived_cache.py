@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from braindecoding.events import CORE_EVENT_COLUMNS, validate_event_table
+from braindecoding.data.event_table import CORE_EVENT_COLUMNS, validate_event_table
 
 
 CORE_LEGACY_COLUMNS = {
@@ -28,26 +28,9 @@ CORE_LEGACY_COLUMNS = {
 
 
 def canonical_cache_paths(dataset: str) -> dict[str, str]:
-    """返回 canonical 实验唯一允许使用的 derived 数据位置。"""
+    """返回 canonical 实验唯一允许使用的 derived 数据位置（纯 MEG 仓库）。"""
     dataset = str(dataset)
-    if dataset == "chineseeeg2_littleprince":
-        return {
-            "event_table": "data/cache/derived/chineseeeg2_littleprince/events/events.csv",
-            "eeg_dir": "data/cache/derived/chineseeeg2_littleprince/signals/eeg_50hz",
-            "text_embeddings": (
-                "data/cache/derived/chineseeeg2_littleprince/text/"
-                "mengzi_t5_layer_0_5/embeddings.npz"
-            ),
-        }
-    if dataset == "pallier2025":
-        return {
-            "event_table": "data/cache/derived/pallier2025/events/events.csv",
-            "meg_dir": "data/cache/derived/pallier2025/signals/meg_50hz",
-            "text_embeddings": (
-                "data/cache/derived/pallier2025/text/t5_large_layer_0_5/embeddings.npz"
-            ),
-        }
-    if dataset in {"libribrain100", "pallier2025_full", "armeni2022"}:
+    if dataset in {"pallier2025", "libribrain100", "pallier2025_full", "armeni2022"}:
         return {
             "event_table": f"data/cache/derived/{dataset}/events/events.csv",
             "meg_dir": f"data/cache/derived/{dataset}/signals/meg_50hz",

@@ -25,8 +25,6 @@ import warnings
 import h5py
 import numpy as np
 import pandas as pd
-import torch
-from torch.utils.data import Dataset
 
 from braindecoding.config import PROJECT_ROOT, project_path
 from braindecoding.data.derived_cache import (
@@ -41,30 +39,32 @@ from braindecoding.data.event_table import (
     text_fingerprint,
     validate_event_table,
 )
-from braindecoding.data.pallier2025_dataset import (
+from braindecoding.data.word_window_dataset import (
+    BASELINE_SECONDS,
+    CLAMP,
+    DEFAULT_MAX_CONTEXT_WORDS,
     DEFAULT_PREROLL_SECONDS,
+    DerivedMegWordDataset,
+    ELIGIBILITY_WINDOW_SECONDS,
     RUNTIME_CONTEXT_COLUMN,
+    TARGET_SAMPLING_RATE_HZ,
     VALID_TEMPORAL_SHIFT_MODES,
+    WINDOW_SECONDS,
+    WINDOW_START_OFFSET_SECONDS,
+    WordWindowDataset,
     add_runtime_context_uid,
     channel_names_sha256,
+    format_subject_id as _format_subject_id,
+    parse_bool_value as _parse_bool,
     recording_onset_to_sample,
 )
-from braindecoding.data.sensor_coordinates import vectorview_channel_positions
-import braindecoding.data.text_embeddings as text_data
 
 
-SUPPORTED_DATASETS = ("libribrain100", "pallier2025", "armeni2022")
+SUPPORTED_DATASETS = ("libribrain100", "pallier2025_full", "armeni2022")
 
-TARGET_SAMPLING_RATE_HZ = 50.0
 FILTER_LOW_HZ = 0.1
 FILTER_HIGH_HZ = 40.0
-WINDOW_START_OFFSET_SECONDS = 0.0
-WINDOW_SECONDS = 1.0
-ELIGIBILITY_WINDOW_SECONDS = 3.0
-BASELINE_SECONDS = 0.5
-CLAMP = 5.0
 DEFAULT_PAUSE_GAP_SECONDS = 0.5
-DEFAULT_MAX_CONTEXT_WORDS = 128
 
 # SimpleB2T (arXiv:2609.40359v1) 表 3：LibriBrain100 0 号受试者会话级划分。
 LIBRIBRAIN100_SIMPLEB2T_TRAIN_SESSIONS = frozenset(
@@ -167,10 +167,10 @@ def _normalize_dataset_name(dataset_name: str) -> str:
     aliases = {
         "libribrain": "libribrain100",
         "libribrain100": "libribrain100",
-        "pallier": "pallier2025",
-        "pallier2025": "pallier2025",
-        "pallier2025_full": "pallier2025",
-        "littleprince": "pallier2025",
+        "pallier": "pallier2025_full",
+        "pallier2025": "pallier2025_full",
+        "pallier2025_full": "pallier2025_full",
+        "littleprince": "pallier2025_full",
         "armeni": "armeni2022",
         "armeni2022": "armeni2022",
     }
@@ -179,11 +179,6 @@ def _normalize_dataset_name(dataset_name: str) -> str:
             f"不支持的 PNPL 数据集：{dataset_name!r}，支持范围：{SUPPORTED_DATASETS}"
         )
     return aliases[name]
-
-
-def _format_subject_id(subject: str) -> str:
-    raw = str(subject).strip()
-    return raw if raw.startswith("sub-") else f"sub-{raw}"
 
 
 def _strip_prefix(value: str, prefix: str) -> str:
@@ -203,17 +198,6 @@ def _normalize_token(value: Any, *, preserve_accents: bool = True) -> str:
     return "".join(
         ch for ch in text if ch.isalnum() or ch in {"-", "'"}
     )
-
-
-def _parse_bool(value: Any) -> bool:
-    if isinstance(value, (bool, np.bool_)):
-        return bool(value)
-    text = str(value).strip().lower()
-    if text in {"true", "1", "yes"}:
-        return True
-    if text in {"false", "0", "no", ""}:
-        return False
-    raise ValueError(f"无法解析布尔值：{value!r}")
 
 
 def _write_array_atomic(path: Path, array: np.ndarray) -> None:
@@ -336,7 +320,7 @@ def open_pnpl_dataset(
         else dict(preprocessing_config or {})
     )
 
-    if canonical_name == "pallier2025":
+    if canonical_name == "pallier2025_full":
         cls = getattr(datasets_mod, "Pallier2025")
         include_subjects = (
             [_strip_prefix(s, "sub-") for s in subjects]
@@ -613,7 +597,7 @@ def recording_identifier(dataset_name: str, run_key: tuple[str, str, str, str]) 
     canonical = _normalize_dataset_name(dataset_name)
     subject, session, task, run = map(str, run_key)
     sub = _format_subject_id(subject)
-    if canonical == "pallier2025":
+    if canonical == "pallier2025_full":
         return f"pallier2025|{sub}|run-{_strip_prefix(run, 'run-')}"
     if canonical == "armeni2022":
         return f"armeni2022|{sub}|ses-{_strip_prefix(session, 'ses-')}|task-{task}"
@@ -629,7 +613,7 @@ def recording_signal_stem(dataset_name: str, run_key: tuple[str, str, str, str])
     sub = _format_subject_id(subject)
     ses = _strip_prefix(session, "ses-")
     run_tok = _strip_prefix(run, "run-")
-    if canonical == "pallier2025":
+    if canonical == "pallier2025_full":
         return f"{sub}_ses-{ses}_task-{task}_run-{run_tok}_meg"
     if canonical == "armeni2022":
         return f"{sub}_ses-{ses}_task-{task}_meg"
@@ -680,7 +664,7 @@ def resolve_split_and_unit(
             f"LibriBrain100 不支持 split_policy={split_policy!r}，可选：simpleb2t, pnpl_official"
         )
 
-    if canonical == "pallier2025":
+    if canonical == "pallier2025_full":
         run_num = _strip_prefix(run, "run-").zfill(2)
         unit = f"pallier2025|run-{run_num}"
         if policy == "simpleb2t":
@@ -688,13 +672,16 @@ def resolve_split_and_unit(
                 raise ValueError(f"Pallier2025 未知运行编号：run-{run_num}")
             return PALLIER2025_SIMPLEB2T_SPLIT_BY_RUN[run_num], unit
         if policy == "manifest":
-            from braindecoding.data.pallier2025_dataset import load_run_split
-
             manifest_p = Path(
                 split_manifest_path
                 or (PROJECT_ROOT / "data/manifests/pallier2025/run_split.json")
             )
-            assignments = load_run_split(manifest_p)
+            payload = json.loads(manifest_p.read_text(encoding="utf-8"))
+            assignments = {
+                str(run_id): str(split_name)
+                for split_name, run_list in payload["assignments"].items()
+                for run_id in run_list
+            }
             return assignments[f"run-{run_num}"], unit
         raise ValueError(
             f"Pallier2025 不支持 split_policy={split_policy!r}，可选：simpleb2t, manifest"
@@ -832,7 +819,7 @@ def extract_run_word_events(
     rec_id = recording_identifier(canonical, run_key)
 
     df = pd.read_csv(events_path, sep="\t")
-    preserve_accents = canonical == "pallier2025"
+    preserve_accents = canonical == "pallier2025_full"
 
     if canonical == "libribrain100":
         if "kind" in df.columns:
@@ -847,7 +834,7 @@ def extract_run_word_events(
             f"libribrain100|ses-{_strip_prefix(session, 'ses-')}|"
             f"task-{task}|run-{_strip_prefix(run, 'run-')}"
         )
-    elif canonical == "pallier2025":
+    elif canonical == "pallier2025_full":
         if "trial_type" in df.columns:
             word_df = df[df["trial_type"].astype(str).str.strip().str.lower().eq("word")].copy()
         else:
@@ -923,7 +910,7 @@ def extract_run_word_events(
         else [False] * len(word_df)
     )
 
-    if canonical == "pallier2025" and explicit_sents is None and pnpl_dataset is not None:
+    if canonical == "pallier2025_full" and explicit_sents is None and pnpl_dataset is not None:
         extra_df = _load_optional_pallier_extra_info(pnpl_dataset, run)
         if extra_df is not None and len(extra_df) == len(word_df):
             extra_norm = extra_df["word"].map(
@@ -1043,7 +1030,7 @@ def _corpus_for_run_key(
             if tuple(map(str, rec.run_key)) == tuple(map(str, run_key)):
                 return str(rec.corpus)
         return str(run_key[2]).lower()
-    if canonical == "pallier2025":
+    if canonical == "pallier2025_full":
         return "littleprince_listen"
     return "armeni_sherlock"
 
@@ -1203,7 +1190,7 @@ def materialize_pnpl_dataset(
                     h5_path,
                     fallback_sfreq=getattr(pnpl_dataset, "sfreq", None),
                 )
-                if canonical == "pallier2025":
+                if canonical == "pallier2025_full":
                     first_samp, time_origin_sfreq, time_origin_src = (
                         _inspect_pallier_time_origin(pnpl_dataset, run_key, h5_meta)
                     )
@@ -1423,445 +1410,10 @@ def load_pnpl_event_table(
     return table.reset_index(drop=True)
 
 
-def _resolve_meg_channel_positions(
-    channel_names: Sequence[str],
-    *,
-    layout_path: str | Path | None = None,
-    sensor_xyz: Sequence[Sequence[float]] | None = None,
-) -> np.ndarray:
-    """按 Vectorview -> CTF275 -> H5 3D 坐标投影 -> 规则网格的顺序解析 2D 传感器位置。"""
-    names = [str(name) for name in channel_names]
-    try:
-        return vectorview_channel_positions(names, layout_path=layout_path)
-    except (ImportError, FileNotFoundError, KeyError):
-        pass
-
-    # 尝试 MNE CTF275 布局（适配 Armeni2022 等 CTF MEG 系统）
-    spec = importlib.util.find_spec("mne")
-    if spec is not None and spec.origin is not None:
-        ctf_layout = (
-            Path(spec.origin).parent / "channels" / "data" / "layouts" / "CTF275.lay"
-        )
-        if ctf_layout.is_file():
-            positions: dict[str, tuple[float, float]] = {}
-            for line in ctf_layout.read_text(encoding="utf-8").splitlines():
-                fields = line.split()
-                if len(fields) >= 6:
-                    label = fields[5].split("-")[0].strip()
-                    try:
-                        positions[label] = (float(fields[1]), float(fields[2]))
-                    except ValueError:
-                        continue
-            mapped = [
-                positions.get(name.split("-")[0].replace(" ", ""))
-                for name in names
-            ]
-            if all(pos is not None for pos in mapped):
-                coords = np.asarray(mapped, dtype=np.float32)
-                lower = coords.min(axis=0, keepdims=True)
-                span = coords.max(axis=0, keepdims=True) - lower
-                return ((coords - lower) / np.maximum(span, 1e-8)).astype(np.float32)
-
-    if sensor_xyz is not None and len(sensor_xyz) == len(names):
-        xyz = np.asarray(sensor_xyz, dtype=np.float32)
-        if xyz.ndim == 2 and xyz.shape[1] >= 2 and np.isfinite(xyz[:, :2]).all():
-            xy = xyz[:, :2]
-            lower = xy.min(axis=0, keepdims=True)
-            span = xy.max(axis=0, keepdims=True) - lower
-            return ((xy - lower) / np.maximum(span, 1e-8)).astype(np.float32)
-
-    # 兜底：无布局信息时提供确定的 [0, 1]^2 单位圆周排布，确保测试与新设备不崩溃
-    angles = np.linspace(0.0, 2.0 * np.pi, num=max(1, len(names)), endpoint=False)
-    coords = np.stack([0.5 + 0.5 * np.cos(angles), 0.5 + 0.5 * np.sin(angles)], axis=1)
-    return coords[: len(names)].astype(np.float32)
-
-
-@lru_cache(maxsize=256)
-def _open_derived_signal(path: str):
-    return np.load(path, mmap_mode="r")
-
-
-class DerivedMegWordDataset(Dataset):
-    """通用 50 Hz 派生 MEG 词级数据集，接口与 ``Pallier2025WordDataset`` 完全对齐。
-
-    可直接接入现有 Stage 1 / Stage 2 错位去偏与局部前瞻训练器，以及
-    ``SyntheticTimingDataset`` 联合/独立合成脉冲对照。
-    """
-
-    def __init__(
-        self,
-        table: pd.DataFrame,
-        dataset_config: Mapping[str, Any],
-        meg_cache_dir: str | Path,
-        text_embedding_path: str | Path,
-        text_embedding_config: Mapping[str, Any],
-        *,
-        zero_meg: bool = False,
-        temporal_shift_seconds: float = 0.0,
-        shift_mode: str | None = None,
-        preroll_seconds: float | None = None,
-        preroll_source_table: pd.DataFrame | None = None,
-        preroll_buffers: dict[str, np.ndarray] | None = None,
-    ) -> None:
-        source = table.copy()
-        missing = sorted(set(CORE_EVENT_COLUMNS) - set(source.columns))
-        if missing:
-            raise ValueError(f"DerivedMegWordDataset 缺少核心事件字段：{missing}")
-        if "信号相对路径" not in source.columns:
-            raise ValueError("DerivedMegWordDataset 事件表缺少 '信号相对路径' 字段。")
-
-        source = source[source["是否可训练"].astype(bool)].reset_index(drop=True)
-        if source.empty:
-            raise ValueError("DerivedMegWordDataset 没有可训练事件。")
-
-        cfg = dict(dataset_config)
-        cfg.setdefault("target_sampling_rate_hz", TARGET_SAMPLING_RATE_HZ)
-        cfg.setdefault("window_seconds", WINDOW_SECONDS)
-        cfg.setdefault("window_start_offset_seconds", WINDOW_START_OFFSET_SECONDS)
-        cfg.setdefault("baseline_seconds", BASELINE_SECONDS)
-        cfg.setdefault("clamp", CLAMP)
-        cfg.setdefault("max_context_words", DEFAULT_MAX_CONTEXT_WORDS)
-        self.dataset_config = cfg
-
-        self.table = add_runtime_context_uid(
-            source,
-            max_context_words=int(cfg["max_context_words"]),
-        )
-        aliases = {
-            "event_id": "事件编号",
-            "subject_id": "受试者",
-            "recording_id": "记录编号",
-            "word": "词",
-            "normalized_word": "标准词",
-            "sentence_uid": "上下文编号",
-            "split": "数据划分",
-            "is_trainable": "是否可训练",
-            "onset_seconds": "开始时间",
-        }
-        for target, origin in aliases.items():
-            self.table[target] = self.table[origin]
-
-        configured_subjects = tuple(
-            _format_subject_id(s)
-            for s in (
-                cfg.get("subjects")
-                or list(dict.fromkeys(self.table["subject_id"].astype(str)))
-            )
-        )
-        observed_subjects = set(self.table["subject_id"].astype(str))
-        if not observed_subjects.issubset(set(configured_subjects)):
-            raise ValueError("事件表包含未在配置 subjects 中声明的受试者。")
-
-        self.meg_cache_dir = Path(meg_cache_dir)
-        self.zero_meg = bool(zero_meg)
-        self.sampling_rate_hz = float(cfg["target_sampling_rate_hz"])
-        self.window_seconds = float(cfg["window_seconds"])
-        self.window_samples = int(round(self.window_seconds * self.sampling_rate_hz))
-        self._baseline_samples = int(
-            round(float(cfg["baseline_seconds"]) * self.sampling_rate_hz)
-        )
-        self._clamp = float(cfg["clamp"])
-        self._window_offset_seconds = float(cfg["window_start_offset_seconds"])
-
-        self.temporal_shift_seconds = float(temporal_shift_seconds)
-        self.temporal_shift_samples = int(
-            round(self.temporal_shift_seconds * self.sampling_rate_hz)
-        )
-        resolved_shift_mode = str(
-            shift_mode if shift_mode is not None else cfg.get("shift_mode", "deterministic_circular")
-        ).strip().lower()
-        if resolved_shift_mode not in VALID_TEMPORAL_SHIFT_MODES:
-            raise ValueError(
-                f"无效 shift_mode：{resolved_shift_mode!r}，可选 {VALID_TEMPORAL_SHIFT_MODES}"
-            )
-        self.shift_mode = resolved_shift_mode
-        self.preroll_seconds = float(
-            preroll_seconds
-            if preroll_seconds is not None
-            else cfg.get("preroll_seconds", DEFAULT_PREROLL_SECONDS)
-        )
-        if self.shift_mode == "preroll" and self.temporal_shift_samples > 0:
-            raise ValueError("Pre-Roll 因果移位模式仅允许严格过去移位 (<= 0)。")
-
-        self.subject_map = {subj: idx for idx, subj in enumerate(configured_subjects)}
-        self.subject_count = len(self.subject_map)
-        self.subject_indices = np.asarray(
-            [self.subject_map[s] for s in self.table["subject_id"].astype(str)],
-            dtype=np.int64,
-        )
-        contexts = self.table[RUNTIME_CONTEXT_COLUMN].astype(str).tolist()
-        context_map = {val: idx for idx, val in enumerate(dict.fromkeys(contexts))}
-        self.sentence_indices = np.asarray(
-            [context_map[val] for val in contexts], dtype=np.int64
-        )
-
-        signature = text_data.text_embedding_signature(text_embedding_config)
-        self.embedding_map = text_data.load_text_embedding_cache(
-            text_embedding_path, expected_signature=signature
-        )
-        expected_dim = int(text_embedding_config["embedding_dimension"])
-        missing_words = sorted(
-            set(self.table["normalized_word"].astype(str)) - set(self.embedding_map)
-        )
-        if missing_words:
-            raise KeyError(f"文本向量缓存缺少词型：{missing_words[:5]}")
-        if any(vec.shape != (expected_dim,) for vec in self.embedding_map.values()):
-            raise ValueError("文本向量维度与配置不一致。")
-
-        self.signal_paths: dict[str, Path] = {}
-        self.signal_metadata: dict[str, dict[str, Any]] = {}
-        channel_names: tuple[str, ...] | None = None
-        sensor_xyz_ref = None
-        for rec_id, relpath in (
-            self.table[["recording_id", "信号相对路径"]]
-            .drop_duplicates()
-            .itertuples(index=False, name=None)
-        ):
-            rec_key = str(rec_id)
-            sig_path = self.meg_cache_dir / str(relpath)
-            sidecar_path = sig_path.with_suffix(".json")
-            if not sig_path.is_file() or not sidecar_path.is_file():
-                raise FileNotFoundError(f"派生 MEG 信号或其 sidecar 缺失：{sig_path}")
-            meta = json.loads(sidecar_path.read_text(encoding="utf-8"))
-            if not np.isclose(
-                float(meta.get("output_sampling_rate_hz", -1.0)),
-                self.sampling_rate_hz,
-            ):
-                raise ValueError(f"信号采样率与配置不一致：{sidecar_path}")
-            names_tuple = tuple(meta["channel_names"])
-            if channel_names is None:
-                channel_names = names_tuple
-                sensor_xyz_ref = meta.get("sensor_xyz")
-            elif names_tuple != channel_names:
-                raise ValueError(f"recording 间通道顺序不一致：{sidecar_path}")
-            self.signal_paths[rec_key] = sig_path
-            self.signal_metadata[rec_key] = meta
-
-        self.channel_names = list(channel_names or ())
-        self.channel_count = len(self.channel_names)
-        self.channel_positions = _resolve_meg_channel_positions(
-            self.channel_names,
-            layout_path=cfg.get("layout_path"),
-            sensor_xyz=sensor_xyz_ref,
-        )
-
-        self._recording_ids = tuple(self.table["recording_id"].astype(str).tolist())
-        self._words = tuple(self.table["normalized_word"].astype(str).tolist())
-        self._event_ids = tuple(self.table["event_id"].astype(str).tolist())
-        self._onset_seconds = self.table["onset_seconds"].to_numpy(dtype=np.float64, copy=True)
-        self._signal_path_strs = tuple(
-            str(self.signal_paths[rec_id]) for rec_id in self._recording_ids
-        )
-        self._window_starts = np.asarray(
-            [
-                recording_onset_to_sample(
-                    float(onset) + self._window_offset_seconds,
-                    source_first_samp=self.signal_metadata[rec_id]["source_first_samp"],
-                    source_sampling_rate_hz=self.signal_metadata[rec_id][
-                        "source_sampling_rate_hz"
-                    ],
-                    output_sampling_rate_hz=self.signal_metadata[rec_id][
-                        "output_sampling_rate_hz"
-                    ],
-                )
-                for rec_id, onset in zip(self._recording_ids, self._onset_seconds)
-            ],
-            dtype=np.int64,
-        )
-        self._embedding_tensors = {
-            word: torch.from_numpy(np.array(vec, dtype=np.float32, copy=True))
-            for word, vec in self.embedding_map.items()
-        }
-        self._subject_index_tensors = torch.as_tensor(self.subject_indices, dtype=torch.long)
-        self._sentence_index_tensors = torch.as_tensor(self.sentence_indices, dtype=torch.long)
-        self._onset_second_tensors = torch.as_tensor(self._onset_seconds, dtype=torch.float32)
-
-        self._preroll_by_recording: dict[str, np.ndarray] = {}
-        self._preroll_source_table = preroll_source_table
-        self._explicit_preroll_buffers = preroll_buffers
-        if (
-            not self.zero_meg
-            and self.shift_mode == "preroll"
-            and self.temporal_shift_samples < 0
-        ):
-            self.ensure_preroll_buffers()
-
-    def ensure_preroll_buffers(
-        self,
-        shift_seconds: float | None = None,
-        *,
-        shift_mode: str | None = None,
-        preroll_seconds: float | None = None,
-    ) -> None:
-        if shift_mode is not None:
-            mode_norm = str(shift_mode).strip().lower()
-            if mode_norm not in VALID_TEMPORAL_SHIFT_MODES:
-                raise ValueError(f"无效 shift_mode：{mode_norm!r}")
-            self.shift_mode = mode_norm
-        if preroll_seconds is not None:
-            self.preroll_seconds = float(preroll_seconds)
-        if shift_seconds is not None:
-            self.temporal_shift_seconds = float(shift_seconds)
-            self.temporal_shift_samples = int(
-                round(self.temporal_shift_seconds * self.sampling_rate_hz)
-            )
-        if self.zero_meg or self.shift_mode != "preroll" or self.temporal_shift_samples == 0:
-            return
-        if self.temporal_shift_samples > 0:
-            raise ValueError("Pre-Roll 因果移位模式仅允许严格过去移位 (<= 0)。")
-
-        required = max(
-            int(round(self.preroll_seconds * self.sampling_rate_hz)),
-            abs(int(self.temporal_shift_samples)) + int(self.window_samples),
-        )
-        observed_pairs = list(
-            self.table[["subject_id", "recording_id"]]
-            .drop_duplicates()
-            .itertuples(index=False, name=None)
-        )
-        if self._explicit_preroll_buffers is not None:
-            for subj_raw, rec_raw in observed_pairs:
-                subj, rec_id = str(subj_raw), str(rec_raw)
-                buf = self._explicit_preroll_buffers.get(
-                    rec_id, self._explicit_preroll_buffers.get(subj)
-                )
-                if buf is None:
-                    raise ValueError(f"preroll_buffers 缺少受试者 {subj} ({rec_id})。")
-                arr = np.asarray(buf, dtype=np.float32)
-                if arr.ndim != 2 or arr.shape[0] != self.channel_count or arr.shape[1] < required:
-                    raise ValueError(f"preroll_buffers[{subj}] 形状或长度不足：{arr.shape}")
-                sliced = np.array(arr[:, -required:], dtype=np.float32, copy=True)
-                sliced.setflags(write=False)
-                self._preroll_by_recording[rec_id] = sliced
-            return
-
-        src_table = self._preroll_source_table
-        if src_table is None:
-            csv_path = self.meg_cache_dir.parent.parent / "events" / "events.csv"
-            if csv_path.is_file():
-                src_table = load_pnpl_event_table(csv_path, split="train", trainable_only=True)
-        if src_table is None or src_table.empty:
-            raise ValueError("Pre-Roll 模式需要提供 train 划分事件表或显式 preroll_buffers。")
-
-        split_col = "数据划分" if "数据划分" in src_table.columns else "split"
-        subj_col = "受试者" if "受试者" in src_table.columns else "subject_id"
-        rec_col = "记录编号" if "记录编号" in src_table.columns else "recording_id"
-        train_df = src_table[src_table[split_col].astype(str).eq("train")]
-        by_subject: dict[str, list[tuple[str, Path]]] = {}
-        for subj_v, rec_v, rel_v in (
-            train_df[[subj_col, rec_col, "信号相对路径"]]
-            .drop_duplicates()
-            .sort_values([subj_col, rec_col], kind="mergesort")
-            .itertuples(index=False, name=None)
-        ):
-            sig_p = self.meg_cache_dir / str(rel_v)
-            if sig_p.is_file():
-                by_subject.setdefault(str(subj_v), []).append((str(rec_v), sig_p))
-
-        for subj_raw, rec_raw in observed_pairs:
-            subj, rec_id = str(subj_raw), str(rec_raw)
-            candidates = [
-                (r, p) for r, p in by_subject.get(subj, ()) if r != rec_id
-            ]
-            if not candidates:
-                raise ValueError(f"受试者 {subj} 缺少独立于 {rec_id} 的 train Pre-Roll 记录。")
-            chunks_rev: list[np.ndarray] = []
-            remaining = required
-            for _, sig_p in reversed(candidates):
-                arr = _open_derived_signal(str(sig_p))
-                take = min(remaining, int(arr.shape[1]))
-                if take > 0:
-                    chunks_rev.append(
-                        np.array(arr[:, int(arr.shape[1]) - take :], dtype=np.float32, copy=True)
-                    )
-                    remaining -= take
-                if remaining <= 0:
-                    break
-            if remaining > 0:
-                raise ValueError(f"受试者 {subj} 的 train 记录总长不足以构建 {required} 点 Pre-Roll。")
-            buf = (
-                chunks_rev[0]
-                if len(chunks_rev) == 1
-                else np.concatenate(list(reversed(chunks_rev)), axis=1).astype(np.float32)
-            )
-            buf.setflags(write=False)
-            self._preroll_by_recording[rec_id] = buf
-
-    def __len__(self) -> int:
-        return len(self.table)
-
-    def read_meg(self, index: int) -> np.ndarray:
-        idx = int(index)
-        if self.zero_meg:
-            return np.zeros((self.channel_count, self.window_samples), dtype=np.float32)
-        recording = _open_derived_signal(self._signal_path_strs[idx])
-        if recording.ndim != 2 or recording.shape[1] < self.window_samples:
-            raise ValueError("词窗口超出连续 MEG 信号长度。")
-        start = int(self._window_starts[idx])
-        stop = start + self.window_samples
-        if start < 0 or stop > recording.shape[1]:
-            start = max(0, min(start, int(recording.shape[1]) - self.window_samples))
-            stop = start + self.window_samples
-
-        if self.temporal_shift_samples == 0:
-            window = recording[:, start:stop].astype(np.float32, copy=True)
-        elif self.shift_mode == "preroll":
-            raw_start = start + int(self.temporal_shift_samples)
-            win_len = int(self.window_samples)
-            if raw_start >= 0:
-                window = recording[:, raw_start : raw_start + win_len].astype(np.float32, copy=True)
-            else:
-                preroll = self._preroll_by_recording[self._recording_ids[idx]]
-                buf_len = int(preroll.shape[1])
-                buf_start = buf_len + raw_start
-                if buf_start < 0:
-                    raise IndexError(f"Pre-Roll 缓冲区长度不足：raw_start={raw_start}, buf_len={buf_len}")
-                if raw_start + win_len <= 0:
-                    window = preroll[:, buf_start : buf_start + win_len].astype(np.float32, copy=True)
-                else:
-                    left_len = -raw_start
-                    right_len = win_len - left_len
-                    window = np.empty((self.channel_count, win_len), dtype=np.float32)
-                    window[:, :left_len] = preroll[:, buf_start:buf_len]
-                    window[:, left_len:] = recording[:, :right_len]
-        else:
-            valid_span = int(recording.shape[1]) - self.window_samples + 1
-            if valid_span <= 2 * self.window_samples:
-                raise ValueError("连续信号长度不足以执行非重叠时间错位。")
-            shifted_start = (start + self.temporal_shift_samples) % valid_span
-            if abs(shifted_start - start) < self.window_samples:
-                step = self.window_samples if self.temporal_shift_samples > 0 else -self.window_samples
-                shifted_start = (shifted_start + step) % valid_span
-            window = recording[:, shifted_start : shifted_start + self.window_samples].astype(
-                np.float32, copy=True
-            )
-
-        effective_baseline = min(self._baseline_samples, int(window.shape[1]))
-        if effective_baseline > 0:
-            window -= window[:, :effective_baseline].mean(axis=1, keepdims=True)
-        np.clip(window, -self._clamp, self._clamp, out=window)
-        return window
-
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        idx = int(index)
-        word = self._words[idx]
-        return {
-            "meg": torch.from_numpy(self.read_meg(idx)),
-            "text_embedding": self._embedding_tensors[word],
-            "subject_index": self._subject_index_tensors[idx],
-            "sentence_index": self._sentence_index_tensors[idx],
-            "onset_seconds": self._onset_second_tensors[idx],
-            "word": word,
-            "event_id": self._event_ids[idx],
-            "recording_id": self._recording_ids[idx],
-        }
-
-
 def _default_output_root(dataset_name: str) -> Path:
     canonical = _normalize_dataset_name(dataset_name)
-    key = "pallier2025_full" if canonical == "pallier2025" else canonical
-    paths = canonical_cache_paths(key)
-    return project_path(paths["event_table"]).parent.parent
+    paths = canonical_cache_paths(canonical)
+    return project_path(paths['event_table']).parent.parent
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -1876,7 +1428,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--split-policy",
         default="simpleb2t",
-        help="划分策略：libribrain100(simpleb2t/pnpl_official), pallier2025(simpleb2t/manifest), armeni2022(simpleb2t)",
+        help="划分策略：libribrain100(simpleb2t/pnpl_official), pallier2025_full(simpleb2t/manifest), armeni2022(simpleb2t)",
     )
     parser.add_argument(
         "--subjects",

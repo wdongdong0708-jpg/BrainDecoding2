@@ -41,8 +41,8 @@ PROJECT_DEPENDENCIES = (
     "scipy>=1.13",
     "scikit-learn>=1.5",
     "PyYAML>=6.0",
-    "openpyxl>=3.1",
-    "jieba==0.42.1",
+    "h5py>=3.10",
+    "pnpl>=0.2",
     "einops>=0.8",
     "x-transformers>=1.40",
     "tqdm>=4.66",
@@ -53,7 +53,6 @@ PROJECT_DEPENDENCIES = (
     "sentencepiece>=0.2",
     "mne>=1.7",
     "psutil>=5.9",
-    "matplotlib>=3.8",
 )
 
 

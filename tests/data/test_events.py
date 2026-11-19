@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 from torch.utils.data import Dataset
 
-from braindecoding.events import (
+from braindecoding.data.event_table import (
     CORE_EVENT_COLUMNS,
     add_core_event_columns,
     align_text_sequences,
@@ -11,8 +11,7 @@ from braindecoding.events import (
     text_fingerprint,
     validate_event_table,
 )
-from braindecoding.training.word import make_loader
-from braindecoding.data import chineseeeg2 as ChineseEEG2
+from braindecoding.training.word_encoder_training import make_loader
 
 
 EXPECTED_CORE_COLUMNS = (
@@ -52,61 +51,6 @@ def _base_table():
 
 def test_core_event_columns_are_the_frozen_public_contract():
     assert CORE_EVENT_COLUMNS == EXPECTED_CORE_COLUMNS
-
-
-@pytest.mark.parametrize(
-    ("module", "extra", "expected_material", "expected_start", "expected_stop"),
-    [
-        (
-            ChineseEEG2,
-            {
-                "chapter": [1, 2, 1, 2, 1],
-                "aligned_start_seconds": [0.1, 0.2, 0.3, 0.4, 0.5],
-                "aligned_stop_seconds": [0.2, 0.3, 0.4, 0.5, 0.6],
-                "voice_version": ["f1", "m1", "f1", "m1", "f1"],
-            },
-            [
-                "ChineseEEG2|littleprince|chapter-01|voice-f1",
-                "ChineseEEG2|littleprince|chapter-02|voice-m1",
-                "ChineseEEG2|littleprince|chapter-01|voice-f1",
-                "ChineseEEG2|littleprince|chapter-02|voice-m1",
-                "ChineseEEG2|littleprince|chapter-01|voice-f1",
-            ],
-            [0.1, 0.2, 0.3, 0.4, 0.5],
-            [0.2, 0.3, 0.4, 0.5, 0.6],
-        ),
-    ],
-)
-def test_dataset_contract_addition_preserves_old_columns_and_row_order(
-    module, extra, expected_material, expected_start, expected_stop
-):
-    table = _base_table().assign(**extra)
-    before = table.copy(deep=True)
-
-    result = module.add_event_contract(table)
-
-    pd.testing.assert_frame_equal(result.loc[:, before.columns], before)
-    assert len(result) == len(before)
-    assert result.index.equals(before.index)
-    assert result["event_id"].tolist() == before["event_id"].tolist()
-    assert result["split"].tolist() == before["split"].tolist()
-    assert result["sentence_uid"].tolist() == before["sentence_uid"].tolist()
-    assert result["材料编号"].tolist() == expected_material
-    if module is ChineseEEG2:
-        assert result["划分单元"].tolist() == [
-            "ChineseEEG2|littleprince|chapter-01",
-            "ChineseEEG2|littleprince|chapter-02",
-            "ChineseEEG2|littleprince|chapter-01",
-            "ChineseEEG2|littleprince|chapter-02",
-            "ChineseEEG2|littleprince|chapter-01",
-        ]
-    else:
-        assert result["划分单元"].tolist() == expected_material
-    assert result["开始时间"].tolist() == pytest.approx(expected_start)
-    assert result["结束时间"].tolist() == pytest.approx(expected_stop)
-    assert result["记录内序号"].tolist() == [0, 0, 1, 1, 2]
-    assert tuple(result.loc[:, CORE_EVENT_COLUMNS].columns) == CORE_EVENT_COLUMNS
-    assert validate_event_table(result) == ()
 
 
 def test_core_columns_copy_the_old_contract_row_by_row():
@@ -314,46 +258,6 @@ def test_leading_insertion_is_not_miscounted_as_many_substitutions():
     assert result["edit_distance"] == 1
     assert result["first_edit_left_index"] == 0
     assert result["first_edit_right_index"] == 0
-
-
-def test_chineseeeg2_voice_versions_have_distinct_materials_and_shared_split_unit():
-    table = pd.DataFrame(
-        {
-            "event_id": [f"event-{index}" for index in range(8)],
-            "subject_id": [
-                "sub-01", "sub-01", "sub-02", "sub-02",
-                "sub-05", "sub-05", "sub-06", "sub-06",
-            ],
-            "recording_id": [
-                "f1-a", "f1-a", "f1-b", "f1-b",
-                "m1-a", "m1-a", "m1-b", "m1-b",
-            ],
-            "chapter": [3] * 8,
-            "voice_version": ["speaker-A"] * 4 + ["speaker-B"] * 4,
-            "word": ["小", "王子"] * 4,
-            "normalized_word": ["小", "王子"] * 4,
-            "aligned_start_seconds": [0.0, 1.0] * 4,
-            "aligned_stop_seconds": [0.5, 1.5] * 4,
-            "sentence_uid": ["f1-a"] * 2 + ["f1-b"] * 2
-            + ["m1-a"] * 2 + ["m1-b"] * 2,
-            "split": ["train"] * 8,
-            "is_trainable": [True] * 8,
-            "exclusion_reason": [""] * 8,
-        }
-    )
-
-    result = ChineseEEG2.add_event_contract(table)
-
-    assert result["材料编号"].nunique() == 2
-    assert result["划分单元"].nunique() == 1
-    assert result.groupby("voice_version")["材料编号"].nunique().eq(1).all()
-    assert result.groupby("voice_version")["材料编号"].first().to_dict() == {
-        "speaker-A": "ChineseEEG2|littleprince|chapter-03|voice-speaker-A",
-        "speaker-B": "ChineseEEG2|littleprince|chapter-03|voice-speaker-B",
-    }
-    assert result["划分单元"].iat[0] == "ChineseEEG2|littleprince|chapter-03"
-    assert result["split"].tolist() == table["split"].tolist()
-    assert result["event_id"].tolist() == table["event_id"].tolist()
 
 
 def test_validation_rejects_multiple_fingerprints_for_one_material():

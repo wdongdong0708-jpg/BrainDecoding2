@@ -29,7 +29,6 @@ from braindecoding.pallier_alignment_trial import strict_bank_metrics
 from braindecoding.pallier_bge_trial import save_json
 from braindecoding.reporting import study_report_dir
 from braindecoding.tasks.word_decoding.pallier2025 import train as pallier
-from braindecoding.tasks.word_decoding.chineseeeg2_littleprince import train as chinese
 from braindecoding.training.runtime import cpu_state_dict, load_checkpoint, save_checkpoint, set_seed
 from braindecoding.training.word import make_loader, train_one_epoch
 from braindecoding.unified_rolling_training import full_vocabulary_metrics

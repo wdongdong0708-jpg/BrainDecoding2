@@ -5,18 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "braindecoding"
 version = "0.1.0"
-description = "可复现的 EEG/MEG 语言解码数据与实验工具"
+description = "可复现的 MEG 连续语音神经词级解码与 PNPL 统一数据管线"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "einops",
   "h5py",
-  "jieba==0.42.1",
-  "matplotlib",
   "mne",
   "numpy",
-  "openpyxl",
   "pandas",
+  "pnpl",
   "PyYAML",
   "scikit-learn",
   "scipy",

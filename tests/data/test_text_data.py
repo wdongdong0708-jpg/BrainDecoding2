@@ -7,8 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from braindecoding.data import text
-from braindecoding.data import chineseeeg2 as ChineseEEG2
+from braindecoding.data import text_embeddings as text
 
 
 def _install_fake_transformers(monkeypatch, calls):
@@ -166,20 +165,6 @@ def test_cache_reading_preserves_word_order_and_embeddings(
     assert list(current) == ["second", "first"]
     np.testing.assert_array_equal(current["second"], embeddings[0])
     np.testing.assert_array_equal(current["first"], embeddings[1])
-
-
-def test_word_datasets_use_the_public_text_implementation():
-    assert ChineseEEG2.normalize_word is text.normalize_word
-    assert (
-        ChineseEEG2.text_embedding_signature is text.text_embedding_signature
-    )
-    assert (
-        ChineseEEG2.ensure_text_embedding_cache
-        is text.ensure_text_embedding_cache
-    )
-    assert (
-        ChineseEEG2.load_text_embedding_cache is text.load_text_embedding_cache
-    )
 
 
 def test_dataset_production_modules_do_not_import_each_other():

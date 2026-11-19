@@ -9,22 +9,33 @@ import os
 import time
 from collections import Counter
 from difflib import SequenceMatcher
-from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import torch
-from torch.utils.data import Dataset
 
-from braindecoding.data.derived import sha256_file, stable_sha256
-import braindecoding.data.text as text_data
-from braindecoding.data.sensors import vectorview_channel_positions
-from braindecoding.events import (
+from braindecoding.data.derived_cache import sha256_file, stable_sha256
+from braindecoding.data.event_table import (
     CORE_EVENT_COLUMNS,
     align_text_sequences,
     text_fingerprint,
     validate_event_table,
+)
+import braindecoding.data.text_embeddings as text_data
+from braindecoding.data.word_window_dataset import (
+    DEFAULT_PREROLL_SECONDS,
+    RUNTIME_CONTEXT_COLUMN,
+    RUNTIME_CONTEXT_GROUPING,
+    VALID_TEMPORAL_SHIFT_MODES,
+    WordWindowDataset,
+    add_runtime_context_uid,
+    channel_names_sha256,
+    concat_readonly_tail_from_signals as _concat_readonly_tail_from_signals,
+    open_derived_signal as _open_signal_product,
+    pallier_legacy_signal_paths as _signal_product_paths,
+    recording_onset_to_sample,
+    recording_window_bounds,
+    runtime_context_statistics,
 )
 
 
@@ -54,8 +65,6 @@ GRADIOMETER_COUNT = 204
 CHANNEL_NAMES_SHA256 = (
     "807ff5cf39a18398f004221d596241033e9c55c91f031842069120d10dbf9fb8"
 )
-RUNTIME_CONTEXT_COLUMN = "runtime_context_uid"
-RUNTIME_CONTEXT_GROUPING = "recording_id_plus_canonical_context_v1"
 FRENCH_REFERENCE_TOKENS = (
     "lorsque",
     "cinquième",
@@ -1025,160 +1034,8 @@ def load_event_table(
     return table.reset_index(drop=True)
 
 
-def _signal_product_paths(cache_dir, subject, run) -> tuple[Path, Path]:
-    """返回一条 canonical Pall signal 及其 sidecar 路径。"""
-    stem = f"{subject}_{SESSION}_task-listen_{run}_meg"
-    signal_path = Path(cache_dir) / str(subject) / f"{stem}.npy"
-    return signal_path, signal_path.with_suffix(".json")
-
-
-def add_runtime_context_uid(table, max_context_words=128):
-    """建立受试者记录内的运行时上下文键，并验证序列边界。
-
-    Canonical ``上下文编号`` 保持材料级语言上下文身份；模型运行时额外把
-    ``记录编号`` 纳入分组，避免同一材料在不同受试者间发生注意力交互。
-    """
-    required = {"受试者", "记录编号", "上下文编号", "记录内序号"}
-    missing = sorted(required - set(table.columns))
-    if missing:
-        raise ValueError(f"Pallier2025 运行时上下文缺少字段：{missing}")
-    maximum = int(max_context_words)
-    if maximum <= 0:
-        raise ValueError("Pallier2025 max_context_words 必须为正整数。")
-
-    result = table.copy()
-    result[RUNTIME_CONTEXT_COLUMN] = (
-        result["记录编号"].astype(str)
-        + "|"
-        + result["上下文编号"].astype(str)
-    )
-    grouped = result.groupby(RUNTIME_CONTEXT_COLUMN, sort=False)
-    if grouped["受试者"].nunique().gt(1).any():
-        raise ValueError("Pallier2025 运行时上下文跨受试者。")
-    if grouped["记录编号"].nunique().gt(1).any():
-        raise ValueError("Pallier2025 运行时上下文跨 recording。")
-    if grouped["上下文编号"].nunique().gt(1).any():
-        raise ValueError("Pallier2025 运行时上下文混合多个 canonical context。")
-    sizes = grouped.size()
-    oversized = sizes[sizes.gt(maximum)]
-    if not oversized.empty:
-        raise ValueError(
-            f"Pallier2025 运行时上下文超过 max_context_words={maximum}："
-            f"{oversized.index[0]}={int(oversized.iloc[0])}"
-        )
-    for context_uid, rows in grouped:
-        order = pd.to_numeric(rows["记录内序号"], errors="coerce")
-        if order.isna().any() or (np.diff(order.to_numpy()) <= 0).any():
-            raise ValueError(
-                f"Pallier2025 运行时上下文记录内序号未严格递增：{context_uid}"
-            )
-    return result
-
-
-def runtime_context_statistics(table, max_context_words=128) -> dict:
-    """汇总 Pallier 受试者记录内运行时上下文的只读统计。"""
-    runtime = add_runtime_context_uid(table, max_context_words=max_context_words)
-    grouped = runtime.groupby(RUNTIME_CONTEXT_COLUMN, sort=False)
-    sizes = grouped.size()
-    return {
-        "context_count": int(len(sizes)),
-        "mean_words": float(sizes.mean()) if len(sizes) else 0.0,
-        "median_words": float(sizes.median()) if len(sizes) else 0.0,
-        "maximum_words": int(sizes.max()) if len(sizes) else 0,
-        "cross_subject_groups": int(grouped["受试者"].nunique().gt(1).sum()),
-        "cross_recording_groups": int(
-            grouped["记录编号"].nunique().gt(1).sum()
-        ),
-        "cross_canonical_context_groups": int(
-            grouped["上下文编号"].nunique().gt(1).sum()
-        ),
-        "groups_over_maximum": int(sizes.gt(int(max_context_words)).sum()),
-    }
-
-
-@lru_cache(maxsize=256)
-def _open_signal_product(path: str):
-    """只读映射 canonical continuous signal，避免反复载入完整记录。"""
-    return np.load(path, mmap_mode="r")
-
-
-VALID_TEMPORAL_SHIFT_MODES = ("deterministic_circular", "preroll")
-DEFAULT_PREROLL_SECONDS = 45.0
-
-
-@lru_cache(maxsize=8)
-def _cached_pallier_train_recordings(
-    events_csv_path: str, mtime_ns: int
-) -> tuple[tuple[str, str, str], ...]:
-    """缓存读取 canonical events.csv 中 train 划分的可训练 (subject_id, recording_id, run) 列表。"""
-    del mtime_ns
-    df = pd.read_csv(
-        events_csv_path,
-        usecols=["受试者", "记录编号", "运行编号", "数据划分", "是否可训练"],
-        keep_default_na=False,
-    )
-    trainable_mask = df["是否可训练"].map(
-        lambda value: _bool_value(value, field="是否可训练")
-    )
-    train_df = df[df["数据划分"].eq("train") & trainable_mask]
-    dedup = (
-        train_df[["受试者", "记录编号", "运行编号"]]
-        .drop_duplicates()
-        .sort_values(["受试者", "运行编号", "记录编号"], kind="mergesort")
-    )
-    return tuple(
-        (str(subj), str(rec_id), str(run))
-        for subj, rec_id, run in dedup.itertuples(index=False, name=None)
-    )
-
-
-def _concat_readonly_tail_from_signals(
-    signal_paths: list[Path] | tuple[Path, ...],
-    *,
-    required_samples: int,
-    channel_count: int,
-    subject_id: str,
-    max_samples_by_path: dict[Path, int] | None = None,
-) -> np.ndarray:
-    """从同被试 train 连续记录末尾截取只读 Pre-Roll 校准缓冲 [C, required_samples]。"""
-    if required_samples <= 0:
-        raise ValueError(f"Pre-Roll 采样点数必须为正整数：{required_samples}")
-    chunks_rev: list[np.ndarray] = []
-    remaining = int(required_samples)
-    for sig_path in reversed(signal_paths):
-        arr = _open_signal_product(str(sig_path))
-        if arr.ndim != 2 or int(arr.shape[0]) != int(channel_count):
-            raise ValueError(
-                f"Pallier2025 Pre-Roll 信号维度异常：{sig_path} shape={getattr(arr, 'shape', None)}"
-            )
-        avail = int(arr.shape[1])
-        if max_samples_by_path and sig_path in max_samples_by_path:
-            avail = min(avail, max(0, int(max_samples_by_path[sig_path])))
-        if avail <= 0:
-            continue
-        take = min(remaining, avail)
-        chunks_rev.append(np.array(arr[:, avail - take : avail], dtype=np.float32, copy=True))
-        remaining -= take
-        if remaining <= 0:
-            break
-    if remaining > 0:
-        collected = int(required_samples) - remaining
-        raise ValueError(
-            f"Pallier2025 受试者 {subject_id} 的 train 划分记录总长度 ({collected}) "
-            f"不足以构建所需 Pre-Roll 校准缓冲 ({required_samples} 采样点)。"
-        )
-    if len(chunks_rev) == 1:
-        buffer = chunks_rev[0]
-    else:
-        buffer = np.concatenate(list(reversed(chunks_rev)), axis=1).astype(
-            np.float32, copy=False
-        )
-    buffer.setflags(write=False)
-    return buffer
-
-
-class Pallier2025WordDataset(Dataset):
-    """从冻结事件、连续信号和 T5-large 词向量构造 1 秒词样本。"""
+class Pallier2025WordDataset(WordWindowDataset):
+    """Pallier2025 10 被试本地 BIDS 派生缓存兼容数据集（薄封装 ``WordWindowDataset``）。"""
 
     def __init__(
         self,
@@ -1188,24 +1045,16 @@ class Pallier2025WordDataset(Dataset):
         text_embedding_path,
         text_embedding_config,
         *,
-        zero_meg=False,
+        zero_meg: bool = False,
         temporal_shift_seconds: float = 0.0,
         shift_mode: str | None = None,
         preroll_seconds: float | None = None,
         preroll_source_table: pd.DataFrame | None = None,
         preroll_buffers: dict[str, np.ndarray] | None = None,
-        allow_subject_subset=False,
-    ):
-        source = table.copy()
-        missing = sorted(set(CORE_EVENT_COLUMNS) - set(source.columns))
-        if missing:
-            raise ValueError(f"Pallier2025 Dataset 缺少核心事件字段：{missing}")
-        # Dataset 永远不暴露冻结 QC 已排除或窗口不完整的事件。
-        source = source[source["是否可训练"].astype(bool)].reset_index(drop=True)
-        if source.empty:
-            raise ValueError("Pallier2025 Dataset 没有可训练事件。")
-
-        configured_subjects = tuple(str(value) for value in dataset_config["subjects"])
+        allow_subject_subset: bool = False,
+    ) -> None:
+        cfg = dict(dataset_config or {})
+        configured_subjects = tuple(str(value) for value in cfg["subjects"])
         if allow_subject_subset:
             if (
                 not configured_subjects
@@ -1219,570 +1068,30 @@ class Pallier2025WordDataset(Dataset):
             raise ValueError(
                 "Pallier2025 subject 顺序必须固定为 sub-01 至 sub-10。"
             )
-        observed_subjects = set(source["受试者"].astype(str))
-        if not observed_subjects.issubset(set(configured_subjects)):
-            raise ValueError("Pallier2025 事件表含配置外受试者。")
-
-        # Canonical 上下文身份不变；运行时分组严格限制在一条受试者 recording 内。
-        self.table = add_runtime_context_uid(
-            source,
-            max_context_words=int(dataset_config.get("max_context_words", 128)),
-        )
-        # 仅在内存中恢复训练批处理所需英文 key；不污染 canonical CSV。
-        aliases = {
-            "event_id": "事件编号",
-            "subject_id": "受试者",
-            "recording_id": "记录编号",
-            "word": "词",
-            "normalized_word": "标准词",
-            "sentence_uid": "上下文编号",
-            "split": "数据划分",
-            "is_trainable": "是否可训练",
-            "onset_seconds": "开始时间",
-        }
-        for target, origin in aliases.items():
-            self.table[target] = self.table[origin]
-
-        self.dataset_config = dict(dataset_config)
-        self.meg_cache_dir = Path(meg_cache_dir)
-        self.zero_meg = bool(zero_meg)
-        contract = word_window_contract(dataset_config)
-        self.window_seconds = float(contract["window_seconds"])
-        self.window_samples = int(contract["window_samples"])
-        self._baseline_samples = int(contract["baseline_samples"])
-        self._clamp = float(contract["clamp"])
-        self._window_offset_seconds = float(contract["window_start_offset_seconds"])
-        self.sampling_rate_hz = float(
+        contract = word_window_contract(cfg)
+        cfg["target_sampling_rate_hz"] = float(
             contract.get("sampling_rate_hz", TARGET_SAMPLING_RATE_HZ)
         )
-        self.temporal_shift_seconds = float(temporal_shift_seconds)
-        self.temporal_shift_samples = int(
-            round(self.temporal_shift_seconds * self.sampling_rate_hz)
+        cfg["window_seconds"] = float(contract["window_seconds"])
+        cfg["window_start_offset_seconds"] = float(contract["window_start_offset_seconds"])
+        cfg["baseline_seconds"] = float(contract["baseline_seconds"])
+        cfg["clamp"] = float(contract["clamp"])
+        super().__init__(
+            table,
+            cfg,
+            meg_cache_dir,
+            text_embedding_path,
+            text_embedding_config,
+            zero_meg=zero_meg,
+            temporal_shift_seconds=temporal_shift_seconds,
+            shift_mode=shift_mode,
+            preroll_seconds=preroll_seconds,
+            preroll_source_table=preroll_source_table,
+            preroll_buffers=preroll_buffers,
+            expected_channel_count=MEG_CHANNEL_COUNT,
+            expected_channel_names_sha256=CHANNEL_NAMES_SHA256,
+            strict_window_bounds=True,
         )
-        resolved_shift_mode = str(
-            shift_mode
-            if shift_mode is not None
-            else self.dataset_config.get("shift_mode", "deterministic_circular")
-        ).strip().lower()
-        if resolved_shift_mode not in VALID_TEMPORAL_SHIFT_MODES:
-            raise ValueError(
-                f"Pallier2025 shift_mode 无效：{resolved_shift_mode!r}，可选 {VALID_TEMPORAL_SHIFT_MODES}"
-            )
-        self.shift_mode = resolved_shift_mode
-        self.preroll_seconds = float(
-            preroll_seconds
-            if preroll_seconds is not None
-            else self.dataset_config.get("preroll_seconds", DEFAULT_PREROLL_SECONDS)
-        )
-        if self.preroll_seconds <= 0.0:
-            raise ValueError(f"Pallier2025 preroll_seconds 必须为正数：{self.preroll_seconds}")
-        if self.shift_mode == "preroll" and self.temporal_shift_samples > 0:
-            raise ValueError(
-                "Pallier2025 Pre-Roll 因果移位模式仅允许严格过去移位 (temporal_shift_seconds <= 0)。"
-            )
-        self.channel_count = MEG_CHANNEL_COUNT
-        self.subject_map = {
-            subject: index for index, subject in enumerate(configured_subjects)
-        }
-        self.subject_count = len(self.subject_map)
-        self.subject_indices = np.asarray(
-            [self.subject_map[value] for value in self.table["subject_id"].astype(str)],
-            dtype=np.int64,
-        )
-        contexts = self.table[RUNTIME_CONTEXT_COLUMN].astype(str).tolist()
-        context_map = {
-            value: index for index, value in enumerate(dict.fromkeys(contexts))
-        }
-        self.sentence_indices = np.asarray(
-            [context_map[value] for value in contexts], dtype=np.int64
-        )
-
-        signature = text_data.text_embedding_signature(text_embedding_config)
-        self.embedding_map = text_data.load_text_embedding_cache(
-            text_embedding_path, expected_signature=signature
-        )
-        expected_dimension = int(text_embedding_config["embedding_dimension"])
-        missing_words = sorted(
-            set(self.table["normalized_word"].astype(str)) - set(self.embedding_map)
-        )
-        if missing_words:
-            raise KeyError(f"Pallier2025 文本缓存缺少词型：{missing_words[:5]}")
-        if any(
-            value.shape != (expected_dimension,)
-            for value in self.embedding_map.values()
-        ):
-            raise ValueError("Pallier2025 文本向量维数与配置不一致。")
-
-        self.signal_paths = {}
-        self.signal_metadata = {}
-        channel_names = None
-        for row in self.table[
-            ["recording_id", "subject_id", "运行编号"]
-        ].drop_duplicates().itertuples(index=False):
-            recording_id, subject, run = map(str, row)
-            signal_path, sidecar_path = _signal_product_paths(
-                self.meg_cache_dir, subject, run
-            )
-            if not signal_path.is_file() or not sidecar_path.is_file():
-                raise FileNotFoundError(
-                    f"Pallier2025 canonical signal product 缺失：{signal_path}"
-                )
-            metadata = json.loads(sidecar_path.read_text(encoding="utf-8"))
-            if metadata.get("recording_id") != recording_id:
-                raise ValueError(
-                    f"Pallier2025 signal sidecar 记录编号不一致：{sidecar_path}"
-                )
-            if (
-                int(metadata.get("channel_count", -1)) != MEG_CHANNEL_COUNT
-                or metadata.get("channel_names_sha256") != CHANNEL_NAMES_SHA256
-                or float(metadata.get("output_sampling_rate_hz", -1))
-                != TARGET_SAMPLING_RATE_HZ
-                or metadata.get("dtype") != "float32"
-            ):
-                raise ValueError(f"Pallier2025 signal sidecar 合同不一致：{sidecar_path}")
-            current_names = tuple(metadata["channel_names"])
-            channel_names = current_names if channel_names is None else channel_names
-            if current_names != channel_names:
-                raise ValueError("Pallier2025 recording 间通道顺序不一致。")
-            self.signal_paths[recording_id] = signal_path
-            self.signal_metadata[recording_id] = metadata
-
-        self.channel_names = list(channel_names or ())
-        if channel_names_sha256(self.channel_names) != CHANNEL_NAMES_SHA256:
-            raise ValueError("Pallier2025 Dataset 通道顺序 SHA 不一致。")
-        self.channel_positions = vectorview_channel_positions(
-            self.channel_names, self.dataset_config.get("layout_path")
-        )
-
-        # 预提取行级索引数组，避免每个样本在 DataLoader 中重复调用 DataFrame.iloc
-        self._recording_ids = tuple(self.table["recording_id"].astype(str).tolist())
-        self._words = tuple(self.table["normalized_word"].astype(str).tolist())
-        self._event_ids = tuple(self.table["event_id"].astype(str).tolist())
-        self._onset_seconds = self.table["onset_seconds"].to_numpy(
-            dtype=np.float64, copy=True
-        )
-        self._signal_path_strs = tuple(
-            str(self.signal_paths[rec_id]) for rec_id in self._recording_ids
-        )
-        self._window_starts = np.asarray(
-            [
-                recording_onset_to_sample(
-                    float(onset) + self._window_offset_seconds,
-                    source_first_samp=self.signal_metadata[rec_id]["source_first_samp"],
-                    source_sampling_rate_hz=self.signal_metadata[rec_id][
-                        "source_sampling_rate_hz"
-                    ],
-                    output_sampling_rate_hz=self.signal_metadata[rec_id][
-                        "output_sampling_rate_hz"
-                    ],
-                )
-                for rec_id, onset in zip(self._recording_ids, self._onset_seconds)
-            ],
-            dtype=np.int64,
-        )
-        self._embedding_tensors = {
-            word: torch.from_numpy(np.array(vec, dtype=np.float32, copy=True))
-            for word, vec in self.embedding_map.items()
-        }
-        self._subject_index_tensors = torch.as_tensor(
-            self.subject_indices, dtype=torch.long
-        )
-        self._sentence_index_tensors = torch.as_tensor(
-            self.sentence_indices, dtype=torch.long
-        )
-        self._onset_second_tensors = torch.as_tensor(
-            self._onset_seconds, dtype=torch.float32
-        )
-        self._preroll_by_recording: dict[str, np.ndarray] = {}
-        self._default_preroll_buffer: np.ndarray | None = None
-        self._preroll_source_table = preroll_source_table
-        self._explicit_preroll_buffers = preroll_buffers
-        if (
-            not self.zero_meg
-            and self.shift_mode == "preroll"
-            and self.temporal_shift_samples < 0
-        ):
-            self._init_preroll_buffers(
-                preroll_source_table=preroll_source_table,
-                preroll_buffers=preroll_buffers,
-            )
-
-    def ensure_preroll_buffers(
-        self,
-        shift_seconds: float | None = None,
-        *,
-        shift_mode: str | None = None,
-        preroll_seconds: float | None = None,
-    ) -> None:
-        """动态切换至 Pre-Roll 模式或扩展过去移位幅度时，按需初始化或扩容只读前置校准缓冲。"""
-        if shift_mode is not None:
-            mode_norm = str(shift_mode).strip().lower()
-            if mode_norm not in VALID_TEMPORAL_SHIFT_MODES:
-                raise ValueError(f"Pallier2025 shift_mode 无效：{mode_norm!r}")
-            self.shift_mode = mode_norm
-        if preroll_seconds is not None:
-            self.preroll_seconds = float(preroll_seconds)
-        if shift_seconds is not None:
-            self.temporal_shift_seconds = float(shift_seconds)
-            self.temporal_shift_samples = int(
-                round(self.temporal_shift_seconds * self.sampling_rate_hz)
-            )
-        if self.zero_meg or self.shift_mode != "preroll" or self.temporal_shift_samples == 0:
-            return
-        if self.temporal_shift_samples > 0:
-            raise ValueError(
-                "Pallier2025 Pre-Roll 因果移位模式仅允许严格过去移位 (temporal_shift_seconds <= 0)。"
-            )
-        required_samples = max(
-            int(round(self.preroll_seconds * self.sampling_rate_hz)),
-            abs(int(self.temporal_shift_samples)) + int(self.window_samples),
-        )
-        if self._preroll_by_recording and all(
-            int(buf.shape[1]) >= required_samples
-            for buf in self._preroll_by_recording.values()
-        ):
-            return
-        self._init_preroll_buffers(
-            preroll_source_table=getattr(self, "_preroll_source_table", None),
-            preroll_buffers=getattr(self, "_explicit_preroll_buffers", None),
-        )
-
-    def _init_preroll_buffers(
-        self,
-        *,
-        preroll_source_table: pd.DataFrame | None = None,
-        preroll_buffers: dict[str, np.ndarray] | None = None,
-    ) -> None:
-        required_samples = max(
-            int(round(self.preroll_seconds * self.sampling_rate_hz)),
-            abs(int(self.temporal_shift_samples)) + int(self.window_samples),
-        )
-        observed_pairs = list(
-            self.table[["subject_id", "recording_id"]]
-            .drop_duplicates()
-            .itertuples(index=False, name=None)
-        )
-        if preroll_buffers is not None:
-            for subj_raw, rec_raw in observed_pairs:
-                subj = str(subj_raw)
-                rec_id = str(rec_raw)
-                buf = preroll_buffers.get(rec_id)
-                if buf is None:
-                    buf = preroll_buffers.get(subj)
-                if buf is None:
-                    raise ValueError(
-                        f"Pallier2025 preroll_buffers 缺少受试者 {subj} (recording={rec_id}) 的前置校准信号。"
-                    )
-                arr = np.asarray(buf, dtype=np.float32)
-                if arr.ndim != 2 or int(arr.shape[0]) != int(self.channel_count):
-                    raise ValueError(
-                        f"Pallier2025 preroll_buffers[{subj}] 形状无效：{arr.shape}"
-                    )
-                if int(arr.shape[1]) < required_samples:
-                    raise ValueError(
-                        f"Pallier2025 preroll_buffers[{subj}] 长度 ({arr.shape[1]}) 小于所需采样点 ({required_samples})。"
-                    )
-                sliced = np.array(arr[:, -required_samples:], dtype=np.float32, copy=True)
-                sliced.setflags(write=False)
-                self._preroll_by_recording[rec_id] = sliced
-            return
-
-        train_rows: list[tuple[str, str, str]] = []
-        shared_rec_max_train_end: dict[str, int] = {}
-        if preroll_source_table is not None:
-            src_df = preroll_source_table
-            split_col = "数据划分" if "数据划分" in src_df.columns else "split"
-            subj_col = "受试者" if "受试者" in src_df.columns else "subject_id"
-            rec_col = "记录编号" if "记录编号" in src_df.columns else "recording_id"
-            run_col = "运行编号" if "运行编号" in src_df.columns else "run"
-            onset_col = "开始时间" if "开始时间" in src_df.columns else "onset_seconds"
-            train_col = "是否可训练" if "是否可训练" in src_df.columns else "is_trainable"
-            trainable_mask = (
-                src_df[train_col].astype(bool)
-                if train_col in src_df.columns
-                else pd.Series(True, index=src_df.index)
-            )
-            mask = src_df[split_col].astype(str).eq("train") & trainable_mask
-            dedup = (
-                src_df.loc[mask, [subj_col, rec_col, run_col]]
-                .drop_duplicates()
-                .sort_values([subj_col, run_col, rec_col], kind="mergesort")
-            )
-            train_rows = [
-                (str(s), str(r), str(u))
-                for s, r, u in dedup.itertuples(index=False, name=None)
-            ]
-            non_train_mask = (~src_df[split_col].astype(str).eq("train")) & trainable_mask
-            shared_recs = set(src_df.loc[mask, rec_col].astype(str)) & set(
-                src_df.loc[non_train_mask, rec_col].astype(str)
-            )
-            if shared_recs and onset_col in src_df.columns:
-                for s_rec in shared_recs:
-                    rec_rows = src_df[src_df[rec_col].astype(str).eq(s_rec) & trainable_mask]
-                    s_subj = str(rec_rows[subj_col].iloc[0])
-                    s_run = str(rec_rows[run_col].iloc[0])
-                    _, sidecar_p = _signal_product_paths(self.meg_cache_dir, s_subj, s_run)
-                    first_samp = (
-                        int(_read_json(sidecar_p)["source_first_samp"])
-                        if sidecar_p.is_file()
-                        else int(self.signal_metadata.get(s_rec, {}).get("source_first_samp", 0))
-                    )
-                    src_rate = (
-                        float(_read_json(sidecar_p)["source_sampling_rate_hz"])
-                        if sidecar_p.is_file()
-                        else float(
-                            self.signal_metadata.get(s_rec, {}).get(
-                                "source_sampling_rate_hz", SOURCE_SAMPLING_RATE_HZ
-                            )
-                        )
-                    )
-                    out_rate = (
-                        float(_read_json(sidecar_p)["output_sampling_rate_hz"])
-                        if sidecar_p.is_file()
-                        else float(self.sampling_rate_hz)
-                    )
-                    tr_onsets = rec_rows.loc[
-                        rec_rows[split_col].astype(str).eq("train"), onset_col
-                    ].astype(float)
-                    ntr_onsets = rec_rows.loc[
-                        ~rec_rows[split_col].astype(str).eq("train"), onset_col
-                    ].astype(float)
-                    max_tr_stop = max(
-                        recording_onset_to_sample(
-                            float(ov) + self._window_offset_seconds,
-                            source_first_samp=first_samp,
-                            source_sampling_rate_hz=src_rate,
-                            output_sampling_rate_hz=out_rate,
-                        )
-                        + int(self.window_samples)
-                        for ov in tr_onsets
-                    )
-                    min_ntr_start = min(
-                        recording_onset_to_sample(
-                            float(ov) + self._window_offset_seconds,
-                            source_first_samp=first_samp,
-                            source_sampling_rate_hz=src_rate,
-                            output_sampling_rate_hz=out_rate,
-                        )
-                        for ov in ntr_onsets
-                    )
-                    shared_rec_max_train_end[s_rec] = max(0, min(max_tr_stop, min_ntr_start))
-        else:
-            candidate_csv = self.dataset_config.get("event_table_path")
-            if candidate_csv:
-                csv_path = Path(candidate_csv)
-            else:
-                csv_path = self.meg_cache_dir.parent.parent / "events" / "events.csv"
-            if csv_path.is_file():
-                train_rows = list(
-                    _cached_pallier_train_recordings(
-                        str(csv_path.resolve()), csv_path.stat().st_mtime_ns
-                    )
-                )
-            elif "split" in self.table.columns:
-                mask = self.table["split"].astype(str).eq("train")
-                dedup = (
-                    self.table.loc[mask, ["subject_id", "recording_id", "运行编号"]]
-                    .drop_duplicates()
-                    .sort_values(["subject_id", "运行编号", "recording_id"], kind="mergesort")
-                )
-                train_rows = [
-                    (str(s), str(r), str(u))
-                    for s, r, u in dedup.itertuples(index=False, name=None)
-                ]
-
-        by_subject: dict[str, list[tuple[str, Path]]] = {}
-        max_samples_by_path: dict[Path, int] = {}
-        for subj, rec_id, run in train_rows:
-            sig_path, _ = _signal_product_paths(self.meg_cache_dir, subj, run)
-            if sig_path.is_file():
-                by_subject.setdefault(subj, []).append((rec_id, sig_path))
-                if rec_id in shared_rec_max_train_end:
-                    max_samples_by_path[sig_path] = shared_rec_max_train_end[rec_id]
-
-        primary_cache: dict[str, tuple[str, np.ndarray]] = {}
-        alt_cache: dict[str, np.ndarray] = {}
-        for subj_raw, rec_raw in observed_pairs:
-            subj = str(subj_raw)
-            rec_id = str(rec_raw)
-            records = by_subject.get(subj, [])
-            if not records:
-                raise ValueError(
-                    f"Pallier2025 Pre-Roll 模式未找到受试者 {subj} 的 train 划分校准信号。"
-                )
-            if subj not in primary_cache:
-                last_rec_id = records[-1][0]
-                primary_buf = _concat_readonly_tail_from_signals(
-                    [p for _, p in records],
-                    required_samples=required_samples,
-                    channel_count=self.channel_count,
-                    subject_id=subj,
-                    max_samples_by_path=max_samples_by_path or None,
-                )
-                primary_cache[subj] = (last_rec_id, primary_buf)
-            last_rec_id, primary_buf = primary_cache[subj]
-            if rec_id == last_rec_id and rec_id not in shared_rec_max_train_end:
-                if len(records) >= 2:
-                    if subj not in alt_cache:
-                        alt_cache[subj] = _concat_readonly_tail_from_signals(
-                            [p for _, p in records[:-1]],
-                            required_samples=required_samples,
-                            channel_count=self.channel_count,
-                            subject_id=subj,
-                            max_samples_by_path=max_samples_by_path or None,
-                        )
-                    self._preroll_by_recording[rec_id] = alt_cache[subj]
-                else:
-                    raise ValueError(
-                        f"Pallier2025 受试者 {subj} 仅有一条未截断 train 记录 ({rec_id})，"
-                        "Pre-Roll 模式禁止使用同一记录末尾环绕充当校准缓冲。"
-                    )
-            else:
-                self._preroll_by_recording[rec_id] = primary_buf
-
-    def _get_preroll_for_index(self, idx: int) -> np.ndarray:
-        preroll_map = getattr(self, "_preroll_by_recording", None)
-        if preroll_map:
-            rec_ids = getattr(self, "_recording_ids", None)
-            if rec_ids is not None:
-                buf = preroll_map.get(rec_ids[idx])
-                if buf is not None:
-                    return buf
-        default_buf = getattr(self, "_default_preroll_buffer", None)
-        if default_buf is not None:
-            return default_buf
-        raise RuntimeError(
-            f"Pallier2025 Pre-Roll 校准缓冲未初始化 (index={idx})。"
-        )
-
-    def __len__(self):
-        return len(self.table)
-
-    def read_meg(self, index) -> np.ndarray:
-        idx = int(index)
-        if self.zero_meg:
-            return np.zeros(
-                (self.channel_count, self.window_samples), dtype=np.float32
-            )
-        recording = _open_signal_product(self._signal_path_strs[idx])
-        if recording.ndim != 2 or recording.shape[1] < self.window_samples:
-            raise ValueError("Pallier2025 词窗口超出 canonical continuous signal。")
-        start = int(self._window_starts[idx])
-        stop = start + self.window_samples
-        if start < 0 or stop > recording.shape[1]:
-            if self.window_samples == 50 and self._window_offset_seconds == 0.0:
-                raise ValueError("Pallier2025 词窗口超出 canonical continuous signal。")
-            start = max(0, min(start, int(recording.shape[1]) - self.window_samples))
-            stop = start + self.window_samples
-        effective_shift_mode = getattr(self, "shift_mode", "deterministic_circular")
-        if self.temporal_shift_samples == 0:
-            window = recording[:, start:stop].astype(np.float32, copy=True)
-        elif effective_shift_mode == "preroll":
-            if self.temporal_shift_samples > 0:
-                raise ValueError(
-                    "Pallier2025 Pre-Roll 因果移位模式仅允许严格过去移位 (temporal_shift_seconds <= 0)。"
-                )
-            raw_start = start + int(self.temporal_shift_samples)
-            win_len = int(self.window_samples)
-            if raw_start >= 0:
-                window = recording[:, raw_start : raw_start + win_len].astype(
-                    np.float32, copy=True
-                )
-            else:
-                preroll = self._get_preroll_for_index(idx)
-                buf_len = int(preroll.shape[1])
-                buf_start = buf_len + raw_start
-                if buf_start < 0:
-                    raise IndexError(
-                        f"Pallier2025 Pre-Roll 缓冲区长度不足：raw_start={raw_start}, buf_len={buf_len}"
-                    )
-                if raw_start + win_len <= 0:
-                    window = preroll[:, buf_start : buf_start + win_len].astype(
-                        np.float32, copy=True
-                    )
-                else:
-                    left_len = -raw_start
-                    right_len = win_len - left_len
-                    window = np.empty((self.channel_count, win_len), dtype=np.float32)
-                    window[:, :left_len] = preroll[:, buf_start:buf_len]
-                    window[:, left_len:] = recording[:, :right_len]
-        else:
-            valid_span = int(recording.shape[1]) - self.window_samples + 1
-            if valid_span <= 2 * self.window_samples:
-                raise ValueError(
-                    "Pallier2025 连续信号长度不足以执行非重叠时间错位对照。"
-                )
-            shifted_start = (start + self.temporal_shift_samples) % valid_span
-            if abs(shifted_start - start) < self.window_samples:
-                step = (
-                    self.window_samples
-                    if self.temporal_shift_samples > 0
-                    else -self.window_samples
-                )
-                shifted_start = (shifted_start + step) % valid_span
-            start = int(shifted_start)
-            stop = start + self.window_samples
-            window = recording[:, start:stop].astype(np.float32, copy=True)
-        effective_baseline = min(self._baseline_samples, int(window.shape[1]))
-        if effective_baseline > 0:
-            baseline = window[:, :effective_baseline].mean(
-                axis=1, keepdims=True
-            )
-            window -= baseline
-        np.clip(window, -self._clamp, self._clamp, out=window)
-        return window
-
-    def __getitem__(self, index):
-        idx = int(index)
-        word = self._words[idx]
-        return {
-            "meg": torch.from_numpy(self.read_meg(idx)),
-            "text_embedding": self._embedding_tensors[word],
-            "subject_index": self._subject_index_tensors[idx],
-            "sentence_index": self._sentence_index_tensors[idx],
-            "onset_seconds": self._onset_second_tensors[idx],
-            "word": word,
-            "event_id": self._event_ids[idx],
-            "recording_id": self._recording_ids[idx],
-        }
-
-
-def channel_names_sha256(channel_names) -> str:
-    """按审计冻结的换行连接规则计算 306 通道顺序摘要。"""
-    payload = "\n".join(str(name) for name in channel_names).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def recording_onset_to_sample(
-    onset_seconds,
-    *,
-    source_first_samp,
-    source_sampling_rate_hz=SOURCE_SAMPLING_RATE_HZ,
-    output_sampling_rate_hz=TARGET_SAMPLING_RATE_HZ,
-) -> int:
-    """将 BIDS 记录时钟 onset 转为 canonical 连续信号的零起点样本。"""
-    recording_start = float(source_first_samp) / float(source_sampling_rate_hz)
-    relative_seconds = float(onset_seconds) - recording_start
-    return int(np.round(relative_seconds * float(output_sampling_rate_hz)))
-
-
-def recording_window_bounds(
-    onset_seconds,
-    *,
-    duration_seconds,
-    source_first_samp,
-    source_sampling_rate_hz=SOURCE_SAMPLING_RATE_HZ,
-    output_sampling_rate_hz=TARGET_SAMPLING_RATE_HZ,
-) -> tuple[int, int]:
-    """返回左闭右开的 canonical 窗口样本范围。"""
-    start = recording_onset_to_sample(
-        onset_seconds,
-        source_first_samp=source_first_samp,
-        source_sampling_rate_hz=source_sampling_rate_hz,
-        output_sampling_rate_hz=output_sampling_rate_hz,
-    )
-    length = int(np.round(float(duration_seconds) * output_sampling_rate_hz))
-    return start, start + length
 
 
 def preprocessing_contract(dataset_config: dict | None = None) -> dict:
