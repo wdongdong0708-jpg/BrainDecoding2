@@ -1,16 +1,14 @@
-"""S3 序列解码协议多维语义评价指标与 C-gated 置信度门控帕累托分析器（Module 5）。
+"""S3 序列解码协议多维语义评价指标与配对显著性分析器。
 
 核心功能：
 1. 同步输出 6 维语义与词位评价指标（全部统一以百分比 % 呈现）：
-   - 字面精确匹配：BLEU-1 (%), WER (%), CER (字符/汉字错误率 %)
+   - 字面精确匹配：BLEU-1 (%), WER (%), CER (%)
    - 词位准确率：Word Acc (%)，并拆解为 实义词（Content Words）Acc (%) 与 功能词（Function Words）Acc (%)
    - 连续语义相似度：BERTScore (%)（Precision / Recall / F1）
-2. 置信度门控回修（C-gated）后处理：
-   - 对流式输出检验综合得分裕度：
-         Δs_i^{(r)} = s_i^{(r)}(w_i^{new} | u) - s_i^{(r)}(w_i^{old} | u) > τ_{gate}
-   - 扫描 τ_{gate} ∈ [0.0, 2.0]（步长 0.1），统计屏幕改写率、有益改对率、有害改错率与无效闪烁滤除率，
-     并自动绘制“解码质量 vs 屏幕改写率”帕累托曲线与基线/负对照对比图。
+2. 覆盖四级延迟预算（Word-Only / Local r=0,1,2 / Full-Context）、Brain-Only / LM-Only 基线、
+   L>=5 闭集与多尺度词表扫描、跨被试聚合（k-scaling）及配对材料块置换/自助检验。
 """
+
 
 from __future__ import annotations
 
@@ -34,9 +32,6 @@ from braindecoding.evaluation.statistical_significance import (
 from braindecoding.training.training_runtime import save_json
 
 
-DEFAULT_TAU_GATE_GRID: tuple[float, ...] = tuple(
-    round(0.1 * i, 2) for i in range(21)
-)
 
 STRATEGY_DISPLAY_NAMES: dict[str, str] = {
     "S0": "Word-Only",
@@ -61,8 +56,6 @@ STRATEGY_DISPLAY_NAMES: dict[str, str] = {
     "Shifted-K0 (-75s)": "Shifted-K0 (-75s)",
     "S3_shifted_neg75s": "Shifted-K2 (-75s)",
     "Shifted-K2 (-75s)": "Shifted-K2 (-75s)",
-    "S3_clean_c_gated": "Rolling-K2 (C-Gated)",
-    "S3_shifted_neg75s_c_gated": "Shifted-K2 (-75s, C-Gated)",
     "S0_brain_only": "Word-Only (Brain-Only)",
     "Word-Only (Brain-Only)": "Word-Only (Brain-Only)",
     "K0_brain_only": "Rolling-K0 (Brain-Only)",
@@ -162,8 +155,6 @@ STRATEGY_STATE_KEYS: dict[str, str] = {
     "S3_shifted_neg75s": "K2",
     "Shifted-K2 (-75s)": "K2",
     "Shifted Local (r = 2, -75s)": "K2",
-    "S3_clean_c_gated": "K2",
-    "S3_shifted_neg75s_c_gated": "K2",
 }
 
 
@@ -1110,293 +1101,6 @@ def evaluate_six_dimensional_metrics(
     return res_dict
 
 
-def apply_confidence_gate_to_segment(
-    segment_history_record: dict,
-    tau_gate: float = 0.0,
-    *,
-    precomputed_top5: Sequence[list[str]] | None = None,
-) -> dict:
-    """对单个句段的流式轨迹应用置信度裕度门控 τ_{gate}：
-
-    仅当 Δs_i^{(r)} = s_i^{(r)}(w_i^{new} | u) - s_i^{(r)}(w_i^{disp} | u) > τ_{gate} 时
-    才触发屏幕改写，否则保留当前屏幕已显示词 w_i^{disp}。
-    """
-    tau = float(tau_gate)
-    trajectories = segment_history_record["position_trajectories"]
-    ref_words = [str(w) for w in segment_history_record["reference_words"]]
-    seg_len = len(trajectories)
-
-    final_gated_words: list[str] = []
-    initial_k0_words: list[str] = []
-    top5_words_per_pos: list[list[str]] = (
-        list(precomputed_top5)
-        if precomputed_top5 is not None and len(precomputed_top5) == seg_len
-        else []
-    )
-    need_top5 = not top5_words_per_pos
-
-    rewrite_opportunities = 0
-    triggered_rewrites = 0
-    beneficial_repairs = 0  # wrong -> right
-    harmful_rewrites = 0  # right -> wrong
-    invalid_flickers = 0  # wrong -> wrong
-    net_position_changes = 0
-
-    for pos, traj in enumerate(trajectories):
-        truth = ref_words[pos] if pos < len(ref_words) else None
-        k0_word = str(traj["k0_word"])
-        initial_k0_words.append(k0_word)
-        current_word = k0_word
-
-        # 阶段 1 回修：K0 -> K1（当 pos <= seg_len - 2 且存在 k1_word 时）
-        k1_word = traj.get("k1_word")
-        if k1_word is not None:
-            k1_word = str(k1_word)
-            rewrite_opportunities += 1
-            delta_k1 = float(traj.get("k1_delta_score") or 0.0)
-            if k1_word != current_word and delta_k1 > tau:
-                old_w = current_word
-                current_word = k1_word
-                triggered_rewrites += 1
-                if truth is not None:
-                    if old_w != truth and current_word == truth:
-                        beneficial_repairs += 1
-                    elif old_w == truth and current_word != truth:
-                        harmful_rewrites += 1
-                    else:
-                        invalid_flickers += 1
-
-        # 阶段 2 定稿回修：当前屏幕词 (k0_word 或 k1_word) -> K2（当 pos <= seg_len - 3 且存在 k2_word 时）
-        k2_word = traj.get("k2_word")
-        if k2_word is not None:
-            k2_word = str(k2_word)
-            rewrite_opportunities += 1
-            k2_new_score = float(traj.get("k2_score") or 0.0)
-            k2_cand_map = traj.get("k2_candidate_scores") or {}
-            if current_word in k2_cand_map:
-                k2_disp_score = float(k2_cand_map[current_word])
-                delta_k2 = k2_new_score - k2_disp_score
-            else:
-                delta_k2 = float(traj.get("k2_delta_score") or 0.0)
-
-            if k2_word != current_word and delta_k2 > tau:
-                old_w = current_word
-                current_word = k2_word
-                triggered_rewrites += 1
-                if truth is not None:
-                    if old_w != truth and current_word == truth:
-                        beneficial_repairs += 1
-                    elif old_w == truth and current_word != truth:
-                        harmful_rewrites += 1
-                    else:
-                        invalid_flickers += 1
-
-        if pos < seg_len - 1 and current_word != k0_word:
-            net_position_changes += 1
-        final_gated_words.append(current_word)
-
-        if need_top5:
-            cand_map = (
-                traj.get("k2_candidate_scores")
-                or traj.get("k1_candidate_scores")
-                or traj.get("k0_candidate_scores")
-                or {}
-            )
-            if cand_map:
-                ranked_w = [
-                    str(w)
-                    for w, _ in sorted(
-                        cand_map.items(),
-                        key=lambda kv: (-float(kv[1]), str(kv[0])),
-                    )[:5]
-                ]
-            else:
-                ranked_w = [current_word]
-            top5_words_per_pos.append(ranked_w)
-
-    eligible_positions = max(0, seg_len - 1)
-    return {
-        "segment_index": segment_history_record.get("segment_index", 0),
-        "group_id": str(segment_history_record.get("group_id", "")),
-        "subject_id": str(segment_history_record.get("subject_id", "")),
-        "reference_words": ref_words,
-        "in_vocabulary_mask": list(
-            segment_history_record.get("in_vocabulary_mask", [True] * seg_len)
-        ),
-        "initial_k0_words": initial_k0_words,
-        "predicted_words": final_gated_words,
-        "top5_words_per_pos": top5_words_per_pos,
-        "eligible_positions": eligible_positions,
-        "rewrite_opportunities": rewrite_opportunities,
-        "triggered_rewrites": triggered_rewrites,
-        "beneficial_repairs": beneficial_repairs,
-        "harmful_rewrites": harmful_rewrites,
-        "invalid_flickers": invalid_flickers,
-        "net_position_changes": net_position_changes,
-    }
-
-
-def sweep_confidence_gate_pareto(
-    screen_histories: Sequence[dict],
-    *,
-    language: str,
-    tau_grid: Sequence[float] = DEFAULT_TAU_GATE_GRID,
-    word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
-) -> dict:
-    """扫描 τ_{gate} ∈ [0.0, 2.0]，计算每个阈值下的 6 维质量指标与屏幕改写/闪烁统计，构建帕累托前沿。"""
-    if not screen_histories:
-        raise ValueError("screen_histories 不能为空。")
-
-    taus = [float(t) for t in tau_grid]
-    curve_points: list[dict] = []
-    baseline_invalid_flickers: int | None = None
-    baseline_rewrites: int | None = None
-    cached_top5_by_seg: list[list[list[str]] | None] = [
-        None for _ in screen_histories
-    ]
-    records_by_tau: list[list[dict]] = []
-
-    for tau_idx, tau in enumerate(taus):
-        gated_records: list[dict] = []
-        for seg_i, rec in enumerate(screen_histories):
-            gated_rec = apply_confidence_gate_to_segment(
-                rec,
-                tau_gate=tau,
-                precomputed_top5=cached_top5_by_seg[seg_i],
-            )
-            if tau_idx == 0 and all(
-                (
-                    t.get("k2_candidate_scores")
-                    or t.get("k1_candidate_scores")
-                    or t.get("k0_candidate_scores")
-                )
-                for t in rec.get("position_trajectories", ())
-            ):
-                cached_top5_by_seg[seg_i] = gated_rec["top5_words_per_pos"]
-            gated_records.append(gated_rec)
-        records_by_tau.append(gated_records)
-        metrics_6d = evaluate_six_dimensional_metrics(
-            gated_records,
-            language=language,
-            word_embedding_map=word_embedding_map,
-            condition="S3_clean",
-            compute_paired_stats=(tau_idx == 0),
-        )
-
-        tot_opps = sum(r["rewrite_opportunities"] for r in gated_records)
-        tot_elig = sum(r["eligible_positions"] for r in gated_records)
-        tot_rewrites = sum(r["triggered_rewrites"] for r in gated_records)
-        tot_repairs = sum(r["beneficial_repairs"] for r in gated_records)
-        tot_harms = sum(r["harmful_rewrites"] for r in gated_records)
-        tot_flickers = sum(r["invalid_flickers"] for r in gated_records)
-        tot_pos_changes = sum(r["net_position_changes"] for r in gated_records)
-
-        if baseline_invalid_flickers is None:
-            baseline_invalid_flickers = max(0, tot_flickers)
-        if baseline_rewrites is None:
-            baseline_rewrites = max(0, tot_rewrites)
-
-        denom_opps = max(1, tot_opps)
-        denom_elig = max(1, tot_elig)
-        if baseline_invalid_flickers and baseline_invalid_flickers > 0:
-            flicker_filtered_pct = float(
-                (1.0 - tot_flickers / baseline_invalid_flickers) * 100.0
-            )
-        else:
-            flicker_filtered_pct = 0.0 if abs(tau) <= 1e-12 else 100.0
-
-        if baseline_rewrites and baseline_rewrites > 0:
-            rewrite_filtered_pct = float(
-                (1.0 - tot_rewrites / baseline_rewrites) * 100.0
-            )
-        else:
-            rewrite_filtered_pct = 0.0 if abs(tau) <= 1e-12 else 100.0
-
-        point = {
-            "tau_gate": round(tau, 4),
-            "screen_rewrite_rate_pct": float(tot_rewrites / denom_opps * 100.0),
-            "rewrite_filtered_pct": rewrite_filtered_pct,
-            "position_change_rate_pct": float(
-                tot_pos_changes / denom_elig * 100.0
-            ),
-            "beneficial_repair_rate_pct": float(tot_repairs / denom_opps * 100.0),
-            "harmful_rewrite_rate_pct": float(tot_harms / denom_opps * 100.0),
-            "invalid_flicker_rate_pct": float(tot_flickers / denom_opps * 100.0),
-            "invalid_flicker_filtered_pct": flicker_filtered_pct,
-            "net_beneficial_gain_pct": float(
-                (tot_repairs - tot_harms) / denom_elig * 100.0
-            ),
-            "triggered_rewrites": int(tot_rewrites),
-            "beneficial_repairs": int(tot_repairs),
-            "harmful_rewrites": int(tot_harms),
-            "invalid_flickers": int(tot_flickers),
-            "rewrite_opportunities": int(tot_opps),
-            **metrics_6d,
-        }
-        curve_points.append(point)
-
-    # 选择推荐工作点：在保持至少 98% 无门控质量（Word Acc + BLEU-1）前提下最小化屏幕改写率，
-    # 或净有益增益 net_beneficial_gain_pct 最大的阈值点
-    unconstrained_pt = curve_points[0]
-    base_quality = (
-        0.5 * unconstrained_pt["bleu1_pct"]
-        + 0.5 * unconstrained_pt["word_acc_pct"]
-    )
-    best_idx = max(
-        range(len(curve_points)),
-        key=lambda idx: (
-            round(
-                0.5 * curve_points[idx]["bleu1_pct"]
-                + 0.5 * curve_points[idx]["word_acc_pct"]
-                - 0.12 * curve_points[idx]["invalid_flicker_rate_pct"],
-                6,
-            ),
-            -curve_points[idx]["screen_rewrite_rate_pct"],
-        ),
-    )
-    best_point = curve_points[best_idx]
-    if best_idx != 0:
-        best_stats = evaluate_six_dimensional_metrics(
-            records_by_tau[best_idx],
-            language=language,
-            word_embedding_map=word_embedding_map,
-            condition="S3_clean",
-            compute_paired_stats=True,
-        )
-        best_point["content_vs_function_p_value"] = best_stats[
-            "content_vs_function_p_value"
-        ]
-        best_point["content_vs_function_significance"] = best_stats[
-            "content_vs_function_significance"
-        ]
-
-    return {
-        "tau_grid": taus,
-        "recommended_tau_gate": best_point["tau_gate"],
-        "recommended_operating_point": best_point,
-        "unconstrained_operating_point": unconstrained_pt,
-        "baseline_quality_score": round(base_quality, 4),
-        "pareto_curve": curve_points,
-    }
-
-
-def _top5_from_trajectory(traj: Mapping[str, object], fallback_word: str = "") -> list[str]:
-    cand_map = (
-        traj.get("k2_candidate_scores")
-        or traj.get("k1_candidate_scores")
-        or traj.get("k0_candidate_scores")
-        or {}
-    )
-    if isinstance(cand_map, Mapping) and cand_map:
-        return [
-            str(w)
-            for w, _ in sorted(
-                cand_map.items(), key=lambda kv: (-float(kv[1]), str(kv[0]))
-            )[:5]
-        ]
-    return [str(fallback_word)] if fallback_word else []
-
-
 def _copy_optional_segment_metadata(
     dst: dict[str, Any], *sources: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -1415,364 +1119,15 @@ def _copy_optional_segment_metadata(
     return dst
 
 
-def _backfill_intermediate_and_shifted_bundles(
+def _normalize_decoded_bundles(
     decoded_bundles: Mapping[str, dict],
 ) -> dict[str, dict]:
-    """若历史或合成测试载荷未单独显式提供 K1 或 K0_shifted_neg75s，则从流式轨迹回填；同时移除废弃的 F_local。"""
+    """规范化解码条件键别名（将 S0_clean / F_clean 同步映射至 S0 / F）。"""
     bundles: dict[str, dict] = dict(decoded_bundles)
-    bundles.pop("F_local", None)
-
-    for key in ("S3_clean", "S3", "S3_shifted_neg75s"):
-        b = bundles.get(key)
-        if not b:
-            continue
-        sents = b.get("final_sentences") or []
-        hists = b.get("screen_histories") or []
-        if sents and hists and len(sents) == len(hists):
-            for rec, hist in zip(sents, hists):
-                if not rec.get("top5_words_per_pos"):
-                    trajs = hist.get("position_trajectories") or []
-                    preds = rec.get("predicted_words") or []
-                    rec["top5_words_per_pos"] = [
-                        _top5_from_trajectory(
-                            t, str(preds[p]) if p < len(preds) else ""
-                        )
-                        for p, t in enumerate(trajs)
-                    ]
-
-    s3_clean = bundles.get("S3_clean") or bundles.get("S3")
-    if "K0" not in bundles and s3_clean is not None:
-        clean_sents = s3_clean.get("final_sentences") or []
-        clean_hists = s3_clean.get("screen_histories") or []
-        k0_clean_records: list[dict] = []
-        for idx, rec in enumerate(clean_sents):
-            init_k0 = rec.get("initial_k0_words")
-            trajs = (
-                clean_hists[idx].get("position_trajectories") or []
-                if idx < len(clean_hists)
-                else []
-            )
-            if not init_k0 and trajs:
-                init_k0 = [str(t.get("k0_word", "")) for t in trajs]
-            if init_k0 is None:
-                continue
-            k0_top5: list[list[str]] = []
-            for p, w0 in enumerate(init_k0):
-                cmap = (
-                    trajs[p].get("k0_candidate_scores") or {}
-                    if p < len(trajs)
-                    else {}
-                )
-                if isinstance(cmap, Mapping) and cmap:
-                    k0_top5.append(
-                        [
-                            str(w)
-                            for w, _ in sorted(
-                                cmap.items(),
-                                key=lambda kv: (-float(kv[1]), str(kv[0])),
-                            )[:5]
-                        ]
-                    )
-                else:
-                    k0_top5.append([str(w0)])
-            k0_clean_records.append(
-                {
-                    "segment_index": rec.get("segment_index", idx),
-                    "group_id": rec.get("group_id", ""),
-                    "subject_id": rec.get("subject_id", ""),
-                    "recording_id": rec.get("recording_id", ""),
-                    "scope": rec.get("scope", ""),
-                    "material_id": str(rec.get("material_id", "")),
-                    "block_id": rec.get("block_id", rec.get("scope", "")),
-                    "reference_words": list(rec.get("reference_words", [])),
-                    "predicted_words": list(init_k0),
-                    "top5_words_per_pos": k0_top5,
-                    "in_vocabulary_mask": list(
-                        rec.get(
-                            "in_vocabulary_mask",
-                            [True] * len(rec.get("reference_words", [])),
-                        )
-                    ),
-                }
-            )
-            _copy_optional_segment_metadata(k0_clean_records[-1], rec)
-        if k0_clean_records:
-            bundles["K0"] = {
-                "condition": "K0",
-                "alignment": "clean",
-                "segment_count": len(k0_clean_records),
-                "mean_seconds_per_segment": float(
-                    s3_clean.get("mean_seconds_per_segment", 0.0)
-                ),
-                "final_sentences": k0_clean_records,
-                "screen_histories": [],
-            }
-
-    if "K1" not in bundles and s3_clean is not None:
-        histories = s3_clean.get("screen_histories") or []
-        sentences = s3_clean.get("final_sentences") or []
-        if histories:
-            k1_records: list[dict] = []
-            for idx, hist in enumerate(histories):
-                trajs = hist.get("position_trajectories") or []
-                k1_words = [
-                    str(
-                        t.get("k1_word")
-                        if t.get("k1_word") is not None
-                        else t.get("k0_word", "")
-                    )
-                    for t in trajs
-                ]
-                k1_top5: list[list[str]] = []
-                for p, t in enumerate(trajs):
-                    cmap = (
-                        t.get("k1_candidate_scores")
-                        or t.get("k0_candidate_scores")
-                        or t.get("k2_candidate_scores")
-                        or {}
-                    )
-                    if isinstance(cmap, Mapping) and cmap:
-                        k1_top5.append(
-                            [
-                                str(w)
-                                for w, _ in sorted(
-                                    cmap.items(),
-                                    key=lambda kv: (-float(kv[1]), str(kv[0])),
-                                )[:5]
-                            ]
-                        )
-                    else:
-                        k1_top5.append([k1_words[p]])
-                base_rec = sentences[idx] if idx < len(sentences) else hist
-                k1_records.append(
-                    {
-                        "segment_index": hist.get(
-                            "segment_index", base_rec.get("segment_index", idx)
-                        ),
-                        "group_id": hist.get(
-                            "group_id", base_rec.get("group_id", "")
-                        ),
-                        "subject_id": hist.get(
-                            "subject_id", base_rec.get("subject_id", "")
-                        ),
-                        "recording_id": hist.get(
-                            "recording_id", base_rec.get("recording_id", "")
-                        ),
-                        "scope": hist.get(
-                            "scope", base_rec.get("scope", "")
-                        ),
-                        "material_id": str(
-                            hist.get(
-                                "material_id", base_rec.get("material_id", "")
-                            )
-                        ),
-                        "block_id": hist.get(
-                            "block_id",
-                            base_rec.get("block_id", base_rec.get("scope", "")),
-                        ),
-                        "reference_words": list(
-                            hist.get(
-                                "reference_words",
-                                base_rec.get("reference_words", []),
-                            )
-                        ),
-                        "predicted_words": k1_words,
-                        "top5_words_per_pos": k1_top5,
-                        "in_vocabulary_mask": list(
-                            hist.get(
-                                "in_vocabulary_mask",
-                                base_rec.get(
-                                    "in_vocabulary_mask",
-                                    [True] * len(k1_words),
-                                ),
-                            )
-                        ),
-                    }
-                )
-                _copy_optional_segment_metadata(k1_records[-1], hist, base_rec)
-            bundles["K1"] = {
-                "condition": "K1",
-                "alignment": "clean",
-                "segment_count": len(k1_records),
-                "mean_seconds_per_segment": float(
-                    s3_clean.get("mean_seconds_per_segment", 0.0)
-                ),
-                "final_sentences": k1_records,
-                "screen_histories": [],
-            }
-
     if "S0" not in bundles and "S0_clean" in bundles:
         bundles["S0"] = bundles["S0_clean"]
     if "F" not in bundles and "F_clean" in bundles:
         bundles["F"] = bundles["F_clean"]
-
-    s3_shifted = bundles.get("S3_shifted_neg75s")
-    if "K0_shifted_neg75s" not in bundles and s3_shifted is not None:
-        shifted_sents = s3_shifted.get("final_sentences") or []
-        shifted_hists = s3_shifted.get("screen_histories") or []
-        k0_shifted_records: list[dict] = []
-        for idx, rec in enumerate(shifted_sents):
-            init_k0 = rec.get("initial_k0_words")
-            trajs = (
-                shifted_hists[idx].get("position_trajectories") or []
-                if idx < len(shifted_hists)
-                else []
-            )
-            if not init_k0 and trajs:
-                init_k0 = [str(t.get("k0_word", "")) for t in trajs]
-            if init_k0 is None:
-                continue
-            k0_top5: list[list[str]] = []
-            for p, w0 in enumerate(init_k0):
-                cmap = (
-                    trajs[p].get("k0_candidate_scores") or {}
-                    if p < len(trajs)
-                    else {}
-                )
-                if isinstance(cmap, Mapping) and cmap:
-                    k0_top5.append(
-                        [
-                            str(w)
-                            for w, _ in sorted(
-                                cmap.items(),
-                                key=lambda kv: (-float(kv[1]), str(kv[0])),
-                            )[:5]
-                        ]
-                    )
-                else:
-                    k0_top5.append([str(w0)])
-            k0_shifted_records.append(
-                {
-                    "segment_index": rec.get("segment_index", idx),
-                    "group_id": rec.get("group_id", ""),
-                    "subject_id": rec.get("subject_id", ""),
-                    "recording_id": rec.get("recording_id", ""),
-                    "scope": rec.get("scope", ""),
-                    "material_id": str(rec.get("material_id", "")),
-                    "block_id": rec.get("block_id", rec.get("scope", "")),
-                    "reference_words": list(rec.get("reference_words", [])),
-                    "predicted_words": list(init_k0),
-                    "top5_words_per_pos": k0_top5,
-                    "in_vocabulary_mask": list(
-                        rec.get(
-                            "in_vocabulary_mask",
-                            [True] * len(rec.get("reference_words", [])),
-                        )
-                    ),
-                }
-            )
-            _copy_optional_segment_metadata(k0_shifted_records[-1], rec)
-        if k0_shifted_records:
-            bundles["K0_shifted_neg75s"] = {
-                "condition": "K0",
-                "alignment": "shifted",
-                "segment_count": len(k0_shifted_records),
-                "mean_seconds_per_segment": float(
-                    s3_shifted.get("mean_seconds_per_segment", 0.0)
-                ),
-                "final_sentences": k0_shifted_records,
-                "screen_histories": [],
-            }
-
-    k0_shifted_b = bundles.get("K0_shifted_neg75s")
-    if (
-        s3_shifted is not None
-        and not s3_shifted.get("screen_histories")
-        and k0_shifted_b is not None
-    ):
-        sh_sents = s3_shifted.get("final_sentences") or []
-        k0_sents = k0_shifted_b.get("final_sentences") or []
-        clean_hists = (s3_clean.get("screen_histories") or []) if s3_clean else []
-        if sh_sents and len(sh_sents) == len(k0_sents):
-            synth_hists: list[dict] = []
-            for idx, (rec_k2, rec_k0) in enumerate(zip(sh_sents, k0_sents)):
-                ref_w = [str(w) for w in (rec_k2.get("reference_words") or ())]
-                pred_k2 = [str(w) for w in (rec_k2.get("predicted_words") or ())]
-                pred_k0 = [str(w) for w in (rec_k0.get("predicted_words") or ())]
-                seg_len = len(ref_w)
-                if len(pred_k2) != seg_len or len(pred_k0) != seg_len:
-                    continue
-                top5_k2 = rec_k2.get("top5_words_per_pos") or []
-                c_trajs = (
-                    clean_hists[idx].get("position_trajectories") or []
-                    if idx < len(clean_hists)
-                    else []
-                )
-                trajs_out: list[dict] = []
-                for pos in range(seg_len):
-                    w0 = pred_k0[pos]
-                    w2 = pred_k2[pos]
-                    has_k1 = pos <= seg_len - 2
-                    has_k2 = pos <= seg_len - 3
-                    c_t = c_trajs[pos] if pos < len(c_trajs) else {}
-                    c_d1 = abs(float(c_t.get("k1_delta_score") or 0.0))
-                    c_d2 = abs(float(c_t.get("k2_delta_score") or 0.0))
-                    t5 = (
-                        [str(x) for x in top5_k2[pos]]
-                        if pos < len(top5_k2) and isinstance(top5_k2[pos], (list, tuple))
-                        else [w2]
-                    )
-                    if w0 == w2:
-                        w1 = w0 if has_k1 else None
-                        d1 = 0.0
-                        d2 = 0.0
-                    else:
-                        rank_w0 = t5.index(w0) if w0 in t5 else 5
-                        base_margin = (
-                            c_d2
-                            if c_d2 > 0.05
-                            else (
-                                0.18 * rank_w0
-                                + 0.15
-                                * (((idx * 17 + pos * 31) % 11) / 10.0)
-                            )
-                        )
-                        use_k1_step = has_k1 and (not has_k2 or ((idx + pos) % 2 == 0))
-                        if use_k1_step:
-                            w1 = w2
-                            d1 = float(c_d1 if c_d1 > 0.05 else base_margin * 0.85)
-                            d2 = 0.0
-                        else:
-                            w1 = w0 if has_k1 else None
-                            d1 = 0.0
-                            d2 = float(base_margin)
-                    k2_cands = {w2: 0.0}
-                    if w1 is not None and w1 != w2:
-                        k2_cands[w1] = -float(d2)
-                    if w0 != w2 and w0 not in k2_cands:
-                        k2_cands[w0] = -float(max(d1, d2))
-                    for r_idx, cw in enumerate(t5[:5]):
-                        if cw not in k2_cands:
-                            k2_cands[cw] = -0.25 * (r_idx + 1)
-                    trajs_out.append(
-                        {
-                            "position": pos,
-                            "k0_word": w0,
-                            "k1_word": w1 if has_k1 else None,
-                            "k2_word": w2 if has_k2 else None,
-                            "k1_delta_score": round(float(d1), 6),
-                            "k2_delta_score": round(float(d2), 6),
-                            "k2_score": 0.0,
-                            "k2_candidate_scores": k2_cands,
-                        }
-                    )
-                synth_hists.append(
-                    {
-                        "segment_index": rec_k2.get("segment_index", idx),
-                        "group_id": rec_k2.get("group_id", ""),
-                        "subject_id": rec_k2.get("subject_id", ""),
-                        "reference_words": ref_w,
-                        "in_vocabulary_mask": list(
-                            rec_k2.get("in_vocabulary_mask", [True] * seg_len)
-                        ),
-                        "position_trajectories": trajs_out,
-                    }
-                )
-            if synth_hists:
-                s3_shifted = dict(s3_shifted)
-                s3_shifted["screen_histories"] = synth_hists
-                bundles["S3_shifted_neg75s"] = s3_shifted
-
     return bundles
 
 
@@ -1853,7 +1208,7 @@ def evaluate_high_coverage_core_subsets(
     vocabulary_size: int | None = None,
 ) -> dict[str, Any]:
     """评估特定词表规模（如 Core Vocab |V|=250 或 Full Vocab |V|=2020）下的口径 1（In-Vocab 全句段）与口径 2（高覆盖核心句 Core Sentences: 100%, >=80%, >=70%）。"""
-    expanded = _backfill_intermediate_and_shifted_bundles(bundles_map)
+    expanded = _normalize_decoded_bundles(bundles_map)
     subset_specs = (
         ("all_segments", 0.0, "All Test Segments (In-Vocab Token Evaluation)"),
         (
@@ -2348,7 +1703,7 @@ def _compute_s3_paired_significance(
             )
             conds = s_entry.get("conditions")
             if v_int > 0 and isinstance(conds, Mapping) and conds:
-                scale_conds_map[v_int] = _backfill_intermediate_and_shifted_bundles(
+                scale_conds_map[v_int] = _normalize_decoded_bundles(
                     conds
                 )
 
@@ -2769,6 +2124,7 @@ def _compute_s3_paired_significance(
     return sig_results
 
 
+
 def evaluate_and_export_sequence_decoding(
     decoded_bundles: Mapping[str, dict],
     *,
@@ -2777,7 +2133,6 @@ def evaluate_and_export_sequence_decoding(
     split: str,
     output_dir: str | Path,
     word_embedding_map: Mapping[str, np.ndarray | torch.Tensor] | None = None,
-    tau_grid: Sequence[float] = DEFAULT_TAU_GATE_GRID,
     multi_subject_bundles: Mapping[str | int, dict] | None = None,
     vocabulary_scaling_bundles: Mapping[str, dict] | None = None,
     core_vocab_size: int | str = "full",
@@ -2789,16 +2144,14 @@ def evaluate_and_export_sequence_decoding(
     f_condition_mode: str | None = None,
     plot: bool = True,
 ) -> dict:
-    """汇总四级延迟预算阶梯（Word-Only, Rolling-K0, Rolling-K1, Rolling-K2, Full-Context 及对照）、|V| in {50,100,250} 核心词表、k in {1,2,5,10} 跨被试聚合与独立 C-Gated 防闪烁模块。"""
+    """汇总四级延迟预算阶梯（Word-Only, Rolling-K0, Rolling-K1, Rolling-K2, Full-Context 及对照）、|V| 多尺度闭集词表与 k 跨被试聚合评估。"""
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    expanded_bundles = _backfill_intermediate_and_shifted_bundles(
+    expanded_bundles = _normalize_decoded_bundles(
         decoded_bundles
     )
     condition_summaries: dict[str, dict] = {}
-    c_gated_online_stability: dict[str, dict] = {}
-    pareto_results: dict[str, dict] = {}
     figure_paths: dict[str, str] = {}
     multi_subject_summaries: dict[str, dict] = {}
     vocabulary_scaling_summaries: dict[str, dict] = {}
@@ -2806,8 +2159,6 @@ def evaluate_and_export_sequence_decoding(
     core_vocabulary_benchmarks: dict[str, Any] = {}
 
     for key, bundle in expanded_bundles.items():
-        if key == "F_local":
-            continue
         records = bundle["final_sentences"]
         metrics_6d = evaluate_six_dimensional_metrics(
             records,
@@ -2820,51 +2171,6 @@ def evaluate_and_export_sequence_decoding(
         )
         condition_summaries[key] = metrics_6d
 
-        histories = bundle.get("screen_histories") or []
-        if histories:
-            pareto = sweep_confidence_gate_pareto(
-                histories,
-                language=language,
-                tau_grid=tau_grid,
-                word_embedding_map=word_embedding_map,
-            )
-            pareto_results[key] = pareto
-            rec_pt = pareto["recommended_operating_point"]
-            gated_entry = {
-                k: rec_pt[k]
-                for k in metrics_6d
-                if k in rec_pt
-            }
-            gated_entry["recommended_tau_gate"] = rec_pt["tau_gate"]
-            gated_entry["screen_rewrite_rate_pct"] = (
-                rec_pt["screen_rewrite_rate_pct"]
-            )
-            gated_entry["rewrite_filtered_pct"] = rec_pt.get(
-                "rewrite_filtered_pct", 0.0
-            )
-            gated_entry["invalid_flicker_filtered_pct"] = (
-                rec_pt["invalid_flicker_filtered_pct"]
-            )
-            gated_entry["triggered_rewrites"] = rec_pt.get(
-                "triggered_rewrites", 0
-            )
-            gated_entry["beneficial_repairs"] = rec_pt.get(
-                "beneficial_repairs", 0
-            )
-            gated_entry["harmful_rewrites"] = rec_pt.get("harmful_rewrites", 0)
-            gated_entry["invalid_flickers"] = rec_pt.get("invalid_flickers", 0)
-            gated_entry["mean_seconds_per_segment"] = float(
-                bundle.get("mean_seconds_per_segment", 0.0)
-            )
-            gated_entry["mean_wait_seconds"] = float(
-                metrics_6d.get("mean_wait_seconds", 2.60)
-            )
-            gated_entry["strategy_display_name"] = canonical_strategy_display_name(
-                f"{key}_c_gated"
-            )
-            gated_entry["is_online_screen_gate"] = True
-            c_gated_online_stability[f"{key}_c_gated"] = gated_entry
-            condition_summaries[f"{key}_c_gated"] = gated_entry
 
     canonical_order = (
         "S0",
@@ -2883,8 +2189,6 @@ def evaluate_and_export_sequence_decoding(
         "K1_brain_only",
         "K2_brain_only",
         "F_brain_only",
-        "S3_clean_c_gated",
-        "S3_shifted_neg75s_c_gated",
     )
     ordered_summaries: dict[str, dict] = {}
     for k in canonical_order:
@@ -2903,7 +2207,7 @@ def evaluate_and_export_sequence_decoding(
                 for k in (vocabulary_scaling_bundles or {}).keys()
                 if str(k).lstrip("vV=_").isdigit()
             ),
-            default=2020 if dataset == "pallier2025" else 2180,
+            default=2020,
         )
     )
     full_vocab_core_subsets = evaluate_high_coverage_core_subsets(
@@ -3185,7 +2489,6 @@ def evaluate_and_export_sequence_decoding(
         "language": language,
         "split": split,
         "conditions": condition_summaries,
-        "c_gated_online_stability": c_gated_online_stability,
         "revision_gains": revision_gains,
         "statistical_significance": statistical_significance,
         "paired_statistical_significance": statistical_significance,
@@ -3196,7 +2499,6 @@ def evaluate_and_export_sequence_decoding(
         "full_vocab_core_subsets": full_vocab_core_subsets,
         "vocabulary_scaling": vocabulary_scaling_summaries,
         "multi_subject_scaling": multi_subject_summaries,
-        "confidence_gate_pareto": pareto_results,
         "figures": figure_paths,
     }
     if state_hyperparameters is not None:
@@ -3371,7 +2673,7 @@ def summarize_and_export_multi_seed_sequence_decoding(
     first_rep = reports_list[0]
     ds_name = str(dataset or first_rep.get("dataset") or "pallier2025")
     lang = str(
-        first_rep.get("language") or ("fr" if ds_name == "pallier2025" else "zh")
+        first_rep.get("language") or ("fr" if ds_name.startswith("pallier2025") else "en")
     )
     resolved_tag = exp_tag if exp_tag is not None else first_rep.get("exp_tag")
 

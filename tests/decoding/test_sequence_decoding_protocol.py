@@ -11,8 +11,7 @@
      （单 Token 候选 0 次模型 Forward，多 Token 候选增量 Batch Forward）
 3. Module 3 (`rolling_beam_search`)：
    - 闭集 Top-K (K=20) 候选检索 `compute_neural_log_probabilities` / `select_top_k_neural_candidates`
-   - 方案一（单遍定稿主干 K2 + 尾部轻量草稿 K1/K0）流式束搜索 `decode_segment_streaming`
-   - 单状态静态束搜索与双锚点基线（`S0` 与 `LM-Only`）`decode_segment_static` / `decode_dataset_segments`
+   - 单遍静态束搜索与双锚点基线（`S0`、`K0/K1/K2`、`F`、`Brain-Only` 与 `LM-Only`）`decode_segment_static` / `decode_dataset_segments`
 4. Module 4 (`state_hyperparameter_calibrator`)：
    - 验证集状态自适应超参 `(T_r, λ_r)` 独立网格搜索与 `λ_{K0} >= λ_{K1} >= λ_{K2}` 单调递减约束
 """
@@ -41,7 +40,6 @@ from braindecoding.decoding.rolling_beam_search import (
     compute_neural_log_probabilities,
     decode_dataset_segments,
     decode_segment_static,
-    decode_segment_streaming,
 )
 from braindecoding.decoding.state_hyperparameter_calibrator import (
     calibrate_state_hyperparameters,
@@ -260,71 +258,6 @@ def test_kv_cache_incremental_scoring_zero_forward_for_single_token() -> None:
         assert past_len == prompt_state.token_length
 
 
-def test_scheme_one_streaming_committed_backbone_and_draft_tail() -> None:
-    """验证方案一：K2 定稿主干单向推进永不撤回，K1/K0 草稿仅作屏幕显示与裕度记录。"""
-    vocabulary, scorer, _ = _build_toy_french_scorer()
-    seg_len = 5
-    vocab_size = len(vocabulary)
-
-    k0_raw = np.full((seg_len, vocab_size), -5.0, dtype=np.float32)
-    k1_raw = np.full((seg_len, vocab_size), -5.0, dtype=np.float32)
-    k2_raw = np.full((seg_len, vocab_size), -5.0, dtype=np.float32)
-
-    k0_raw[0, 0] = 5.0   # pos 0, K0 -> "le"
-    k1_raw[0, 1] = 6.0   # pos 0, K1 -> "petit"
-    k2_raw[0, 2] = 8.0   # pos 0, K2 -> "prince"
-
-    k0_raw[1, 3] = 5.0   # pos 1, K0 -> "l"
-    k1_raw[1, 3] = 5.0   # pos 1, K1 -> "l"
-    k2_raw[1, 4] = 8.0   # pos 1, K2 -> "ami"
-
-    for pos in range(2, seg_len):
-        k0_raw[pos, pos % vocab_size] = 6.0
-        k1_raw[pos, (pos + 1) % vocab_size] = 6.5
-        k2_raw[pos, (pos + 2) % vocab_size] = 7.5
-
-    log_probs = {
-        "K0": compute_neural_log_probabilities(k0_raw, temperature=0.1),
-        "K1": compute_neural_log_probabilities(k1_raw, temperature=0.1),
-        "K2": compute_neural_log_probabilities(k2_raw, temperature=0.1),
-    }
-
-    result = decode_segment_streaming(
-        log_probs,
-        vocabulary,
-        scorer,
-        language_weights={"K0": 0.2, "K1": 0.1, "K2": 0.05},
-        beam_width=5,
-        candidate_top_k=20,
-        reference_words=["prince", "ami", "ami", "le", "petit"],
-    )
-
-    history = result["screen_history"]
-    trajectories = result["position_trajectories"]
-    assert len(history) == seg_len
-    assert len(trajectories) == seg_len
-
-    # Step 0 (t=0)：只有草稿 K0 ("le")，定稿主干为空
-    assert history[0]["committed_prefix"] == []
-    assert history[0]["screen_words"] == ["le"]
-
-    # Step 1 (t=1)：词位 0 进入 K1 草稿 ("petit")，词位 1 进入 K0 草稿 ("l")，定稿主干仍为空
-    assert history[1]["committed_prefix"] == []
-    assert history[1]["screen_words"] == ["petit", "l"]
-
-    # Step 2 (t=2)：词位 0 达到 K2 定稿 ("prince")，后续 t=3, 4 中词位 0 永久锁定为 "prince"
-    assert history[2]["committed_prefix"] == ["prince"]
-    assert history[3]["committed_prefix"][0] == "prince"
-    assert history[4]["committed_prefix"][:2] == ["prince", "ami"]
-
-    # 校验轨迹中记录了精确的正向改写裕度 Δs_i^{(r)} > 0
-    assert trajectories[0]["k0_word"] == "le"
-    assert trajectories[0]["k1_word"] == "petit"
-    assert trajectories[0]["k2_word"] == "prince"
-    assert trajectories[0]["k1_delta_score"] > 0.0
-    assert trajectories[0]["k2_delta_score"] > 0.0
-
-
 def test_static_baselines_and_state_hyperparameter_calibration() -> None:
     """验证 S0 / LM-Only 静态束搜索及验证集状态自适应超参校准（含 λ_{K0} >= λ_{K1} >= λ_{K2} 约束）。"""
     vocabulary, scorer, _ = _build_toy_french_scorer()
@@ -439,7 +372,6 @@ def test_static_baselines_and_state_hyperparameter_calibration() -> None:
     )
     assert s3_clean_bundle["segment_count"] == 2
     assert len(s3_clean_bundle["final_sentences"]) == 2
-    assert len(s3_clean_bundle["screen_histories"]) == 2
 
     lm_only_bundle = decode_dataset_segments(
         exported_val,
@@ -456,8 +388,11 @@ def test_static_baselines_and_state_hyperparameter_calibration() -> None:
 
 
 def test_decode_sentences_cli_pipeline_steps(tmp_path, monkeypatch) -> None:
-    """验证 scripts/decode_sentences.py 的 calibrate -> decode -> evaluate 流水线闭环。"""
-    import scripts.decode_sentences as decode_cli
+    """验证 sentence_decoding_pipeline 的 calibrate -> decode -> evaluate 流水线闭环。"""
+    from braindecoding.decoding import sentence_decoding_pipeline as decode_cli
+    import scripts.decode_sentences as thin_cli
+
+    assert thin_cli.run_sequence_decoding_pipeline is decode_cli.run_sequence_decoding_pipeline
 
     vocabulary, scorer, _ = _build_toy_french_scorer()
     vocab_size = len(vocabulary)
@@ -575,7 +510,6 @@ def test_decode_sentences_cli_pipeline_steps(tmp_path, monkeypatch) -> None:
         assert summary["step"] == step_name
         if step_name == "evaluate":
             assert "S3_clean" in summary["conditions"]
-            assert "S3_clean_c_gated" in summary["conditions"]
             assert "S3_shifted_neg75s" in summary["conditions"]
 
 
@@ -611,10 +545,9 @@ def test_build_segment_inventory_supports_chinese_canonical_columns():
 
 
 def test_batched_segment_decoding_and_transition_cache_equivalence() -> None:
-    """验证跨句段锁步批处理解码与单句段解码输出 100% 一致，且重复解码命中转移缓存零额外 Forward。"""
+    """验证跨句段锁步批处理静态解码与单句段解码输出 100% 一致，且重复解码命中转移缓存零额外 Forward。"""
     from braindecoding.decoding.rolling_beam_search import (
         decode_segments_static_batched,
-        decode_segments_streaming_batched,
     )
 
     vocabulary, scorer_single, _ = _build_toy_french_scorer()
@@ -622,57 +555,22 @@ def test_batched_segment_decoding_and_transition_cache_equivalence() -> None:
     vocab_size = len(vocabulary)
     rng = np.random.default_rng(1234)
 
-    seg_dicts = []
-    for seg_len in (3, 5, 4):
-        seg_dicts.append(
-            {
-                "K0": compute_neural_log_probabilities(
-                    rng.standard_normal((seg_len, vocab_size)).astype(np.float32),
-                    temperature=0.1,
-                ),
-                "K1": compute_neural_log_probabilities(
-                    rng.standard_normal((seg_len, vocab_size)).astype(np.float32),
-                    temperature=0.1,
-                ),
-                "K2": compute_neural_log_probabilities(
-                    rng.standard_normal((seg_len, vocab_size)).astype(np.float32),
-                    temperature=0.1,
-                ),
-            }
+    seg_k2_list = [
+        compute_neural_log_probabilities(
+            rng.standard_normal((seg_len, vocab_size)).astype(np.float32),
+            temperature=0.1,
         )
-
-    lam_weights = {"K0": 0.2, "K1": 0.15, "K2": 0.1}
-    single_stream = [
-        decode_segment_streaming(
-            sd, vocabulary, scorer_single, language_weights=lam_weights, beam_width=3, candidate_top_k=5
-        )
-        for sd in seg_dicts
+        for seg_len in (3, 5, 4)
     ]
-    batched_stream = decode_segments_streaming_batched(
-        seg_dicts, vocabulary, scorer_batched, language_weights=lam_weights, beam_width=3, candidate_top_k=5
-    )
-    for s_res, b_res in zip(single_stream, batched_stream):
-        assert s_res["final_words"] == b_res["final_words"]
-        assert s_res["committed_k2_words"] == b_res["committed_k2_words"]
-        assert s_res["initial_k0_words"] == b_res["initial_k0_words"]
-
-    calls_before_repeat = len(model_batched.forward_calls)
-    batched_stream_repeat = decode_segments_streaming_batched(
-        seg_dicts, vocabulary, scorer_batched, language_weights=lam_weights, beam_width=3, candidate_top_k=5
-    )
-    assert len(model_batched.forward_calls) == calls_before_repeat
-    assert scorer_batched.stats["transition_cache_hits"] > 0
-    for b_res, r_res in zip(batched_stream, batched_stream_repeat):
-        assert b_res["final_words"] == r_res["final_words"]
 
     single_static = [
         decode_segment_static(
-            sd["K2"], vocabulary, scorer_single, language_weight=0.15, beam_width=3, candidate_top_k=5
+            k2_lp, vocabulary, scorer_single, language_weight=0.15, beam_width=3, candidate_top_k=5
         )
-        for sd in seg_dicts
+        for k2_lp in seg_k2_list
     ]
     batched_static = decode_segments_static_batched(
-        [sd["K2"] for sd in seg_dicts],
+        seg_k2_list,
         vocabulary,
         scorer_batched,
         language_weight=0.15,
@@ -682,6 +580,20 @@ def test_batched_segment_decoding_and_transition_cache_equivalence() -> None:
     for s_res, b_res in zip(single_static, batched_static):
         assert s_res["final_words"] == b_res["final_words"]
         assert np.isclose(s_res["score"], b_res["score"], atol=1e-6)
+
+    calls_before_repeat = len(model_batched.forward_calls)
+    batched_static_repeat = decode_segments_static_batched(
+        seg_k2_list,
+        vocabulary,
+        scorer_batched,
+        language_weight=0.15,
+        beam_width=3,
+        candidate_top_k=5,
+    )
+    assert len(model_batched.forward_calls) == calls_before_repeat
+    assert scorer_batched.stats["transition_cache_hits"] > 0
+    for b_res, r_res in zip(batched_static, batched_static_repeat):
+        assert b_res["final_words"] == r_res["final_words"]
 
 
 def test_top_k_local_softmax_and_multi_subject_observation_sweep() -> None:
@@ -875,7 +787,7 @@ def test_vocabulary_frequency_order_and_scaling_sweep() -> None:
     assert set(v2_s3["predicted_words"]).issubset({"ami", "prince"})
     assert v2_s3["in_vocabulary_mask"] == [True, True, False]
     assert scaling_bundles["V=2"]["test_token_coverage_pct"] == round(200.0 / 3.0, 4)
-    # 验证每个尺度均对 S0 / K0 / K1 / S3_clean / K0_shifted_neg75s / S3_shifted_neg75s 执行统一静态束搜索，且未生成 F-local
+    # 验证每个尺度均对 S0 / K0 / K1 / S3_clean / K0_shifted_neg75s / S3_shifted_neg75s / F 执行统一静态束搜索
     assert {
         "S0",
         "K0",
@@ -885,7 +797,6 @@ def test_vocabulary_frequency_order_and_scaling_sweep() -> None:
         "S3_shifted_neg75s",
     }.issubset(set(scaling_bundles["V=2"]["conditions"].keys()))
     assert "F" in scaling_bundles["V=2"]["conditions"]
-    assert "F_local" not in scaling_bundles["V=2"]["conditions"]
 
 
 def test_decoupled_stage_checkpoints_and_incremental_f_reuse(
@@ -893,7 +804,7 @@ def test_decoupled_stage_checkpoints_and_incremental_f_reuse(
 ) -> None:
     """验证 S3 三阶段检查点严格解耦（Stage 1 -> S0, Stage 2.1 -> F, Stage 2.3 -> K0/K1/K2）与无 F/增量补 F 缓存复用。"""
     import json
-    import scripts.decode_sentences as decode_cli
+    from braindecoding.decoding import sentence_decoding_pipeline as decode_cli
     from braindecoding.decoding.neural_score_exporter import (
         resolve_stage_checkpoints,
     )
@@ -1295,7 +1206,7 @@ def test_simple_sequence_decoding_subdir_reuses_legacy_pts_without_overwriting(
 ) -> None:
     """验证默认输出至 simple_sequence_decoding，且只读复用旧版 sequence_decoding 下的 .pt 矩阵而不覆盖旧结果。"""
     import json
-    import scripts.decode_sentences as decode_cli
+    from braindecoding.decoding import sentence_decoding_pipeline as decode_cli
 
     runs_root = tmp_path / "runs"
     exp_tag = "siamese_debiased_tag"
@@ -1476,7 +1387,7 @@ def test_open_segment_sequence_decoding_reuses_simple_sequence_decoding_cache(
 ) -> None:
     """验证 --sequence-subdir sequence_decoding 启用全词表开放句段协议，并双向复用 simple_sequence_decoding 下的 .pt 缓存。"""
     import json
-    import scripts.decode_sentences as decode_cli
+    from braindecoding.decoding import sentence_decoding_pipeline as decode_cli
 
     runs_root = tmp_path / "runs"
     exp_tag = "2_siamese_prefix_tag"

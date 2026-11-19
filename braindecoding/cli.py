@@ -1005,7 +1005,7 @@ def _workflow_eval(args) -> int:
 
 
 def _workflow_decode_sentences(args) -> int:
-    from scripts.decode_sentences import (
+    from braindecoding.decoding.sentence_decoding_pipeline import (
         print_pipeline_summary,
         run_sequence_decoding_pipeline,
     )
@@ -1085,7 +1085,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     decode_cmd = commands.add_parser(
         "decode-sentences",
-        help="执行序列解码协议（S3：神经词表得分导出、状态自适应校准、KV-Cache 单遍定稿主干束搜索与 6 维语义/C-gated 评估）",
+        help="执行序列解码协议（S3：神经词表得分导出、状态自适应校准、KV-Cache 单遍静态束搜索与 6 维语义评估）",
     )
     decode_cmd._negative_number_matcher = re.compile(
         r"^-\d+(?:\.\d+)?(?:,\s*[+-]?\d+(?:\.\d+)?)*$"
