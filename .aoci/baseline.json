@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-11-20T03:42:18Z",
+  "updated_at": "2026-11-20T06:25:52Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "d189f5bae1f985c320036cf18bc534675c95425070c19e8d20ba59f119aba464",
-      "size": 41163,
-      "normalized_sha256": "d189f5bae1f985c320036cf18bc534675c95425070c19e8d20ba59f119aba464"
+      "sha256": "f191fa9c156a2abdda5f580b91fad959602b8edea48ca5d6f79894e1818e5472",
+      "size": 42119,
+      "normalized_sha256": "f191fa9c156a2abdda5f580b91fad959602b8edea48ca5d6f79894e1818e5472"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -113,9 +113,9 @@
     },
     "braindecoding/data/pnpl_dataset_adapter.py": {
       "role": "index",
-      "sha256": "6522d41ffc3c4c6a9526e53ac375f19a7a60fbc3157272e591a7859da495a8fb",
-      "size": 68690,
-      "normalized_sha256": "6522d41ffc3c4c6a9526e53ac375f19a7a60fbc3157272e591a7859da495a8fb"
+      "sha256": "5816d489a990c5490d8df7c55ea9ebc01b508ecdfed1d21c5a465ef672717d9c",
+      "size": 72607,
+      "normalized_sha256": "5816d489a990c5490d8df7c55ea9ebc01b508ecdfed1d21c5a465ef672717d9c"
     },
     "braindecoding/data/sensor_coordinates.py": {
       "role": "index",
@@ -131,9 +131,9 @@
     },
     "braindecoding/data/text_embeddings.py": {
       "role": "index",
-      "sha256": "3274cf75697bcf8fbbec256749dceb0167b7b0cde7d240d248fe62a98a39e4f6",
-      "size": 9557,
-      "normalized_sha256": "3274cf75697bcf8fbbec256749dceb0167b7b0cde7d240d248fe62a98a39e4f6"
+      "sha256": "e454310a0d356fc4ba028cef772b560f148366172ced8347d9599d95ac6c9465",
+      "size": 10387,
+      "normalized_sha256": "e454310a0d356fc4ba028cef772b560f148366172ced8347d9599d95ac6c9465"
     },
     "braindecoding/data/word_window_dataset.py": {
       "role": "index",
@@ -1156,9 +1156,9 @@
     },
     "scripts/cache_archive.py": {
       "role": "index",
-      "sha256": "468f3147e652ba48f6fcbf6b8b8185c09a9813c63aaf954b69316370ab1349c7",
-      "size": 17746,
-      "normalized_sha256": "468f3147e652ba48f6fcbf6b8b8185c09a9813c63aaf954b69316370ab1349c7"
+      "sha256": "8ee0198e45d9a5788b1677e0eb6d267c1e9eed8a87ebdba7b571b5d8f4e02c66",
+      "size": 19850,
+      "normalized_sha256": "8ee0198e45d9a5788b1677e0eb6d267c1e9eed8a87ebdba7b571b5d8f4e02c66"
     },
     "scripts/colab/colab_cpu_cache.ipynb": {
       "role": "index",
@@ -1189,6 +1189,18 @@
       "sha256": "0cefb58e5e123ab736bf9edb8bdb8c9e83cc1ecc68f32a482d845ccc848e8c0f",
       "size": 51810,
       "normalized_sha256": "0cefb58e5e123ab736bf9edb8bdb8c9e83cc1ecc68f32a482d845ccc848e8c0f"
+    },
+    "scripts/colab/train_libribrain.ipynb": {
+      "role": "index",
+      "sha256": "5fbdb8fe871ec91d4fc699a39721709e89178be590e32b29da00131435848c8d",
+      "size": 12170,
+      "normalized_sha256": "5fbdb8fe871ec91d4fc699a39721709e89178be590e32b29da00131435848c8d"
+    },
+    "scripts/colab/train_pallier.ipynb": {
+      "role": "index",
+      "sha256": "21bb5f5dbd7a256fcc2c33a0f3ca9c2442cecbc19130a74671d0f410d5bae3a1",
+      "size": 12258,
+      "normalized_sha256": "21bb5f5dbd7a256fcc2c33a0f3ca9c2442cecbc19130a74671d0f410d5bae3a1"
     },
     "scripts/colab_setup.py": {
       "role": "index",

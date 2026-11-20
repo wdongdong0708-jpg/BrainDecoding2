@@ -1301,6 +1301,7 @@ def materialize_pnpl_dataset(
     create_h5_if_missing: bool = True,
     cleanup_raw: bool = False,
     force: bool = False,
+    show_progress: bool = True,
     pnpl_dataset: Any = None,
     pnpl_datasets_module: Any = None,
 ) -> dict[str, Any]:
@@ -1311,6 +1312,15 @@ def materialize_pnpl_dataset(
     meg_dir = out_root / "signals" / "meg_50hz"
     events_path = out_root / "events" / "events.csv"
     meg_dir.mkdir(parents=True, exist_ok=True)
+
+    tqdm_cls = None
+    if show_progress:
+        try:
+            from tqdm import tqdm as _tqdm_cls
+
+            tqdm_cls = _tqdm_cls
+        except ImportError:
+            tqdm_cls = None
 
     # Colab 防爆盘：Pallier2025 / Armeni2022 的 PNPL __init__ 会批量下载全部选中被试原始 FIF，
     # 开启 cleanup_raw 时改按单个被试逐批物化并及时删除该被试临时 FIF/H5，使本地峰值盘占 <10 GB。
@@ -1331,215 +1341,290 @@ def materialize_pnpl_dataset(
     reused_count = 0
     materialized_count = 0
     cleaned_raw_count = 0
+    total_words_extracted = 0
 
-    for batch_subjects in subject_batches:
-        batch_include_keys = include_run_keys
-        if stream_by_subject and include_run_keys is not None:
-            want_sub = _strip_prefix(str(batch_subjects[0]), "sub-")
-            batch_include_keys = [
-                rk
-                for rk in include_run_keys
-                if _strip_prefix(str(rk[0]), "sub-").lstrip("0") == want_sub.lstrip("0")
-            ]
-            if not batch_include_keys:
-                continue
+    subject_pbar = (
+        tqdm_cls(
+            total=len(subject_batches),
+            desc=f"PNPL[{canonical}] subjects",
+            unit="sub",
+            dynamic_ncols=True,
+            mininterval=0.5,
+        )
+        if (stream_by_subject and tqdm_cls is not None)
+        else None
+    )
 
-        opened_locally = pnpl_dataset is None
-        active_ds = pnpl_dataset
-        if active_ds is None:
-            active_ds = open_pnpl_dataset(
-                canonical,
-                pnpl_data_path,
-                subjects=batch_subjects,
-                corpus=corpus,
-                sessions=sessions,
-                runs=runs,
-                tasks=tasks,
-                include_run_keys=batch_include_keys,
-                exclude_run_keys=exclude_run_keys,
-                preprocessing=preprocessing,
-                preprocessing_config=preprocessing_config,
-                download=download,
-                preload_files=preload_files,
-                preload_h5=False,
-                create_h5_if_missing=create_h5_if_missing,
-                pnpl_datasets_module=pnpl_datasets_module,
+    try:
+        for batch_idx, batch_subjects in enumerate(subject_batches, start=1):
+            batch_include_keys = include_run_keys
+            sub_label = (
+                _format_subject_id(str(batch_subjects[0]))
+                if stream_by_subject and batch_subjects
+                else canonical
             )
-
-        try:
-            # 防御性检查：确保 PNPL 内置 z-score 标准化已关闭。
-            if getattr(active_ds, "standardize_enabled", False):
-                raise RuntimeError(
-                    "PNPL 数据集必须以 standardize=False 实例化，避免在 RobustScaler 前混入 z-score。"
-                )
-
-            run_keys = [tuple(map(str, rk)) for rk in getattr(active_ds, "run_keys", ())]
-            if not run_keys:
-                if stream_by_subject:
+            if stream_by_subject and include_run_keys is not None:
+                want_sub = _strip_prefix(str(batch_subjects[0]), "sub-")
+                batch_include_keys = [
+                    rk
+                    for rk in include_run_keys
+                    if _strip_prefix(str(rk[0]), "sub-").lstrip("0") == want_sub.lstrip("0")
+                ]
+                if not batch_include_keys:
+                    if subject_pbar is not None:
+                        subject_pbar.update(1)
                     continue
-                raise ValueError(f"PNPL 数据集 {canonical} 未解析到任何可用 run_key。")
 
-            for index, run_key in enumerate(run_keys, start=1):
-                all_run_keys.append(run_key)
-                subject, session, task, run = run_key
-                sub_id = _format_subject_id(subject)
-                rec_id = recording_identifier(canonical, run_key)
-                split, split_unit = resolve_split_and_unit(
-                    canonical,
-                    run_key,
-                    split_policy=split_policy,
-                    pnpl_dataset=active_ds,
-                    split_manifest_path=split_manifest_path,
+            if subject_pbar is not None:
+                subject_pbar.set_postfix(
+                    sub=sub_label,
+                    phase="fetch/bp+ds",
+                    runs=len(all_run_keys),
+                    words=total_words_extracted,
                 )
 
-                stem = recording_signal_stem(canonical, run_key)
-                output_npy = meg_dir / sub_id / f"{stem}.npy"
-                sidecar_json = output_npy.with_suffix(".json")
-                signal_relpath = output_npy.relative_to(meg_dir).as_posix()
+            opened_locally = pnpl_dataset is None
+            active_ds = pnpl_dataset
+            if active_ds is None:
+                active_ds = open_pnpl_dataset(
+                    canonical,
+                    pnpl_data_path,
+                    subjects=batch_subjects,
+                    corpus=corpus,
+                    sessions=sessions,
+                    runs=runs,
+                    tasks=tasks,
+                    include_run_keys=batch_include_keys,
+                    exclude_run_keys=exclude_run_keys,
+                    preprocessing=preprocessing,
+                    preprocessing_config=preprocessing_config,
+                    download=download,
+                    preload_files=preload_files,
+                    preload_h5=False,
+                    create_h5_if_missing=create_h5_if_missing,
+                    pnpl_datasets_module=pnpl_datasets_module,
+                )
 
-                reused_sidecar = None
-                h5_path: Path | None = None
-                if not force and cleanup_raw:
-                    # 断点续跑优先校验已有 50 Hz 产物，避免重复下载已清理的临时 H5
-                    reused_sidecar = _sidecar_matches(
-                        output_npy,
-                        sidecar_json,
-                        source_h5_path=None,
-                        target_sampling_rate_hz=target_sampling_rate_hz,
-                        filter_low_hz=filter_low_hz,
-                        filter_high_hz=filter_high_hz,
+            run_pbar = None
+            try:
+                # 防御性检查：确保 PNPL 内置 z-score 标准化已关闭。
+                if getattr(active_ds, "standardize_enabled", False):
+                    raise RuntimeError(
+                        "PNPL 数据集必须以 standardize=False 实例化，避免在 RobustScaler 前混入 z-score。"
                     )
 
-                if reused_sidecar is None:
-                    h5_path = _resolve_pnpl_h5_path(active_ds, run_key)
-                    if not force:
+                run_keys = [tuple(map(str, rk)) for rk in getattr(active_ds, "run_keys", ())]
+                if not run_keys:
+                    if stream_by_subject:
+                        continue
+                    raise ValueError(f"PNPL 数据集 {canonical} 未解析到任何可用 run_key。")
+
+                if tqdm_cls is not None:
+                    run_pbar = tqdm_cls(
+                        total=len(run_keys),
+                        desc=(
+                            f"PNPL[{canonical} | {sub_label}]"
+                            if stream_by_subject
+                            else f"PNPL[{canonical}]"
+                        ),
+                        unit="run",
+                        dynamic_ncols=True,
+                        mininterval=0.5,
+                        leave=not stream_by_subject,
+                    )
+
+                for index, run_key in enumerate(run_keys, start=1):
+                    all_run_keys.append(run_key)
+                    subject, session, task, run = run_key
+                    sub_id = _format_subject_id(subject)
+                    rec_id = recording_identifier(canonical, run_key)
+                    split, split_unit = resolve_split_and_unit(
+                        canonical,
+                        run_key,
+                        split_policy=split_policy,
+                        pnpl_dataset=active_ds,
+                        split_manifest_path=split_manifest_path,
+                    )
+                    if run_pbar is not None:
+                        run_pbar.set_postfix(
+                            rec=f"{sub_id}/r{_strip_prefix(run, 'run-')}",
+                            words=total_words_extracted,
+                            reused=reused_count,
+                            cleaned=cleaned_raw_count,
+                        )
+
+                    stem = recording_signal_stem(canonical, run_key)
+                    output_npy = meg_dir / sub_id / f"{stem}.npy"
+                    sidecar_json = output_npy.with_suffix(".json")
+                    signal_relpath = output_npy.relative_to(meg_dir).as_posix()
+
+                    reused_sidecar = None
+                    h5_path: Path | None = None
+                    if not force and cleanup_raw:
+                        # 断点续跑优先校验已有 50 Hz 产物，避免重复下载已清理的临时 H5
                         reused_sidecar = _sidecar_matches(
                             output_npy,
                             sidecar_json,
-                            source_h5_path=h5_path,
+                            source_h5_path=None,
                             target_sampling_rate_hz=target_sampling_rate_hz,
                             filter_low_hz=filter_low_hz,
                             filter_high_hz=filter_high_hz,
                         )
 
-                events_tsv_path = _resolve_pnpl_events_path(active_ds, run_key)
+                    if reused_sidecar is None:
+                        h5_path = _resolve_pnpl_h5_path(active_ds, run_key)
+                        if not force:
+                            reused_sidecar = _sidecar_matches(
+                                output_npy,
+                                sidecar_json,
+                                source_h5_path=h5_path,
+                                target_sampling_rate_hz=target_sampling_rate_hz,
+                                filter_low_hz=filter_low_hz,
+                                filter_high_hz=filter_high_hz,
+                            )
 
-                if reused_sidecar is not None:
-                    sidecar = reused_sidecar
-                    reused_count += 1
-                else:
-                    assert h5_path is not None
-                    raw_array, h5_meta = _read_h5_continuous_meg(
-                        h5_path,
-                        fallback_sfreq=getattr(active_ds, "sfreq", None),
+                    events_tsv_path = _resolve_pnpl_events_path(active_ds, run_key)
+
+                    if reused_sidecar is not None:
+                        sidecar = reused_sidecar
+                        reused_count += 1
+                    else:
+                        assert h5_path is not None
+                        raw_array, h5_meta = _read_h5_continuous_meg(
+                            h5_path,
+                            fallback_sfreq=getattr(active_ds, "sfreq", None),
+                        )
+                        if canonical == "pallier2025_full":
+                            first_samp, time_origin_sfreq, time_origin_src = (
+                                _inspect_pallier_time_origin(active_ds, run_key, h5_meta)
+                            )
+                        else:
+                            first_samp = int(h5_meta["source_first_samp"])
+                            time_origin_sfreq = float(h5_meta["source_sampling_rate_hz"])
+                            time_origin_src = "h5_attrs"
+
+                        scaled_array, preproc_details = preprocess_continuous_meg(
+                            raw_array,
+                            source_sampling_rate_hz=h5_meta["source_sampling_rate_hz"],
+                            channel_names=h5_meta["channel_names"],
+                            channel_types=h5_meta["channel_types"],
+                            target_sampling_rate_hz=target_sampling_rate_hz,
+                            filter_low_hz=filter_low_hz,
+                            filter_high_hz=filter_high_hz,
+                            source_highpass_hz=h5_meta["source_highpass_hz"],
+                            source_lowpass_hz=h5_meta["source_lowpass_hz"],
+                            mne_n_jobs=mne_n_jobs,
+                        )
+                        _write_array_atomic(output_npy, scaled_array)
+                        output_sha = sha256_file(output_npy)
+                        stat = h5_path.stat()
+                        sidecar = {
+                            "schema_version": 1,
+                            "dataset": canonical,
+                            "recording_id": rec_id,
+                            "subject": sub_id,
+                            "session": f"ses-{_strip_prefix(session, 'ses-')}",
+                            "task": task,
+                            "run": f"run-{_strip_prefix(run, 'run-')}",
+                            "split": split,
+                            "split_unit": split_unit,
+                            "source_h5_path": str(h5_path.resolve()),
+                            "source_h5_size_bytes": int(stat.st_size),
+                            "source_h5_mtime_ns": int(stat.st_mtime_ns),
+                            "source_first_samp": int(first_samp),
+                            "source_sampling_rate_hz": float(time_origin_sfreq),
+                            "source_h5_sampling_rate_hz": float(h5_meta["source_sampling_rate_hz"]),
+                            "source_sample_count": int(h5_meta["source_sample_count"]),
+                            "time_origin_source": time_origin_src,
+                            "output_first_samp": 0,
+                            "output_sampling_rate_hz": float(preproc_details["output_sampling_rate_hz"]),
+                            "output_sample_count": int(scaled_array.shape[1]),
+                            "channel_count": int(scaled_array.shape[0]),
+                            "channel_names": h5_meta["channel_names"],
+                            "channel_types": h5_meta["channel_types"],
+                            "channel_names_sha256": h5_meta["channel_names_sha256"],
+                            "sensor_xyz": h5_meta["sensor_xyz"],
+                            "shape": list(scaled_array.shape),
+                            "dtype": "float32",
+                            "output_sha256": output_sha,
+                            "signal_relpath": signal_relpath,
+                            "preprocessing": preproc_details,
+                        }
+                        _write_json_atomic(sidecar_json, sidecar)
+                        materialized_count += 1
+
+                    corpus_name = _corpus_for_run_key(canonical, run_key, active_ds)
+                    frame = extract_run_word_events(
+                        canonical,
+                        events_tsv_path,
+                        run_key=run_key,
+                        split=split,
+                        split_unit=split_unit,
+                        signal_metadata=sidecar,
+                        signal_relpath=signal_relpath,
+                        corpus_name=corpus_name,
+                        pnpl_dataset=active_ds,
+                        eligibility_window_seconds=eligibility_window_seconds,
+                        pause_gap_seconds=pause_gap_seconds,
+                        max_context_words=max_context_words,
                     )
-                    if canonical == "pallier2025_full":
-                        first_samp, time_origin_sfreq, time_origin_src = (
-                            _inspect_pallier_time_origin(active_ds, run_key, h5_meta)
+                    if not frame.empty:
+                        event_frames.append(frame)
+                        total_words_extracted += int(len(frame))
+
+                    signal_records.append(
+                        {
+                            "recording_id": rec_id,
+                            "subject": sub_id,
+                            "split": split,
+                            "split_unit": split_unit,
+                            "signal_relpath": signal_relpath,
+                            "sidecar_relpath": sidecar_json.relative_to(meg_dir).as_posix(),
+                            "shape": sidecar["shape"],
+                            "output_sha256": sidecar["output_sha256"],
+                            "sidecar_sha256": sha256_file(sidecar_json),
+                            "channel_count": sidecar["channel_count"],
+                            "channel_names_sha256": sidecar["channel_names_sha256"],
+                        }
+                    )
+                    if cleanup_raw:
+                        cleaned_raw_count += _cleanup_run_raw_files(
+                            active_ds, run_key, pnpl_root_path
+                        )
+                    if run_pbar is not None:
+                        run_pbar.update(1)
+                        run_pbar.set_postfix(
+                            rec=f"{sub_id}/r{_strip_prefix(run, 'run-')}",
+                            words=total_words_extracted,
+                            reused=reused_count,
+                            cleaned=cleaned_raw_count,
                         )
                     else:
-                        first_samp = int(h5_meta["source_first_samp"])
-                        time_origin_sfreq = float(h5_meta["source_sampling_rate_hz"])
-                        time_origin_src = "h5_attrs"
-
-                    scaled_array, preproc_details = preprocess_continuous_meg(
-                        raw_array,
-                        source_sampling_rate_hz=h5_meta["source_sampling_rate_hz"],
-                        channel_names=h5_meta["channel_names"],
-                        channel_types=h5_meta["channel_types"],
-                        target_sampling_rate_hz=target_sampling_rate_hz,
-                        filter_low_hz=filter_low_hz,
-                        filter_high_hz=filter_high_hz,
-                        source_highpass_hz=h5_meta["source_highpass_hz"],
-                        source_lowpass_hz=h5_meta["source_lowpass_hz"],
-                        mne_n_jobs=mne_n_jobs,
+                        print(
+                            f"PNPL[{canonical}] {index}/{len(run_keys)}: {rec_id} "
+                            f"shape={sidecar['shape']} words={len(frame)}",
+                            flush=True,
+                        )
+            finally:
+                if run_pbar is not None:
+                    run_pbar.close()
+                if opened_locally and hasattr(active_ds, "close_h5_files"):
+                    try:
+                        active_ds.close_h5_files()
+                    except Exception:
+                        pass
+                if subject_pbar is not None:
+                    subject_pbar.update(1)
+                    subject_pbar.set_postfix(
+                        sub=sub_label,
+                        phase="done",
+                        runs=len(all_run_keys),
+                        words=total_words_extracted,
+                        cleaned=cleaned_raw_count,
                     )
-                    _write_array_atomic(output_npy, scaled_array)
-                    output_sha = sha256_file(output_npy)
-                    stat = h5_path.stat()
-                    sidecar = {
-                        "schema_version": 1,
-                        "dataset": canonical,
-                        "recording_id": rec_id,
-                        "subject": sub_id,
-                        "session": f"ses-{_strip_prefix(session, 'ses-')}",
-                        "task": task,
-                        "run": f"run-{_strip_prefix(run, 'run-')}",
-                        "split": split,
-                        "split_unit": split_unit,
-                        "source_h5_path": str(h5_path.resolve()),
-                        "source_h5_size_bytes": int(stat.st_size),
-                        "source_h5_mtime_ns": int(stat.st_mtime_ns),
-                        "source_first_samp": int(first_samp),
-                        "source_sampling_rate_hz": float(time_origin_sfreq),
-                        "source_h5_sampling_rate_hz": float(h5_meta["source_sampling_rate_hz"]),
-                        "source_sample_count": int(h5_meta["source_sample_count"]),
-                        "time_origin_source": time_origin_src,
-                        "output_first_samp": 0,
-                        "output_sampling_rate_hz": float(preproc_details["output_sampling_rate_hz"]),
-                        "output_sample_count": int(scaled_array.shape[1]),
-                        "channel_count": int(scaled_array.shape[0]),
-                        "channel_names": h5_meta["channel_names"],
-                        "channel_types": h5_meta["channel_types"],
-                        "channel_names_sha256": h5_meta["channel_names_sha256"],
-                        "sensor_xyz": h5_meta["sensor_xyz"],
-                        "shape": list(scaled_array.shape),
-                        "dtype": "float32",
-                        "output_sha256": output_sha,
-                        "signal_relpath": signal_relpath,
-                        "preprocessing": preproc_details,
-                    }
-                    _write_json_atomic(sidecar_json, sidecar)
-                    materialized_count += 1
-
-                corpus_name = _corpus_for_run_key(canonical, run_key, active_ds)
-                frame = extract_run_word_events(
-                    canonical,
-                    events_tsv_path,
-                    run_key=run_key,
-                    split=split,
-                    split_unit=split_unit,
-                    signal_metadata=sidecar,
-                    signal_relpath=signal_relpath,
-                    corpus_name=corpus_name,
-                    pnpl_dataset=active_ds,
-                    eligibility_window_seconds=eligibility_window_seconds,
-                    pause_gap_seconds=pause_gap_seconds,
-                    max_context_words=max_context_words,
-                )
-                if not frame.empty:
-                    event_frames.append(frame)
-
-                signal_records.append(
-                    {
-                        "recording_id": rec_id,
-                        "subject": sub_id,
-                        "split": split,
-                        "split_unit": split_unit,
-                        "signal_relpath": signal_relpath,
-                        "sidecar_relpath": sidecar_json.relative_to(meg_dir).as_posix(),
-                        "shape": sidecar["shape"],
-                        "output_sha256": sidecar["output_sha256"],
-                        "sidecar_sha256": sha256_file(sidecar_json),
-                        "channel_count": sidecar["channel_count"],
-                        "channel_names_sha256": sidecar["channel_names_sha256"],
-                    }
-                )
-                if cleanup_raw:
-                    cleaned_raw_count += _cleanup_run_raw_files(
-                        active_ds, run_key, pnpl_root_path
-                    )
-                print(
-                    f"PNPL[{canonical}] {index}/{len(run_keys)}: {rec_id} "
-                    f"shape={sidecar['shape']} words={len(frame)}",
-                    flush=True,
-                )
-        finally:
-            if opened_locally and hasattr(active_ds, "close_h5_files"):
-                try:
-                    active_ds.close_h5_files()
-                except Exception:
-                    pass
+    finally:
+        if subject_pbar is not None:
+            subject_pbar.close()
 
     if not event_frames:
         raise ValueError(f"PNPL 数据集 {canonical} 未提取到任何词级事件。")

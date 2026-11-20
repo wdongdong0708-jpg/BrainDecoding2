@@ -87,7 +87,7 @@ def load_text_model(config):
 
 
 def encode_words(
-    words, config, *, tokenizer=None, model=None, device=None
+    words, config, *, tokenizer=None, model=None, device=None, show_progress: bool = True
 ) -> np.ndarray:
     """逐词批量编码，并保持输入词序与既有层/聚合语义。"""
     words = [str(word) for word in words]
@@ -102,49 +102,73 @@ def encode_words(
     signature = text_embedding_signature(config)
     batch_size = int(config.get("batch_size", 32))
     expected_dimension = int(config.get("embedding_dimension", 1024))
+    pbar = None
+    if show_progress:
+        try:
+            from tqdm import tqdm
+
+            pbar = tqdm(
+                total=len(words),
+                desc=f"TextEmb[{signature['model_name']}]",
+                unit="word",
+                dynamic_ncols=True,
+                mininterval=0.5,
+            )
+        except ImportError:
+            pbar = None
     batches = []
-    for start in range(0, len(words), batch_size):
-        batch_words = words[start : start + batch_size]
-        print(f"文本向量 {min(start + len(batch_words), len(words))}/{len(words)}", flush=True)
-        inputs = tokenizer(
-            batch_words,
-            add_special_tokens=signature["add_special_tokens"],
-            return_tensors="pt",
-            padding=True,
-            truncation=not bool(config.get("max_length")),
-        )
-        if config.get("max_length") and inputs["input_ids"].shape[1] > int(config["max_length"]):
-            raise ValueError("完整词超过文本编码长度上限，不能静默截断。")
-        inputs = {key: value.to(device) for key, value in inputs.items()}
-        with torch.inference_mode():
-            outputs = model(**inputs, output_hidden_states=True)
-        states = outputs.hidden_states
-        layer_index = int(signature["layer_fraction"] * len(states) - 1e-6)
-        layer_index = min(max(layer_index, 0), len(states) - 1)
-        hidden = states[layer_index]
-        mask = inputs["attention_mask"].unsqueeze(-1).to(hidden.dtype)
-        if signature["token_aggregation"] == "mean":
-            pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1)
-        elif signature["token_aggregation"] == "sum":
-            pooled = (hidden * mask).sum(dim=1)
-        elif signature["token_aggregation"] == "first":
-            pooled = hidden[:, 0]
-        elif signature["token_aggregation"] == "last":
-            last = inputs["attention_mask"].sum(dim=1).sub(1).clamp_min(0)
-            pooled = hidden[torch.arange(len(hidden), device=device), last]
-        else:
-            raise ValueError(
-                f"未知 token aggregation：{signature['token_aggregation']}"
+    try:
+        for start in range(0, len(words), batch_size):
+            batch_words = words[start : start + batch_size]
+            if pbar is None and show_progress:
+                print(
+                    f"文本向量 {min(start + len(batch_words), len(words))}/{len(words)}",
+                    flush=True,
+                )
+            inputs = tokenizer(
+                batch_words,
+                add_special_tokens=signature["add_special_tokens"],
+                return_tensors="pt",
+                padding=True,
+                truncation=not bool(config.get("max_length")),
             )
-        pooled = pooled.float()
-        if config.get("normalize_embeddings", False):
-            pooled = torch.nn.functional.normalize(pooled, dim=-1)
-        pooled = pooled.cpu().numpy().astype(np.float32, copy=False)
-        if pooled.shape[1] != expected_dimension:
-            raise ValueError(
-                f"文本向量维数为 {pooled.shape[1]}，配置预期 {expected_dimension}。"
-            )
-        batches.append(pooled)
+            if config.get("max_length") and inputs["input_ids"].shape[1] > int(config["max_length"]):
+                raise ValueError("完整词超过文本编码长度上限，不能静默截断。")
+            inputs = {key: value.to(device) for key, value in inputs.items()}
+            with torch.inference_mode():
+                outputs = model(**inputs, output_hidden_states=True)
+            states = outputs.hidden_states
+            layer_index = int(signature["layer_fraction"] * len(states) - 1e-6)
+            layer_index = min(max(layer_index, 0), len(states) - 1)
+            hidden = states[layer_index]
+            mask = inputs["attention_mask"].unsqueeze(-1).to(hidden.dtype)
+            if signature["token_aggregation"] == "mean":
+                pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1)
+            elif signature["token_aggregation"] == "sum":
+                pooled = (hidden * mask).sum(dim=1)
+            elif signature["token_aggregation"] == "first":
+                pooled = hidden[:, 0]
+            elif signature["token_aggregation"] == "last":
+                last = inputs["attention_mask"].sum(dim=1).sub(1).clamp_min(0)
+                pooled = hidden[torch.arange(len(hidden), device=device), last]
+            else:
+                raise ValueError(
+                    f"未知 token aggregation：{signature['token_aggregation']}"
+                )
+            pooled = pooled.float()
+            if config.get("normalize_embeddings", False):
+                pooled = torch.nn.functional.normalize(pooled, dim=-1)
+            pooled = pooled.cpu().numpy().astype(np.float32, copy=False)
+            if pooled.shape[1] != expected_dimension:
+                raise ValueError(
+                    f"文本向量维数为 {pooled.shape[1]}，配置预期 {expected_dimension}。"
+                )
+            batches.append(pooled)
+            if pbar is not None:
+                pbar.update(len(batch_words))
+    finally:
+        if pbar is not None:
+            pbar.close()
     return np.concatenate(batches, axis=0)
 
 
