@@ -146,8 +146,8 @@ def pack_cache(
                 unit="B",
                 unit_scale=True,
                 unit_divisor=1024,
-                dynamic_ncols=True,
-                mininterval=0.5,
+                ncols=92,
+                mininterval=2.0,
             )
         except ImportError:
             pbar = None
@@ -165,8 +165,8 @@ def pack_cache(
                     tar.add(abs_path, arcname=rel_posix, recursive=False)
                     written_bytes += size
                     if pbar is not None:
+                        pbar.set_postfix_str(f"f={idx}/{len(entries)}", refresh=False)
                         pbar.update(size)
-                        pbar.set_postfix(files=f"{idx}/{len(entries)}")
                     elif idx == 1 or idx % 20 == 0 or idx == len(entries):
                         elapsed_so_far = max(time.perf_counter() - started, 1e-6)
                         speed_mib = (written_bytes / (1024 * 1024)) / elapsed_so_far
@@ -325,8 +325,8 @@ def unpack_cache(
                 unit="B",
                 unit_scale=True,
                 unit_divisor=1024,
-                dynamic_ncols=True,
-                mininterval=0.5,
+                ncols=92,
+                mininterval=2.0,
             )
         except ImportError:
             pbar = None
@@ -359,11 +359,16 @@ def unpack_cache(
                             except Exception:
                                 pass
                         if pbar is not None:
-                            pbar.update(member_size)
-                            pbar.set_postfix(
-                                files=f"{idx}/{expected_total_files}" if expected_total_files else idx,
-                                skipped=skipped_files,
+                            files_label = (
+                                f"{idx}/{expected_total_files}"
+                                if expected_total_files
+                                else str(idx)
                             )
+                            pbar.set_postfix_str(
+                                f"f={files_label} skip={skipped_files}",
+                                refresh=False,
+                            )
+                            pbar.update(member_size)
                         continue
 
                     dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -386,10 +391,13 @@ def unpack_cache(
                     extracted_files += 1
                     total_bytes += member_size
                     if pbar is not None:
-                        pbar.update(member_size)
-                        pbar.set_postfix(
-                            files=f"{idx}/{expected_total_files}" if expected_total_files else idx,
+                        files_label = (
+                            f"{idx}/{expected_total_files}"
+                            if expected_total_files
+                            else str(idx)
                         )
+                        pbar.set_postfix_str(f"f={files_label}", refresh=False)
+                        pbar.update(member_size)
                     elif (
                         idx == 1
                         or idx % 20 == 0
@@ -469,6 +477,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="meg",
         help="模态或数据集标识（meg / pallier2025 / pallier2025_full / libribrain100 / armeni2022 / all）",
     )
+    pack_p.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="禁用 tqdm 实时进度条",
+    )
 
     unpack_p = subparsers.add_parser(
         "unpack", help="将单一 .tar 归档解包回本地高速缓存目录"
@@ -498,6 +511,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="若目标文件已存在且大小一致则跳过解压",
     )
+    unpack_p.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="禁用 tqdm 实时进度条",
+    )
     return parser
 
 
@@ -509,6 +527,7 @@ def main(argv=None) -> int:
             archive=args.archive,
             archive_dir=args.archive_dir,
             modality=args.modality,
+            show_progress=not bool(getattr(args, "no_progress", False)),
         )
         return 0
     if args.command == "unpack":
@@ -518,6 +537,7 @@ def main(argv=None) -> int:
             archive_dir=args.archive_dir,
             modality=args.modality,
             skip_existing=args.skip_existing,
+            show_progress=not bool(getattr(args, "no_progress", False)),
         )
         return 0
     return 2

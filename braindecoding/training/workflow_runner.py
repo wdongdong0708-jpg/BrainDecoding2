@@ -1642,6 +1642,8 @@ def run_cache_workflow(
     include_run_keys: Sequence[str | Sequence[str]] | None = None,
     download: bool = True,
     cleanup_raw: bool = False,
+    mne_n_jobs: int = 1,
+    show_progress: bool = True,
 ) -> dict:
     """预热并校验指定数据集与受试者子集的事件表、神经信号与文本嵌入缓存。"""
     ensure_default_environment()
@@ -1727,6 +1729,8 @@ def run_cache_workflow(
                 download=bool(download),
                 cleanup_raw=bool(cleanup_raw),
                 force=bool(force),
+                mne_n_jobs=int(mne_n_jobs),
+                show_progress=bool(show_progress),
             )
             # 物化完成后按真实 events.csv 重新解析动态受试者列表
             cfg, subset_spec = build_workflow_config(
@@ -1759,11 +1763,19 @@ def run_cache_workflow(
         )
         if force and Path(cfg["cache"]["text_embeddings"]).is_file():
             Path(cfg["cache"]["text_embeddings"]).unlink(missing_ok=True)
-        text_data.ensure_text_embedding_cache(
-            text_words,
-            cfg["text_embedding"],
-            cfg["cache"]["text_embeddings"],
-        )
+        if show_progress:
+            text_data.ensure_text_embedding_cache(
+                text_words,
+                cfg["text_embedding"],
+                cfg["cache"]["text_embeddings"],
+            )
+        else:
+            text_data.ensure_text_embedding_cache(
+                text_words,
+                cfg["text_embedding"],
+                cfg["cache"]["text_embeddings"],
+                show_progress=False,
+            )
         if ds_name == "pallier2025" and "信号相对路径" not in subset_table.columns:
             raw_root = Path(cfg["dataset"]["root"])
             recordings = (

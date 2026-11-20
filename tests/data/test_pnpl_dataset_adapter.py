@@ -618,3 +618,127 @@ def test_real_pnpl_installed_signatures_match_adapter():
         cls = getattr(datasets_mod, cls_name)
         params = set(inspect.signature(cls.__init__).parameters)
         assert required_params <= params, f"{cls_name} 缺少参数：{required_params - params}"
+
+
+def test_preprocess_continuous_meg_threaded_mne_n_jobs_matches_single_thread():
+    rng = np.random.default_rng(7)
+    raw_250hz = rng.standard_normal((8, 10000)) * 20.0
+    ch_names = [f"MEG011{i + 1}" for i in range(8)]
+    ref, ref_details = preprocess_continuous_meg(
+        raw_250hz,
+        source_sampling_rate_hz=250.0,
+        channel_names=ch_names,
+        source_highpass_hz=0.1,
+        source_lowpass_hz=125.0,
+        mne_n_jobs=1,
+    )
+    mt, mt_details = preprocess_continuous_meg(
+        raw_250hz,
+        source_sampling_rate_hz=250.0,
+        channel_names=ch_names,
+        source_highpass_hz=0.1,
+        source_lowpass_hz=125.0,
+        mne_n_jobs=0,
+    )
+    assert ref_details["mne_n_jobs"] == 1
+    assert mt_details["mne_n_jobs"] >= 1
+    assert np.allclose(ref, mt, atol=1e-5, rtol=1e-5)
+
+
+def test_materialize_libribrain100_cleanup_raw_streams_one_run_at_a_time_and_zero_redownload_resume(tmp_path):
+    pnpl_root = tmp_path / "pnpl_raw"
+    out_root = tmp_path / "derived_stream"
+    ch_names = ["MEG0111", "MEG0112", "MEG0113", "MEG0121"]
+    run_keys = [
+        ("0", "1", "Sherlock1", "1"),
+        ("0", "2", "Sherlock1", "1"),
+    ]
+    created_h5s: dict[tuple[str, str, str, str], Path] = {}
+    open_calls: list[list[tuple[str, str, str, str]]] = []
+    h5_alive_at_open: list[int] = []
+
+    class _StreamingFakeLibriBrain100:
+        def __init__(self, **kwargs):
+            rks = [tuple(map(str, rk)) for rk in kwargs["include_run_keys"]]
+            open_calls.append(rks)
+            # 记录本次打开时磁盘上尚存的旧 H5 数量：必须为 0（上一条已清理）
+            h5_alive_at_open.append(sum(1 for p in created_h5s.values() if p.exists()))
+            self.data_path = str(pnpl_root)
+            self.run_keys = rks
+            self.sfreq = 50.0
+            self.standardize_enabled = False
+            self._records = [
+                SimpleNamespace(run_key=rk, partition="train", corpus="sherlock")
+                for rk in rks
+            ]
+            self._h5_map = {}
+            self._events_map = {}
+            for rk in rks:
+                sub, ses, task, run = rk
+                h5_p = _write_fake_h5(
+                    pnpl_root / task / "derivatives" / "serialised" / f"sub-{sub}_ses-{ses}_task-{task}_run-{run}_meg.h5",
+                    channels=4,
+                    samples=50 * 16,
+                    sfreq=50.0,
+                    channel_names=ch_names,
+                    seed=int(ses),
+                    highpass=0.1,
+                    lowpass=40.0,
+                )
+                ev_p = pnpl_root / task / "derivatives" / "events" / f"sub-{sub}_ses-{ses}_task-{task}_run-{run}_events.tsv"
+                ev_p.parent.mkdir(parents=True, exist_ok=True)
+                pd.DataFrame(
+                    {
+                        "kind": ["word", "word", "word"],
+                        "segment": ["holmes", "walked", "home"],
+                        "timemeg": [2.0, 2.4, 2.8],
+                        "duration": [0.3, 0.3, 0.2],
+                        "sentenceidx": [0, 0, 0],
+                        "wordidx": [0, 1, 2],
+                    }
+                ).to_csv(ev_p, sep="\t", index=False)
+                created_h5s[rk] = h5_p
+                self._h5_map[rk] = h5_p
+                self._events_map[rk] = ev_p
+
+        def get_h5_path(self, subject, session, task, run):
+            return str(self._h5_map[(str(subject), str(session), str(task), str(run))])
+
+        def get_events_path(self, subject, session, task, run):
+            return str(self._events_map[(str(subject), str(session), str(task), str(run))])
+
+        def close_h5_files(self):
+            return None
+
+    fake_mod = SimpleNamespace(LibriBrain100=_StreamingFakeLibriBrain100)
+    summary = materialize_pnpl_dataset(
+        "libribrain100",
+        pnpl_root,
+        out_root,
+        split_policy="simpleb2t",
+        corpus="sherlock",
+        include_run_keys=run_keys,
+        cleanup_raw=True,
+        pnpl_datasets_module=fake_mod,
+    )
+    assert len(open_calls) == 2
+    assert open_calls == [[run_keys[0]], [run_keys[1]]]
+    assert h5_alive_at_open == [0, 0]
+    assert summary["cleaned_raw_files"] == 2
+    assert all(not p.exists() for p in created_h5s.values())
+
+    # 断点续跑：所有 50 Hz .npy 与本地 events.tsv 已存在，应 0 次调用 LibriBrain100（零重下 H5）
+    open_calls.clear()
+    resumed = materialize_pnpl_dataset(
+        "libribrain100",
+        pnpl_root,
+        out_root,
+        split_policy="simpleb2t",
+        corpus="sherlock",
+        include_run_keys=run_keys,
+        cleanup_raw=True,
+        pnpl_datasets_module=fake_mod,
+    )
+    assert open_calls == []
+    assert resumed["reused_recordings"] == 2
+    assert resumed["materialized_recordings"] == 0

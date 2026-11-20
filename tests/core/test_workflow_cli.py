@@ -1760,8 +1760,35 @@ def test_from_scratch_synthetic_and_eq12_null_space_context_configs():
     assert y_branches[0].requires_grad is True
 
 
+def test_cache_cli_forwards_mne_n_jobs_and_no_progress(monkeypatch):
+    captured: dict = {}
 
+    def _fake_run_cache_workflow(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"ok": True}
 
-
-
+    monkeypatch.setattr(
+        "braindecoding.training.workflow_runner.run_cache_workflow",
+        _fake_run_cache_workflow,
+    )
+    rc = cli.main(
+        [
+            "cache",
+            "--dataset",
+            "libribrain100",
+            "--corpus",
+            "sherlock",
+            "--cleanup-raw",
+            "--mne-n-jobs",
+            "0",
+            "--no-progress",
+        ]
+    )
+    assert rc == 0
+    assert captured["args"] == ("libribrain100",)
+    assert captured["kwargs"]["corpus"] == "sherlock"
+    assert captured["kwargs"]["cleanup_raw"] is True
+    assert captured["kwargs"]["mne_n_jobs"] == 0
+    assert captured["kwargs"]["show_progress"] is False
 

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 from functools import lru_cache
 import hashlib
 import importlib
@@ -574,6 +575,78 @@ def _inspect_pallier_time_origin(
     )
 
 
+def _resolve_mne_n_jobs(mne_n_jobs: int | None) -> int:
+    """解析 MNE 滤波与重采样线程数（0/负数自动取 min(4, CPU核数)，正数按主机核数封顶）。"""
+    cpu_count = max(1, int(os.cpu_count() or 1))
+    if mne_n_jobs is None:
+        return 1
+    requested = int(mne_n_jobs)
+    if requested <= 0:
+        return max(1, min(4, cpu_count))
+    return max(1, min(requested, cpu_count))
+
+
+@contextlib.contextmanager
+def _suppress_nested_download_bars(*, disable_xet: bool = False):
+    """外层进度条接管期间静默 Hugging Face / OpenNeuro 子进度条；cleanup_raw 时同步禁用 Xet 块缓存防爆盘。"""
+    hf_utils = None
+    prev_hf_disabled = None
+    try:
+        from huggingface_hub import utils as _hf_utils
+
+        hf_utils = _hf_utils
+        prev_hf_disabled = bool(hf_utils.are_progress_bars_disabled())
+        if not prev_hf_disabled:
+            hf_utils.disable_progress_bars()
+    except Exception:
+        hf_utils = None
+
+    hf_constants = None
+    prev_xet_const = None
+    had_xet_env = "HF_HUB_DISABLE_XET" in os.environ
+    prev_xet_env = os.environ.get("HF_HUB_DISABLE_XET")
+    if disable_xet:
+        if not had_xet_env:
+            os.environ["HF_HUB_DISABLE_XET"] = "1"
+        try:
+            from huggingface_hub import constants as _hf_constants
+
+            if hasattr(_hf_constants, "HF_HUB_DISABLE_XET"):
+                hf_constants = _hf_constants
+                prev_xet_const = getattr(hf_constants, "HF_HUB_DISABLE_XET")
+                setattr(hf_constants, "HF_HUB_DISABLE_XET", True)
+        except Exception:
+            hf_constants = None
+
+    had_openneuro_env = "PNPL_OPENNEURO_PROGRESS" in os.environ
+    prev_openneuro_env = os.environ.get("PNPL_OPENNEURO_PROGRESS")
+    if not had_openneuro_env:
+        os.environ["PNPL_OPENNEURO_PROGRESS"] = "0"
+
+    try:
+        yield
+    finally:
+        if hf_utils is not None and prev_hf_disabled is False:
+            try:
+                hf_utils.enable_progress_bars()
+            except Exception:
+                pass
+        if hf_constants is not None and prev_xet_const is not None:
+            try:
+                setattr(hf_constants, "HF_HUB_DISABLE_XET", prev_xet_const)
+            except Exception:
+                pass
+        if disable_xet:
+            if not had_xet_env:
+                os.environ.pop("HF_HUB_DISABLE_XET", None)
+            elif prev_xet_env is not None:
+                os.environ["HF_HUB_DISABLE_XET"] = prev_xet_env
+        if not had_openneuro_env:
+            os.environ.pop("PNPL_OPENNEURO_PROGRESS", None)
+        elif prev_openneuro_env is not None:
+            os.environ["PNPL_OPENNEURO_PROGRESS"] = prev_openneuro_env
+
+
 def preprocess_continuous_meg(
     data: np.ndarray,
     *,
@@ -629,22 +702,34 @@ def preprocess_continuous_meg(
     )
     should_resample = not np.isclose(src_sfreq, tgt_sfreq, rtol=0.0, atol=1e-6)
 
+    resolved_n_jobs = _resolve_mne_n_jobs(mne_n_jobs)
     if should_filter or should_resample:
         info = mne.create_info(ch_names=ch_names, sfreq=src_sfreq, ch_types=ch_types)
-        raw = mne.io.RawArray(arr, info, verbose=False)
-        if should_filter:
-            raw.filter(
-                l_freq=float(filter_low_hz),
-                h_freq=float(filter_high_hz),
-                n_jobs=int(mne_n_jobs),
-                verbose=False,
-            )
-        if should_resample:
-            raw = raw.resample(
-                tgt_sfreq,
-                n_jobs=int(mne_n_jobs),
-                verbose=False,
-            )
+        work_arr = arr.copy() if np.shares_memory(arr, data) else arr
+        raw = mne.io.RawArray(work_arr, info, verbose=False)
+        # 共享内存 threading 后端：scipy.fft / NumPy 释放 GIL，既提速 ~2.5x 又避免 loky 进程复制爆内存
+        parallel_ctx: Any = contextlib.nullcontext()
+        if resolved_n_jobs > 1:
+            try:
+                import joblib
+
+                parallel_ctx = joblib.parallel_backend("threading")
+            except ImportError:
+                parallel_ctx = contextlib.nullcontext()
+        with parallel_ctx:
+            if should_filter:
+                raw.filter(
+                    l_freq=float(filter_low_hz),
+                    h_freq=float(filter_high_hz),
+                    n_jobs=resolved_n_jobs,
+                    verbose=False,
+                )
+            if should_resample:
+                raw = raw.resample(
+                    tgt_sfreq,
+                    n_jobs=resolved_n_jobs,
+                    verbose=False,
+                )
         processed = np.asarray(raw.get_data(), dtype=np.float64)
         out_sfreq = float(raw.info["sfreq"])
     else:
@@ -663,6 +748,7 @@ def preprocess_continuous_meg(
         "filter_high_hz": float(filter_high_hz),
         "source_sampling_rate_hz": src_sfreq,
         "output_sampling_rate_hz": out_sfreq,
+        "mne_n_jobs": int(resolved_n_jobs),
         "scaler": "RobustScaler",
         "scaler_scope": "per_channel_per_recording",
         "baseline_applied_in_cache": False,
@@ -734,9 +820,10 @@ def resolve_split_and_unit(
                     part = str(rec.partition).strip().lower()
                     return ("val" if part == "validation" else part), unit
             manifest_mod = importlib.import_module("pnpl.datasets.libribrain100.manifest")
-            rec = manifest_mod.get_record(str(run_key[0]), ses, task, _strip_prefix(run, "run-"))
-            if rec is None:
-                raise ValueError(f"LibriBrain100 官方 manifest 未找到记录：{run_key}")
+            try:
+                rec = manifest_mod.get_record((str(run_key[0]), ses, task, _strip_prefix(run, "run-")))
+            except KeyError as exc:
+                raise ValueError(f"LibriBrain100 官方 manifest 未找到记录：{run_key}") from exc
             part = str(rec.partition).strip().lower()
             return ("val" if part == "validation" else part), unit
         raise ValueError(
@@ -1251,6 +1338,105 @@ def _cleanup_run_raw_files(
     return removed
 
 
+def _libribrain_local_events_path(
+    pnpl_root: Path, run_key: tuple[str, str, str, str]
+) -> Path:
+    subject, session, task, run = map(str, run_key)
+    fname = f"sub-{subject}_ses-{session}_task-{task}_run-{run}_events.tsv"
+    return pnpl_root / task / "derivatives" / "events" / fname
+
+
+def _cleanup_pnpl_local_hf_cache(pnpl_root: Path) -> None:
+    """清理 local_dir/.cache/huggingface/download 中残留的未完成分片，避免占用本地盘。"""
+    download_cache = pnpl_root / ".cache" / "huggingface" / "download"
+    if not download_cache.is_dir() or _is_reparse_or_symlink(download_cache):
+        return
+    for entry in download_cache.rglob("*.incomplete"):
+        _safe_unlink_inside_root(entry, pnpl_root)
+
+
+def _resolve_libribrain_streaming_records(
+    *,
+    subjects: Any,
+    corpus: Any,
+    sessions: Sequence[str] | None,
+    runs: Sequence[str] | None,
+    tasks: Sequence[str] | None,
+    include_run_keys: Sequence[tuple[str, str, str, str]] | None,
+    exclude_run_keys: Sequence[tuple[str, str, str, str]] | None,
+) -> list[tuple[tuple[str, str, str, str], str]] | None:
+    """零下载解析 LibriBrain100 待物化 (run_key, corpus) 列表，避免 __init__ 预拉全部 114 个 H5 爆盘。"""
+    excluded = (
+        {tuple(map(str, rk)) for rk in exclude_run_keys} if exclude_run_keys else set()
+    )
+    if include_run_keys:
+        get_rec = None
+        try:
+            manifest_mod = importlib.import_module("pnpl.datasets.libribrain100.manifest")
+            get_rec = getattr(manifest_mod, "get_record", None)
+        except Exception:
+            get_rec = None
+        resolved: list[tuple[tuple[str, str, str, str], str]] = []
+        for rk_raw in include_run_keys:
+            rk = tuple(map(str, rk_raw))
+            if rk in excluded:
+                continue
+            corpus_name = str(rk[2]).lower()
+            if get_rec is not None:
+                try:
+                    rec = get_rec(rk)
+                    if getattr(rec, "corpus", None):
+                        corpus_name = str(rec.corpus)
+                except Exception:
+                    pass
+            resolved.append((rk, corpus_name))
+        return resolved
+
+    try:
+        base_mod = importlib.import_module("pnpl.datasets.libribrain100.base")
+        normalize_subjects = getattr(base_mod, "normalize_subjects")
+        normalize_corpus = getattr(base_mod, "normalize_corpus")
+        select_records = getattr(base_mod, "select_records")
+    except Exception:
+        return None
+
+    if subjects is None:
+        lb_subjects: Any = "deep"
+    elif isinstance(subjects, str):
+        low_s = subjects.strip().lower()
+        lb_subjects = (
+            low_s
+            if low_s in {"all", "deep", "broad"}
+            else [_strip_prefix(subjects, "sub-")]
+        )
+    else:
+        lb_subjects = [_strip_prefix(str(s), "sub-") for s in subjects]
+
+    recs = select_records(
+        subjects=normalize_subjects(lb_subjects),
+        corpus=normalize_corpus(corpus),
+        partition=None,
+        exclude_run_keys=list(excluded) if excluded else None,
+    )
+    ses_set = {_strip_prefix(str(s), "ses-") for s in sessions} if sessions else None
+    run_set = {_strip_prefix(str(r), "run-") for r in runs} if runs else None
+    task_set = {str(t).strip() for t in tasks} if tasks else None
+
+    out: list[tuple[tuple[str, str, str, str], str]] = []
+    for rec in recs:
+        rk = tuple(map(str, rec.run_key))
+        if rk in excluded:
+            continue
+        if ses_set is not None and _strip_prefix(rk[1], "ses-") not in ses_set:
+            continue
+        if task_set is not None and rk[2] not in task_set:
+            continue
+        if run_set is not None and _strip_prefix(rk[3], "run-") not in run_set:
+            continue
+        out.append((rk, str(getattr(rec, "corpus", "") or rk[2])))
+    return out
+
+
 def _resolve_streaming_subjects(
     canonical: str,
     *,
@@ -1322,8 +1508,25 @@ def materialize_pnpl_dataset(
         except ImportError:
             tqdm_cls = None
 
-    # Colab 防爆盘：Pallier2025 / Armeni2022 的 PNPL __init__ 会批量下载全部选中被试原始 FIF，
-    # 开启 cleanup_raw 时改按单个被试逐批物化并及时删除该被试临时 FIF/H5，使本地峰值盘占 <10 GB。
+    # Colab 防爆盘：
+    # - LibriBrain100.__init__ 即使 preload_files=False 也会在循环中预先拉完所有选中 run 的 250 Hz H5（114 runs ~180 GB），
+    #   开启 cleanup_raw 时按单条 run_key 逐个物化并立即删临时 H5，将峰值盘占压至 <15 GB。
+    # - Pallier2025 / Armeni2022 的 PNPL __init__ 会批量下载全部选中被试原始 FIF，
+    #   开启 cleanup_raw 时按单个被试逐批物化并及时删除临时 FIF/H5，将峰值盘占压至 <15 GB。
+    libribrain_stream_records = (
+        _resolve_libribrain_streaming_records(
+            subjects=subjects,
+            corpus=corpus,
+            sessions=sessions,
+            runs=runs,
+            tasks=tasks,
+            include_run_keys=include_run_keys,
+            exclude_run_keys=exclude_run_keys,
+        )
+        if (cleanup_raw and pnpl_dataset is None and canonical == "libribrain100")
+        else None
+    )
+    stream_by_run = bool(libribrain_stream_records)
     stream_by_subject = bool(
         cleanup_raw
         and pnpl_dataset is None
@@ -1335,6 +1538,7 @@ def materialize_pnpl_dataset(
         else [subjects]
     )
 
+    resolved_mne_n_jobs = _resolve_mne_n_jobs(mne_n_jobs)
     event_frames: list[pd.DataFrame] = []
     signal_records: list[dict[str, Any]] = []
     all_run_keys: list[tuple[str, str, str, str]] = []
@@ -1343,126 +1547,217 @@ def materialize_pnpl_dataset(
     cleaned_raw_count = 0
     total_words_extracted = 0
 
+    def _materialize_run(
+        run_key: tuple[str, str, str, str],
+        *,
+        active_ds: Any,
+        fallback_corpus: str = "",
+        prematched_sidecar: dict[str, Any] | None = None,
+        prematched_events_path: Path | None = None,
+    ) -> None:
+        nonlocal reused_count, materialized_count, cleaned_raw_count, total_words_extracted
+
+        all_run_keys.append(run_key)
+        subject, session, task, run = run_key
+        sub_id = _format_subject_id(subject)
+        rec_id = recording_identifier(canonical, run_key)
+        split, split_unit = resolve_split_and_unit(
+            canonical,
+            run_key,
+            split_policy=split_policy,
+            pnpl_dataset=active_ds,
+            split_manifest_path=split_manifest_path,
+        )
+
+        stem = recording_signal_stem(canonical, run_key)
+        output_npy = meg_dir / sub_id / f"{stem}.npy"
+        sidecar_json = output_npy.with_suffix(".json")
+        signal_relpath = output_npy.relative_to(meg_dir).as_posix()
+
+        reused_sidecar = prematched_sidecar
+        h5_path: Path | None = None
+        if reused_sidecar is None and not force and cleanup_raw:
+            # 断点续跑优先校验已有 50 Hz 产物，避免重复下载已清理的临时 H5
+            reused_sidecar = _sidecar_matches(
+                output_npy,
+                sidecar_json,
+                source_h5_path=None,
+                target_sampling_rate_hz=target_sampling_rate_hz,
+                filter_low_hz=filter_low_hz,
+                filter_high_hz=filter_high_hz,
+            )
+
+        if reused_sidecar is None:
+            assert active_ds is not None
+            h5_path = _resolve_pnpl_h5_path(active_ds, run_key)
+            if not force:
+                reused_sidecar = _sidecar_matches(
+                    output_npy,
+                    sidecar_json,
+                    source_h5_path=h5_path,
+                    target_sampling_rate_hz=target_sampling_rate_hz,
+                    filter_low_hz=filter_low_hz,
+                    filter_high_hz=filter_high_hz,
+                )
+
+        if prematched_events_path is not None and prematched_events_path.is_file():
+            events_tsv_path = prematched_events_path
+        else:
+            assert active_ds is not None
+            events_tsv_path = _resolve_pnpl_events_path(active_ds, run_key)
+
+        if reused_sidecar is not None:
+            sidecar = reused_sidecar
+            reused_count += 1
+        else:
+            assert h5_path is not None
+            raw_array, h5_meta = _read_h5_continuous_meg(
+                h5_path,
+                fallback_sfreq=getattr(active_ds, "sfreq", None),
+            )
+            if canonical == "pallier2025_full":
+                first_samp, time_origin_sfreq, time_origin_src = (
+                    _inspect_pallier_time_origin(active_ds, run_key, h5_meta)
+                )
+            else:
+                first_samp = int(h5_meta["source_first_samp"])
+                time_origin_sfreq = float(h5_meta["source_sampling_rate_hz"])
+                time_origin_src = "h5_attrs"
+
+            scaled_array, preproc_details = preprocess_continuous_meg(
+                raw_array,
+                source_sampling_rate_hz=h5_meta["source_sampling_rate_hz"],
+                channel_names=h5_meta["channel_names"],
+                channel_types=h5_meta["channel_types"],
+                target_sampling_rate_hz=target_sampling_rate_hz,
+                filter_low_hz=filter_low_hz,
+                filter_high_hz=filter_high_hz,
+                source_highpass_hz=h5_meta["source_highpass_hz"],
+                source_lowpass_hz=h5_meta["source_lowpass_hz"],
+                mne_n_jobs=resolved_mne_n_jobs,
+            )
+            _write_array_atomic(output_npy, scaled_array)
+            output_sha = sha256_file(output_npy)
+            stat = h5_path.stat()
+            sidecar = {
+                "schema_version": 1,
+                "dataset": canonical,
+                "recording_id": rec_id,
+                "subject": sub_id,
+                "session": f"ses-{_strip_prefix(session, 'ses-')}",
+                "task": task,
+                "run": f"run-{_strip_prefix(run, 'run-')}",
+                "split": split,
+                "split_unit": split_unit,
+                "source_h5_path": str(h5_path.resolve()),
+                "source_h5_size_bytes": int(stat.st_size),
+                "source_h5_mtime_ns": int(stat.st_mtime_ns),
+                "source_first_samp": int(first_samp),
+                "source_sampling_rate_hz": float(time_origin_sfreq),
+                "source_h5_sampling_rate_hz": float(h5_meta["source_sampling_rate_hz"]),
+                "source_sample_count": int(h5_meta["source_sample_count"]),
+                "time_origin_source": time_origin_src,
+                "output_first_samp": 0,
+                "output_sampling_rate_hz": float(preproc_details["output_sampling_rate_hz"]),
+                "output_sample_count": int(scaled_array.shape[1]),
+                "channel_count": int(scaled_array.shape[0]),
+                "channel_names": h5_meta["channel_names"],
+                "channel_types": h5_meta["channel_types"],
+                "channel_names_sha256": h5_meta["channel_names_sha256"],
+                "sensor_xyz": h5_meta["sensor_xyz"],
+                "shape": list(scaled_array.shape),
+                "dtype": "float32",
+                "output_sha256": output_sha,
+                "signal_relpath": signal_relpath,
+                "preprocessing": preproc_details,
+            }
+            _write_json_atomic(sidecar_json, sidecar)
+            materialized_count += 1
+
+        corpus_name = (
+            _corpus_for_run_key(canonical, run_key, active_ds)
+            if active_ds is not None
+            else (fallback_corpus or str(run_key[2]).lower())
+        )
+        frame = extract_run_word_events(
+            canonical,
+            events_tsv_path,
+            run_key=run_key,
+            split=split,
+            split_unit=split_unit,
+            signal_metadata=sidecar,
+            signal_relpath=signal_relpath,
+            corpus_name=corpus_name,
+            pnpl_dataset=active_ds,
+            eligibility_window_seconds=eligibility_window_seconds,
+            pause_gap_seconds=pause_gap_seconds,
+            max_context_words=max_context_words,
+        )
+        if not frame.empty:
+            event_frames.append(frame)
+            total_words_extracted += int(len(frame))
+
+        signal_records.append(
+            {
+                "recording_id": rec_id,
+                "subject": sub_id,
+                "split": split,
+                "split_unit": split_unit,
+                "signal_relpath": signal_relpath,
+                "sidecar_relpath": sidecar_json.relative_to(meg_dir).as_posix(),
+                "shape": sidecar["shape"],
+                "output_sha256": sidecar["output_sha256"],
+                "sidecar_sha256": sha256_file(sidecar_json),
+                "channel_count": sidecar["channel_count"],
+                "channel_names_sha256": sidecar["channel_names_sha256"],
+            }
+        )
+        if cleanup_raw and active_ds is not None:
+            cleaned_raw_count += _cleanup_run_raw_files(
+                active_ds, run_key, pnpl_root_path
+            )
+            _cleanup_pnpl_local_hf_cache(pnpl_root_path)
+
     subject_pbar = (
         tqdm_cls(
             total=len(subject_batches),
-            desc=f"PNPL[{canonical}] subjects",
+            desc=f"PNPL[{canonical}]",
             unit="sub",
-            dynamic_ncols=True,
-            mininterval=0.5,
+            ncols=92,
+            mininterval=2.0,
         )
         if (stream_by_subject and tqdm_cls is not None)
         else None
     )
 
-    try:
-        for batch_idx, batch_subjects in enumerate(subject_batches, start=1):
-            batch_include_keys = include_run_keys
-            sub_label = (
-                _format_subject_id(str(batch_subjects[0]))
-                if stream_by_subject and batch_subjects
-                else canonical
+    with _suppress_nested_download_bars(disable_xet=bool(cleanup_raw)):
+        if stream_by_run:
+            assert libribrain_stream_records is not None
+            run_pbar = (
+                tqdm_cls(
+                    total=len(libribrain_stream_records),
+                    desc=f"PNPL[{canonical}]",
+                    unit="run",
+                    ncols=92,
+                    mininterval=2.0,
+                    leave=True,
+                )
+                if tqdm_cls is not None
+                else None
             )
-            if stream_by_subject and include_run_keys is not None:
-                want_sub = _strip_prefix(str(batch_subjects[0]), "sub-")
-                batch_include_keys = [
-                    rk
-                    for rk in include_run_keys
-                    if _strip_prefix(str(rk[0]), "sub-").lstrip("0") == want_sub.lstrip("0")
-                ]
-                if not batch_include_keys:
-                    if subject_pbar is not None:
-                        subject_pbar.update(1)
-                    continue
-
-            if subject_pbar is not None:
-                subject_pbar.set_postfix(
-                    sub=sub_label,
-                    phase="fetch/bp+ds",
-                    runs=len(all_run_keys),
-                    words=total_words_extracted,
-                )
-
-            opened_locally = pnpl_dataset is None
-            active_ds = pnpl_dataset
-            if active_ds is None:
-                active_ds = open_pnpl_dataset(
-                    canonical,
-                    pnpl_data_path,
-                    subjects=batch_subjects,
-                    corpus=corpus,
-                    sessions=sessions,
-                    runs=runs,
-                    tasks=tasks,
-                    include_run_keys=batch_include_keys,
-                    exclude_run_keys=exclude_run_keys,
-                    preprocessing=preprocessing,
-                    preprocessing_config=preprocessing_config,
-                    download=download,
-                    preload_files=preload_files,
-                    preload_h5=False,
-                    create_h5_if_missing=create_h5_if_missing,
-                    pnpl_datasets_module=pnpl_datasets_module,
-                )
-
-            run_pbar = None
             try:
-                # 防御性检查：确保 PNPL 内置 z-score 标准化已关闭。
-                if getattr(active_ds, "standardize_enabled", False):
-                    raise RuntimeError(
-                        "PNPL 数据集必须以 standardize=False 实例化，避免在 RobustScaler 前混入 z-score。"
-                    )
-
-                run_keys = [tuple(map(str, rk)) for rk in getattr(active_ds, "run_keys", ())]
-                if not run_keys:
-                    if stream_by_subject:
-                        continue
-                    raise ValueError(f"PNPL 数据集 {canonical} 未解析到任何可用 run_key。")
-
-                if tqdm_cls is not None:
-                    run_pbar = tqdm_cls(
-                        total=len(run_keys),
-                        desc=(
-                            f"PNPL[{canonical} | {sub_label}]"
-                            if stream_by_subject
-                            else f"PNPL[{canonical}]"
-                        ),
-                        unit="run",
-                        dynamic_ncols=True,
-                        mininterval=0.5,
-                        leave=not stream_by_subject,
-                    )
-
-                for index, run_key in enumerate(run_keys, start=1):
-                    all_run_keys.append(run_key)
+                for index, (run_key, rec_corpus) in enumerate(libribrain_stream_records, start=1):
                     subject, session, task, run = run_key
                     sub_id = _format_subject_id(subject)
                     rec_id = recording_identifier(canonical, run_key)
-                    split, split_unit = resolve_split_and_unit(
-                        canonical,
-                        run_key,
-                        split_policy=split_policy,
-                        pnpl_dataset=active_ds,
-                        split_manifest_path=split_manifest_path,
-                    )
-                    if run_pbar is not None:
-                        run_pbar.set_postfix(
-                            rec=f"{sub_id}/r{_strip_prefix(run, 'run-')}",
-                            words=total_words_extracted,
-                            reused=reused_count,
-                            cleaned=cleaned_raw_count,
-                        )
-
                     stem = recording_signal_stem(canonical, run_key)
                     output_npy = meg_dir / sub_id / f"{stem}.npy"
                     sidecar_json = output_npy.with_suffix(".json")
-                    signal_relpath = output_npy.relative_to(meg_dir).as_posix()
+                    local_events = _libribrain_local_events_path(pnpl_root_path, run_key)
 
-                    reused_sidecar = None
-                    h5_path: Path | None = None
-                    if not force and cleanup_raw:
-                        # 断点续跑优先校验已有 50 Hz 产物，避免重复下载已清理的临时 H5
-                        reused_sidecar = _sidecar_matches(
+                    fast_sidecar = None
+                    if not force and local_events.is_file():
+                        fast_sidecar = _sidecar_matches(
                             output_npy,
                             sidecar_json,
                             source_h5_path=None,
@@ -1471,160 +1766,178 @@ def materialize_pnpl_dataset(
                             filter_high_hz=filter_high_hz,
                         )
 
-                    if reused_sidecar is None:
-                        h5_path = _resolve_pnpl_h5_path(active_ds, run_key)
-                        if not force:
-                            reused_sidecar = _sidecar_matches(
-                                output_npy,
-                                sidecar_json,
-                                source_h5_path=h5_path,
-                                target_sampling_rate_hz=target_sampling_rate_hz,
-                                filter_low_hz=filter_low_hz,
-                                filter_high_hz=filter_high_hz,
-                            )
-
-                    events_tsv_path = _resolve_pnpl_events_path(active_ds, run_key)
-
-                    if reused_sidecar is not None:
-                        sidecar = reused_sidecar
-                        reused_count += 1
+                    if fast_sidecar is not None:
+                        _materialize_run(
+                            run_key,
+                            active_ds=None,
+                            fallback_corpus=rec_corpus,
+                            prematched_sidecar=fast_sidecar,
+                            prematched_events_path=local_events,
+                        )
                     else:
-                        assert h5_path is not None
-                        raw_array, h5_meta = _read_h5_continuous_meg(
-                            h5_path,
-                            fallback_sfreq=getattr(active_ds, "sfreq", None),
+                        active_ds = open_pnpl_dataset(
+                            canonical,
+                            pnpl_data_path,
+                            subjects=subjects,
+                            corpus=corpus,
+                            include_run_keys=[run_key],
+                            exclude_run_keys=exclude_run_keys,
+                            preprocessing=preprocessing,
+                            preprocessing_config=preprocessing_config,
+                            download=download,
+                            preload_files=False,
+                            preload_h5=False,
+                            create_h5_if_missing=create_h5_if_missing,
+                            pnpl_datasets_module=pnpl_datasets_module,
                         )
-                        if canonical == "pallier2025_full":
-                            first_samp, time_origin_sfreq, time_origin_src = (
-                                _inspect_pallier_time_origin(active_ds, run_key, h5_meta)
-                            )
-                        else:
-                            first_samp = int(h5_meta["source_first_samp"])
-                            time_origin_sfreq = float(h5_meta["source_sampling_rate_hz"])
-                            time_origin_src = "h5_attrs"
+                        try:
+                            if getattr(active_ds, "standardize_enabled", False):
+                                raise RuntimeError(
+                                    "PNPL 数据集必须以 standardize=False 实例化，避免在 RobustScaler 前混入 z-score。"
+                                )
+                            active_keys = [
+                                tuple(map(str, rk))
+                                for rk in getattr(active_ds, "run_keys", ())
+                            ]
+                            for active_rk in active_keys:
+                                _materialize_run(
+                                    active_rk,
+                                    active_ds=active_ds,
+                                    fallback_corpus=rec_corpus,
+                                )
+                        finally:
+                            if hasattr(active_ds, "close_h5_files"):
+                                try:
+                                    active_ds.close_h5_files()
+                                except Exception:
+                                    pass
 
-                        scaled_array, preproc_details = preprocess_continuous_meg(
-                            raw_array,
-                            source_sampling_rate_hz=h5_meta["source_sampling_rate_hz"],
-                            channel_names=h5_meta["channel_names"],
-                            channel_types=h5_meta["channel_types"],
-                            target_sampling_rate_hz=target_sampling_rate_hz,
-                            filter_low_hz=filter_low_hz,
-                            filter_high_hz=filter_high_hz,
-                            source_highpass_hz=h5_meta["source_highpass_hz"],
-                            source_lowpass_hz=h5_meta["source_lowpass_hz"],
-                            mne_n_jobs=mne_n_jobs,
-                        )
-                        _write_array_atomic(output_npy, scaled_array)
-                        output_sha = sha256_file(output_npy)
-                        stat = h5_path.stat()
-                        sidecar = {
-                            "schema_version": 1,
-                            "dataset": canonical,
-                            "recording_id": rec_id,
-                            "subject": sub_id,
-                            "session": f"ses-{_strip_prefix(session, 'ses-')}",
-                            "task": task,
-                            "run": f"run-{_strip_prefix(run, 'run-')}",
-                            "split": split,
-                            "split_unit": split_unit,
-                            "source_h5_path": str(h5_path.resolve()),
-                            "source_h5_size_bytes": int(stat.st_size),
-                            "source_h5_mtime_ns": int(stat.st_mtime_ns),
-                            "source_first_samp": int(first_samp),
-                            "source_sampling_rate_hz": float(time_origin_sfreq),
-                            "source_h5_sampling_rate_hz": float(h5_meta["source_sampling_rate_hz"]),
-                            "source_sample_count": int(h5_meta["source_sample_count"]),
-                            "time_origin_source": time_origin_src,
-                            "output_first_samp": 0,
-                            "output_sampling_rate_hz": float(preproc_details["output_sampling_rate_hz"]),
-                            "output_sample_count": int(scaled_array.shape[1]),
-                            "channel_count": int(scaled_array.shape[0]),
-                            "channel_names": h5_meta["channel_names"],
-                            "channel_types": h5_meta["channel_types"],
-                            "channel_names_sha256": h5_meta["channel_names_sha256"],
-                            "sensor_xyz": h5_meta["sensor_xyz"],
-                            "shape": list(scaled_array.shape),
-                            "dtype": "float32",
-                            "output_sha256": output_sha,
-                            "signal_relpath": signal_relpath,
-                            "preprocessing": preproc_details,
-                        }
-                        _write_json_atomic(sidecar_json, sidecar)
-                        materialized_count += 1
-
-                    corpus_name = _corpus_for_run_key(canonical, run_key, active_ds)
-                    frame = extract_run_word_events(
-                        canonical,
-                        events_tsv_path,
-                        run_key=run_key,
-                        split=split,
-                        split_unit=split_unit,
-                        signal_metadata=sidecar,
-                        signal_relpath=signal_relpath,
-                        corpus_name=corpus_name,
-                        pnpl_dataset=active_ds,
-                        eligibility_window_seconds=eligibility_window_seconds,
-                        pause_gap_seconds=pause_gap_seconds,
-                        max_context_words=max_context_words,
-                    )
-                    if not frame.empty:
-                        event_frames.append(frame)
-                        total_words_extracted += int(len(frame))
-
-                    signal_records.append(
-                        {
-                            "recording_id": rec_id,
-                            "subject": sub_id,
-                            "split": split,
-                            "split_unit": split_unit,
-                            "signal_relpath": signal_relpath,
-                            "sidecar_relpath": sidecar_json.relative_to(meg_dir).as_posix(),
-                            "shape": sidecar["shape"],
-                            "output_sha256": sidecar["output_sha256"],
-                            "sidecar_sha256": sha256_file(sidecar_json),
-                            "channel_count": sidecar["channel_count"],
-                            "channel_names_sha256": sidecar["channel_names_sha256"],
-                        }
-                    )
-                    if cleanup_raw:
-                        cleaned_raw_count += _cleanup_run_raw_files(
-                            active_ds, run_key, pnpl_root_path
-                        )
                     if run_pbar is not None:
-                        run_pbar.update(1)
-                        run_pbar.set_postfix(
-                            rec=f"{sub_id}/r{_strip_prefix(run, 'run-')}",
-                            words=total_words_extracted,
-                            reused=reused_count,
-                            cleaned=cleaned_raw_count,
+                        run_pbar.set_postfix_str(
+                            f"{sub_id}/r{_strip_prefix(run, 'run-')} w={total_words_extracted}",
+                            refresh=False,
                         )
-                    else:
+                        run_pbar.update(1)
+                    elif index == 1 or index % 10 == 0 or index == len(libribrain_stream_records):
                         print(
-                            f"PNPL[{canonical}] {index}/{len(run_keys)}: {rec_id} "
-                            f"shape={sidecar['shape']} words={len(frame)}",
+                            f"PNPL[{canonical}] {index}/{len(libribrain_stream_records)}: {rec_id} "
+                            f"words={total_words_extracted} reused={reused_count}",
                             flush=True,
                         )
             finally:
                 if run_pbar is not None:
                     run_pbar.close()
-                if opened_locally and hasattr(active_ds, "close_h5_files"):
-                    try:
-                        active_ds.close_h5_files()
-                    except Exception:
-                        pass
-                if subject_pbar is not None:
-                    subject_pbar.update(1)
-                    subject_pbar.set_postfix(
-                        sub=sub_label,
-                        phase="done",
-                        runs=len(all_run_keys),
-                        words=total_words_extracted,
-                        cleaned=cleaned_raw_count,
+        else:
+            try:
+                for batch_idx, batch_subjects in enumerate(subject_batches, start=1):
+                    batch_include_keys = include_run_keys
+                    sub_label = (
+                        _format_subject_id(str(batch_subjects[0]))
+                        if stream_by_subject and batch_subjects
+                        else canonical
                     )
-    finally:
-        if subject_pbar is not None:
-            subject_pbar.close()
+                    if stream_by_subject and include_run_keys is not None:
+                        want_sub = _strip_prefix(str(batch_subjects[0]), "sub-")
+                        batch_include_keys = [
+                            rk
+                            for rk in include_run_keys
+                            if _strip_prefix(str(rk[0]), "sub-").lstrip("0") == want_sub.lstrip("0")
+                        ]
+                        if not batch_include_keys:
+                            if subject_pbar is not None:
+                                subject_pbar.update(1)
+                            continue
+
+                    if subject_pbar is not None:
+                        subject_pbar.set_postfix_str(
+                            f"{sub_label} fetch w={total_words_extracted}",
+                            refresh=True,
+                        )
+
+                    opened_locally = pnpl_dataset is None
+                    active_ds = pnpl_dataset
+                    if active_ds is None:
+                        active_ds = open_pnpl_dataset(
+                            canonical,
+                            pnpl_data_path,
+                            subjects=batch_subjects,
+                            corpus=corpus,
+                            sessions=sessions,
+                            runs=runs,
+                            tasks=tasks,
+                            include_run_keys=batch_include_keys,
+                            exclude_run_keys=exclude_run_keys,
+                            preprocessing=preprocessing,
+                            preprocessing_config=preprocessing_config,
+                            download=download,
+                            preload_files=preload_files,
+                            preload_h5=False,
+                            create_h5_if_missing=create_h5_if_missing,
+                            pnpl_datasets_module=pnpl_datasets_module,
+                        )
+
+                    run_pbar = None
+                    try:
+                        # 防御性检查：确保 PNPL 内置 z-score 标准化已关闭。
+                        if getattr(active_ds, "standardize_enabled", False):
+                            raise RuntimeError(
+                                "PNPL 数据集必须以 standardize=False 实例化，避免在 RobustScaler 前混入 z-score。"
+                            )
+
+                        run_keys = [tuple(map(str, rk)) for rk in getattr(active_ds, "run_keys", ())]
+                        if not run_keys:
+                            if stream_by_subject:
+                                continue
+                            raise ValueError(f"PNPL 数据集 {canonical} 未解析到任何可用 run_key。")
+
+                        if tqdm_cls is not None:
+                            run_pbar = tqdm_cls(
+                                total=len(run_keys),
+                                desc=(
+                                    f"PNPL[{sub_label}]"
+                                    if stream_by_subject
+                                    else f"PNPL[{canonical}]"
+                                ),
+                                unit="run",
+                                ncols=92,
+                                mininterval=2.0,
+                                leave=not stream_by_subject,
+                            )
+
+                        for index, run_key in enumerate(run_keys, start=1):
+                            subject, _, _, run = run_key
+                            sub_id = _format_subject_id(subject)
+                            rec_id = recording_identifier(canonical, run_key)
+                            _materialize_run(run_key, active_ds=active_ds)
+                            if run_pbar is not None:
+                                run_pbar.set_postfix_str(
+                                    f"{sub_id}/r{_strip_prefix(run, 'run-')} w={total_words_extracted}",
+                                    refresh=False,
+                                )
+                                run_pbar.update(1)
+                            elif index == 1 or index % 10 == 0 or index == len(run_keys):
+                                print(
+                                    f"PNPL[{canonical}] {index}/{len(run_keys)}: {rec_id} "
+                                    f"words={total_words_extracted} reused={reused_count}",
+                                    flush=True,
+                                )
+                    finally:
+                        if run_pbar is not None:
+                            run_pbar.close()
+                        if opened_locally and hasattr(active_ds, "close_h5_files"):
+                            try:
+                                active_ds.close_h5_files()
+                            except Exception:
+                                pass
+                        if subject_pbar is not None:
+                            subject_pbar.set_postfix_str(
+                                f"{sub_label} done w={total_words_extracted}",
+                                refresh=False,
+                            )
+                            subject_pbar.update(1)
+            finally:
+                if subject_pbar is not None:
+                    subject_pbar.close()
 
     if not event_frames:
         raise ValueError(f"PNPL 数据集 {canonical} 未提取到任何词级事件。")
@@ -1705,6 +2018,7 @@ def materialize_pnpl_dataset(
         "dataset": canonical,
         "split_policy": split_policy,
         "corpus": corpus,
+        "mne_n_jobs": int(resolved_mne_n_jobs),
         "cleanup_raw": bool(cleanup_raw),
         "cleaned_raw_files": int(cleaned_raw_count),
         "recording_count": len(signal_records),
@@ -1785,7 +2099,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="每物化完一条记录/被试后立即删除临时原始 H5/FIF（Colab 防爆盘）",
     )
     parser.add_argument("--force", action="store_true", help="强制重建已有 50 Hz 缓存")
-    parser.add_argument("--mne-n-jobs", type=int, default=1)
+    parser.add_argument(
+        "--mne-n-jobs",
+        type=int,
+        default=1,
+        help="MNE 带通滤波与重采样线程并行数（默认 1；设 0 自动取 min(4, CPU核数)）",
+    )
+    parser.add_argument("--no-progress", action="store_true", help="禁用 tqdm 实时进度条")
     args = parser.parse_args(argv)
 
     subjects_arg: Any = None
@@ -1808,6 +2128,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         cleanup_raw=args.cleanup_raw,
         force=args.force,
         mne_n_jobs=args.mne_n_jobs,
+        show_progress=not args.no_progress,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 

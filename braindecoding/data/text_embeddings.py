@@ -111,20 +111,27 @@ def encode_words(
                 total=len(words),
                 desc=f"TextEmb[{signature['model_name']}]",
                 unit="word",
-                dynamic_ncols=True,
-                mininterval=0.5,
+                ncols=92,
+                mininterval=2.0,
             )
         except ImportError:
             pbar = None
     batches = []
+    milestone_step = max(batch_size, (len(words) + 9) // 10)
+    next_milestone = milestone_step
     try:
         for start in range(0, len(words), batch_size):
             batch_words = words[start : start + batch_size]
-            if pbar is None and show_progress:
+            done_count = min(start + len(batch_words), len(words))
+            if pbar is None and show_progress and (
+                start == 0 or done_count >= next_milestone or done_count == len(words)
+            ):
                 print(
-                    f"文本向量 {min(start + len(batch_words), len(words))}/{len(words)}",
+                    f"文本向量 {done_count}/{len(words)}",
                     flush=True,
                 )
+                while next_milestone <= done_count:
+                    next_milestone += milestone_step
             inputs = tokenizer(
                 batch_words,
                 add_special_tokens=signature["add_special_tokens"],
@@ -217,7 +224,9 @@ def load_text_embedding_cache(path, expected_signature=None) -> dict[str, np.nda
     return {word: embeddings[index] for index, word in enumerate(words)}
 
 
-def ensure_text_embedding_cache(words, config, path) -> Path:
+def ensure_text_embedding_cache(
+    words, config, path, *, show_progress: bool = True
+) -> Path:
     """增量缓存所选数据划分需要的 T5 词向量。"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,7 +241,12 @@ def ensure_text_embedding_cache(words, config, path) -> Path:
 
     tokenizer, model, device = load_text_model(config)
     encoded = encode_words(
-        missing, config, tokenizer=tokenizer, model=model, device=device
+        missing,
+        config,
+        tokenizer=tokenizer,
+        model=model,
+        device=device,
+        show_progress=show_progress,
     )
     for word, embedding in zip(missing, encoded):
         existing[word] = embedding

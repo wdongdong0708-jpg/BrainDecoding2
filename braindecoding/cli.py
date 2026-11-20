@@ -896,6 +896,8 @@ def _workflow_cache(args) -> int:
         include_run_keys=getattr(args, "include_run_key", None),
         download=not bool(getattr(args, "no_download", False)),
         cleanup_raw=bool(getattr(args, "cleanup_raw", False)),
+        mne_n_jobs=int(getattr(args, "mne_n_jobs", 1)),
+        show_progress=not bool(getattr(args, "no_progress", False)),
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
@@ -1142,6 +1144,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--cleanup-raw",
         action="store_true",
         help="Colab 防爆盘模式：每物化并校验完一条记录（或被试）的 50 Hz 缓存后立即删除对应临时原始 H5/FIF",
+    )
+    cache_cmd.add_argument(
+        "--mne-n-jobs",
+        type=int,
+        default=1,
+        help="MNE 带通滤波与重采样线程并行数（默认 1；设 0 自动取 min(4, CPU核数)，使用共享内存 threading 后端）",
+    )
+    cache_cmd.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="禁用 tqdm 实时进度条（改用稀疏里程碑输出，避免网页端刷屏）",
     )
 
     smoke_cmd = commands.add_parser(
