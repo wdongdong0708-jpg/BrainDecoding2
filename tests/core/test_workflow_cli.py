@@ -1702,9 +1702,9 @@ def test_from_scratch_synthetic_and_eq12_null_space_context_configs():
             from_scratch=True,
         )
 
-    for rel in (
-        "configs/training/siamese_debiased/libribrain100_siamese_debiased_context.yaml",
-        "configs/training/siamese_debiased/pallier2025_full_siamese_debiased_context.yaml",
+    for rel, expected_lambda_null in (
+        ("configs/training/siamese_debiased/libribrain100_siamese_debiased_context.yaml", 10.0),
+        ("configs/training/siamese_debiased/pallier2025_full_siamese_debiased_context.yaml", 20.0),
     ):
         cfg_eq, _ = build_workflow_config(config_path=rel, seed=0, mode="train")
         siam = cfg_eq["siamese_debiased"]
@@ -1712,7 +1712,7 @@ def test_from_scratch_synthetic_and_eq12_null_space_context_configs():
         assert siam["debias_mode"] == "null_space"
         assert siam["shift_mode"] == "preroll"
         assert float(siam["eta_train"]) == pytest.approx(0.50)
-        assert float(siam["lambda_null"]) == pytest.approx(10.0)
+        assert float(siam["lambda_null"]) == pytest.approx(expected_lambda_null)
         assert float(siam["lambda_delta"]) == pytest.approx(0.0)
 
     positions = np.linspace(0.0, 1.0, 12, dtype=np.float32).reshape(6, 2)

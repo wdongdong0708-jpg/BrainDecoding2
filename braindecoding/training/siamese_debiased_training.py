@@ -418,9 +418,8 @@ def train_one_epoch_siamese_debiased(
 
                         if debias_mode == "null_space":
                             if eta_0 > 0.0:
-                                y_tilde = F.normalize(
-                                    y_clean - eta_0 * y_shift_mean.detach(),
-                                    dim=-1,
+                                y_tilde = compute_norm_damped_debiased_embedding(
+                                    y_clean, y_shift_mean, eta_0
                                 )
                             else:
                                 y_tilde = y_clean
@@ -665,9 +664,8 @@ def train_one_epoch_siamese_debiased(
                     if siamese_enabled and y_shift_mean is not None:
                         if debias_mode == "null_space":
                             if eta_train > 0.0:
-                                y_tilde = F.normalize(
-                                    y_clean - eta_train * y_shift_mean.detach(),
-                                    dim=-1,
+                                y_tilde = compute_norm_damped_debiased_embedding(
+                                    y_clean, y_shift_mean, eta_train
                                 )
                             else:
                                 y_tilde = y_clean

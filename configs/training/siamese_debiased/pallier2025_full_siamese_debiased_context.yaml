@@ -25,7 +25,8 @@ siamese_debiased:
   preroll_seconds: 45.0
   eta_0: 0.50
   eta_train: 0.50
-  lambda_null: 10.0
+  # null_space 模式含 D/|V| (=1024/1897≈0.54) 缩放，设为 20.0 对齐旧版 legacy_siamese lambda_null=10.0 的等效去偏强度
+  lambda_null: 20.0
   lambda_delta: 0.0
   shift_seconds: [-12.0, -19.0, -27.0, -36.0]
   shifts_per_step: 4
