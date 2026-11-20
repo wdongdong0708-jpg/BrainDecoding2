@@ -1494,6 +1494,8 @@ def test_cli_cache_parses_pnpl_flags_and_loads_pnpl_stage_yaml_configs():
             "/tmp/pnpl_raw",
             "--split-policy",
             "simpleb2t",
+            "--corpus",
+            "sherlock",
             "--sessions",
             "1,11,0",
             "--runs",
@@ -1506,18 +1508,49 @@ def test_cli_cache_parses_pnpl_flags_and_loads_pnpl_stage_yaml_configs():
             "0,11,Sherlock1,2",
             "--include-test",
             "--no-download",
+            "--cleanup-raw",
         ]
     )
     assert cache_args.command == "cache"
     assert cache_args.dataset == "libribrain100"
     assert cache_args.pnpl_root == "/tmp/pnpl_raw"
     assert cache_args.split_policy == "simpleb2t"
+    assert cache_args.corpus == "sherlock"
     assert cache_args.sessions == "1,11,0"
     assert cache_args.runs == "1,2"
     assert cache_args.tasks == "Sherlock1,Sherlock2"
     assert cache_args.include_run_key == ["0,1,Sherlock1,1", "0,11,Sherlock1,2"]
     assert cache_args.include_test is True
     assert cache_args.no_download is True
+    assert cache_args.cleanup_raw is True
+
+    train_fs = parser.parse_args(
+        [
+            "train",
+            "--config",
+            "configs/training/libribrain100_context_transformer.yaml",
+            "--from-scratch",
+            "--synthetic-timing",
+            "shared",
+        ]
+    )
+    assert train_fs.from_scratch is True
+    assert train_fs.synthetic_timing == "shared"
+
+    eval_syn = parser.parse_args(
+        [
+            "eval-run",
+            "--dataset",
+            "libribrain100",
+            "--stage",
+            "context",
+            "--split",
+            "test",
+            "--synthetic-timing",
+            "shared",
+        ]
+    )
+    assert eval_syn.synthetic_timing == "shared"
 
     pnpl_configs = [
         ("libribrain100", "word", "configs/training/libribrain100_word_encoder.yaml"),
@@ -1636,6 +1669,95 @@ def test_run_cache_workflow_wires_materialize_pnpl_dataset(tmp_path, monkeypatch
     assert captured["kwargs"]["download"] is False
     assert report["pnpl_materialization"]["recording_count"] == 1
     assert report["cache_verification"]["verified_event_rows"] == 3
+
+
+def test_from_scratch_synthetic_and_eq12_null_space_context_configs():
+    import numpy as np
+    import torch
+    from braindecoding.models import build_word_decoding_model
+    from braindecoding.training.siamese_debiased_training import (
+        forward_context_from_preextracted,
+    )
+
+    cfg_fs, _ = build_workflow_config(
+        config_path="configs/training/libribrain100_context_transformer.yaml",
+        seed=0,
+        mode="train",
+        from_scratch=True,
+        synthetic_timing="shared",
+    )
+    assert cfg_fs["training"]["from_scratch"] is True
+    assert cfg_fs["training"]["freeze_brain_encoder_epochs"] == 0
+    assert cfg_fs["training"]["warm_start_from"] is None
+    assert "pretrained_brain_encoder_checkpoint" not in cfg_fs["training"]
+    assert cfg_fs["dataset"]["synthetic_timing"] == "shared"
+    assert cfg_fs["workflow"]["from_scratch"] is True
+    assert cfg_fs["workflow"]["synthetic_timing"] == "shared"
+
+    with pytest.raises(ValueError, match="from-scratch"):
+        build_workflow_config(
+            config_path="configs/training/siamese_debiased/libribrain100_siamese_debiased_context.yaml",
+            seed=0,
+            mode="train",
+            from_scratch=True,
+        )
+
+    for rel in (
+        "configs/training/siamese_debiased/libribrain100_siamese_debiased_context.yaml",
+        "configs/training/siamese_debiased/pallier2025_full_siamese_debiased_context.yaml",
+    ):
+        cfg_eq, _ = build_workflow_config(config_path=rel, seed=0, mode="train")
+        siam = cfg_eq["siamese_debiased"]
+        assert siam["enabled"] is True
+        assert siam["debias_mode"] == "null_space"
+        assert siam["shift_mode"] == "preroll"
+        assert float(siam["eta_train"]) == pytest.approx(0.50)
+        assert float(siam["lambda_null"]) == pytest.approx(10.0)
+        assert float(siam["lambda_delta"]) == pytest.approx(0.0)
+
+    positions = np.linspace(0.0, 1.0, 12, dtype=np.float32).reshape(6, 2)
+    small_cfg = {
+        "embedding_dimension": 16,
+        "use_transformer": True,
+        "context_mode": "grouped",
+        "conv": {
+            "merger_channels": 4,
+            "merger_position_dimension": 8,
+            "merger_per_subject": False,
+            "merger_dropout": 0.0,
+            "initial_linear": 8,
+            "hidden": 8,
+            "depth": 1,
+            "kernel_size": 3,
+            "dilation_growth": 2,
+            "dilation_period": 1,
+            "dropout_input": 0.0,
+            "convolution_dropout": 0.0,
+            "batch_norm": False,
+            "gelu": True,
+            "skip": False,
+            "glu_every": 0,
+            "glu_context": 0,
+            "temporal_attention_hidden": 8,
+        },
+        "transformer": {"depth": 1, "heads": 2, "attention_dropout": 0.0, "feedforward_dropout": 0.0},
+    }
+    model = build_word_decoding_model(6, positions, 1, small_cfg).train()
+    z_clean = torch.randn(4, 16)
+    z_sh = [torch.randn(4, 16), torch.randn(4, 16)]
+    g_idx = torch.tensor([0, 0, 1, 1], dtype=torch.long)
+    y_clean, y_mean, y_branches = forward_context_from_preextracted(
+        model,
+        z_clean,
+        g_idx,
+        shifted_z_batches=z_sh,
+        compute_null_grad=True,
+        return_shift_branches=True,
+    )
+    assert y_clean.shape == (4, 16)
+    assert y_mean.shape == (4, 16)
+    assert y_branches.shape == (2, 4, 16)
+    assert y_branches[0].requires_grad is True
 
 
 

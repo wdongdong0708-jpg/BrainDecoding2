@@ -107,6 +107,7 @@ def run_evaluation_workflow(
     control_method: str | Iterable[str] | None = None,
     control_metric: str | Iterable[str] | None = None,
     common_horizon_delay: int | None = None,
+    synthetic_timing: str | None = None,
     all_stages: bool = False,
     plot: bool = True,
     show_progress: bool = True,
@@ -167,6 +168,7 @@ def run_evaluation_workflow(
                 control_method=control_method,
                 control_metric=control_metric,
                 common_horizon_delay=common_horizon_delay,
+                synthetic_timing=synthetic_timing,
                 all_stages=all_stages,
                 plot=plot,
                 show_progress=show_progress,
@@ -226,6 +228,7 @@ def run_evaluation_workflow(
             verbose=verbose,
             print_report=True,
             common_horizon_delay=common_horizon_delay,
+            synthetic_timing=synthetic_timing,
         )
         if plot and common_horizon_delay is None:
             ds_name = single_res["dataset"]
@@ -524,6 +527,7 @@ def run_evaluation_workflow(
             verbose=verbose,
             print_report=False,
             common_horizon_delay=common_horizon_delay,
+            synthetic_timing=synthetic_timing,
         )
 
     effective_summary_tag = (

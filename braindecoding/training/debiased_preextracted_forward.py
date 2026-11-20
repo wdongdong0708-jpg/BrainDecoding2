@@ -468,8 +468,12 @@ def forward_context_from_preextracted(
     synchronize_dropout_rng: bool = True,
     padded_plan: dict[str, torch.Tensor] | None = None,
     compute_null_grad: bool = True,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """针对 Stage 2.1 (context) 在预提取 CNN 特征上运行共享 Transformer，返回 (y_clean, y_shift_mean)。"""
+    return_shift_branches: bool = False,
+) -> (
+    tuple[torch.Tensor, torch.Tensor | None]
+    | tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]
+):
+    """针对 Stage 2.1 (context) 在预提取 CNN 特征上运行共享 Transformer，返回 (y_clean, y_shift_mean[, y_shift_branches])。"""
     if _can_use_fast_padded_transformer(model):
         plan = (
             padded_plan
@@ -489,6 +493,8 @@ def forward_context_from_preextracted(
             y_clean = F.normalize(
                 clean_encoded[row_to_group, row_to_col], dim=-1
             )
+            if return_shift_branches:
+                return y_clean, None, None
             return y_clean, None
 
         if _can_use_direct_layer_loop(
@@ -557,9 +563,12 @@ def forward_context_from_preextracted(
                                 num_branches=num_shifts,
                                 synchronize_dropout_rng=False,
                             ).view(num_shifts, g_len, max_len, -1)
-                        y_shift_mean = F.normalize(
+                        y_shift_branches = F.normalize(
                             shift_encoded[:, row_to_group, row_to_col], dim=-1
-                        ).mean(dim=0)
+                        )
+                        y_shift_mean = y_shift_branches.mean(dim=0)
+                    if return_shift_branches:
+                        return y_clean, y_shift_mean, y_shift_branches
                     return y_clean, y_shift_mean
 
                 grad_encoded = _run_fast_padded_transformer(
@@ -638,6 +647,11 @@ def forward_context_from_preextracted(
                 y_shift_mean = y_shift_mean_detached + (
                     y_shift_0 - y_shift_0.detach()
                 )
+                if return_shift_branches:
+                    y_shift_branches = torch.cat(
+                        [y_shift_0.unsqueeze(0), rest_norm], dim=0
+                    )
+                    return y_clean, y_shift_mean, y_shift_branches
                 return y_clean, y_shift_mean
 
             num_branches = 1 + num_shifts
@@ -653,7 +667,10 @@ def forward_context_from_preextracted(
             all_norm = F.normalize(
                 all_encoded[:, row_to_group, row_to_col], dim=-1
             )
-            return all_norm[0], all_norm[1:].mean(dim=0)
+            y_shift_branches = all_norm[1:]
+            if return_shift_branches:
+                return all_norm[0], y_shift_branches.mean(dim=0), y_shift_branches
+            return all_norm[0], y_shift_branches.mean(dim=0)
 
         cpu_rng_state = (
             torch.get_rng_state() if synchronize_dropout_rng else None
@@ -694,7 +711,10 @@ def forward_context_from_preextracted(
                 F.normalize(shift_encoded[row_to_group, row_to_col], dim=-1)
             )
 
-        y_shift_mean = torch.stack(y_shift_list, dim=0).mean(dim=0)
+        y_shift_branches = torch.stack(y_shift_list, dim=0)
+        y_shift_mean = y_shift_branches.mean(dim=0)
+        if return_shift_branches:
+            return y_clean, y_shift_mean, y_shift_branches
         return y_clean, y_shift_mean
 
     clean_input = clean_z_batch
@@ -723,6 +743,8 @@ def forward_context_from_preextracted(
     y_clean = F.normalize(clean_ctx, dim=-1)
 
     if not shifted_z_batches:
+        if return_shift_branches:
+            return y_clean, None, None
         return y_clean, None
 
     fork_devices = [] if cuda_device is None else [cuda_device]
@@ -745,5 +767,8 @@ def forward_context_from_preextracted(
             shift_ctx = model.context_transformer(shift_input, group_indices)
         y_shift_list.append(F.normalize(shift_ctx, dim=-1))
 
-    y_shift_mean = torch.stack(y_shift_list, dim=0).mean(dim=0)
+    y_shift_branches = torch.stack(y_shift_list, dim=0)
+    y_shift_mean = y_shift_branches.mean(dim=0)
+    if return_shift_branches:
+        return y_clean, y_shift_mean, y_shift_branches
     return y_clean, y_shift_mean

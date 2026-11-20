@@ -718,3 +718,64 @@ def preextract_frozen_cnn_features(
         loaded_from_disk=False,
         elapsed=elapsed,
     )
+
+
+def refresh_preextracted_train_features(
+    preextracted_cache: dict,
+    model,
+    train_ds,
+    *,
+    shift_seconds: Iterable[float] = (),
+    shift_mode: str = "preroll",
+    preroll_seconds: float = 45.0,
+    device: torch.device,
+    batch_size: int = 512,
+    amp: bool = True,
+    amp_dtype: torch.dtype = torch.bfloat16,
+    show_progress: bool = False,
+) -> dict:
+    """在每轮刷新合成平滑脉冲流后，原地更新 GPU 驻留的训练集 Clean/Shifted 冻结 CNN 特征（不重提 Val）。"""
+    shifts = [float(s) for s in shift_seconds]
+    norm_shift_mode = _normalize_shift_mode(shift_mode) or "preroll"
+    eff_preroll = float(preroll_seconds)
+
+    train_clean_cpu = _extract_single_dataset_cnn_embeddings(
+        model,
+        train_ds,
+        device=device,
+        batch_size=batch_size,
+        amp=amp,
+        amp_dtype=amp_dtype,
+        temporal_shift_seconds=0.0,
+        shift_mode=norm_shift_mode,
+        preroll_seconds=eff_preroll,
+        show_progress=show_progress,
+        progress_desc="Refresh [Train | Clean 0s]",
+    )
+    preextracted_cache["train_clean_z_pad"][: len(train_clean_cpu)].copy_(
+        train_clean_cpu, non_blocking=False
+    )
+
+    for f_sec in shifts:
+        shifted_cpu = _extract_single_dataset_cnn_embeddings(
+            model,
+            train_ds,
+            device=device,
+            batch_size=batch_size,
+            amp=amp,
+            amp_dtype=amp_dtype,
+            temporal_shift_seconds=f_sec,
+            shift_mode=norm_shift_mode,
+            preroll_seconds=eff_preroll,
+            show_progress=show_progress,
+            progress_desc=f"Refresh [Train | Shift {f_sec:+.0f}s]",
+        )
+        if f_sec in preextracted_cache["train_shifted_z_pad"]:
+            preextracted_cache["train_shifted_z_pad"][f_sec][
+                : len(shifted_cpu)
+            ].copy_(shifted_cpu, non_blocking=False)
+        else:
+            unpad, pad = _alloc_padded_gpu_feature_matrix(shifted_cpu, device)
+            preextracted_cache["train_shifted_z"][f_sec] = unpad
+            preextracted_cache["train_shifted_z_pad"][f_sec] = pad
+    return preextracted_cache

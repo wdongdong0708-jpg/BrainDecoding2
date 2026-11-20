@@ -85,6 +85,7 @@ def _evaluate_single_stage(
     verbose: bool = False,
     print_report: bool = True,
     common_horizon_delay: int | None = None,
+    synthetic_timing: str | None = None,
 ) -> dict:
     """对单个训练阶段（word / context / revision）执行验证集或测试集评估并生成图表。"""
     from braindecoding.training.workflow_runner import (
@@ -116,6 +117,7 @@ def _evaluate_single_stage(
         exp_tag=exp_tag,
         word_exp_tag=word_exp_tag,
         config_path=config_path,
+        synthetic_timing=synthetic_timing,
     )
     control_spec = _resolve_control_specification(
         cfg,
@@ -298,6 +300,19 @@ def _evaluate_single_stage(
 
     set_seed(seed)
     checkpoint = load_checkpoint(ckpt_file, map_location="cpu")
+    ckpt_cfg_ds_all = (
+        checkpoint.get("config", {}).get("dataset", {})
+        if isinstance(checkpoint.get("config"), dict)
+        else {}
+    )
+    if (
+        synthetic_timing is None
+        and not cfg["dataset"].get("synthetic_timing")
+        and isinstance(ckpt_cfg_ds_all, dict)
+        and ckpt_cfg_ds_all.get("synthetic_timing")
+    ):
+        cfg["dataset"]["synthetic_timing"] = str(ckpt_cfg_ds_all["synthetic_timing"]).strip().lower()
+        cfg["workflow"]["synthetic_timing"] = cfg["dataset"]["synthetic_timing"]
     if not bool(cfg["workflow"].get("window_explicitly_overridden", False)):
         ckpt_cfg_ds = (
             checkpoint.get("config", {}).get("dataset", {})
@@ -644,6 +659,7 @@ def _evaluate_single_stage(
         "stage_display_name": STAGE_DISPLAY_NAMES.get(stage, stage),
         "split": split,
         "seed": seed,
+        "synthetic_timing": cfg["dataset"].get("synthetic_timing"),
         "precision": tc["precision"],
         "window_seconds": eval_win_sec,
         "window_samples": eval_win_samp,

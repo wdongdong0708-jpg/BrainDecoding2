@@ -653,6 +653,18 @@ def _add_training_workflow_args(
         default=None,
         help="在 Stage 2.1/2.2/2.3 冻结 CNN 训练启动前一次性预提取并缓存 Stage-1 CNN 特征，将单轮训练提速 5-8 倍",
     )
+    parser.add_argument(
+        "--from-scratch",
+        action="store_true",
+        default=False,
+        help="跳过 Stage-1 词编码器热启动并将 freeze_brain_encoder_epochs 置 0，从随机初始化端到端联合训练 CNN + Transformer（第 2 章第 2 组对照）",
+    )
+    parser.add_argument(
+        "--synthetic-timing",
+        choices=("shared", "independent"),
+        default=None,
+        help="启用与刺激无关的 50 Hz 合成平滑脉冲流对照（shared=联合合成信号 / independent=独立合成信号；不读取真实 MEG，仅保留真实词起始间隔）",
+    )
 
 
 def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
@@ -838,6 +850,12 @@ def _add_evaluation_workflow_args(parser: argparse.ArgumentParser) -> None:
         help="可选限制评估事件行数上限（用于快速联调）",
     )
     parser.add_argument(
+        "--synthetic-timing",
+        choices=("shared", "independent"),
+        default=None,
+        help="在 50 Hz 合成平滑脉冲流对照上执行评估（未传时若检查点由合成流训练则自动继承）",
+    )
+    parser.add_argument(
         "--no-plot",
         action="store_true",
         help="禁用可视化图表生成",
@@ -871,11 +889,13 @@ def _workflow_cache(args) -> int:
         config_path=args.config,
         pnpl_root=getattr(args, "pnpl_root", None),
         split_policy=getattr(args, "split_policy", None),
+        corpus=getattr(args, "corpus", None),
         sessions=getattr(args, "sessions", None),
         runs=getattr(args, "runs", None),
         tasks=getattr(args, "tasks", None),
         include_run_keys=getattr(args, "include_run_key", None),
         download=not bool(getattr(args, "no_download", False)),
+        cleanup_raw=bool(getattr(args, "cleanup_raw", False)),
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
@@ -938,6 +958,8 @@ def _workflow_train(args, *, mode: str) -> int:
             beta_delta_cm=getattr(args, "beta_delta_cm", None),
             shifts_per_step=getattr(args, "shifts_per_step", None),
             preextract_frozen_cnn=getattr(args, "preextract_frozen_cnn", None),
+            from_scratch=bool(getattr(args, "from_scratch", False)),
+            synthetic_timing=getattr(args, "synthetic_timing", None),
         )
         if len(seed_list) > 1:
             import gc
@@ -1007,6 +1029,7 @@ def _workflow_eval(args) -> int:
         control_method=getattr(args, "control_method", None),
         control_metric=getattr(args, "control_metric", None),
         common_horizon_delay=getattr(args, "common_horizon_delay", None),
+        synthetic_timing=getattr(args, "synthetic_timing", None),
     )
     return 0
 
@@ -1085,6 +1108,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="PNPL 数据划分策略（默认 simpleb2t；可选 pnpl_official / manifest）",
     )
     cache_cmd.add_argument(
+        "--corpus",
+        default=None,
+        help="可选 LibriBrain100 语料筛选（如 sherlock / all；默认 all）",
+    )
+    cache_cmd.add_argument(
         "--sessions",
         default=None,
         help="可选 PNPL 会话白名单（逗号分隔，如 1,11,0）",
@@ -1109,6 +1137,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-download",
         action="store_true",
         help="禁用 PNPL 自动下载（仅使用本地已有原始/H5 文件）",
+    )
+    cache_cmd.add_argument(
+        "--cleanup-raw",
+        action="store_true",
+        help="Colab 防爆盘模式：每物化并校验完一条记录（或被试）的 50 Hz 缓存后立即删除对应临时原始 H5/FIF",
     )
 
     smoke_cmd = commands.add_parser(

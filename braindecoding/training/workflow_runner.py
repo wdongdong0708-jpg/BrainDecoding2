@@ -649,6 +649,8 @@ def build_workflow_config(
     beta_delta_cm: float | None = None,
     shifts_per_step: int | None = None,
     preextract_frozen_cnn: bool | None = None,
+    from_scratch: bool = False,
+    synthetic_timing: str | None = None,
 ) -> tuple[dict, dict]:
     """构建支持灵活受试者子集、可切换窗口长度、自定义 YAML 配置与环境变量路径解耦的训练配置。"""
     ensure_default_environment()
@@ -877,6 +879,19 @@ def build_workflow_config(
 
     cfg["dataset"]["subjects"] = list(subset_spec["subjects"])
     cfg["dataset"]["allow_subject_subset"] = True
+    resolved_synthetic = (
+        str(synthetic_timing).strip().lower()
+        if synthetic_timing is not None
+        else str((cfg.get("dataset") or {}).get("synthetic_timing") or "").strip().lower()
+    )
+    if resolved_synthetic:
+        if resolved_synthetic not in {"shared", "independent"}:
+            raise ValueError(
+                f"不支持的 synthetic_timing={resolved_synthetic!r}，可选：shared, independent"
+            )
+        cfg["dataset"]["synthetic_timing"] = resolved_synthetic
+    else:
+        cfg["dataset"].pop("synthetic_timing", None)
     if not subset_spec["is_full_dataset"]:
         cfg["subject_generalization"] = {
             "enabled": True,
@@ -957,72 +972,96 @@ def build_workflow_config(
     effective_word_exp_tag = (
         resolved_word_exp_tag if has_explicit_word_tag else resolved_exp_tag
     )
-    if stage in ("context", "revision", "prefix_revision"):
-        tc.update(
-            preserve_complete_groups=bool(yaml_tc.get("preserve_complete_groups", True)),
-            freeze_brain_encoder_epochs=int(
-                yaml_tc.get("freeze_brain_encoder_epochs", common["freeze_brain_encoder_epochs"])
-            ),
-            save_last_checkpoint=True,
-            warm_start_from=str(yaml_tc.get("warm_start_from", "main_word")),
-            warm_start_seed=seed,
-            warm_start_output_group=cfg["experiment"]["output_group"],
-            warm_start_exp_tag=effective_word_exp_tag,
+    effective_from_scratch = bool(
+        from_scratch
+        or yaml_tc.get("from_scratch", False)
+        or (
+            "warm_start_from" in yaml_tc
+            and yaml_tc.get("warm_start_from") is None
+            and not word_checkpoint
         )
-        if stage in ("revision", "prefix_revision"):
-            tc["revision_cutoff_policy"] = str(
-                yaml_tc.get("revision_cutoff_policy", "all")
+    )
+    if stage in ("context", "revision", "prefix_revision"):
+        if effective_from_scratch:
+            tc.update(
+                from_scratch=True,
+                preserve_complete_groups=bool(
+                    yaml_tc.get("preserve_complete_groups", True)
+                ),
+                freeze_brain_encoder_epochs=0,
+                save_last_checkpoint=True,
+                warm_start_from=None,
             )
-        if word_checkpoint:
-            tc["pretrained_brain_encoder_checkpoint"] = str(
-                project_path(word_checkpoint)
-            )
-        elif has_explicit_word_tag:
-            explicit_word_dir = workflow_output_directory(
-                dataset,
-                "word",
-                subset_spec["subset_tag"],
-                seed,
-                mode=mode,
-                exp_tag=resolved_word_exp_tag,
-                ignore_implicit_tag=(resolved_word_exp_tag == ""),
-            )
-            candidate_ckpt = explicit_word_dir / "best.ckpt"
-            if not candidate_ckpt.exists():
-                b_pt = explicit_word_dir / "best.pt"
-                if b_pt.exists():
-                    candidate_ckpt = b_pt
-            tc["pretrained_brain_encoder_checkpoint"] = str(candidate_ckpt)
+            if stage in ("revision", "prefix_revision"):
+                tc["revision_cutoff_policy"] = str(
+                    yaml_tc.get("revision_cutoff_policy", "all")
+                )
         else:
-            default_word_dir = workflow_output_directory(
-                dataset,
-                "word",
-                subset_spec["subset_tag"],
-                seed,
-                mode=mode,
-                exp_tag=resolved_exp_tag,
+            tc.update(
+                preserve_complete_groups=bool(yaml_tc.get("preserve_complete_groups", True)),
+                freeze_brain_encoder_epochs=int(
+                    yaml_tc.get("freeze_brain_encoder_epochs", common["freeze_brain_encoder_epochs"])
+                ),
+                save_last_checkpoint=True,
+                warm_start_from=str(yaml_tc.get("warm_start_from", "main_word")),
+                warm_start_seed=seed,
+                warm_start_output_group=cfg["experiment"]["output_group"],
+                warm_start_exp_tag=effective_word_exp_tag,
             )
-            candidate_ckpt = default_word_dir / "best.ckpt"
-            if not candidate_ckpt.exists():
-                b_pt = default_word_dir / "best.pt"
-                if b_pt.exists():
-                    candidate_ckpt = b_pt
-            if not candidate_ckpt.exists() and resolved_exp_tag:
-                fallback_word_dir = workflow_output_directory(
+            if stage in ("revision", "prefix_revision"):
+                tc["revision_cutoff_policy"] = str(
+                    yaml_tc.get("revision_cutoff_policy", "all")
+                )
+            if word_checkpoint:
+                tc["pretrained_brain_encoder_checkpoint"] = str(
+                    project_path(word_checkpoint)
+                )
+            elif has_explicit_word_tag:
+                explicit_word_dir = workflow_output_directory(
                     dataset,
                     "word",
                     subset_spec["subset_tag"],
                     seed,
                     mode=mode,
-                    ignore_implicit_tag=True,
+                    exp_tag=resolved_word_exp_tag,
+                    ignore_implicit_tag=(resolved_word_exp_tag == ""),
                 )
-                fallback_ckpt = fallback_word_dir / "best.ckpt"
-                if not fallback_ckpt.exists():
-                    fallback_ckpt = fallback_word_dir / "best.pt"
-                if fallback_ckpt.exists():
-                    candidate_ckpt = fallback_ckpt
-                    tc["warm_start_exp_tag"] = ""
-            tc["pretrained_brain_encoder_checkpoint"] = str(candidate_ckpt)
+                candidate_ckpt = explicit_word_dir / "best.ckpt"
+                if not candidate_ckpt.exists():
+                    b_pt = explicit_word_dir / "best.pt"
+                    if b_pt.exists():
+                        candidate_ckpt = b_pt
+                tc["pretrained_brain_encoder_checkpoint"] = str(candidate_ckpt)
+            else:
+                default_word_dir = workflow_output_directory(
+                    dataset,
+                    "word",
+                    subset_spec["subset_tag"],
+                    seed,
+                    mode=mode,
+                    exp_tag=resolved_exp_tag,
+                )
+                candidate_ckpt = default_word_dir / "best.ckpt"
+                if not candidate_ckpt.exists():
+                    b_pt = default_word_dir / "best.pt"
+                    if b_pt.exists():
+                        candidate_ckpt = b_pt
+                if not candidate_ckpt.exists() and resolved_exp_tag:
+                    fallback_word_dir = workflow_output_directory(
+                        dataset,
+                        "word",
+                        subset_spec["subset_tag"],
+                        seed,
+                        mode=mode,
+                        ignore_implicit_tag=True,
+                    )
+                    fallback_ckpt = fallback_word_dir / "best.ckpt"
+                    if not fallback_ckpt.exists():
+                        fallback_ckpt = fallback_word_dir / "best.pt"
+                    if fallback_ckpt.exists():
+                        candidate_ckpt = fallback_ckpt
+                        tc["warm_start_exp_tag"] = ""
+                tc["pretrained_brain_encoder_checkpoint"] = str(candidate_ckpt)
 
     from braindecoding.training.siamese_debiased_training import (
         resolve_siamese_debiased_config,
@@ -1096,6 +1135,12 @@ def build_workflow_config(
         )
     elif preroll_seconds is not None:
         cfg["dataset"]["preroll_seconds"] = float(preroll_seconds)
+    if effective_from_scratch and stage in ("context", "revision", "prefix_revision"):
+        if siamese_spec["enabled"]:
+            raise ValueError(
+                "--from-scratch（端到端不冻结 CNN+Transformer）不能与冻结 CNN 孪生去偏同时启用。"
+            )
+        siamese_spec["preextract_frozen_cnn"] = False
     if (
         siamese_spec["enabled"] or siamese_spec["preextract_frozen_cnn"]
     ) and stage in ("context", "revision", "prefix_revision"):
@@ -1133,6 +1178,8 @@ def build_workflow_config(
         "stage": stage,
         "exp_tag": resolved_exp_tag,
         "word_exp_tag": tc.get("warm_start_exp_tag", effective_word_exp_tag),
+        "from_scratch": effective_from_scratch,
+        "synthetic_timing": resolved_synthetic or None,
         "config_path": normalize_project_relative(active_config_path),
         "precision": precision_label,
         "amp_dtype": amp_dtype_name,
@@ -1588,11 +1635,13 @@ def run_cache_workflow(
     config_path: str | Path | None = None,
     pnpl_root: str | Path | None = None,
     split_policy: str | None = None,
+    corpus: str | None = None,
     sessions: str | Sequence[str] | None = None,
     runs: str | Sequence[str] | None = None,
     tasks: str | Sequence[str] | None = None,
     include_run_keys: Sequence[str | Sequence[str]] | None = None,
     download: bool = True,
+    cleanup_raw: bool = False,
 ) -> dict:
     """预热并校验指定数据集与受试者子集的事件表、神经信号与文本嵌入缓存。"""
     ensure_default_environment()
@@ -1608,8 +1657,18 @@ def run_cache_workflow(
     parsed_runs = _split_csv_arg(runs)
     parsed_tasks = _split_csv_arg(tasks)
     parsed_run_keys = _parse_run_keys_arg(include_run_keys)
+    resolved_corpus = (
+        str(corpus).strip() if corpus is not None and str(corpus).strip() else None
+    )
     has_pnpl_filter = any(
-        x is not None for x in (parsed_sessions, parsed_runs, parsed_tasks, parsed_run_keys)
+        x is not None
+        for x in (
+            resolved_corpus,
+            parsed_sessions,
+            parsed_runs,
+            parsed_tasks,
+            parsed_run_keys,
+        )
     )
 
     reports = {}
@@ -1660,11 +1719,13 @@ def run_cache_workflow(
                 pnpl_output_root,
                 split_policy=resolved_policy,
                 subjects=pnpl_subjects,
+                corpus=resolved_corpus or "all",
                 sessions=parsed_sessions,
                 runs=parsed_runs,
                 tasks=parsed_tasks,
                 include_run_keys=parsed_run_keys,
                 download=bool(download),
+                cleanup_raw=bool(cleanup_raw),
                 force=bool(force),
             )
             # 物化完成后按真实 events.csv 重新解析动态受试者列表
@@ -1795,6 +1856,8 @@ def run_training_workflow(
     beta_delta_cm: float | None = None,
     shifts_per_step: int | None = None,
     preextract_frozen_cnn: bool | None = None,
+    from_scratch: bool = False,
+    synthetic_timing: str | None = None,
 ) -> dict:
     """运行 smoke 冒烟测试或 train 正式训练工作流。"""
     cfg, subset_spec = build_workflow_config(
@@ -1834,6 +1897,8 @@ def run_training_workflow(
         beta_delta_cm=beta_delta_cm,
         shifts_per_step=shifts_per_step,
         preextract_frozen_cnn=preextract_frozen_cnn,
+        from_scratch=from_scratch,
+        synthetic_timing=synthetic_timing,
     )
     dataset = subset_spec["dataset"]
     stage = cfg["workflow"]["stage"]
@@ -1841,7 +1906,11 @@ def run_training_workflow(
     seed = int(tc["seed"])
     out = Path(tc["output_dir"])
     revision = stage in ("revision", "prefix_revision")
-    warm_start_stage = stage in ("context", "revision", "prefix_revision")
+    warm_start_stage = (
+        stage in ("context", "revision", "prefix_revision")
+        and not bool(tc.get("from_scratch", False))
+        and bool(tc.get("pretrained_brain_encoder_checkpoint"))
+    )
 
     if require_cache:
         cache_verification = verify_cache_ready(cfg, splits=("train", "val"))
@@ -2032,6 +2101,17 @@ def run_training_workflow(
             f" Warm-Start  : {initialization['path']} (epoch {initialization['epoch']})",
             flush=True,
         )
+    elif bool(tc.get("from_scratch", False)):
+        print(
+            " Init Mode   : from_scratch (end-to-end unfrozen CNN + Transformer)",
+            flush=True,
+        )
+    synthetic_mode = str((cfg.get("dataset") or {}).get("synthetic_timing") or "").strip().lower()
+    if synthetic_mode:
+        print(
+            f" Synthetic   : {synthetic_mode} (zero real MEG access; train stream refreshed per epoch)",
+            flush=True,
+        )
     if resumed_from:
         print(
             f" Resumed     : {resumed_from} (starting from epoch {start_epoch + 1}/{max_epochs})",
@@ -2044,7 +2124,13 @@ def run_training_workflow(
     )
     use_preextracted_cnn = bool(
         all_epochs_frozen
-        and (siamese_enabled or bool(siamese_spec.get("preextract_frozen_cnn", False)))
+        and (
+            siamese_enabled
+            or (
+                bool(siamese_spec.get("preextract_frozen_cnn", False))
+                and not synthetic_mode
+            )
+        )
     )
     if siamese_enabled:
         siam_mode = str(siamese_spec.get("debias_mode", "legacy_siamese"))
@@ -2066,7 +2152,7 @@ def run_training_workflow(
         if siam_mode == "null_space":
             print(
                 f" Siamese Deb : enabled [mode=null_space, shift={siam_shift_mode}] "
-                f"(eta_train=0.00, lambda_null={siam_lam:.2f}, lambda_delta={siam_lam_d:.2f}, "
+                f"(eta_train={siam_eta0:.2f}, lambda_null={siam_lam:.2f}, lambda_delta={siam_lam_d:.2f}, "
                 f"M={int(siamese_spec.get('shifts_per_step', 1))}/{len(siamese_spec.get('shift_seconds', ()))} shifts, "
                 f"preextract_cnn={use_preextracted_cnn})",
                 flush=True,
@@ -2099,14 +2185,18 @@ def run_training_workflow(
 
     preextracted_cache: dict | None = None
     centered_vocab_bank: torch.Tensor | None = None
+    refresh_preextracted_train_features_fn = None
     if use_preextracted_cnn and start_epoch < max_epochs:
         from braindecoding.training.siamese_debiased_training import (
             build_centered_vocabulary_bank,
             preextract_frozen_cnn_features,
+            refresh_preextracted_train_features as refresh_preextracted_train_features_fn,
             train_one_epoch_siamese_debiased,
         )
 
         meg_word_task.set_brain_encoder_trainable(model, False)
+        if synthetic_mode and hasattr(train_ds, "set_epoch"):
+            train_ds.set_epoch(start_epoch)
         word_ckpt_sha = ""
         if initialization and initialization.get("sha256"):
             word_ckpt_sha = str(initialization["sha256"])
@@ -2138,6 +2228,7 @@ def run_training_workflow(
                 siamese_spec.get("cache_preextracted_to_disk", True)
                 and tc.get("max_train_rows") is None
                 and tc.get("max_val_rows") is None
+                and not synthetic_mode
             ),
             show_progress=show_progress,
         )
@@ -2164,10 +2255,35 @@ def run_training_workflow(
 
     for epoch in range(start_epoch, max_epochs):
         epoch_started = time.perf_counter()
+        if hasattr(train_ds, "set_epoch"):
+            train_ds.set_epoch(epoch)
         train_sampler.set_epoch(epoch)
         frozen = warm_start_stage and epoch < int(tc.get("freeze_brain_encoder_epochs", 0))
         meg_word_task.set_brain_encoder_trainable(model, not frozen)
         epoch_lr = float(optimizer.param_groups[0]["lr"])
+
+        if (
+            synthetic_mode
+            and preextracted_cache is not None
+            and frozen
+            and epoch > start_epoch
+            and refresh_preextracted_train_features_fn is not None
+        ):
+            refresh_preextracted_train_features_fn(
+                preextracted_cache,
+                model,
+                train_ds,
+                shift_seconds=(
+                    siamese_spec.get("shift_seconds", ()) if siamese_enabled else ()
+                ),
+                shift_mode=str(siamese_spec.get("shift_mode", "preroll")),
+                preroll_seconds=float(siamese_spec.get("preroll_seconds", 45.0)),
+                device=device,
+                batch_size=int(tc.get("eval_batch_size", tc["batch_size"])),
+                amp=bool(tc.get("amp", True)),
+                amp_dtype=amp_dtype,
+                show_progress=False,
+            )
 
         if preextracted_cache is not None and frozen:
             train_loss, epoch_updates, batches_seen, diagnostics = (

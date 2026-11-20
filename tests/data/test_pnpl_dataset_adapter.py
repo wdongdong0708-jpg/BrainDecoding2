@@ -370,7 +370,7 @@ def test_materialize_libribrain100_and_downstream_dataset_and_synthetic_control(
     assert shifted_sample["meg"].shape == (6, 50)
     assert not torch.equal(sample["meg"], shifted_sample["meg"])
 
-    # 验证现有 SyntheticTimingDataset 联合合成脉冲对照无缝兼容
+    # 验证现有 SyntheticTimingDataset 联合合成脉冲对照及错位平滑脉冲流分支无缝兼容
     synth_ds = SyntheticTimingDataset(
         test_ds,
         "shared",
@@ -380,7 +380,77 @@ def test_materialize_libribrain100_and_downstream_dataset_and_synthetic_control(
     synth_sample = synth_ds[0]
     assert synth_sample["meg"].shape == (6, 50)
     assert "onset_seconds" in synth_sample
+    assert synth_ds.ensure_preroll_buffers(-12.0) == {}
+    synth_ds.temporal_shift_seconds = -12.0
+    synth_shifted_12 = synth_ds[0]
+    synth_ds.temporal_shift_seconds = -19.0
+    synth_shifted_19 = synth_ds[0]
+    assert not torch.equal(synth_sample["meg"], synth_shifted_12["meg"])
+    assert not torch.equal(synth_shifted_12["meg"], synth_shifted_19["meg"])
     assert len(train_table) == 8
+
+
+def test_materialize_cleanup_raw_deletes_temp_h5_and_reuses_without_h5(tmp_path):
+    pnpl_root = tmp_path / "pnpl_raw"
+    out_root = tmp_path / "derived_cleanup"
+    ch_names = ["MEG0111", "MEG0112", "MEG0113", "MEG0121"]
+    rk = ("0", "1", "Sherlock1", "1")
+    h5_p = _write_fake_h5(
+        pnpl_root / "sub-0_ses-1_task-Sherlock1_run-1.h5",
+        channels=4,
+        samples=50 * 16,
+        sfreq=50.0,
+        channel_names=ch_names,
+        seed=9,
+        highpass=0.1,
+        lowpass=40.0,
+    )
+    ev_p = pnpl_root / "sub-0_ses-1_task-Sherlock1_run-1_events.tsv"
+    pd.DataFrame(
+        {
+            "kind": ["word", "word", "word"],
+            "segment": ["holmes", "looked", "up"],
+            "timemeg": [2.0, 2.35, 2.75],
+            "duration": [0.30, 0.30, 0.20],
+            "sentenceidx": [0, 0, 0],
+            "wordidx": [0, 1, 2],
+        }
+    ).to_csv(ev_p, sep="\t", index=False)
+
+    fake_ds = _FakePnplDataset(
+        data_path=pnpl_root,
+        run_keys=[rk],
+        h5_map={rk: h5_p},
+        events_map={rk: ev_p},
+        sfreq=50.0,
+        standardize_enabled=False,
+        records=[SimpleNamespace(run_key=rk, partition="train", corpus="sherlock")],
+    )
+    summary = materialize_pnpl_dataset(
+        "libribrain100",
+        pnpl_root,
+        out_root,
+        split_policy="simpleb2t",
+        corpus="sherlock",
+        cleanup_raw=True,
+        pnpl_dataset=fake_ds,
+    )
+    assert summary["cleanup_raw"] is True
+    assert summary["cleaned_raw_files"] == 1
+    assert not h5_p.exists()
+
+    # 二次续跑（H5 已被清理）应直接复用已落盘的 50 Hz .npy，不报错不重新读取 H5
+    resumed = materialize_pnpl_dataset(
+        "libribrain100",
+        pnpl_root,
+        out_root,
+        split_policy="simpleb2t",
+        corpus="sherlock",
+        cleanup_raw=True,
+        pnpl_dataset=fake_ds,
+    )
+    assert resumed["reused_recordings"] == 1
+    assert resumed["materialized_recordings"] == 0
 
 
 def test_materialize_pallier2025_preserves_first_samp_and_simpleb2t_chapter_split(tmp_path):

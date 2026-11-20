@@ -63,6 +63,7 @@ from braindecoding.training.debiased_preextraction import (
     _finalize_gpu_preextracted_bundle,
     _preextracted_cache_path,
     preextract_frozen_cnn_features,
+    refresh_preextracted_train_features,
 )
 from braindecoding.training.word_encoder_training import (
     _wrap_progress,
@@ -647,13 +648,18 @@ def train_one_epoch_siamese_debiased(
                     batch_distill_t = torch.stack(horizon_distill_losses).mean()
                     revision_supervision_count += int(y_tilde.shape[0])
                 else:
-                    y_clean, y_shift_mean = forward_context_from_preextracted(
+                    (
+                        y_clean,
+                        y_shift_mean,
+                        y_shift_branches,
+                    ) = forward_context_from_preextracted(
                         model,
                         clean_z_batch,
                         batch_sentence_indices,
                         shifted_z_batches=shifted_z_batches,
                         synchronize_dropout_rng=sync_rng,
                         compute_null_grad=compute_null_grad,
+                        return_shift_branches=True,
                     )
                     b_ctx_pred: torch.Tensor | None = None
                     if siamese_enabled and y_shift_mean is not None:
@@ -700,7 +706,9 @@ def train_one_epoch_siamese_debiased(
                     ):
                         d_null = (
                             compute_scaled_shift_null_loss(
-                                y_shift_mean, centered_vocab_bank
+                                y_shift_mean,
+                                centered_vocab_bank,
+                                y_shift_branches=y_shift_branches,
                             )
                             if is_causal_tier
                             else compute_shift_null_loss(

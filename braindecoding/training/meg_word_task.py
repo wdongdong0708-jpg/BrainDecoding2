@@ -112,18 +112,25 @@ def build_dataset(
         else dataset_cfg.get("preroll_seconds", siamese_cfg.get("preroll_seconds"))
     )
     dataset_name = str(config.get("experiment", {}).get("dataset") or dataset_cfg.get("id") or "")
+    synthetic_condition = str(dataset_cfg.get("synthetic_timing") or "").strip().lower()
+    if synthetic_condition and synthetic_condition not in {"shared", "independent"}:
+        raise ValueError(
+            f"不支持的 synthetic_timing={synthetic_condition!r}，可选：shared, independent"
+        )
+    use_synthetic = bool(synthetic_condition) and not bool(zero_meg or zero_signal)
+    effective_zero_meg = bool(zero_meg or zero_signal or use_synthetic)
     is_legacy_pallier = (
         dataset_name == "pallier2025" and "信号相对路径" not in table.columns
     )
     if is_legacy_pallier:
-        return dataset_module.Pallier2025WordDataset(
+        base_ds: WordWindowDataset = dataset_module.Pallier2025WordDataset(
             table,
             dataset_cfg,
             cache_cfg["meg_dir"],
             cache_cfg["text_embeddings"],
             config["text_embedding"],
-            zero_meg=bool(zero_meg or zero_signal),
-            temporal_shift_seconds=float(temporal_shift_seconds),
+            zero_meg=effective_zero_meg,
+            temporal_shift_seconds=0.0 if use_synthetic else float(temporal_shift_seconds),
             shift_mode=effective_shift_mode,
             preroll_seconds=effective_preroll_seconds,
             preroll_source_table=preroll_source_table,
@@ -133,18 +140,44 @@ def build_dataset(
                 or dataset_cfg.get("allow_subject_subset")
             ),
         )
-    return WordWindowDataset(
-        table,
-        dataset_cfg,
-        cache_cfg["meg_dir"],
-        cache_cfg["text_embeddings"],
-        config["text_embedding"],
-        zero_meg=bool(zero_meg or zero_signal),
+    else:
+        base_ds = WordWindowDataset(
+            table,
+            dataset_cfg,
+            cache_cfg["meg_dir"],
+            cache_cfg["text_embeddings"],
+            config["text_embedding"],
+            zero_meg=effective_zero_meg,
+            temporal_shift_seconds=0.0 if use_synthetic else float(temporal_shift_seconds),
+            shift_mode=effective_shift_mode,
+            preroll_seconds=effective_preroll_seconds,
+            preroll_source_table=preroll_source_table,
+            preroll_buffers=preroll_buffers,
+        )
+    if not use_synthetic:
+        return base_ds
+
+    from braindecoding.data.synthetic_timing_dataset import SyntheticTimingDataset
+
+    split_col = "数据划分" if "数据划分" in table.columns else ("split" if "split" in table.columns else None)
+    if split_col is not None and len(table) > 0:
+        resolved_split = str(table[split_col].iloc[0]).strip().lower()
+    else:
+        resolved_split = "train"
+    if resolved_split not in {"train", "val", "test"}:
+        resolved_split = "train"
+    train_seed = int((config.get("training") or {}).get("seed", 0))
+    eval_seed = int(dataset_cfg.get("synthetic_evaluation_seed", 20261008))
+    return SyntheticTimingDataset(
+        base_ds,
+        synthetic_condition,
+        split=resolved_split,
+        training_seed=train_seed,
+        evaluation_seed=eval_seed,
         temporal_shift_seconds=float(temporal_shift_seconds),
-        shift_mode=effective_shift_mode,
-        preroll_seconds=effective_preroll_seconds,
-        preroll_source_table=preroll_source_table,
-        preroll_buffers=preroll_buffers,
+        shift_mode=str(effective_shift_mode or "preroll"),
+        preroll_seconds=float(effective_preroll_seconds or 45.0),
+        include_onset_seconds=bool(getattr(base_ds, "include_onset_seconds", False)),
     )
 
 

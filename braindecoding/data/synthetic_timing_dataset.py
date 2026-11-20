@@ -87,7 +87,10 @@ class SyntheticTimingDataset(Dataset):
     """
     def __init__(self, base, condition, *, split, training_seed=0,
                  evaluation_seed=20261008, cache_streams=32,
-                 include_onset_seconds=False):
+                 include_onset_seconds=None,
+                 temporal_shift_seconds=0.0,
+                 shift_mode="preroll",
+                 preroll_seconds=45.0):
         if condition not in CONDITIONS or split not in ("train", "val", "test"):
             raise ValueError("Unknown synthetic condition or split")
         if cache_streams < 1:
@@ -98,6 +101,11 @@ class SyntheticTimingDataset(Dataset):
         self.epoch, self.cache_streams = 0, int(cache_streams)
         self._streams = OrderedDict()
         self.sfreq = float(base.dataset_config["target_sampling_rate_hz"])
+        self.sampling_rate_hz = self.sfreq
+        self.temporal_shift_seconds = float(temporal_shift_seconds)
+        self.temporal_shift_samples = int(round(self.temporal_shift_seconds * self.sfreq))
+        self.shift_mode = str(shift_mode)
+        self.preroll_seconds = float(preroll_seconds)
         if self.sfreq != 50.0 or base.window_samples != 50:
             raise ValueError("This control is frozen to the existing 50 Hz, 1 s inputs")
         self.signal_key = "meg" if "runtime_context_uid" in self.table else "eeg"
@@ -108,7 +116,11 @@ class SyntheticTimingDataset(Dataset):
         self.words = self.table.normalized_word.astype(str).tolist()
         self.event_ids = self.table.event_id.astype(str).tolist()
         self.recording_ids = self.table.recording_id.astype(str).tolist()
-        self.include_onset_seconds = bool(include_onset_seconds)
+        self.include_onset_seconds = (
+            bool(getattr(base, "include_onset_seconds", False))
+            if include_onset_seconds is None
+            else bool(include_onset_seconds)
+        )
         if "onset_seconds" in self.table.columns:
             self.onset_seconds = self.table["onset_seconds"].to_numpy(dtype=np.float32)
         elif "开始时间" in self.table.columns:
@@ -120,7 +132,7 @@ class SyntheticTimingDataset(Dataset):
         self.group_keys = list(zip(self.table.subject_id.astype(str),
                                    self.table.recording_id.astype(str), self.table[group_column].astype(str)))
         if self.signal_key == "meg":
-            from braindecoding.data.pallier2025_dataset import recording_onset_to_sample
+            from braindecoding.data.word_window_dataset import recording_onset_to_sample
             offset = float(base.dataset_config.get("window_start_offset_seconds", 0))
             absolute = np.asarray([recording_onset_to_sample(float(onset) + offset,
                 source_first_samp=base.signal_metadata[recording]["source_first_samp"],
@@ -147,6 +159,11 @@ class SyntheticTimingDataset(Dataset):
     def __len__(self):
         return len(self.table)
 
+    def ensure_preroll_buffers(self, *args, **kwargs):
+        """合成流模式下的空操作占位：严禁回落至 base 读取真实 MEG 信号。"""
+        del args, kwargs
+        return {}
+
     def set_epoch(self, epoch):
         if self.split == "train" and int(epoch) != self.epoch:
             self.epoch = int(epoch)
@@ -154,17 +171,34 @@ class SyntheticTimingDataset(Dataset):
 
     def _stream(self, index):
         group = self.group_keys[index]
-        identity = (group, self.event_ids[index] if self.condition == "independent" else "shared_stream")
-        if identity not in self._streams:
-            seed = (stable_seed(GENERATOR_VERSION, self.condition, "train", self.training_seed,
-                                self.epoch, identity) if self.split == "train" else
-                    stable_seed(GENERATOR_VERSION, self.condition, self.split, self.evaluation_seed, identity))
-            self._streams[identity] = synthetic_stream(self.stream_lengths[group], self.channel_count,
+        base_identity = (group, self.event_ids[index] if self.condition == "independent" else "shared_stream")
+        shift_key = round(float(self.temporal_shift_seconds), 4)
+        is_shifted = abs(shift_key) > 1e-9
+        cache_key = (base_identity, "shift", shift_key) if is_shifted else base_identity
+        if cache_key not in self._streams:
+            if self.split == "train":
+                seed_parts = (
+                    (GENERATOR_VERSION, self.condition, "train", self.training_seed,
+                     self.epoch, base_identity, "shift", shift_key)
+                    if is_shifted else
+                    (GENERATOR_VERSION, self.condition, "train", self.training_seed,
+                     self.epoch, base_identity)
+                )
+            else:
+                seed_parts = (
+                    (GENERATOR_VERSION, self.condition, self.split, self.evaluation_seed,
+                     base_identity, "shift", shift_key)
+                    if is_shifted else
+                    (GENERATOR_VERSION, self.condition, self.split, self.evaluation_seed,
+                     base_identity)
+                )
+            seed = stable_seed(*seed_parts)
+            self._streams[cache_key] = synthetic_stream(self.stream_lengths[group], self.channel_count,
                                                        self.sfreq, np.random.default_rng(seed))
             if len(self._streams) > self.cache_streams:
                 self._streams.popitem(last=False)
-        self._streams.move_to_end(identity)
-        return self._streams[identity]
+        self._streams.move_to_end(cache_key)
+        return self._streams[cache_key]
 
     def raw_window(self, index):
         index = int(index)
