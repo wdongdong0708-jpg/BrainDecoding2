@@ -742,3 +742,67 @@ def test_materialize_libribrain100_cleanup_raw_streams_one_run_at_a_time_and_zer
     assert open_calls == []
     assert resumed["reused_recordings"] == 2
     assert resumed["materialized_recordings"] == 0
+
+
+def test_materialize_pallier2025_fast_direct_fif_cleanup_and_resume(tmp_path):
+    import mne
+
+    pnpl_root = tmp_path / "pallier_fast_raw"
+    out_root = tmp_path / "derived_pallier_fast"
+    rng = np.random.default_rng(123)
+    ch_names = ["MEG0111", "MEG0112", "MEG0113", "MEG0121"]
+    info = mne.create_info(ch_names=ch_names, sfreq=250.0, ch_types=["mag", "grad", "grad", "mag"])
+
+    fif_paths: list[Path] = []
+    for run_num in ("01", "07", "08"):
+        meg_dir = pnpl_root / "sub-01" / "ses-01" / "meg"
+        meg_dir.mkdir(parents=True, exist_ok=True)
+        fif_p = meg_dir / f"sub-01_ses-01_task-listen_run-{run_num}_meg.fif"
+        ev_p = meg_dir / f"sub-01_ses-01_task-listen_run-{run_num}_events.tsv"
+        data = rng.standard_normal((4, 250 * 40)) * 1e-12
+        raw = mne.io.RawArray(data, info, first_samp=500, verbose="ERROR")
+        raw.save(fif_p, overwrite=True, verbose="ERROR")
+        fif_paths.append(fif_p)
+        # first_samp=500 @ 250Hz -> 2.0s 起点；onset=4.0s 对应相对 2.0s
+        pd.DataFrame(
+            {
+                "onset": [4.0, 4.35, 5.6],
+                "duration": [0.25, 0.25, 0.25],
+                "trial_type": ["Word", "Word", "Word"],
+                "stimulus": ["Le", "Petit", "Prince"],
+            }
+        ).to_csv(ev_p, sep="\t", index=False)
+
+    summary = materialize_pnpl_dataset(
+        "pallier2025_full",
+        pnpl_root,
+        out_root,
+        split_policy="simpleb2t",
+        subjects=["sub-01"],
+        runs=["01", "07", "08"],
+        download=False,
+        cleanup_raw=True,
+        mne_n_jobs=0,
+    )
+    assert summary["recording_count"] == 3
+    assert summary["materialized_recordings"] == 3
+    assert summary["cleaned_raw_files"] == 3
+    assert all(not p.exists() for p in fif_paths)
+    assert summary["split_counts"]["train"]["trainable_event_count"] == 3
+    assert summary["split_counts"]["val"]["trainable_event_count"] == 3
+    assert summary["split_counts"]["test"]["trainable_event_count"] == 3
+
+    # 二次续跑（原始 FIF 均已删除）：应零重下直接复用全部 3 个 50 Hz .npy
+    resumed = materialize_pnpl_dataset(
+        "pallier2025_full",
+        pnpl_root,
+        out_root,
+        split_policy="simpleb2t",
+        subjects=["sub-01"],
+        runs=["01", "07", "08"],
+        download=False,
+        cleanup_raw=True,
+        mne_n_jobs=0,
+    )
+    assert resumed["reused_recordings"] == 3
+    assert resumed["materialized_recordings"] == 0

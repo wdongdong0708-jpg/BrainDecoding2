@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import contextlib
 from functools import lru_cache
+import gc
 import hashlib
 import importlib
 import importlib.util
@@ -20,7 +22,11 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
+from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Sequence
+from urllib.parse import quote
 import warnings
 
 import h5py
@@ -525,6 +531,57 @@ def _read_h5_continuous_meg(
     return data, meta
 
 
+def _read_raw_fif_continuous_meg(
+    fif_path: str | Path,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """直接读取 Pallier2025 原始 BIDS FIF 的全部 MEG 通道（跳过 pnpl 单线程分块 bp+ds 与中间 preproc.fif/H5 落盘）。"""
+    import mne
+
+    fif_p = Path(fif_path)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*Internal Active Shielding.*",
+            category=RuntimeWarning,
+        )
+        raw = mne.io.read_raw_fif(
+            fif_p, preload=False, allow_maxshield=True, verbose="ERROR"
+        )
+        try:
+            raw.pick(picks="meg", exclude=[])
+            raw.load_data(verbose="ERROR")
+            data = np.asarray(raw.get_data(), dtype=np.float64)
+            source_sfreq = float(raw.info["sfreq"])
+            first_samp = int(raw.first_samp)
+            highpass = raw.info.get("highpass")
+            lowpass = raw.info.get("lowpass")
+            channel_names = list(raw.ch_names)
+            try:
+                raw_ch_types = list(raw.get_channel_types())
+            except Exception:
+                raw_ch_types = None
+        finally:
+            raw.close()
+
+    if data.ndim != 2 or data.shape[1] == 0:
+        raise ValueError(f"原始 FIF MEG 数据维度无效：{data.shape} ({fif_p})")
+    channel_types = _infer_channel_types(channel_names, raw_ch_types)
+    meta = {
+        "source_h5_path": str(fif_p.resolve()),
+        "source_sampling_rate_hz": source_sfreq,
+        "source_sample_count": int(data.shape[1]),
+        "source_first_samp": first_samp,
+        "source_highpass_hz": float(highpass) if highpass is not None else None,
+        "source_lowpass_hz": float(lowpass) if lowpass is not None else None,
+        "channel_count": int(data.shape[0]),
+        "channel_names": channel_names,
+        "channel_types": channel_types,
+        "channel_names_sha256": channel_names_sha256(channel_names),
+        "sensor_xyz": None,
+    }
+    return data, meta
+
+
 def _inspect_pallier_time_origin(
     pnpl_dataset: Any,
     run_key: tuple[str, str, str, str],
@@ -945,8 +1002,11 @@ def _resolve_pnpl_h5_path(pnpl_dataset: Any, run_key: tuple[str, str, str, str])
 def _load_optional_pallier_extra_info(
     pnpl_dataset: Any,
     run: str,
+    pnpl_root: Path | None = None,
 ) -> pd.DataFrame | None:
-    data_path = getattr(pnpl_dataset, "data_path", None)
+    data_path = getattr(pnpl_dataset, "data_path", None) or (
+        str(pnpl_root) if pnpl_root is not None else None
+    )
     if not data_path:
         return None
     run_num = _strip_prefix(run, "run-").zfill(2)
@@ -1437,6 +1497,200 @@ def _resolve_libribrain_streaming_records(
     return out
 
 
+PALLIER2025_OPENNEURO_S3_BASE = "https://s3.amazonaws.com/openneuro.org/ds007523"
+
+
+def _pallier_pad2(val: str, prefix: str) -> str:
+    tok = _strip_prefix(str(val), prefix)
+    return tok.zfill(2) if tok.isdigit() else tok
+
+
+def _pallier_openneuro_url(rel_path: str) -> str:
+    clean = rel_path.lstrip("/")
+    encoded = "/".join(quote(seg, safe="") for seg in clean.split("/"))
+    return f"{PALLIER2025_OPENNEURO_S3_BASE}/{encoded}"
+
+
+def _pallier_local_bids_paths(
+    pnpl_root: Path, run_key: tuple[str, str, str, str]
+) -> tuple[Path, Path, Path]:
+    sub, ses, task, run = (
+        _pallier_pad2(run_key[0], "sub-"),
+        _pallier_pad2(run_key[1], "ses-"),
+        str(run_key[2]),
+        _pallier_pad2(run_key[3], "run-"),
+    )
+    meg_dir = pnpl_root / f"sub-{sub}" / f"ses-{ses}" / "meg"
+    raw_fif = meg_dir / f"sub-{sub}_ses-{ses}_task-{task}_run-{run}_meg.fif"
+    events_tsv = meg_dir / f"sub-{sub}_ses-{ses}_task-{task}_run-{run}_events.tsv"
+    extra_tsv = pnpl_root / "sourcedata" / f"task-{task}_run-{run}_extra_info.tsv"
+    return raw_fif, events_tsv, extra_tsv
+
+
+def _resolve_pallier_subject_run_keys(
+    subject_token: str,
+    *,
+    sessions: Sequence[str] | None,
+    runs: Sequence[str] | None,
+    tasks: Sequence[str] | None,
+    include_run_keys: Sequence[tuple[str, str, str, str]] | None,
+    exclude_run_keys: Sequence[tuple[str, str, str, str]] | None,
+) -> list[tuple[str, str, str, str]]:
+    sub = _pallier_pad2(subject_token, "sub-")
+    excluded = (
+        {
+            (
+                _pallier_pad2(rk[0], "sub-"),
+                _pallier_pad2(rk[1], "ses-"),
+                str(rk[2]),
+                _pallier_pad2(rk[3], "run-"),
+            )
+            for rk in exclude_run_keys
+        }
+        if exclude_run_keys
+        else set()
+    )
+    if include_run_keys:
+        out = []
+        for rk in include_run_keys:
+            norm = (
+                _pallier_pad2(rk[0], "sub-"),
+                _pallier_pad2(rk[1], "ses-"),
+                str(rk[2]),
+                _pallier_pad2(rk[3], "run-"),
+            )
+            if norm[0] == sub and norm not in excluded:
+                out.append(norm)
+        return out
+
+    ses_list = [_pallier_pad2(s, "ses-") for s in sessions] if sessions else ["01"]
+    task_list = [str(t).strip() for t in tasks] if tasks else ["listen"]
+    run_list = (
+        [_pallier_pad2(r, "run-") for r in runs]
+        if runs
+        else [f"{idx:02d}" for idx in range(1, 10)]
+    )
+    return [
+        (sub, ses, task, run)
+        for ses in ses_list
+        for task in task_list
+        for run in run_list
+        if (sub, ses, task, run) not in excluded
+    ]
+
+
+def _download_single_http_file(url: str, dest: Path, *, max_retries: int = 4) -> bool:
+    import time
+    import requests
+
+    if dest.is_file():
+        return True
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dest.with_name(dest.name + ".tmp")
+    for attempt in range(1, max_retries + 1):
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+            with requests.get(url, stream=True, timeout=120) as resp:
+                if resp.status_code in (403, 404):
+                    return False
+                resp.raise_for_status()
+                with tmp_path.open("wb") as handle:
+                    for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            handle.write(chunk)
+            os.replace(tmp_path, dest)
+            return True
+        except Exception:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+            if attempt >= max_retries:
+                return False
+            time.sleep(min(8.0, float(2**attempt)))
+    return False
+
+
+def _prefetch_pallier_subject_from_openneuro(
+    pnpl_root: Path,
+    run_keys: Sequence[tuple[str, str, str, str]],
+) -> None:
+    """并发多连接预拉取 Pallier2025 单被试原始 FIF 与 events.tsv（优先 aria2c -x 8 -s 8 -j 4，回退 4 线程 requests）。"""
+    download_items: list[tuple[str, Path]] = []
+    seen_paths: set[Path] = set()
+    for rk in run_keys:
+        sub, ses, task, run = rk
+        raw_fif, events_tsv, extra_tsv = _pallier_local_bids_paths(pnpl_root, rk)
+        candidates = [
+            (f"sub-{sub}/ses-{ses}/meg/{raw_fif.name}", raw_fif),
+            (f"sub-{sub}/ses-{ses}/meg/{events_tsv.name}", events_tsv),
+            (f"sourcedata/{extra_tsv.name}", extra_tsv),
+        ]
+        for rel_path, local_path in candidates:
+            if local_path in seen_paths or local_path.is_file():
+                continue
+            seen_paths.add(local_path)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            download_items.append((_pallier_openneuro_url(rel_path), local_path))
+
+    if not download_items:
+        return
+
+    aria2_bin = shutil.which("aria2c")
+    if aria2_bin:
+        sub_tag = run_keys[0][0] if run_keys else "batch"
+        list_file = pnpl_root / f".aria2_prefetch_sub-{sub_tag}.txt"
+        lines: list[str] = []
+        for url, dest in download_items:
+            lines.append(url)
+            lines.append(f"  dir={dest.parent}")
+            lines.append(f"  out={dest.name}")
+        list_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        try:
+            subprocess.run(
+                [
+                    aria2_bin,
+                    "--continue=true",
+                    "--auto-file-renaming=false",
+                    "--allow-overwrite=false",
+                    "--max-connection-per-server=8",
+                    "--split=8",
+                    "--min-split-size=4M",
+                    "--max-concurrent-downloads=4",
+                    "--max-tries=5",
+                    "--retry-wait=2",
+                    "--connect-timeout=30",
+                    "--timeout=120",
+                    "--console-log-level=error",
+                    "--summary-interval=0",
+                    "--download-result=hide",
+                    "-i",
+                    str(list_file),
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        finally:
+            list_file.unlink(missing_ok=True)
+            for _, dest in download_items:
+                ctrl = Path(str(dest) + ".aria2")
+                if ctrl.exists():
+                    ctrl.unlink(missing_ok=True)
+                    dest.unlink(missing_ok=True)
+        return
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [
+            pool.submit(_download_single_http_file, url, dest)
+            for url, dest in download_items
+        ]
+        for fut in futures:
+            try:
+                fut.result()
+            except Exception:
+                pass
+
+
 def _resolve_streaming_subjects(
     canonical: str,
     *,
@@ -1532,6 +1786,14 @@ def materialize_pnpl_dataset(
         and pnpl_dataset is None
         and canonical in {"pallier2025_full", "armeni2022"}
     )
+    # Pallier2025 高速直通模式：多连接并发拉原始 FIF -> 多线程整段 MNE 滤波重采样 -> 写 .npy 即删 FIF，
+    # 跳过 pnpl 单连接 requests 下载、单线程 120s 分块 bp+ds 与冗余 preproc.fif/H5 落盘（提速 ~5x 且零刷屏告警）。
+    pallier_fast_direct = bool(
+        stream_by_subject
+        and canonical == "pallier2025_full"
+        and pnpl_datasets_module is None
+        and preprocessing is None
+    )
     subject_batches: list[Any] = (
         [[s] for s in _resolve_streaming_subjects(canonical, subjects=subjects, include_run_keys=include_run_keys)]
         if stream_by_subject
@@ -1554,6 +1816,7 @@ def materialize_pnpl_dataset(
         fallback_corpus: str = "",
         prematched_sidecar: dict[str, Any] | None = None,
         prematched_events_path: Path | None = None,
+        direct_raw_fif_path: Path | None = None,
     ) -> None:
         nonlocal reused_count, materialized_count, cleaned_raw_count, total_words_extracted
 
@@ -1577,7 +1840,7 @@ def materialize_pnpl_dataset(
         reused_sidecar = prematched_sidecar
         h5_path: Path | None = None
         if reused_sidecar is None and not force and cleanup_raw:
-            # 断点续跑优先校验已有 50 Hz 产物，避免重复下载已清理的临时 H5
+            # 断点续跑优先校验已有 50 Hz 产物，避免重复下载已清理的临时 H5/FIF
             reused_sidecar = _sidecar_matches(
                 output_npy,
                 sidecar_json,
@@ -1588,8 +1851,11 @@ def materialize_pnpl_dataset(
             )
 
         if reused_sidecar is None:
-            assert active_ds is not None
-            h5_path = _resolve_pnpl_h5_path(active_ds, run_key)
+            if direct_raw_fif_path is not None:
+                h5_path = direct_raw_fif_path
+            else:
+                assert active_ds is not None
+                h5_path = _resolve_pnpl_h5_path(active_ds, run_key)
             if not force:
                 reused_sidecar = _sidecar_matches(
                     output_npy,
@@ -1611,18 +1877,24 @@ def materialize_pnpl_dataset(
             reused_count += 1
         else:
             assert h5_path is not None
-            raw_array, h5_meta = _read_h5_continuous_meg(
-                h5_path,
-                fallback_sfreq=getattr(active_ds, "sfreq", None),
-            )
-            if canonical == "pallier2025_full":
-                first_samp, time_origin_sfreq, time_origin_src = (
-                    _inspect_pallier_time_origin(active_ds, run_key, h5_meta)
-                )
-            else:
+            if direct_raw_fif_path is not None:
+                raw_array, h5_meta = _read_raw_fif_continuous_meg(direct_raw_fif_path)
                 first_samp = int(h5_meta["source_first_samp"])
                 time_origin_sfreq = float(h5_meta["source_sampling_rate_hz"])
-                time_origin_src = "h5_attrs"
+                time_origin_src = f"fif_header:{direct_raw_fif_path.name}"
+            else:
+                raw_array, h5_meta = _read_h5_continuous_meg(
+                    h5_path,
+                    fallback_sfreq=getattr(active_ds, "sfreq", None),
+                )
+                if canonical == "pallier2025_full":
+                    first_samp, time_origin_sfreq, time_origin_src = (
+                        _inspect_pallier_time_origin(active_ds, run_key, h5_meta)
+                    )
+                else:
+                    first_samp = int(h5_meta["source_first_samp"])
+                    time_origin_sfreq = float(h5_meta["source_sampling_rate_hz"])
+                    time_origin_src = "h5_attrs"
 
             scaled_array, preproc_details = preprocess_continuous_meg(
                 raw_array,
@@ -1636,6 +1908,7 @@ def materialize_pnpl_dataset(
                 source_lowpass_hz=h5_meta["source_lowpass_hz"],
                 mne_n_jobs=resolved_mne_n_jobs,
             )
+            del raw_array
             _write_array_atomic(output_npy, scaled_array)
             output_sha = sha256_file(output_npy)
             stat = h5_path.stat()
@@ -1673,11 +1946,18 @@ def materialize_pnpl_dataset(
             }
             _write_json_atomic(sidecar_json, sidecar)
             materialized_count += 1
+            if direct_raw_fif_path is not None:
+                gc.collect()
 
         corpus_name = (
             _corpus_for_run_key(canonical, run_key, active_ds)
             if active_ds is not None
             else (fallback_corpus or str(run_key[2]).lower())
+        )
+        events_ds_context = (
+            active_ds
+            if active_ds is not None
+            else SimpleNamespace(data_path=str(pnpl_root_path))
         )
         frame = extract_run_word_events(
             canonical,
@@ -1688,7 +1968,7 @@ def materialize_pnpl_dataset(
             signal_metadata=sidecar,
             signal_relpath=signal_relpath,
             corpus_name=corpus_name,
-            pnpl_dataset=active_ds,
+            pnpl_dataset=events_ds_context,
             eligibility_window_seconds=eligibility_window_seconds,
             pause_gap_seconds=pause_gap_seconds,
             max_context_words=max_context_words,
@@ -1712,11 +1992,15 @@ def materialize_pnpl_dataset(
                 "channel_names_sha256": sidecar["channel_names_sha256"],
             }
         )
-        if cleanup_raw and active_ds is not None:
-            cleaned_raw_count += _cleanup_run_raw_files(
-                active_ds, run_key, pnpl_root_path
-            )
-            _cleanup_pnpl_local_hf_cache(pnpl_root_path)
+        if cleanup_raw:
+            if active_ds is not None:
+                cleaned_raw_count += _cleanup_run_raw_files(
+                    active_ds, run_key, pnpl_root_path
+                )
+                _cleanup_pnpl_local_hf_cache(pnpl_root_path)
+            elif direct_raw_fif_path is not None:
+                if _safe_unlink_inside_root(direct_raw_fif_path, pnpl_root_path):
+                    cleaned_raw_count += 1
 
     subject_pbar = (
         tqdm_cls(
@@ -1853,6 +2137,113 @@ def materialize_pnpl_dataset(
                             f"{sub_label} fetch w={total_words_extracted}",
                             refresh=True,
                         )
+
+                    if pallier_fast_direct:
+                        sub_run_keys = _resolve_pallier_subject_run_keys(
+                            str(batch_subjects[0]),
+                            sessions=sessions,
+                            runs=runs,
+                            tasks=tasks,
+                            include_run_keys=batch_include_keys,
+                            exclude_run_keys=exclude_run_keys,
+                        )
+                        if not sub_run_keys:
+                            if subject_pbar is not None:
+                                subject_pbar.update(1)
+                            continue
+
+                        prematched_by_rk: dict[tuple[str, str, str, str], tuple[dict[str, Any], Path]] = {}
+                        need_fetch_rks: list[tuple[str, str, str, str]] = []
+                        for rk in sub_run_keys:
+                            sub_id_rk = _format_subject_id(rk[0])
+                            stem_rk = recording_signal_stem(canonical, rk)
+                            out_npy_rk = meg_dir / sub_id_rk / f"{stem_rk}.npy"
+                            sidecar_rk = out_npy_rk.with_suffix(".json")
+                            _, ev_rk, _ = _pallier_local_bids_paths(pnpl_root_path, rk)
+                            fast_sc = None
+                            if not force and ev_rk.is_file():
+                                fast_sc = _sidecar_matches(
+                                    out_npy_rk,
+                                    sidecar_rk,
+                                    source_h5_path=None,
+                                    target_sampling_rate_hz=target_sampling_rate_hz,
+                                    filter_low_hz=filter_low_hz,
+                                    filter_high_hz=filter_high_hz,
+                                )
+                            if fast_sc is not None:
+                                prematched_by_rk[rk] = (fast_sc, ev_rk)
+                            else:
+                                need_fetch_rks.append(rk)
+
+                        if download and need_fetch_rks:
+                            _prefetch_pallier_subject_from_openneuro(
+                                pnpl_root_path, need_fetch_rks
+                            )
+
+                        ready_rks: list[tuple[tuple[str, str, str, str], Path | None, Path]] = []
+                        for rk in sub_run_keys:
+                            if rk in prematched_by_rk:
+                                ready_rks.append((rk, None, prematched_by_rk[rk][1]))
+                                continue
+                            raw_fif_rk, ev_rk, _ = _pallier_local_bids_paths(pnpl_root_path, rk)
+                            if raw_fif_rk.is_file() and ev_rk.is_file():
+                                ready_rks.append((rk, raw_fif_rk, ev_rk))
+
+                        if ready_rks:
+                            run_pbar = (
+                                tqdm_cls(
+                                    total=len(ready_rks),
+                                    desc=f"PNPL[{sub_label}]",
+                                    unit="run",
+                                    ncols=92,
+                                    mininterval=2.0,
+                                    leave=False,
+                                )
+                                if tqdm_cls is not None
+                                else None
+                            )
+                            try:
+                                for index, (rk, raw_fif_rk, ev_rk) in enumerate(ready_rks, start=1):
+                                    sub_id_rk = _format_subject_id(rk[0])
+                                    rec_id_rk = recording_identifier(canonical, rk)
+                                    if rk in prematched_by_rk:
+                                        _materialize_run(
+                                            rk,
+                                            active_ds=None,
+                                            fallback_corpus="littleprince_listen",
+                                            prematched_sidecar=prematched_by_rk[rk][0],
+                                            prematched_events_path=ev_rk,
+                                        )
+                                    else:
+                                        _materialize_run(
+                                            rk,
+                                            active_ds=None,
+                                            fallback_corpus="littleprince_listen",
+                                            prematched_events_path=ev_rk,
+                                            direct_raw_fif_path=raw_fif_rk,
+                                        )
+                                    if run_pbar is not None:
+                                        run_pbar.set_postfix_str(
+                                            f"{sub_id_rk}/r{_strip_prefix(rk[3], 'run-')} w={total_words_extracted}",
+                                            refresh=False,
+                                        )
+                                        run_pbar.update(1)
+                                    elif index == 1 or index == len(ready_rks):
+                                        print(
+                                            f"PNPL[{canonical}] {sub_label} {index}/{len(ready_rks)}: "
+                                            f"{rec_id_rk} words={total_words_extracted} reused={reused_count}",
+                                            flush=True,
+                                        )
+                            finally:
+                                if run_pbar is not None:
+                                    run_pbar.close()
+                                if subject_pbar is not None:
+                                    subject_pbar.set_postfix_str(
+                                        f"{sub_label} done w={total_words_extracted}",
+                                        refresh=False,
+                                    )
+                                    subject_pbar.update(1)
+                            continue
 
                     opened_locally = pnpl_dataset is None
                     active_ds = pnpl_dataset
