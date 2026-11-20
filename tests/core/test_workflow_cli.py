@@ -1702,18 +1702,32 @@ def test_from_scratch_synthetic_and_eq12_null_space_context_configs():
             from_scratch=True,
         )
 
-    for rel, expected_lambda_null in (
-        ("configs/training/siamese_debiased/libribrain100_siamese_debiased_context.yaml", 10.0),
-        ("configs/training/siamese_debiased/pallier2025_full_siamese_debiased_context.yaml", 20.0),
-    ):
-        cfg_eq, _ = build_workflow_config(config_path=rel, seed=0, mode="train")
-        siam = cfg_eq["siamese_debiased"]
-        assert siam["enabled"] is True
-        assert siam["debias_mode"] == "null_space"
-        assert siam["shift_mode"] == "preroll"
-        assert float(siam["eta_train"]) == pytest.approx(0.50)
-        assert float(siam["lambda_null"]) == pytest.approx(expected_lambda_null)
-        assert float(siam["lambda_delta"]) == pytest.approx(0.0)
+    cfg_lb, _ = build_workflow_config(
+        config_path="configs/training/siamese_debiased/libribrain100_siamese_debiased_context.yaml",
+        seed=0,
+        mode="train",
+    )
+    siam_lb = cfg_lb["siamese_debiased"]
+    assert siam_lb["enabled"] is True
+    assert siam_lb["debias_mode"] == "null_space"
+    assert siam_lb["shift_mode"] == "preroll"
+    assert float(siam_lb["eta_train"]) == pytest.approx(0.50)
+    assert float(siam_lb["lambda_null"]) == pytest.approx(10.0)
+    assert float(siam_lb["lambda_delta"]) == pytest.approx(0.0)
+
+    cfg_pal, _ = build_workflow_config(
+        config_path="configs/training/siamese_debiased/pallier2025_full_siamese_debiased_context.yaml",
+        seed=0,
+        mode="train",
+    )
+    siam_pal = cfg_pal["siamese_debiased"]
+    assert siam_pal["enabled"] is True
+    assert siam_pal["debias_mode"] == "legacy_siamese"
+    assert siam_pal["shift_mode"] == "deterministic_circular"
+    assert float(siam_pal["eta_train"]) == pytest.approx(0.50)
+    assert float(siam_pal["lambda_null"]) == pytest.approx(10.0)
+    assert int(siam_pal["shifts_per_step"]) == 6
+    assert list(siam_pal["shift_seconds"]) == [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
 
     positions = np.linspace(0.0, 1.0, 12, dtype=np.float32).reshape(6, 2)
     small_cfg = {
