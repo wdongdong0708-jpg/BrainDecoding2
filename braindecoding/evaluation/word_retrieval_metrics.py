@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -280,14 +281,51 @@ def _compute_encoded_evaluation_metrics(
         and "revision_predictions" in encoded
     )
     manifest_dir = PROJECT_ROOT / "data/manifests" / dataset
-    if manifest_dir.is_dir() and (manifest_dir / "vocab_50.json").is_file():
+    if manifest_dir.is_dir() and (manifest_dir / "vocabulary_N50.json").is_file():
         manifests = load_vocabulary_assets(manifest_dir)
     else:
-        ordered_vocab = list(vocabulary)
-        manifests = {
-            sz: {"vocabulary": ordered_vocab[: min(sz, len(ordered_vocab))]}
-            for sz in (20, 50, 100, 150)
-        }
+        from braindecoding.evaluation.vocabulary_coverage import (
+            build_frequency_vocabulary,
+        )
+
+        ranked_words: list[str] | None = None
+        ev_path = (cfg.get("cache") or {}).get("event_table")
+        if ev_path and Path(str(ev_path)).is_file():
+            try:
+                from braindecoding.training import meg_word_task
+
+                tr_tbl = meg_word_task.load_event_table(
+                    ev_path,
+                    split="train",
+                    subjects=(cfg.get("dataset") or {}).get("subjects"),
+                    trainable_only=True,
+                )
+                w_col = "normalized_word" if "normalized_word" in tr_tbl.columns else "标准词"
+                if len(tr_tbl) > 0 and w_col in tr_tbl.columns:
+                    ranked_words = tr_tbl[w_col].astype(str).tolist()
+            except Exception:
+                ranked_words = None
+        if ranked_words:
+            manifests = {
+                sz: {
+                    "vocabulary": list(
+                        build_frequency_vocabulary(ranked_words, min(sz, len(vocabulary)))
+                    )
+                }
+                for sz in (20, 50, 100, 150)
+            }
+        else:
+            seen: set[str] = set()
+            ordered_vocab: list[str] = []
+            for w in list(vocab50) + list(vocabulary):
+                sw = str(w)
+                if sw not in seen:
+                    seen.add(sw)
+                    ordered_vocab.append(sw)
+            manifests = {
+                sz: {"vocabulary": ordered_vocab[: min(sz, len(ordered_vocab))]}
+                for sz in (20, 50, 100, 150)
+            }
 
     primary_preds = (
         encoded["revision_predictions"][max(encoded["revision_predictions"])]

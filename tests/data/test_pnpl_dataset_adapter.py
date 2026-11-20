@@ -113,8 +113,8 @@ def test_open_pnpl_dataset_enforces_standardize_false_for_all_three_datasets(tmp
     open_pnpl_dataset(
         "pallier2025",
         tmp_path,
-        subjects=["sub-01", "sub-02"],
-        runs=["run-01"],
+        subjects=["sub-01", "2"],
+        runs=["run-01", "7"],
         download=False,
         pnpl_datasets_module=fake_mod,
     )
@@ -139,10 +139,74 @@ def test_open_pnpl_dataset_enforces_standardize_false_for_all_three_datasets(tmp
         "ds": {"sfreq": 50.0},
     }
     assert captured["Pallier2025"]["include_subjects"] == ["01", "02"]
-    assert captured["Pallier2025"]["include_runs"] == ["01"]
+    assert captured["Pallier2025"]["include_runs"] == ["01", "07"]
     assert captured["Armeni2022"]["preprocessing"] == "bp+ds"
     assert captured["Armeni2022"]["include_subjects"] == ["001"]
     assert captured["Armeni2022"]["include_sessions"] == ["001"]
+
+
+def test_open_pnpl_dataset_libribrain100_subject_and_session_task_filters(
+    tmp_path, monkeypatch
+):
+    captured: list[dict] = []
+
+    class LibriBrain100:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+
+    fake_mod = SimpleNamespace(LibriBrain100=LibriBrain100)
+    fake_manifest = SimpleNamespace(
+        RUN_RECORDS=(
+            SimpleNamespace(run_key=("0", "1", "Sherlock1", "1")),
+            SimpleNamespace(run_key=("0", "11", "Sherlock1", "2")),
+            SimpleNamespace(run_key=("0", "0", "Sherlock9", "1")),
+            SimpleNamespace(run_key=("1", "1", "Sherlock1", "1")),
+        )
+    )
+    orig_import = importlib.import_module
+
+    def _fake_import(name: str, package=None):
+        if name == "pnpl.datasets.libribrain100.manifest":
+            return fake_manifest
+        return orig_import(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", _fake_import)
+
+    open_pnpl_dataset(
+        "libribrain100",
+        tmp_path,
+        subjects=["sub-0"],
+        sessions=["ses-1", "11"],
+        tasks=["Sherlock1"],
+        download=False,
+        pnpl_datasets_module=fake_mod,
+    )
+    assert captured[-1]["subjects"] == ["0"]
+    assert captured[-1]["include_run_keys"] == [
+        ("0", "1", "Sherlock1", "1"),
+        ("0", "11", "Sherlock1", "2"),
+    ]
+
+    open_pnpl_dataset(
+        "libribrain100",
+        tmp_path,
+        subjects="broad",
+        tasks=["Sherlock1"],
+        download=False,
+        pnpl_datasets_module=fake_mod,
+    )
+    assert captured[-1]["subjects"] == "broad"
+    assert captured[-1]["include_run_keys"] == [("1", "1", "Sherlock1", "1")]
+
+    open_pnpl_dataset(
+        "libribrain100",
+        tmp_path,
+        include_run_keys=[("1", "1", "Sherlock1", "1")],
+        download=False,
+        pnpl_datasets_module=fake_mod,
+    )
+    assert captured[-1]["subjects"] == "all"
+    assert captured[-1]["include_run_keys"] == [("1", "1", "Sherlock1", "1")]
 
 
 def test_preprocess_continuous_meg_bandpasses_resamples_and_robust_scales():

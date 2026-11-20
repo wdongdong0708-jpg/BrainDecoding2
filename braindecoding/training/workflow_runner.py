@@ -22,7 +22,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -122,7 +122,7 @@ STAGE_DISPLAY_NAMES: dict[str, str] = {
 
 _FALLBACK_SUBJECTS: dict[str, tuple[str, ...]] = {
     "pallier2025": tuple(pallier2025.SUBJECTS),
-    "pallier2025_full": tuple(pallier2025.SUBJECTS),
+    "pallier2025_full": tuple(f"sub-{idx:02d}" for idx in range(1, 59)),
     "libribrain100": ("sub-0",),
     "armeni2022": ("sub-001", "sub-002", "sub-003"),
 }
@@ -165,6 +165,20 @@ DEFAULT_STAGE_CONFIGS: dict[tuple[str, str], str] = {
     ("pallier2025", "context"): "configs/training/pallier2025_context_transformer.yaml",
     ("pallier2025", "revision"): "configs/training/pallier2025_rolling_revision.yaml",
     ("pallier2025", "prefix_revision"): "configs/training/pallier2025_prefix_revision.yaml",
+    ("pallier2025_full", "word"): "configs/training/pallier2025_full_word_encoder.yaml",
+    ("pallier2025_full", "context"): "configs/training/pallier2025_full_context_transformer.yaml",
+    ("pallier2025_full", "revision"): "configs/training/pallier2025_full_prefix_revision.yaml",
+    ("pallier2025_full", "prefix_revision"): "configs/training/pallier2025_full_prefix_revision.yaml",
+    ("libribrain100", "word"): "configs/training/libribrain100_word_encoder.yaml",
+    ("libribrain100", "context"): "configs/training/libribrain100_context_transformer.yaml",
+    ("libribrain100", "revision"): "configs/training/libribrain100_prefix_revision.yaml",
+    ("libribrain100", "prefix_revision"): "configs/training/libribrain100_prefix_revision.yaml",
+}
+
+_PNPL_DEFAULT_RAW_SUBDIRS: dict[str, str] = {
+    "libribrain100": "LibriBrain100",
+    "pallier2025_full": "LittlePrince_MEG_French_Listen_Pallier2025",
+    "armeni2022": "Armeni2022",
 }
 
 
@@ -1519,6 +1533,50 @@ def write_subjects_manifest(output_dir: str | Path, subset_spec: dict, *, stage:
     return subjects_path
 
 
+def _split_csv_arg(value: str | Sequence[str] | None) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        items = [tok.strip() for tok in value.split(",") if tok.strip()]
+        return items or None
+    items = [str(tok).strip() for tok in value if str(tok).strip()]
+    return items or None
+
+
+def _parse_run_keys_arg(
+    value: Sequence[str | Sequence[str]] | None,
+) -> list[tuple[str, str, str, str]] | None:
+    if not value:
+        return None
+    keys: list[tuple[str, str, str, str]] = []
+    for item in value:
+        if isinstance(item, str):
+            parts = [p.strip() for p in item.split(",") if p.strip()]
+        else:
+            parts = [str(p).strip() for p in item if str(p).strip()]
+        if len(parts) != 4:
+            raise ValueError(
+                f"include_run_keys 每项必须是 4 元组 (subject, session, task, run)，收到：{item!r}"
+            )
+        keys.append((parts[0], parts[1], parts[2], parts[3]))
+    return keys or None
+
+
+def _resolve_pnpl_raw_root(
+    dataset: str, cfg: Mapping, pnpl_root: str | Path | None = None
+) -> Path:
+    if pnpl_root is not None:
+        return Path(pnpl_root).resolve()
+    env_root = os.environ.get("BRAINDECODING_PNPL_ROOT", "").strip()
+    if env_root:
+        return Path(env_root).resolve()
+    cfg_root = (cfg.get("dataset") or {}).get("root")
+    if cfg_root:
+        return Path(str(cfg_root)).resolve()
+    subdir = _PNPL_DEFAULT_RAW_SUBDIRS.get(dataset, dataset)
+    return (data_root() / subdir).resolve()
+
+
 def run_cache_workflow(
     dataset: str | None = None,
     *,
@@ -1528,6 +1586,13 @@ def run_cache_workflow(
     include_test: bool = False,
     force: bool = False,
     config_path: str | Path | None = None,
+    pnpl_root: str | Path | None = None,
+    split_policy: str | None = None,
+    sessions: str | Sequence[str] | None = None,
+    runs: str | Sequence[str] | None = None,
+    tasks: str | Sequence[str] | None = None,
+    include_run_keys: Sequence[str | Sequence[str]] | None = None,
+    download: bool = True,
 ) -> dict:
     """预热并校验指定数据集与受试者子集的事件表、神经信号与文本嵌入缓存。"""
     ensure_default_environment()
@@ -1539,6 +1604,14 @@ def run_cache_workflow(
         datasets = list(DATASETS)
     else:
         datasets = [str(dataset or "pallier2025")]
+    parsed_sessions = _split_csv_arg(sessions)
+    parsed_runs = _split_csv_arg(runs)
+    parsed_tasks = _split_csv_arg(tasks)
+    parsed_run_keys = _parse_run_keys_arg(include_run_keys)
+    has_pnpl_filter = any(
+        x is not None for x in (parsed_sessions, parsed_runs, parsed_tasks, parsed_run_keys)
+    )
+
     reports = {}
     for ds_name in datasets:
         cfg, subset_spec = build_workflow_config(
@@ -1557,16 +1630,56 @@ def run_cache_workflow(
 
         import pandas as pd
 
+        pnpl_materialization = None
         if ds_name == "pallier2025":
             if force or not event_path.is_file():
                 from braindecoding.data.dataset_builder import build_dataset
 
                 build_dataset("pallier2025", events=True, force=force)
-        elif not event_path.is_file():
-            raise FileNotFoundError(
-                f"PNPL 派生事件表尚未物化：{event_path}。"
-                f"请先运行 `python -m braindecoding.data.pnpl_dataset_adapter --dataset {ds_name} --pnpl-root <dir>`。"
+        elif force or not event_path.is_file() or has_pnpl_filter:
+            from braindecoding.data.pnpl_dataset_adapter import (
+                materialize_pnpl_dataset,
             )
+
+            resolved_pnpl_root = _resolve_pnpl_raw_root(ds_name, cfg, pnpl_root=pnpl_root)
+            resolved_policy = str(
+                split_policy
+                or (cfg.get("dataset") or {}).get("split_policy")
+                or "simpleb2t"
+            )
+            explicit_subject_filter = (
+                (subject is not None and str(subject).strip().lower() != "all")
+                or num_subjects is not None
+                or subjects is not None
+            )
+            pnpl_subjects = list(selected_subjects) if explicit_subject_filter else None
+            pnpl_output_root = event_path.parents[1]
+            pnpl_materialization = materialize_pnpl_dataset(
+                ds_name,
+                resolved_pnpl_root,
+                pnpl_output_root,
+                split_policy=resolved_policy,
+                subjects=pnpl_subjects,
+                sessions=parsed_sessions,
+                runs=parsed_runs,
+                tasks=parsed_tasks,
+                include_run_keys=parsed_run_keys,
+                download=bool(download),
+                force=bool(force),
+            )
+            # 物化完成后按真实 events.csv 重新解析动态受试者列表
+            cfg, subset_spec = build_workflow_config(
+                ds_name,
+                stage=None if config_path is not None else "word",
+                seed=0,
+                subject=subject,
+                num_subjects=num_subjects,
+                subjects=subjects,
+                mode="cache",
+                config_path=config_path if len(datasets) == 1 else None,
+            )
+            selected_subjects = subset_spec["subjects"]
+            event_path = Path(cfg["cache"]["event_table"])
         frames = [
             meg_word_task.load_event_table(
                 event_path,
@@ -1632,6 +1745,8 @@ def run_cache_workflow(
             "cache_root": str(cache_root()),
             "data_root": str(data_root()),
         }
+        if pnpl_materialization is not None:
+            report["pnpl_materialization"] = pnpl_materialization
         save_json(cache_out_dir / "cache_summary.json", report)
         reports[ds_name] = report
 

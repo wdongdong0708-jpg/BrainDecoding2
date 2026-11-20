@@ -1,0 +1,31 @@
+# Pallier2025 全量法语 MEG（PNPL + SimpleB2T 1-6/7/8-9 章节划分）第一阶段：单窗词编码器训练配置
+extends: ./pallier2025_word_encoder.yaml
+
+workflow:
+  dataset: pallier2025_full
+  stage: word
+  subject: all
+  precision: bf16-mixed
+  window_seconds: 1.0
+  window_start_offset_seconds: 0.0
+
+experiment:
+  dataset: pallier2025_full
+  output_group: unified_rolling_v2
+
+dataset:
+  id: pallier2025_full
+  name: LittlePrince_MEG_French_Listen_Pallier2025
+  root: ${BRAINDATA_ROOT}/LittlePrince_MEG_French_Listen_Pallier2025
+  split_policy: simpleb2t
+  expected_meg_channel_count: 306
+  channel_names_sha256: null
+
+cache:
+  event_table: data/cache/derived/pallier2025_full/events/events.csv
+  meg_dir: data/cache/derived/pallier2025_full/signals/meg_50hz
+  text_embeddings: data/cache/derived/pallier2025_full/text/t5_large_layer_0_5/embeddings.npz
+
+evaluation:
+  default_split: val
+  selection_metric: retrieval_acc10_vocab=pallier2025_full_50_macro

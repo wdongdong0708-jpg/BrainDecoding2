@@ -1483,6 +1483,161 @@ def test_common_horizon_delay_subset_filter_and_cli_arg() -> None:
     assert parsed_report.word_exp_tag == "lr4e-4_bs256"
 
 
+def test_cli_cache_parses_pnpl_flags_and_loads_pnpl_stage_yaml_configs():
+    parser = cli.build_parser()
+    cache_args = parser.parse_args(
+        [
+            "cache",
+            "--dataset",
+            "libribrain100",
+            "--pnpl-root",
+            "/tmp/pnpl_raw",
+            "--split-policy",
+            "simpleb2t",
+            "--sessions",
+            "1,11,0",
+            "--runs",
+            "1,2",
+            "--tasks",
+            "Sherlock1,Sherlock2",
+            "--include-run-key",
+            "0,1,Sherlock1,1",
+            "--include-run-key",
+            "0,11,Sherlock1,2",
+            "--include-test",
+            "--no-download",
+        ]
+    )
+    assert cache_args.command == "cache"
+    assert cache_args.dataset == "libribrain100"
+    assert cache_args.pnpl_root == "/tmp/pnpl_raw"
+    assert cache_args.split_policy == "simpleb2t"
+    assert cache_args.sessions == "1,11,0"
+    assert cache_args.runs == "1,2"
+    assert cache_args.tasks == "Sherlock1,Sherlock2"
+    assert cache_args.include_run_key == ["0,1,Sherlock1,1", "0,11,Sherlock1,2"]
+    assert cache_args.include_test is True
+    assert cache_args.no_download is True
+
+    pnpl_configs = [
+        ("libribrain100", "word", "configs/training/libribrain100_word_encoder.yaml"),
+        ("libribrain100", "context", "configs/training/libribrain100_context_transformer.yaml"),
+        ("libribrain100", "prefix_revision", "configs/training/libribrain100_prefix_revision.yaml"),
+        ("libribrain100", "context", "configs/training/siamese_debiased/libribrain100_siamese_debiased_context.yaml"),
+        ("libribrain100", "prefix_revision", "configs/training/siamese_debiased/libribrain100_causal_null_space_prefix_revision.yaml"),
+        ("pallier2025_full", "word", "configs/training/pallier2025_full_word_encoder.yaml"),
+        ("pallier2025_full", "context", "configs/training/pallier2025_full_context_transformer.yaml"),
+        ("pallier2025_full", "prefix_revision", "configs/training/pallier2025_full_prefix_revision.yaml"),
+        ("pallier2025_full", "context", "configs/training/siamese_debiased/pallier2025_full_siamese_debiased_context.yaml"),
+        ("pallier2025_full", "prefix_revision", "configs/training/siamese_debiased/pallier2025_full_causal_null_space_prefix_revision.yaml"),
+    ]
+    for expected_ds, expected_stage, rel_yaml in pnpl_configs:
+        cfg, subset = build_workflow_config(config_path=rel_yaml, seed=0, mode="smoke")
+        assert subset["dataset"] == expected_ds
+        assert cfg["workflow"]["stage"] == expected_stage
+        assert cfg["text_embedding"]["model_name"] == "t5-large"
+        assert f"/{expected_ds}/events/events.csv" in cfg["cache"]["event_table"].replace("\\", "/")
+        assert f"/{expected_ds}/signals" in cfg["cache"]["meg_dir"].replace("\\", "/")
+
+
+def test_run_cache_workflow_wires_materialize_pnpl_dataset(tmp_path, monkeypatch):
+    import numpy as np
+    import pandas as pd
+
+    import braindecoding.data.pnpl_dataset_adapter as pnpl_adapter
+    import braindecoding.data.text_embeddings as text_data
+    import braindecoding.training.workflow_runner as wr
+
+    cache_dir = tmp_path / "derived"
+    results_dir = tmp_path / "runs"
+    raw_dir = tmp_path / "raw_lb"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("BRAINDECODING_CACHE_DIR", str(cache_dir))
+    monkeypatch.setenv("BRAINDECODING_RESULTS_DIR", str(results_dir))
+
+    captured: dict = {}
+
+    def _fake_materialize(
+        dataset,
+        pnpl_root,
+        output_root,
+        **kwargs,
+    ):
+        captured["dataset"] = dataset
+        captured["pnpl_root"] = Path(pnpl_root)
+        captured["output_root"] = Path(output_root)
+        captured["kwargs"] = dict(kwargs)
+        out_root = Path(output_root)
+        ev_path = out_root / "events" / "events.csv"
+        sig_dir = out_root / "signals" / "meg_50hz"
+        ev_path.parent.mkdir(parents=True, exist_ok=True)
+        sig_dir.mkdir(parents=True, exist_ok=True)
+        rel_sig = "sub-0_ses-1_task-Sherlock1_run-1.npy"
+        np.save(sig_dir / rel_sig, np.zeros((4, 200), dtype=np.float32))
+        (sig_dir / "sub-0_ses-1_task-Sherlock1_run-1.json").write_text(
+            json.dumps({"recording_id": "rec0"}), encoding="utf-8"
+        )
+        rows = []
+        for idx, split in enumerate(("train", "val", "test")):
+            rows.append(
+                {
+                    "事件编号": f"e{idx}",
+                    "受试者": "sub-0",
+                    "记录编号": f"rec{idx}",
+                    "材料编号": f"Sherlock1|run-{idx}",
+                    "划分单元": f"libribrain100|ses-{idx}",
+                    "记录内序号": 0,
+                    "词": "Holmes",
+                    "标准词": "holmes",
+                    "开始时间": 1.0,
+                    "结束时间": 1.2,
+                    "上下文编号": f"ctx{idx}",
+                    "数据划分": split,
+                    "是否可训练": True,
+                    "排除原因": "",
+                    "信号相对路径": rel_sig,
+                }
+            )
+        pd.DataFrame(rows).to_csv(ev_path, index=False, encoding="utf-8")
+        return {
+            "dataset": dataset,
+            "recording_count": 1,
+            "event_count": 3,
+            "trainable_event_count": 3,
+            "events_path": str(ev_path),
+        }
+
+    def _fake_ensure_text(words, text_cfg, cache_path):
+        cache_p = Path(cache_path)
+        unique_words = sorted({str(w) for w in words})
+        vecs = np.ones((len(unique_words), 8), dtype=np.float32)
+        text_data.save_text_embedding_cache(cache_p, unique_words, vecs, text_cfg)
+        return cache_p
+
+    monkeypatch.setattr(pnpl_adapter, "materialize_pnpl_dataset", _fake_materialize)
+    monkeypatch.setattr(text_data, "ensure_text_embedding_cache", _fake_ensure_text)
+
+    report = wr.run_cache_workflow(
+        "libribrain100",
+        pnpl_root=raw_dir,
+        split_policy="simpleb2t",
+        include_run_keys=["0,1,Sherlock1,1"],
+        include_test=True,
+        download=False,
+    )
+    assert report["status"] == "cache_ready"
+    assert report["dataset"] == "libribrain100"
+    assert report["subset"]["subjects"] == ["sub-0"]
+    assert captured["dataset"] == "libribrain100"
+    assert captured["pnpl_root"] == raw_dir.resolve()
+    assert captured["kwargs"]["split_policy"] == "simpleb2t"
+    assert captured["kwargs"]["include_run_keys"] == [("0", "1", "Sherlock1", "1")]
+    assert captured["kwargs"]["subjects"] is None
+    assert captured["kwargs"]["download"] is False
+    assert report["pnpl_materialization"]["recording_count"] == 1
+    assert report["cache_verification"]["verified_event_rows"] == 3
+
+
 
 
 

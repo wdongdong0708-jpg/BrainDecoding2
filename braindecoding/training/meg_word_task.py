@@ -221,16 +221,19 @@ def load_pretrained_brain_encoder(
     if not encoder_state:
         raise ValueError("warm-start 检查点不包含 brain_encoder 参数。")
     model.brain_encoder.load_state_dict(encoder_state, strict=True)
+    dataset_name = str(config.get("experiment", {}).get("dataset") or "pallier2025")
     source_metrics = checkpoint.get("metrics", {})
+    source_macro_r10 = source_metrics.get(
+        f"retrieval_acc10_vocab={dataset_name}_50_macro",
+        source_metrics.get("retrieval_acc10_vocab=pallier2025_50_macro"),
+    )
     return {
         "method": "cnn_only_best_checkpoint_brain_encoder_only",
         "source_checkpoint": str(checkpoint_path),
         "source_checkpoint_sha256": file_sha256(checkpoint_path),
         "source_epoch": int(checkpoint.get("epoch", 0)),
         "source_update": int(checkpoint.get("optimizer_updates", 0)),
-        "source_macro_r_at_10": source_metrics.get(
-            "retrieval_acc10_vocab=pallier2025_50_macro"
-        ),
+        "source_macro_r_at_10": source_macro_r10,
         "loaded_loss_state": False,
         "loaded_transformer_state": False,
     }

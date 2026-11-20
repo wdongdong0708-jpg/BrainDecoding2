@@ -1,0 +1,31 @@
+# LibriBrain100 英语 MEG 阶段 2.1：单窗词编码器 + 16 层全局上下文 Transformer 训练配置（PNPL 统一缓存）
+extends: ./pallier2025_context_transformer.yaml
+
+workflow:
+  dataset: libribrain100
+  stage: context
+  subject: all
+  precision: bf16-mixed
+  window_seconds: 1.0
+  window_start_offset_seconds: 0.0
+
+experiment:
+  dataset: libribrain100
+  output_group: unified_rolling_v2
+
+dataset:
+  id: libribrain100
+  name: LibriBrain100
+  root: ${BRAINDATA_ROOT}/LibriBrain100
+  split_policy: simpleb2t
+  expected_meg_channel_count: 306
+  channel_names_sha256: null
+
+cache:
+  event_table: data/cache/derived/libribrain100/events/events.csv
+  meg_dir: data/cache/derived/libribrain100/signals/meg_50hz
+  text_embeddings: data/cache/derived/libribrain100/text/t5_large_layer_0_5/embeddings.npz
+
+evaluation:
+  default_split: val
+  selection_metric: retrieval_acc10_vocab=libribrain100_50_macro

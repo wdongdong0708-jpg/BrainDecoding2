@@ -869,6 +869,13 @@ def _workflow_cache(args) -> int:
         include_test=args.include_test,
         force=args.force,
         config_path=args.config,
+        pnpl_root=getattr(args, "pnpl_root", None),
+        split_policy=getattr(args, "split_policy", None),
+        sessions=getattr(args, "sessions", None),
+        runs=getattr(args, "runs", None),
+        tasks=getattr(args, "tasks", None),
+        include_run_keys=getattr(args, "include_run_key", None),
+        download=not bool(getattr(args, "no_download", False)),
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
@@ -1066,6 +1073,42 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="强制重新计算并覆盖已有缓存",
+    )
+    cache_cmd.add_argument(
+        "--pnpl-root",
+        default=None,
+        help="PNPL 原始数据/H5 根目录（适用于 libribrain100 / pallier2025_full / armeni2022）",
+    )
+    cache_cmd.add_argument(
+        "--split-policy",
+        default=None,
+        help="PNPL 数据划分策略（默认 simpleb2t；可选 pnpl_official / manifest）",
+    )
+    cache_cmd.add_argument(
+        "--sessions",
+        default=None,
+        help="可选 PNPL 会话白名单（逗号分隔，如 1,11,0）",
+    )
+    cache_cmd.add_argument(
+        "--runs",
+        default=None,
+        help="可选 PNPL 运行编号白名单（逗号分隔，如 01,02,07,08）",
+    )
+    cache_cmd.add_argument(
+        "--tasks",
+        default=None,
+        help="可选 PNPL 任务白名单（逗号分隔，如 Sherlock1,Sherlock2）",
+    )
+    cache_cmd.add_argument(
+        "--include-run-key",
+        action="append",
+        default=None,
+        help="可选精确指定 PNPL run_key（可重复传入，格式 sub,ses,task,run，如 0,1,Sherlock1,1）",
+    )
+    cache_cmd.add_argument(
+        "--no-download",
+        action="store_true",
+        help="禁用 PNPL 自动下载（仅使用本地已有原始/H5 文件）",
     )
 
     smoke_cmd = commands.add_parser(

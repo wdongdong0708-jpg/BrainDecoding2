@@ -287,11 +287,61 @@ def open_pnpl_dataset(
 
     if canonical_name == "libribrain100":
         cls = getattr(datasets_mod, "LibriBrain100")
+        resolved_include_keys = (
+            [tuple(map(str, rk)) for rk in include_run_keys]
+            if include_run_keys
+            else None
+        )
+        if subjects is None:
+            lb_subjects: Any = "all" if resolved_include_keys else "deep"
+        elif isinstance(subjects, str):
+            low_s = subjects.strip().lower()
+            lb_subjects = (
+                low_s
+                if low_s in {"all", "deep", "broad"}
+                else [_strip_prefix(subjects, "sub-")]
+            )
+        else:
+            lb_subjects = [_strip_prefix(str(s), "sub-") for s in subjects]
+
+        if resolved_include_keys is None and (sessions or runs or tasks):
+            manifest_mod = importlib.import_module("pnpl.datasets.libribrain100.manifest")
+            ses_set = (
+                {_strip_prefix(str(s), "ses-") for s in sessions} if sessions else None
+            )
+            run_set = {_strip_prefix(str(r), "run-") for r in runs} if runs else None
+            task_set = {str(t).strip() for t in tasks} if tasks else None
+            subj_set = (
+                {str(s) for s in lb_subjects}
+                if isinstance(lb_subjects, list)
+                else ({"0"} if lb_subjects == "deep" else None)
+            )
+            filtered: list[tuple[str, str, str, str]] = []
+            for rec in getattr(manifest_mod, "RUN_RECORDS", ()):
+                rk = tuple(map(str, rec.run_key))
+                if lb_subjects == "broad" and rk[0] == "0":
+                    continue
+                if subj_set is not None and rk[0] not in subj_set:
+                    continue
+                if ses_set is not None and rk[1] not in ses_set:
+                    continue
+                if task_set is not None and rk[2] not in task_set:
+                    continue
+                if run_set is not None and rk[3] not in run_set:
+                    continue
+                filtered.append((rk[0], rk[1], rk[2], rk[3]))
+            if not filtered:
+                raise ValueError(
+                    f"LibriBrain100 过滤条件未匹配任何 run_key："
+                    f"subjects={lb_subjects}, sessions={sessions}, tasks={tasks}, runs={runs}"
+                )
+            resolved_include_keys = filtered
+
         kwargs: dict[str, Any] = {
             "data_path": data_dir,
             "task": task,
             "partition": None,
-            "subjects": "deep" if subjects is None else subjects,
+            "subjects": lb_subjects,
             "corpus": corpus,
             "standardize": False,
             "clipping_boundary": None,
@@ -303,8 +353,8 @@ def open_pnpl_dataset(
             kwargs["preprocessing_str"] = preprocessing
         if preprocessing_config is not None:
             kwargs["preprocessing_config"] = dict(preprocessing_config)
-        if include_run_keys:
-            kwargs["include_run_keys"] = [tuple(map(str, rk)) for rk in include_run_keys]
+        if resolved_include_keys:
+            kwargs["include_run_keys"] = resolved_include_keys
         if exclude_run_keys:
             kwargs["exclude_run_keys"] = [tuple(map(str, rk)) for rk in exclude_run_keys]
         return cls(**kwargs)
@@ -322,16 +372,21 @@ def open_pnpl_dataset(
 
     if canonical_name == "pallier2025_full":
         cls = getattr(datasets_mod, "Pallier2025")
+
+        def _pad2(val: str, prefix: str) -> str:
+            tok = _strip_prefix(str(val), prefix)
+            return tok.zfill(2) if tok.isdigit() else tok
+
         include_subjects = (
-            [_strip_prefix(s, "sub-") for s in subjects]
+            [_pad2(s, "sub-") for s in subjects]
             if isinstance(subjects, (list, tuple, set))
-            else ([_strip_prefix(subjects, "sub-")] if isinstance(subjects, str) and subjects != "all" else None)
+            else ([_pad2(subjects, "sub-")] if isinstance(subjects, str) and subjects != "all" else None)
         )
         include_runs = (
-            [_strip_prefix(r, "run-") for r in runs] if runs else None
+            [_pad2(r, "run-") for r in runs] if runs else None
         )
         include_sessions = (
-            [_strip_prefix(s, "ses-") for s in sessions] if sessions else None
+            [_pad2(s, "ses-") for s in sessions] if sessions else None
         )
         return cls(
             data_path=data_dir,
@@ -342,10 +397,16 @@ def open_pnpl_dataset(
             include_sessions=include_sessions,
             include_tasks=list(tasks) if tasks else None,
             include_runs=include_runs,
-            include_run_keys=[tuple(map(str, rk)) for rk in include_run_keys]
+            include_run_keys=[
+                (_pad2(rk[0], "sub-"), _pad2(rk[1], "ses-"), str(rk[2]), _pad2(rk[3], "run-"))
+                for rk in include_run_keys
+            ]
             if include_run_keys
             else None,
-            exclude_run_keys=[tuple(map(str, rk)) for rk in exclude_run_keys]
+            exclude_run_keys=[
+                (_pad2(rk[0], "sub-"), _pad2(rk[1], "ses-"), str(rk[2]), _pad2(rk[3], "run-"))
+                for rk in exclude_run_keys
+            ]
             if exclude_run_keys
             else None,
             standardize=False,
@@ -356,13 +417,18 @@ def open_pnpl_dataset(
         )
 
     cls = getattr(datasets_mod, "Armeni2022")
+
+    def _pad3(val: str, prefix: str) -> str:
+        tok = _strip_prefix(str(val), prefix)
+        return tok.zfill(3) if tok.isdigit() else tok
+
     include_subjects = (
-        [_strip_prefix(s, "sub-") for s in subjects]
+        [_pad3(s, "sub-") for s in subjects]
         if isinstance(subjects, (list, tuple, set))
-        else ([_strip_prefix(subjects, "sub-")] if isinstance(subjects, str) and subjects != "all" else None)
+        else ([_pad3(subjects, "sub-")] if isinstance(subjects, str) and subjects != "all" else None)
     )
     include_sessions = (
-        [_strip_prefix(s, "ses-") for s in sessions] if sessions else None
+        [_pad3(s, "ses-") for s in sessions] if sessions else None
     )
     return cls(
         data_path=data_dir,
