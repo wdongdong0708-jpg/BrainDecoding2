@@ -12,6 +12,7 @@ from braindecoding.losses import build_siglip_loss
 from braindecoding.models import TemporalGeometryBiasHead, build_brain_embedding_model
 from braindecoding.optimizers import build_adamw_for_modules
 from braindecoding.training.siamese_debiased_training import (
+    build_centered_vocabulary_bank,
     compute_causal_cms_mu0_from_encoded,
     compute_euclidean_cross_horizon_loss,
     compute_scaled_shift_null_loss,
@@ -421,3 +422,101 @@ def test_new_causal_yaml_configs_build_workflow_cleanly(
         assert pytest.approx(float(tb_cfg.get("eta", 0.0)), abs=1e-6) == 0.40
         assert int(tb_cfg.get("hidden_dimension", 0)) == 256
         assert pytest.approx(float(tb_cfg.get("window_seconds", 0.0)), abs=1e-6) == 1.0
+
+
+def test_frequency_weighted_bank_and_coherent_mean_null_loss():
+    """检验：词频加权零空间严格等于加权协方差二次型、阻断非训练划分泄漏，且相干均值衰减非相干噪声梯度 M 倍。"""
+    import pandas as pd
+    from types import SimpleNamespace
+
+    torch.manual_seed(123)
+    dim = 32
+    vocab = ["the", "of", "and", "rare_a", "rare_b", "rare_c"]
+    raw_vecs = {w: F.normalize(torch.randn(dim), dim=-1).numpy() for w in vocab}
+    train_words = (
+        ["the"] * 100
+        + ["of"] * 64
+        + ["and"] * 25
+        + ["rare_a"] * 1
+        + ["rare_b"] * 1
+        + ["rare_c"] * 1
+    )
+    train_ds = SimpleNamespace(
+        embedding_map=raw_vecs,
+        _words=train_words,
+        table=pd.DataFrame({"数据划分": ["train"] * len(train_words), "标准词": train_words}),
+    )
+    device = torch.device("cpu")
+
+    bank_u = build_centered_vocabulary_bank(train_ds, vocab, device, freq_alpha=0.0)
+    E = F.normalize(
+        torch.from_numpy(np.stack([raw_vecs[w] for w in vocab], axis=0)), dim=-1
+    )
+    torch.testing.assert_close(bank_u, E - E.mean(dim=0, keepdim=True), atol=1e-6, rtol=1e-6)
+
+    q = F.normalize(torch.randn(8, dim), dim=-1)
+    counts = torch.tensor([100.0, 64.0, 25.0, 1.0, 1.0, 1.0], dtype=torch.float64)
+    for alpha in (0.5, 1.0):
+        bank_w = build_centered_vocabulary_bank(train_ds, vocab, device, freq_alpha=alpha)
+        loss_val = compute_scaled_shift_null_loss(q, bank_w, coherent_mean=True)
+        w = (counts**alpha) / (counts**alpha).sum()
+        E64 = E.double()
+        e_bar = (w.unsqueeze(-1) * E64).sum(dim=0, keepdim=True)
+        diff = E64 - e_bar
+        proj = q.double() @ diff.T
+        expected = float(dim) * (w.unsqueeze(0) * (proj**2)).sum(dim=-1).mean()
+        assert float(loss_val.item()) == pytest.approx(float(expected.item()), rel=1e-5, abs=1e-6)
+
+    # 防泄漏守卫：包含 val/test 划分时拒绝构建词频加权矩阵；负 alpha 拒绝
+    leaky_ds = SimpleNamespace(
+        embedding_map=raw_vecs,
+        _words=train_words,
+        table=pd.DataFrame({"split": ["train"] * (len(train_words) - 1) + ["test"]}),
+    )
+    with pytest.raises(ValueError, match="非训练划分"):
+        build_centered_vocabulary_bank(leaky_ds, vocab, device, freq_alpha=0.5)
+    with pytest.raises(ValueError, match="非负"):
+        build_centered_vocabulary_bank(train_ds, vocab, device, freq_alpha=-0.2)
+
+    # 相干均值梯度检验：纯非相干正交噪声 eps_0..eps_{M-1} 在 coherent_mean=True 时梯度精确缩小 M 倍，
+    # 而纯相干捷径 s 在两种模式下梯度完全一致。
+    M = 4
+    bank_test = build_centered_vocabulary_bank(train_ds, vocab, device, freq_alpha=0.5)
+    # 1) 纯相干捷径：各路相同 s
+    s_base = F.normalize(torch.randn(4, dim), dim=-1)
+    s_param_sb = s_base.clone().requires_grad_(True)
+    br_sb = torch.stack([s_param_sb, s_base.detach(), s_base.detach(), s_base.detach()], dim=0)
+    mean_sb = br_sb.detach().mean(dim=0) + (s_param_sb - s_param_sb.detach())
+    loss_sb = compute_scaled_shift_null_loss(
+        mean_sb, bank_test, y_shift_branches=br_sb, coherent_mean=False
+    )
+    loss_sb.backward()
+
+    s_param_cm = s_base.clone().requires_grad_(True)
+    br_cm = torch.stack([s_param_cm, s_base.detach(), s_base.detach(), s_base.detach()], dim=0)
+    mean_cm = br_cm.detach().mean(dim=0) + (s_param_cm - s_param_cm.detach())
+    loss_cm = compute_scaled_shift_null_loss(
+        mean_cm, bank_test, y_shift_branches=br_cm, coherent_mean=True
+    )
+    loss_cm.backward()
+    torch.testing.assert_close(s_param_cm.grad, s_param_sb.grad, atol=1e-5, rtol=1e-5)
+
+    # 2) 纯非相干噪声（均值 = eps_0 / M，其余分支和为 0）：coherent_mean=True 梯度应精确为单路梯度的 1/M
+    eps0 = F.normalize(torch.randn(4, dim), dim=-1)
+    eps1 = F.normalize(torch.randn(4, dim), dim=-1)
+    eps2 = -eps1
+    eps3 = torch.zeros_like(eps0)
+    p_sb = eps0.clone().requires_grad_(True)
+    br_noise_sb = torch.stack([p_sb, eps1, eps2, eps3], dim=0)
+    mean_noise_sb = br_noise_sb.detach().mean(dim=0) + (p_sb - p_sb.detach())
+    compute_scaled_shift_null_loss(
+        mean_noise_sb, bank_test, y_shift_branches=br_noise_sb, coherent_mean=False
+    ).backward()
+
+    p_cm = eps0.clone().requires_grad_(True)
+    br_noise_cm = torch.stack([p_cm, eps1, eps2, eps3], dim=0)
+    mean_noise_cm = br_noise_cm.detach().mean(dim=0) + (p_cm - p_cm.detach())
+    compute_scaled_shift_null_loss(
+        mean_noise_cm, bank_test, y_shift_branches=br_noise_cm, coherent_mean=True
+    ).backward()
+    torch.testing.assert_close(p_cm.grad, p_sb.grad / float(M), atol=1e-5, rtol=1e-5)

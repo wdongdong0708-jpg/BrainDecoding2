@@ -1,4 +1,4 @@
-# Pallier2025 全量法语 MEG 阶段 2.1：冻结 CNN + 整句联合编码 + 孪生共模抵消与错位零化正则训练配置（对齐原版 pallier2025 R4）
+# Pallier2025 全量法语 MEG 阶段 2.1：冻结 CNN + 整句联合编码 + M 路 Pre-Roll 相干均值与词频加权零空间去偏配置
 extends: ../pallier2025_full_context_transformer.yaml
 
 workflow:
@@ -20,13 +20,17 @@ training:
 
 siamese_debiased:
   enabled: true
-  debias_mode: legacy_siamese
-  shift_mode: deterministic_circular
+  debias_mode: null_space
+  shift_mode: preroll
+  preroll_seconds: 55.0
   eta_0: 0.50
   eta_train: 0.50
-  lambda_null: 10.0
-  shift_seconds: [-15.0, -30.0, -45.0, -60.0, -90.0, -120.0]
-  shifts_per_step: 6
+  lambda_null: 20.0
+  lambda_delta: 0.0
+  null_space_coherent_mean: true
+  null_space_vocab_freq_alpha: 0.5
+  shift_seconds: [-12.0, -19.0, -27.0, -36.0, -46.0]
+  shifts_per_step: 5
   synchronize_dropout_rng: true
   preextract_frozen_cnn: true
   cache_preextracted_to_disk: true

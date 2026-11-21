@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+import math
 import os
 from typing import Iterable
 
@@ -132,6 +134,8 @@ def resolve_siamese_debiased_config(
     shift_seconds: str | Iterable[float | int | str] | None = None,
     preextract_frozen_cnn: bool | None = None,
     temporal_bias_hidden_dim: int | None = None,
+    null_space_coherent_mean: bool | None = None,
+    null_space_vocab_freq_alpha: float | None = None,
 ) -> dict:
     """合并 YAML `siamese_debiased` 配置块、环境变量与 CLI 参数。"""
     raw_block = (
@@ -171,6 +175,10 @@ def resolve_siamese_debiased_config(
     env_beta_delta_cm = os.environ.get("BRAINDECODING_BETA_DELTA_CM", "").strip()
     env_m = os.environ.get("BRAINDECODING_SHIFTS_PER_STEP", "").strip()
     env_shifts = os.environ.get("BRAINDECODING_TRAIN_SHIFT_SECONDS", "").strip()
+    env_coherent_mean = _parse_bool_env("BRAINDECODING_NULL_SPACE_COHERENT_MEAN")
+    env_freq_alpha = os.environ.get(
+        "BRAINDECODING_NULL_SPACE_VOCAB_FREQ_ALPHA", ""
+    ).strip()
 
     explicit_debias_mode = (
         _normalize_debias_mode(debias_mode)
@@ -381,6 +389,28 @@ def resolve_siamese_debiased_config(
     cache_to_disk = bool(raw_block.get("cache_preextracted_to_disk", True))
     default_s3_cms_eta = 0.0 if resolved_debias_mode == "amortized_timing" else 0.5
     resolved_s3_cms_eta = float(raw_block.get("s3_cms_eta", default_s3_cms_eta))
+    resolved_coherent_mean = (
+        bool(null_space_coherent_mean)
+        if null_space_coherent_mean is not None
+        else (
+            env_coherent_mean
+            if env_coherent_mean is not None
+            else bool(raw_block.get("null_space_coherent_mean", False))
+        )
+    )
+    resolved_freq_alpha = float(
+        null_space_vocab_freq_alpha
+        if null_space_vocab_freq_alpha is not None
+        else (
+            float(env_freq_alpha)
+            if env_freq_alpha
+            else float(raw_block.get("null_space_vocab_freq_alpha", 0.0))
+        )
+    )
+    if not math.isfinite(resolved_freq_alpha) or resolved_freq_alpha < 0.0:
+        raise ValueError(
+            f"null_space_vocab_freq_alpha 必须为非负有限实数，收到 {resolved_freq_alpha!r}。"
+        )
 
     return {
         "enabled": bool(enabled),
@@ -396,6 +426,8 @@ def resolve_siamese_debiased_config(
         "lambda_distill": resolved_lambda_distill,
         "beta_delta_cm": resolved_beta_delta_cm,
         "temporal_bias_hidden_dim": resolved_hidden_dim,
+        "null_space_coherent_mean": bool(resolved_coherent_mean),
+        "null_space_vocab_freq_alpha": float(resolved_freq_alpha),
         "shift_seconds": resolved_shifts,
         "shifts_per_step": int(resolved_m),
         "s3_cms_eta": resolved_s3_cms_eta,
@@ -405,15 +437,50 @@ def resolve_siamese_debiased_config(
     }
 
 
+def _extract_dataset_word_counts(dataset_obj) -> Counter[str]:
+    """仅从训练 Dataset 提取词次分布，严禁包含 val/test 划分。"""
+    table = getattr(dataset_obj, "table", None)
+    if table is not None and hasattr(table, "columns"):
+        for split_col in ("数据划分", "split"):
+            if split_col in table.columns:
+                splits = {str(s).strip().lower() for s in table[split_col].dropna().unique()}
+                forbidden = splits & {"val", "validation", "test"}
+                if forbidden:
+                    raise ValueError(
+                        f"词频加权零空间禁止使用非训练划分统计，检测到 split={sorted(forbidden)}。"
+                    )
+    raw_words = getattr(dataset_obj, "_words", None)
+    if raw_words is None:
+        raw_words = getattr(dataset_obj, "words", None)
+    if raw_words is not None:
+        return Counter(str(w) for w in raw_words)
+    if table is not None and hasattr(table, "columns"):
+        for word_col in ("标准词", "normalized_word", "word"):
+            if word_col in table.columns:
+                return Counter(str(w) for w in table[word_col].tolist())
+    raise ValueError(
+        "freq_alpha > 0 时 Dataset 缺少训练词序列 (_words/words/table)，无法计算词频权重。"
+    )
+
+
 def build_centered_vocabulary_bank(
     dataset_obj,
     vocabulary: Iterable[str],
     device: torch.device,
+    *,
+    freq_alpha: float = 0.0,
 ) -> torch.Tensor:
-    """构建中心化训练词表矩阵 E_tilde_V = E_V - e_bar in R^(|V| x D)。
+    """构建中心化训练词表矩阵 E_tilde_V in R^(|V| x D)。
 
-    其中 E_V 的每一行为训练集唯一词的 L2 归一化目标向量，e_bar 为全词库均值向量。
+    - freq_alpha == 0.0：均匀词型中心化 E_V - e_bar（向后兼容原公式）。
+    - freq_alpha > 0.0 ：按训练集词频平滑幂次 w_v ∝ c_v^alpha 中心化并预乘 sqrt(|V| * w_v)，
+      使 (D/|V|) * ||E_tilde_V * y||_2^2 严格等于 D * sum_v w_v * (y · (e_v - e_bar_w))^2，
+      在保持跨词表 O(1) 尺度恒定的同时对齐高频词与低频词的零空间惩罚测度。
     """
+    alpha = float(freq_alpha)
+    if not math.isfinite(alpha) or alpha < 0.0:
+        raise ValueError(f"freq_alpha 必须为非负有限实数，收到 {freq_alpha!r}。")
+
     emb_map = getattr(dataset_obj, "embedding_map", None) or getattr(
         dataset_obj, "word_to_embedding", None
     )
@@ -421,21 +488,42 @@ def build_centered_vocabulary_bank(
         raise ValueError("Dataset 缺少 embedding_map，无法构建中心化训练词表矩阵。")
 
     rows = []
+    retained_words: list[str] = []
     for word in vocabulary:
         w_str = str(word)
         if w_str in emb_map:
             vec = np.asarray(emb_map[w_str], dtype=np.float32)
             rows.append(vec)
+            retained_words.append(w_str)
     if not rows:
         raise ValueError("训练词表在 embedding_map 中无匹配词项。")
 
-    bank = torch.from_numpy(np.stack(rows, axis=0)).to(
-        device=device, dtype=torch.float32
+    if alpha == 0.0:
+        bank = torch.from_numpy(np.stack(rows, axis=0)).to(
+            device=device, dtype=torch.float32
+        )
+        bank = F.normalize(bank, dim=-1)
+        mean_vec = bank.mean(dim=0, keepdim=True)
+        centered_bank = bank - mean_vec
+        return centered_bank
+
+    word_counts = _extract_dataset_word_counts(dataset_obj)
+    weights_np = np.asarray(
+        [max(float(word_counts.get(w, 0)), 1.0) ** alpha for w in retained_words],
+        dtype=np.float64,
     )
-    bank = F.normalize(bank, dim=-1)
-    mean_vec = bank.mean(dim=0, keepdim=True)
-    centered_bank = bank - mean_vec
-    return centered_bank
+    weights_np = weights_np / float(weights_np.sum())
+    bank_f64 = torch.from_numpy(np.stack(rows, axis=0)).to(
+        device=device, dtype=torch.float64
+    )
+    bank_f64 = F.normalize(bank_f64, dim=-1)
+    weights_t = torch.from_numpy(weights_np).to(
+        device=device, dtype=torch.float64
+    )
+    mean_vec = (weights_t.unsqueeze(-1) * bank_f64).sum(dim=0, keepdim=True)
+    centered = bank_f64 - mean_vec
+    row_scale = torch.sqrt(float(len(retained_words)) * weights_t).unsqueeze(-1)
+    return (centered * row_scale).to(dtype=torch.float32)
 
 
 def compute_shift_null_loss(
@@ -555,11 +643,14 @@ def compute_scaled_shift_null_loss(
     centered_vocab_bank: torch.Tensor,
     *,
     y_shift_branches: torch.Tensor | None = None,
+    coherent_mean: bool = False,
 ) -> torch.Tensor:
     """维度平衡词表零空间锚定惩罚：(D / |V|) * || E_bar_V * y^(r, delta) ||_2^2。
 
-    使得跨语种不同词表大小（法语 |V|=2020、中文 |V|=2180）拥有严格相同的 O(1) 梯度尺度。
-    当 M > 1 时逐分支独立惩罚，并通过直通均值估计保持分支 0 的无稀释无偏梯度。
+    使得跨语种不同词表大小（法语 |V|=1897、英语 |V|=18031）拥有严格相同的 O(1) 梯度尺度。
+    - coherent_mean=False（默认向后兼容）：当 M > 1 时逐分支独立惩罚。
+    - coherent_mean=True ：直接对 M 路错位分支相干均值 y_shift_mean 施加零空间惩罚，
+      保留 100% 相干时序捷径梯度并使非相干单次真实神经方差梯度衰减 M 倍。
     """
     if y_shift_mean.numel() == 0:
         return y_shift_mean.new_zeros(())
@@ -568,7 +659,11 @@ def compute_scaled_shift_null_loss(
     )
     dim_scale = float(bank.shape[1])
 
-    if y_shift_branches is not None and y_shift_branches.numel() > 0:
+    if (
+        not coherent_mean
+        and y_shift_branches is not None
+        and y_shift_branches.numel() > 0
+    ):
         y_br = y_shift_branches.float()
         num_branches = int(y_br.shape[0])
         if (

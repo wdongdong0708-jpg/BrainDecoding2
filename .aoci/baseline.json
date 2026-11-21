@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-11-20T12:14:07Z",
+  "updated_at": "2026-11-21T10:40:15Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "81308ddbea6b63631032e940b029c10bb0c178e53bb8d57e2cca8d60b4775a76",
-      "size": 42540,
-      "normalized_sha256": "81308ddbea6b63631032e940b029c10bb0c178e53bb8d57e2cca8d60b4775a76"
+      "sha256": "2e8c1473f1f688c62c40dff02b73532e9a31f8ba6f0cff96b6be60df54fe00b7",
+      "size": 42681,
+      "normalized_sha256": "2e8c1473f1f688c62c40dff02b73532e9a31f8ba6f0cff96b6be60df54fe00b7"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -59,9 +59,9 @@
     },
     "braindecoding/cli.py": {
       "role": "index",
-      "sha256": "c164280cf525bfceed12cec7ef5c27b274afefef0264e33de2956953b265b51b",
-      "size": 60415,
-      "normalized_sha256": "c164280cf525bfceed12cec7ef5c27b274afefef0264e33de2956953b265b51b"
+      "sha256": "84d6cffd8e1000e600452859ddb01d6aeca14e35e271b50faae64e1f26aa7cff",
+      "size": 61453,
+      "normalized_sha256": "84d6cffd8e1000e600452859ddb01d6aeca14e35e271b50faae64e1f26aa7cff"
     },
     "braindecoding/config.py": {
       "role": "index",
@@ -473,9 +473,9 @@
     },
     "braindecoding/training/debiased_losses.py": {
       "role": "index",
-      "sha256": "64ec80502b9cfd060624c4b3b70a6f5245936d49fdfd9bf3f3ea23fe15e3fe5a",
-      "size": 26251,
-      "normalized_sha256": "64ec80502b9cfd060624c4b3b70a6f5245936d49fdfd9bf3f3ea23fe15e3fe5a"
+      "sha256": "9e30f8d492248d3aa93464877432be5b0ab8202dc95a52ed90b83e7688116aa4",
+      "size": 30491,
+      "normalized_sha256": "9e30f8d492248d3aa93464877432be5b0ab8202dc95a52ed90b83e7688116aa4"
     },
     "braindecoding/training/debiased_padded_forward.py": {
       "role": "index",
@@ -545,9 +545,9 @@
     },
     "braindecoding/training/siamese_debiased_training.py": {
       "role": "index",
-      "sha256": "d70c623fc293c860470131051ddd3995992b56c27a743b49589efcad568f49e3",
-      "size": 39085,
-      "normalized_sha256": "d70c623fc293c860470131051ddd3995992b56c27a743b49589efcad568f49e3"
+      "sha256": "0f5b96c1e08d59039b4098fe26fc7c7bec181a5ff66136585500f5f2ab8c9247",
+      "size": 39636,
+      "normalized_sha256": "0f5b96c1e08d59039b4098fe26fc7c7bec181a5ff66136585500f5f2ab8c9247"
     },
     "braindecoding/training/synthetic_timing_control.py": {
       "role": "index",
@@ -581,9 +581,9 @@
     },
     "braindecoding/training/workflow_runner.py": {
       "role": "index",
-      "sha256": "3acbb1e3131ebdd5a7a18047ef9c99068e619c4adbb1054546c23aba0b963957",
-      "size": 109102,
-      "normalized_sha256": "3acbb1e3131ebdd5a7a18047ef9c99068e619c4adbb1054546c23aba0b963957"
+      "sha256": "cce3e9dcc82795eb26589c8a9666f58dbc46900552c1d3abb0ea6b86d4a19d2f",
+      "size": 110176,
+      "normalized_sha256": "cce3e9dcc82795eb26589c8a9666f58dbc46900552c1d3abb0ea6b86d4a19d2f"
     },
     "configs/controls/common_mode_subtraction/chineseeeg2_common_mode_subtraction_control.yaml": {
       "role": "observe",

@@ -645,7 +645,26 @@ def _add_training_workflow_args(
         "--shifts-per-step",
         type=int,
         default=None,
-        help="每个训练步从错位池中随机抽取的同构错位分支数量 M（如 1、2 或 6）",
+        help="每个训练步从错位池中随机抽取的同构错位分支数量 M（如 1、2、4 或 6）",
+    )
+    parser.add_argument(
+        "--null-space-coherent-mean",
+        dest="null_space_coherent_mean",
+        action="store_true",
+        default=None,
+        help="在 null_space 模式下先对 M 路 Pre-Roll 错位分支求相干均值再施以零空间惩罚（保留相干时序捷径并使单次真实神经方差梯度衰减 M 倍）",
+    )
+    parser.add_argument(
+        "--no-null-space-coherent-mean",
+        dest="null_space_coherent_mean",
+        action="store_false",
+        help="关闭 null_space 相干均值，退回逐分支独立零空间惩罚",
+    )
+    parser.add_argument(
+        "--null-space-vocab-freq-alpha",
+        type=float,
+        default=None,
+        help="零空间词表中心化的训练集词频幂次权重 alpha（0.0=均匀词型，0.5=平方根平滑，1.0=与训练词频测度 1:1 对齐）",
     )
     parser.add_argument(
         "--preextract-frozen-cnn",
@@ -960,6 +979,8 @@ def _workflow_train(args, *, mode: str) -> int:
             beta_delta_cm=getattr(args, "beta_delta_cm", None),
             shifts_per_step=getattr(args, "shifts_per_step", None),
             preextract_frozen_cnn=getattr(args, "preextract_frozen_cnn", None),
+            null_space_coherent_mean=getattr(args, "null_space_coherent_mean", None),
+            null_space_vocab_freq_alpha=getattr(args, "null_space_vocab_freq_alpha", None),
             from_scratch=bool(getattr(args, "from_scratch", False)),
             synthetic_timing=getattr(args, "synthetic_timing", None),
         )

@@ -143,6 +143,12 @@ def train_one_epoch_siamese_debiased(
         siamese_config.get("shifts_per_step", 1 if is_causal_tier else 2)
     )
     sync_rng = bool(siamese_config.get("synchronize_dropout_rng", True))
+    null_space_coherent_mean = bool(
+        siamese_config.get("null_space_coherent_mean", False)
+    )
+    null_space_vocab_freq_alpha = float(
+        siamese_config.get("null_space_vocab_freq_alpha", 0.0)
+    )
 
     train_clean_z: torch.Tensor = preextracted_cache["train_clean_z"]
     train_clean_z_pad: torch.Tensor | None = preextracted_cache.get(
@@ -494,6 +500,7 @@ def train_one_epoch_siamese_debiased(
                                         if y_shift_branches is not None
                                         else None
                                     ),
+                                    coherent_mean=null_space_coherent_mean,
                                 )
                             else:
                                 d_null = d_siglip * 0.0
@@ -707,6 +714,7 @@ def train_one_epoch_siamese_debiased(
                                 y_shift_mean,
                                 centered_vocab_bank,
                                 y_shift_branches=y_shift_branches,
+                                coherent_mean=null_space_coherent_mean,
                             )
                             if is_causal_tier
                             else compute_shift_null_loss(
@@ -829,6 +837,8 @@ def train_one_epoch_siamese_debiased(
         "lambda_delta_null": lambda_delta_null if siamese_enabled else 0.0,
         "lambda_distill": lambda_distill if siamese_enabled else 0.0,
         "beta_delta_cm": beta_delta_cm if siamese_enabled else 0.0,
+        "null_space_coherent_mean": null_space_coherent_mean if siamese_enabled else False,
+        "null_space_vocab_freq_alpha": null_space_vocab_freq_alpha if siamese_enabled else 0.0,
         "shifts_per_step": shifts_per_step if siamese_enabled else 0,
         "word_loss": float(siglip_loss_sum / denom),
         "siglip_loss": float(siglip_loss_sum / denom),

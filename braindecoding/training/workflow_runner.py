@@ -649,6 +649,8 @@ def build_workflow_config(
     beta_delta_cm: float | None = None,
     shifts_per_step: int | None = None,
     preextract_frozen_cnn: bool | None = None,
+    null_space_coherent_mean: bool | None = None,
+    null_space_vocab_freq_alpha: float | None = None,
     from_scratch: bool = False,
     synthetic_timing: str | None = None,
 ) -> tuple[dict, dict]:
@@ -1100,6 +1102,12 @@ def build_workflow_config(
         shifts_per_step=None if ignore_implicit_siamese_on_word else shifts_per_step,
         preextract_frozen_cnn=(
             False if ignore_implicit_siamese_on_word else preextract_frozen_cnn
+        ),
+        null_space_coherent_mean=(
+            None if ignore_implicit_siamese_on_word else null_space_coherent_mean
+        ),
+        null_space_vocab_freq_alpha=(
+            None if ignore_implicit_siamese_on_word else null_space_vocab_freq_alpha
         ),
     )
     if (
@@ -1868,6 +1876,8 @@ def run_training_workflow(
     beta_delta_cm: float | None = None,
     shifts_per_step: int | None = None,
     preextract_frozen_cnn: bool | None = None,
+    null_space_coherent_mean: bool | None = None,
+    null_space_vocab_freq_alpha: float | None = None,
     from_scratch: bool = False,
     synthetic_timing: str | None = None,
 ) -> dict:
@@ -1909,6 +1919,8 @@ def run_training_workflow(
         beta_delta_cm=beta_delta_cm,
         shifts_per_step=shifts_per_step,
         preextract_frozen_cnn=preextract_frozen_cnn,
+        null_space_coherent_mean=null_space_coherent_mean,
+        null_space_vocab_freq_alpha=null_space_vocab_freq_alpha,
         from_scratch=from_scratch,
         synthetic_timing=synthetic_timing,
     )
@@ -2162,9 +2174,16 @@ def run_training_workflow(
         siam_lam_dist = float(siamese_spec.get("lambda_distill", 1.0))
         siam_beta_d = float(siamese_spec.get("beta_delta_cm", 6.0))
         if siam_mode == "null_space":
+            siam_coherent = bool(
+                siamese_spec.get("null_space_coherent_mean", False)
+            )
+            siam_freq_alpha = float(
+                siamese_spec.get("null_space_vocab_freq_alpha", 0.0)
+            )
             print(
                 f" Siamese Deb : enabled [mode=null_space, shift={siam_shift_mode}] "
                 f"(eta_train={siam_eta0:.2f}, lambda_null={siam_lam:.2f}, lambda_delta={siam_lam_d:.2f}, "
+                f"coherent_mean={siam_coherent}, freq_alpha={siam_freq_alpha:.2f}, "
                 f"M={int(siamese_spec.get('shifts_per_step', 1))}/{len(siamese_spec.get('shift_seconds', ()))} shifts, "
                 f"preextract_cnn={use_preextracted_cnn})",
                 flush=True,
@@ -2255,7 +2274,12 @@ def run_training_workflow(
             or float(siamese_spec.get("beta_delta_cm", 0.0)) > 0.0
         ):
             centered_vocab_bank = build_centered_vocabulary_bank(
-                train_ds, vocabulary, device
+                train_ds,
+                vocabulary,
+                device,
+                freq_alpha=float(
+                    siamese_spec.get("null_space_vocab_freq_alpha", 0.0)
+                ),
             )
 
     print(
