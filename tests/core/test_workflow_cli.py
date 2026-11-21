@@ -1715,7 +1715,7 @@ def test_from_scratch_synthetic_and_eq12_null_space_context_configs():
         assert list(siam["shift_seconds"]) == [-12.0, -19.0, -27.0, -36.0, -46.0]
         assert int(siam["shifts_per_step"]) == 5
         assert float(siam["eta_train"]) == pytest.approx(0.50)
-        assert float(siam["lambda_null"]) == pytest.approx(20.0)
+        assert float(siam["lambda_null"]) == pytest.approx(10.0)
         assert float(siam["lambda_delta"]) == pytest.approx(0.0)
         assert siam["null_space_coherent_mean"] is True
         assert float(siam["null_space_vocab_freq_alpha"]) == pytest.approx(0.5)
