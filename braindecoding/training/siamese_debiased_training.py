@@ -317,6 +317,11 @@ def train_one_epoch_siamese_debiased(
                 mask_2d = static_rev_table["row_win_mask"][idx_tensor][
                     win_sel_2d
                 ]
+                if mask_2d.numel() > 0:
+                    batch_max_len = max(1, int(mask_2d.sum(dim=1).max().item()))
+                    if batch_max_len < mask_2d.shape[1]:
+                        win_global_2d = win_global_2d[:, :batch_max_len]
+                        mask_2d = mask_2d[:, :batch_max_len]
                 target_col_idx = static_rev_table["row_target_col"][
                     idx_tensor
                 ][valid_2d]
@@ -537,6 +542,7 @@ def train_one_epoch_siamese_debiased(
                                     y_shift_k0_m,
                                     y_shift_r_branches=y_shift_r_br,
                                     y_shift_k0_branches=y_shift_k0_br,
+                                    coherent_mean=null_space_coherent_mean,
                                 )
                                 d_delta_weighted = lambda_delta * d_delta_null
                             else:

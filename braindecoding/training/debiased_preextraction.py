@@ -303,9 +303,10 @@ def _build_static_revision_train_table(
                     unique_win_np[global_row, h_idx] = True
                     prev_bounds = (start, stop)
 
+    idx_dtype = torch.int32 if n_rows < (1 << 31) - 1 else torch.long
     return {
         "row_win_global_idx": torch.from_numpy(win_idx_np).to(
-            device=device, dtype=torch.long
+            device=device, dtype=idx_dtype
         ),
         "row_win_mask": torch.from_numpy(mask_np).to(
             device=device, dtype=torch.bool
@@ -369,9 +370,10 @@ def _build_static_revision_eval_table(
                 target_col_np[global_row] = int(target_offset)
                 step_offset_np[global_row] = int(stop - 1 - position)
 
+        idx_dtype = torch.int32 if n_rows < (1 << 31) - 1 else torch.long
         table_by_delay[int(delay)] = {
             "win_global_idx": torch.from_numpy(win_idx_np).to(
-                device=device, dtype=torch.long
+                device=device, dtype=idx_dtype
             ),
             "win_mask": torch.from_numpy(mask_np).to(
                 device=device, dtype=torch.bool
@@ -390,12 +392,15 @@ def _build_static_revision_eval_table(
 
 
 def _alloc_padded_gpu_feature_matrix(
-    src_tensor: torch.Tensor, device: torch.device
+    src_tensor: torch.Tensor,
+    device: torch.device,
+    *,
+    dtype: torch.dtype = torch.float32,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """在目标设备上单次分配带尾部零填充行的连续 float32 矩阵，返回 (零拷贝切片视图, 填充张量)。"""
+    """在目标设备上单次分配带尾部零填充行的连续特征矩阵，返回 (零拷贝切片视图, 填充张量)。"""
     n_rows, feat_dim = int(src_tensor.shape[0]), int(src_tensor.shape[1])
     padded = torch.zeros(
-        (n_rows + 1, feat_dim), device=device, dtype=torch.float32
+        (n_rows + 1, feat_dim), device=device, dtype=dtype
     )
     padded[:n_rows].copy_(src_tensor, non_blocking=False)
     return padded[:n_rows], padded
@@ -413,22 +418,25 @@ def _finalize_gpu_preextracted_bundle(
     cache_file: Path | None,
     loaded_from_disk: bool,
     elapsed: float,
+    feature_dtype: torch.dtype = torch.float32,
 ) -> dict:
     """将预提取张量、尾部零填充视图及全数据集静态 GPU 窗口查表常驻于 GPU 显存（零冗余单份存储）。"""
     train_meta = _extract_static_dataset_metadata(train_ds, device)
     val_meta = _extract_static_dataset_metadata(val_ds, device)
 
     train_clean_z, train_clean_z_pad = _alloc_padded_gpu_feature_matrix(
-        train_clean_z, device
+        train_clean_z, device, dtype=feature_dtype
     )
     val_clean_z, val_clean_z_pad = _alloc_padded_gpu_feature_matrix(
-        val_clean_z, device
+        val_clean_z, device, dtype=feature_dtype
     )
     train_shifted_z_gpu: dict[float, torch.Tensor] = {}
     train_shifted_z_pad: dict[float, torch.Tensor] = {}
     for k in list(train_shifted_z.keys()):
         v_src = train_shifted_z.pop(k)
-        v_unpad, v_pad = _alloc_padded_gpu_feature_matrix(v_src, device)
+        v_unpad, v_pad = _alloc_padded_gpu_feature_matrix(
+            v_src, device, dtype=feature_dtype
+        )
         del v_src
         train_shifted_z_gpu[float(k)] = v_unpad
         train_shifted_z_pad[float(k)] = v_pad
@@ -498,6 +506,11 @@ def preextract_frozen_cnn_features(
     shifts = [float(s) for s in shift_seconds]
     norm_shift_mode = _normalize_shift_mode(shift_mode) or "deterministic_circular"
     eff_preroll = float(preroll_seconds)
+    feature_dtype = (
+        torch.bfloat16
+        if (bool(amp) and device.type == "cuda" and amp_dtype == torch.bfloat16)
+        else torch.float32
+    )
     cache_file: Path | None = None
     if cache_to_disk and word_ckpt_sha256:
         cache_file = _preextracted_cache_path(
@@ -541,6 +554,7 @@ def preextract_frozen_cnn_features(
                         cache_file=cache_file,
                         loaded_from_disk=True,
                         elapsed=elapsed,
+                        feature_dtype=feature_dtype,
                     )
             except Exception:
                 pass
@@ -717,6 +731,7 @@ def preextract_frozen_cnn_features(
         cache_file=cache_file,
         loaded_from_disk=False,
         elapsed=elapsed,
+        feature_dtype=feature_dtype,
     )
 
 
@@ -775,7 +790,11 @@ def refresh_preextracted_train_features(
                 : len(shifted_cpu)
             ].copy_(shifted_cpu, non_blocking=False)
         else:
-            unpad, pad = _alloc_padded_gpu_feature_matrix(shifted_cpu, device)
+            unpad, pad = _alloc_padded_gpu_feature_matrix(
+                shifted_cpu,
+                device,
+                dtype=preextracted_cache["train_clean_z_pad"].dtype,
+            )
             preextracted_cache["train_shifted_z"][f_sec] = unpad
             preextracted_cache["train_shifted_z_pad"][f_sec] = pad
     return preextracted_cache

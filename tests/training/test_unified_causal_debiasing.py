@@ -520,3 +520,131 @@ def test_frequency_weighted_bank_and_coherent_mean_null_loss():
         mean_noise_cm, bank_test, y_shift_branches=br_noise_cm, coherent_mean=True
     ).backward()
     torch.testing.assert_close(p_cm.grad, p_sb.grad / float(M), atol=1e-5, rtol=1e-5)
+
+
+def test_prefix_revision_coherent_cross_horizon_trim_and_pnpl_configs():
+    """验证跨视界相干均值惩罚、动态裁列精度等价性、int32 静态索引及两份 PNPL prefix_revision 定稿配置。"""
+    from braindecoding.training.debiased_preextraction import (
+        _build_static_revision_eval_table,
+        _build_static_revision_train_table,
+    )
+    from braindecoding.training.siamese_debiased_training import (
+        encode_from_preextracted_cnn,
+    )
+
+    torch.manual_seed(17)
+    dim = 32
+    M = 4
+
+    # 1) 跨视界欧氏惩罚 coherent_mean 行为：纯相干跨视界漂移 100% 保留，非相干跨分支噪声梯度衰减 M 倍
+    k0_base = F.normalize(torch.randn(4, dim), dim=-1)
+    drift = 0.25 * F.normalize(torch.randn(4, dim), dim=-1)
+    r_coh = k0_base + drift
+    k0_br = k0_base.unsqueeze(0).expand(M, -1, -1).clone()
+
+    p_sb = r_coh.clone().requires_grad_(True)
+    r_br_sb = torch.stack([p_sb, r_coh.detach(), r_coh.detach(), r_coh.detach()], dim=0)
+    r_mean_sb = r_br_sb.detach().mean(dim=0) + (p_sb - p_sb.detach())
+    compute_euclidean_cross_horizon_loss(
+        r_mean_sb, k0_base, y_shift_r_branches=r_br_sb, y_shift_k0_branches=k0_br, coherent_mean=False
+    ).backward()
+
+    p_cm = r_coh.clone().requires_grad_(True)
+    r_br_cm = torch.stack([p_cm, r_coh.detach(), r_coh.detach(), r_coh.detach()], dim=0)
+    r_mean_cm = r_br_cm.detach().mean(dim=0) + (p_cm - p_cm.detach())
+    compute_euclidean_cross_horizon_loss(
+        r_mean_cm, k0_base, y_shift_r_branches=r_br_cm, y_shift_k0_branches=k0_br, coherent_mean=True
+    ).backward()
+    torch.testing.assert_close(p_cm.grad, p_sb.grad, atol=1e-5, rtol=1e-5)
+
+    eps0 = 0.3 * F.normalize(torch.randn(4, dim), dim=-1)
+    eps1 = 0.3 * F.normalize(torch.randn(4, dim), dim=-1)
+    q_sb = (k0_base + eps0).clone().requires_grad_(True)
+    br_n_sb = torch.stack([q_sb, k0_base + eps1, k0_base - eps1, k0_base], dim=0)
+    mean_n_sb = br_n_sb.detach().mean(dim=0) + (q_sb - q_sb.detach())
+    compute_euclidean_cross_horizon_loss(
+        mean_n_sb, k0_base, y_shift_r_branches=br_n_sb, y_shift_k0_branches=k0_br, coherent_mean=False
+    ).backward()
+
+    q_cm = (k0_base + eps0).clone().requires_grad_(True)
+    br_n_cm = torch.stack([q_cm, k0_base + eps1, k0_base - eps1, k0_base], dim=0)
+    mean_n_cm = br_n_cm.detach().mean(dim=0) + (q_cm - q_cm.detach())
+    compute_euclidean_cross_horizon_loss(
+        mean_n_cm, k0_base, y_shift_r_branches=br_n_cm, y_shift_k0_branches=k0_br, coherent_mean=True
+    ).backward()
+    torch.testing.assert_close(q_cm.grad, q_sb.grad / float(M), atol=1e-5, rtol=1e-5)
+
+    # 2) int32 静态索引表 + eval 阶段 batch 动态裁列与非裁列前向输出严格一致
+    model = _build_tiny_prefix_model().eval()
+    # 构造 1 条长句（10 词）+ 1 条短句（3 词），使短句 batch 触发动态裁列（10 -> 3）
+    sent_idx = torch.tensor([0] * 10 + [1] * 3, dtype=torch.long)
+    device = torch.device("cpu")
+    train_tbl = _build_static_revision_train_table(model, sent_idx, device)
+    eval_tbl = _build_static_revision_eval_table(model, sent_idx, device)
+    assert train_tbl is not None and train_tbl["row_win_global_idx"].dtype == torch.int32
+    assert eval_tbl is not None and eval_tbl[0]["win_global_idx"].dtype == torch.int32
+
+    clean_z = F.normalize(torch.randn(13, dim), dim=-1)
+    clean_z_pad = F.pad(clean_z, (0, 0, 0, 1))
+    meta = {
+        "targets": F.normalize(torch.randn(13, dim), dim=-1),
+        "subject_indices": torch.zeros(13, dtype=torch.long),
+        "sentence_indices": sent_idx,
+        "words": [f"w{i}" for i in range(13)],
+        "event_ids": [f"e{i}" for i in range(13)],
+        "recording_ids": ["r0"] * 13,
+        "clean_z_pad": clean_z_pad,
+        "static_revision_table": eval_tbl,
+    }
+
+    class _TwoGroupSampler:
+        preserve_complete_groups = True
+
+        def __iter__(self):
+            yield list(range(10))
+            yield list(range(10, 13))
+
+        def __len__(self):
+            return 2
+
+    enc_static = encode_from_preextracted_cnn(
+        model, _TwoGroupSampler(), clean_z, meta, device, amp=False
+    )
+    meta_fallback = {k: v for k, v in meta.items() if k != "static_revision_table"}
+    enc_ref = encode_from_preextracted_cnn(
+        model, _TwoGroupSampler(), clean_z, meta_fallback, device, amp=False
+    )
+    for delay in (0, 1, 2):
+        torch.testing.assert_close(
+            enc_static["revision_predictions"][delay],
+            enc_ref["revision_predictions"][delay],
+            atol=1e-5,
+            rtol=1e-5,
+        )
+
+    # 3) 两份 PNPL prefix_revision 配置已同步至定稿 R4 去偏配方 + lambda_delta=0.45
+    for rel_yaml in (
+        "configs/training/siamese_debiased/pallier2025_full_causal_null_space_prefix_revision.yaml",
+        "configs/training/siamese_debiased/libribrain100_causal_null_space_prefix_revision.yaml",
+    ):
+        cfg, _ = build_workflow_config(config_path=rel_yaml, seed=0, mode="train")
+        siam = cfg["siamese_debiased"]
+        assert cfg["workflow"]["stage"] == "prefix_revision"
+        assert cfg["training"]["early_stop_metric"] == "full_vocab"
+        assert siam["enabled"] is True
+        assert siam["debias_mode"] == "null_space"
+        assert siam["shift_mode"] == "preroll"
+        assert float(siam["preroll_seconds"]) == pytest.approx(55.0)
+        assert float(siam["eta_train"]) == pytest.approx(0.50)
+        assert float(siam["lambda_null"]) == pytest.approx(10.0)
+        assert float(siam["lambda_delta"]) == pytest.approx(0.45)
+        assert siam["null_space_coherent_mean"] is True
+        assert float(siam["null_space_vocab_freq_alpha"]) == pytest.approx(0.5)
+        assert int(siam["shifts_per_step"]) == 5
+        assert [float(x) for x in siam["shift_seconds"]] == [
+            -12.0,
+            -19.0,
+            -27.0,
+            -36.0,
+            -46.0,
+        ]

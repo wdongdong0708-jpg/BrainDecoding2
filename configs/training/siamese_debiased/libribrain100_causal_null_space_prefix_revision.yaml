@@ -1,4 +1,4 @@
-# LibriBrain100 英语 MEG 阶段 2.3：纯因果 Pre-Roll + 零空间正交惩罚 + 跨步一致性前缀编码训练配置
+# LibriBrain100 英语 MEG 阶段 2.3：纯因果 Pre-Roll 相干均值 + 词频加权零空间 + 跨步一致性前缀编码训练配置
 extends: ../libribrain100_prefix_revision.yaml
 
 workflow:
@@ -25,16 +25,18 @@ siamese_debiased:
   enabled: true
   debias_mode: null_space
   shift_mode: preroll
-  preroll_seconds: 45.0
-  eta_0: 0.0
-  eta_train: 0.0
+  preroll_seconds: 55.0
+  eta_0: 0.50
+  eta_train: 0.50
   eta_delta: 0.0
   lambda_null: 10.0
   lambda_delta: 0.45
   lambda_distill: 0.0
   beta_delta_cm: 0.0
-  shift_seconds: [-12.0, -19.0, -27.0, -36.0]
-  shifts_per_step: 2
+  null_space_coherent_mean: true
+  null_space_vocab_freq_alpha: 0.5
+  shift_seconds: [-12.0, -19.0, -27.0, -36.0, -46.0]
+  shifts_per_step: 5
   synchronize_dropout_rng: true
   preextract_frozen_cnn: true
   cache_preextracted_to_disk: true

@@ -690,16 +690,21 @@ def compute_euclidean_cross_horizon_loss(
     *,
     y_shift_r_branches: torch.Tensor | None = None,
     y_shift_k0_branches: torch.Tensor | None = None,
+    coherent_mean: bool = False,
 ) -> torch.Tensor:
     """极简欧氏跨视界平滑惩罚：|| y_i^(r, delta) - sg(y_i^(0, delta)) ||_2^2 (r > 0)。
 
     对单位球面向量天然满足 ||y^(r) - y^(0)||_2^2 = 2 * (1 - cos(y^(r), y^(0))) in [0, 4]，
     同时解析上界约束余弦旋转跳变与中心化词表投影跳变，无需双超参。
+    - coherent_mean=False（默认向后兼容）：逐分支独立惩罚并经分支 0 直通均值估计保持满幅梯度。
+    - coherent_mean=True ：对 M 路错位相干均值之差施加欧氏惩罚，保留 100% 跨视界相干时序跳变抑制，
+      同时将未来词窗引入的非相干单次神经波动惩罚衰减 M 倍。
     """
     if y_shift_r_mean.numel() == 0 or y_shift_k0_mean.numel() == 0:
         return y_shift_r_mean.new_zeros(())
     if (
-        y_shift_r_branches is not None
+        not coherent_mean
+        and y_shift_r_branches is not None
         and y_shift_k0_branches is not None
         and y_shift_r_branches.numel() > 0
         and y_shift_r_branches.shape == y_shift_k0_branches.shape

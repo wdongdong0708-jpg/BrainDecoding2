@@ -152,6 +152,13 @@ def encode_from_preextracted_cnn(
                             d0_tbl = static_eval_table[0]
                             win_idx_2d = d0_tbl["win_global_idx"][idx_tensor]
                             mask_2d = d0_tbl["win_mask"][idx_tensor]
+                            if mask_2d.numel() > 0:
+                                batch_max_len = max(
+                                    1, int(mask_2d.sum(dim=1).max().item())
+                                )
+                                if batch_max_len < mask_2d.shape[1]:
+                                    win_idx_2d = win_idx_2d[:, :batch_max_len]
+                                    mask_2d = mask_2d[:, :batch_max_len]
                             bs_eval = int(len(idx_tensor))
                             b_arange = torch.arange(
                                 bs_eval, device=device, dtype=torch.long
@@ -187,6 +194,13 @@ def encode_from_preextracted_cnn(
                                 d_tbl = static_eval_table[int(d)]
                                 win_idx_2d = d_tbl["win_global_idx"][idx_tensor]
                                 mask_2d = d_tbl["win_mask"][idx_tensor]
+                                if mask_2d.numel() > 0:
+                                    batch_max_len = max(
+                                        1, int(mask_2d.sum(dim=1).max().item())
+                                    )
+                                    if batch_max_len < mask_2d.shape[1]:
+                                        win_idx_2d = win_idx_2d[:, :batch_max_len]
+                                        mask_2d = mask_2d[:, :batch_max_len]
                                 target_col_t = d_tbl["target_col"][idx_tensor]
                                 masks[int(d)] = d_tbl["avail_mask"][idx_tensor]
                                 revised = _run_fast_padded_transformer(
