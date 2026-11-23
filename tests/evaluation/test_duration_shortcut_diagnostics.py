@@ -15,6 +15,7 @@ from braindecoding.evaluation.duration_shortcut_diagnostics import (
     compute_duration_variability_correlation,
     compute_same_word_duration_substitution,
     extract_event_durations_ms,
+    extract_prev_inter_onset_interval_ms,
     score_embeddings_against_bank,
 )
 
@@ -128,8 +129,18 @@ def test_duration_oracle_variability_corr_and_chunked_scoring() -> None:
     df = pd.DataFrame(rows)
     priors = build_train_duration_priors(df, vocab)
     dur_ms, ioi_ms = extract_event_durations_ms(df)
+    prev_ioi_ms = extract_prev_inter_onset_interval_ms(df)
     assert np.isfinite(dur_ms).all()
     assert np.isfinite(ioi_ms[:-1]).sum() > 0
+    assert np.isnan(prev_ioi_ms[0])
+    assert np.isfinite(prev_ioi_ms[1:]).sum() == np.isfinite(ioi_ms[:-1]).sum()
+    assert "prev_inter_onset_interval" in priors
+    # 同句内第 k 个词的 prev_ioi 严格等于第 k-1 个词的 ioi
+    for k in range(1, len(df)):
+        if df.iloc[k]["上下文编号"] == df.iloc[k - 1]["上下文编号"]:
+            assert prev_ioi_ms[k] == pytest.approx(ioi_ms[k - 1], abs=1e-6)
+        else:
+            assert np.isnan(prev_ioi_ms[k])
 
     oracle = compute_duration_oracle_n50(
         df["标准词"].tolist(), dur_ms, vocab, priors["acoustic_duration"]

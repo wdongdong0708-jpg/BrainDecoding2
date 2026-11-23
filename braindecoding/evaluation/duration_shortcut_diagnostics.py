@@ -82,19 +82,52 @@ def extract_event_durations_ms(
     return acoustic_ms, ioi_ms
 
 
+def extract_prev_inter_onset_interval_ms(
+    table: pd.DataFrame,
+    *,
+    group_col: str = RUNTIME_CONTEXT_COLUMN,
+) -> np.ndarray:
+    """从事件表提取每个词事件到前一个词的起始时间间隔 prev_ioi = t_i - t_{i-1}（ms；句首为 NaN）。"""
+    onset_col = "开始时间" if "开始时间" in table.columns else "onset_seconds"
+    onsets = pd.to_numeric(table[onset_col], errors="coerce").to_numpy(dtype=np.float64)
+    prev_ioi_ms = np.full(len(table), np.nan, dtype=np.float64)
+    if group_col in table.columns:
+        groups = table[group_col].astype(str).to_numpy()
+    elif "记录编号" in table.columns and "上下文编号" in table.columns:
+        groups = (
+            table["记录编号"].astype(str) + "|" + table["上下文编号"].astype(str)
+        ).to_numpy()
+    elif "上下文编号" in table.columns:
+        groups = table["上下文编号"].astype(str).to_numpy()
+    else:
+        groups = np.zeros(len(table), dtype=np.int64)
+
+    for idx in range(1, len(table)):
+        if groups[idx] == groups[idx - 1]:
+            delta = (onsets[idx] - onsets[idx - 1]) * 1000.0
+            if np.isfinite(delta) and 0.0 < delta <= MAX_VALID_DURATION_MS:
+                prev_ioi_ms[idx] = delta
+    return prev_ioi_ms
+
+
 def build_train_duration_priors(
     train_table: pd.DataFrame,
     vocabulary: Sequence[str],
     *,
     group_col: str = RUNTIME_CONTEXT_COLUMN,
 ) -> dict[str, dict[str, Any]]:
-    """严格基于训练集统计每个候选词的声学词长与词起始间隔（IOI）均值和标准差。"""
+    """严格基于训练集统计每个候选词的声学词长、后向 IOI 与前向间隔（prev_ioi）均值和标准差。"""
     word_col = "normalized_word" if "normalized_word" in train_table.columns else "标准词"
     words = train_table[word_col].astype(str).to_numpy()
     acoustic_ms, ioi_ms = extract_event_durations_ms(train_table, group_col=group_col)
+    prev_ioi_ms = extract_prev_inter_onset_interval_ms(train_table, group_col=group_col)
 
     priors: dict[str, dict[str, Any]] = {}
-    for key, values in (("acoustic_duration", acoustic_ms), ("inter_onset_interval", ioi_ms)):
+    for key, values in (
+        ("acoustic_duration", acoustic_ms),
+        ("inter_onset_interval", ioi_ms),
+        ("prev_inter_onset_interval", prev_ioi_ms),
+    ):
         valid = np.isfinite(values)
         global_mean = float(np.mean(values[valid])) if np.any(valid) else 250.0
         global_std = float(np.std(values[valid])) if np.any(valid) else 100.0
@@ -934,8 +967,9 @@ def _evaluate_clean_predictions_diagnostics(
     train_priors: Mapping[str, Mapping[str, Any]],
     dur_oracle_n50: Mapping[str, Any],
     device: torch.device,
+    prev_ioi_ms: np.ndarray | None = None,
 ) -> dict[str, Any]:
-    """对一组 Clean 神经预测向量计算检索精度 + SimpleB2T 图 2a/2b + Clean JS 散度。"""
+    """对一组 Clean 神经预测向量计算检索精度 + SimpleB2T 图 2a/2b + Clean JS + 前词间隔体检。"""
     mask = np.asarray(eval_mask, dtype=bool)
     preds_sub = (
         predictions[mask]
@@ -945,6 +979,11 @@ def _evaluate_clean_predictions_diagnostics(
     words_sub = [str(w) for w, keep in zip(words, mask) if keep]
     dur_sub = acoustic_ms[mask]
     ioi_sub = ioi_ms[mask]
+    prev_ioi_sub = (
+        prev_ioi_ms[mask]
+        if prev_ioi_ms is not None
+        else np.full(len(words_sub), np.nan, dtype=np.float64)
+    )
 
     res_out: dict[str, Any] = {}
     for scope_name, cand_words, cand_bank in (
@@ -968,20 +1007,27 @@ def _evaluate_clean_predictions_diagnostics(
         cov_words = [w for w, c in zip(words_sub, covered) if c]
         cov_dur = dur_sub[covered]
         cov_ioi = ioi_sub[covered]
+        cov_prev_ioi = prev_ioi_sub[covered]
         cov_top_idx = top_idx[covered]
 
         dur_prior = train_priors["acoustic_duration"]
         ioi_prior = train_priors["inter_onset_interval"]
+        prev_ioi_prior = train_priors.get("prev_inter_onset_interval", ioi_prior)
         cand_dur_vec = np.asarray(
             [float(dur_prior["mean"][str(w)]) for w in cand_words], dtype=np.float64
         )
         cand_ioi_vec = np.asarray(
             [float(ioi_prior["mean"][str(w)]) for w in cand_words], dtype=np.float64
         )
+        cand_prev_ioi_vec = np.asarray(
+            [float(prev_ioi_prior["mean"][str(w)]) for w in cand_words],
+            dtype=np.float64,
+        )
 
         pred_top10_dur = cand_dur_vec[cov_top_idx].mean(axis=1)
         pred_top1_dur = cand_dur_vec[cov_top_idx[:, 0]]
         pred_top10_ioi = cand_ioi_vec[cov_top_idx].mean(axis=1)
+        pred_top10_prev_ioi = cand_prev_ioi_vec[cov_top_idx].mean(axis=1)
 
         fig2b_dur_top10 = compute_same_word_duration_substitution(
             cov_words, cov_dur, pred_top10_dur
@@ -991,6 +1037,9 @@ def _evaluate_clean_predictions_diagnostics(
         )
         fig2b_ioi_top10 = compute_same_word_duration_substitution(
             cov_words, cov_ioi, pred_top10_ioi
+        )
+        fig2b_prev_ioi_top10 = compute_same_word_duration_substitution(
+            cov_words, cov_prev_ioi, pred_top10_prev_ioi
         )
 
         fig2a = compute_duration_variability_correlation(
@@ -1013,6 +1062,7 @@ def _evaluate_clean_predictions_diagnostics(
             "fig2b_duration_top10": fig2b_dur_top10,
             "fig2b_duration_top1": fig2b_dur_top1,
             "fig2b_ioi_top10": fig2b_ioi_top10,
+            "fig2b_prev_ioi_top10": fig2b_prev_ioi_top10,
             "fig2a_variability": fig2a,
         }
     return res_out
@@ -1152,12 +1202,18 @@ def run_duration_shortcut_diagnostics(
     eval_dur_ms, eval_ioi_ms = extract_event_durations_ms(
         clean_eval_ds.table, group_col=RUNTIME_CONTEXT_COLUMN
     )
+    eval_prev_ioi_ms = extract_prev_inter_onset_interval_ms(
+        clean_eval_ds.table, group_col=RUNTIME_CONTEXT_COLUMN
+    )
     eval_words = clean_eval_ds.table["normalized_word"].astype(str).tolist()
     dur_oracle_n50 = compute_duration_oracle_n50(
         eval_words, eval_dur_ms, vocab50, train_priors["acoustic_duration"]
     )
     ioi_oracle_n50 = compute_duration_oracle_n50(
         eval_words, eval_ioi_ms, vocab50, train_priors["inter_onset_interval"]
+    )
+    prev_ioi_oracle_n50 = compute_duration_oracle_n50(
+        eval_words, eval_prev_ioi_ms, vocab50, train_priors["prev_inter_onset_interval"]
     )
 
     device = choose_device(cfg["training"].get("device", "auto"))
@@ -1273,6 +1329,7 @@ def run_duration_shortcut_diagnostics(
                 train_priors=train_priors,
                 dur_oracle_n50=dur_oracle_n50,
                 device=device,
+                prev_ioi_ms=eval_prev_ioi_ms,
             )
 
             spliced_diag: dict[str, Any] = {}
@@ -1323,8 +1380,10 @@ def run_duration_shortcut_diagnostics(
             fv_clean = clean_diag["full_vocab"]["retrieval"]
             f2b_n50_dur = clean_diag["N50"]["fig2b_duration_top10"]
             f2b_n50_ioi = clean_diag["N50"]["fig2b_ioi_top10"]
+            f2b_n50_prev_ioi = clean_diag["N50"]["fig2b_prev_ioi_top10"]
             f2b_fv_dur = clean_diag["full_vocab"]["fig2b_duration_top10"]
             f2b_fv_ioi = clean_diag["full_vocab"]["fig2b_ioi_top10"]
+            f2b_fv_prev_ioi = clean_diag["full_vocab"]["fig2b_prev_ioi_top10"]
             f2a_n50 = clean_diag["N50"]["fig2a_variability"]
             sp_sw = spliced_diag.get("same_word", {})
             sp_sh = spliced_diag.get("shuffled", {})
@@ -1338,8 +1397,14 @@ def run_duration_shortcut_diagnostics(
                     "clean_fv_med": fv_clean["median_rank"],
                     "fig2b_n50_dur_err_red_ms": f2b_n50_dur["error_reduction_micro_ms"],
                     "fig2b_n50_ioi_err_red_ms": f2b_n50_ioi["error_reduction_micro_ms"],
+                    "fig2b_n50_prev_ioi_err_red_ms": f2b_n50_prev_ioi["error_reduction_micro_ms"],
+                    "fig2b_n50_prev_ioi_within_r": f2b_n50_prev_ioi["within_word_corr_r"],
+                    "clean_n50_prev_ioi_fast_slow_shift_ms": f2b_n50_prev_ioi["fast_vs_slow_pred_shift_ms"],
                     "fig2b_fv_dur_err_red_ms": f2b_fv_dur["error_reduction_micro_ms"],
                     "fig2b_fv_ioi_err_red_ms": f2b_fv_ioi["error_reduction_micro_ms"],
+                    "fig2b_fv_prev_ioi_err_red_ms": f2b_fv_prev_ioi["error_reduction_micro_ms"],
+                    "fig2b_fv_prev_ioi_within_r": f2b_fv_prev_ioi["within_word_corr_r"],
+                    "clean_fv_prev_ioi_fast_slow_shift_ms": f2b_fv_prev_ioi["fast_vs_slow_pred_shift_ms"],
                     "fig2b_n50_within_r": f2b_n50_dur["within_word_corr_r"],
                     "fig2b_fv_within_r": f2b_fv_dur["within_word_corr_r"],
                     "clean_n50_fast_slow_shift_ms": f2b_n50_dur["fast_vs_slow_pred_shift_ms"],
@@ -1390,6 +1455,9 @@ def run_duration_shortcut_diagnostics(
             "inter_onset_interval": {
                 k: v for k, v in ioi_oracle_n50.items() if k != "per_word_top10"
             },
+            "prev_inter_onset_interval": {
+                k: v for k, v in prev_ioi_oracle_n50.items() if k != "per_word_top10"
+            },
         },
         "spliced_audits": {
             mode_k: bundle[2] for mode_k, bundle in spliced_bundles.items()
@@ -1412,15 +1480,21 @@ def format_diagnostics_table(report: Mapping[str, Any]) -> str:
     lines: list[str] = []
     or_dur = report["duration_oracles_n50"]["acoustic_duration"]
     or_ioi = report["duration_oracles_n50"]["inter_onset_interval"]
+    or_prev = report["duration_oracles_n50"].get("prev_inter_onset_interval")
     lines.append("=" * 124)
     lines.append(
         f" Clean Duration-Shortcut Diagnostics | dataset={report['dataset']} | "
         f"split={report['split']} | events={report['evaluated_events']} | "
         f"|V|={report['full_vocab_size']}"
     )
+    prev_str = (
+        f" | PrevIOI Top10={or_prev['macro_top10']*100:.2f}% (Top1={or_prev['macro_top1']*100:.2f}%)"
+        if isinstance(or_prev, Mapping)
+        else ""
+    )
     lines.append(
         f" Pure 1D Duration Oracle (N50): acoustic_dur Top10={or_dur['macro_top10']*100:.2f}% "
-        f"(Top1={or_dur['macro_top1']*100:.2f}%) | IOI Top10={or_ioi['macro_top10']*100:.2f}%"
+        f"(Top1={or_dur['macro_top1']*100:.2f}%) | IOI Top10={or_ioi['macro_top10']*100:.2f}%{prev_str}"
     )
     for sp_mode, audit in (report.get("spliced_audits") or {}).items():
         lines.append(
@@ -1477,6 +1551,27 @@ def format_diagnostics_table(report: Mapping[str, Any]) -> str:
             f"{_fmt_pct(row['splice_shuffled_fv_mic10']):>8s} "
             f"{_fmt_num(row['splice_shuffled_fv_med'], '6.0f'):>6s}"
         )
+    if any("fig2b_n50_prev_ioi_err_red_ms" in r for r in report["summary_table"]):
+        lines.append("-" * 124)
+        lines.append(
+            " [Part C] Preceding-Word Interval Check (prev_ioi = t_i - t_{i-1}; audits causal K0 backward overlap leakage)"
+        )
+        header_prev = (
+            f"{'Model / Horizon':24s} | {'N50 Prev2b':>10s} {'PrevInWd r':>10s} {'Prev F→S':>9s} | "
+            f"{'FV Prev2b':>10s} {'PrevInWd r':>10s} {'Prev F→S':>9s}"
+        )
+        lines.append(header_prev)
+        lines.append("-" * 124)
+        for row in report["summary_table"]:
+            lines.append(
+                f"{str(row['model'])[:24]:24s} | "
+                f"{_fmt_num(row.get('fig2b_n50_prev_ioi_err_red_ms', float('nan')), '+7.2f'):>10s} "
+                f"{_fmt_num(row.get('fig2b_n50_prev_ioi_within_r', float('nan')), '+7.3f'):>10s} "
+                f"{_fmt_num(row.get('clean_n50_prev_ioi_fast_slow_shift_ms', float('nan')), '+8.2f'):>9s} | "
+                f"{_fmt_num(row.get('fig2b_fv_prev_ioi_err_red_ms', float('nan')), '+7.2f'):>10s} "
+                f"{_fmt_num(row.get('fig2b_fv_prev_ioi_within_r', float('nan')), '+7.3f'):>10s} "
+                f"{_fmt_num(row.get('clean_fv_prev_ioi_fast_slow_shift_ms', float('nan')), '+8.2f'):>9s}"
+            )
     lines.append("=" * 124)
     lines.append(
         "判读参考：2b Dur/IOI (ms) ≈ 0–2 ms、InWd r ≈ 0、F→S ms ≈ 0 且 Shuf N50 稳守 Word-Only 附近 => 无条件开关；"
