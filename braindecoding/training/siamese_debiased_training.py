@@ -15,6 +15,7 @@ import torch
 from torch.nn import functional as F
 
 from braindecoding.training.debiased_losses import (
+    CleanSteinRunningLoss,
     DEFAULT_CAUSAL_PREROLL_SHIFT_SECONDS,
     DEFAULT_SIAMESE_SHIFT_SECONDS,
     VALID_DEBIAS_MODES,
@@ -24,8 +25,11 @@ from braindecoding.training.debiased_losses import (
     _parse_bool_env,
     _parse_shift_list,
     build_centered_vocabulary_bank,
+    build_clean_stein_residual_basis,
+    build_vocabulary_gram_sqrt,
     compute_delta_shift_null_loss,
     compute_euclidean_cross_horizon_loss,
+    compute_excess_coherent_shift_null_loss,
     compute_norm_damped_debiased_embedding,
     compute_norm_damped_rolling_debiased_embedding,
     compute_scaled_shift_null_loss,
@@ -148,6 +152,36 @@ def train_one_epoch_siamese_debiased(
     )
     null_space_vocab_freq_alpha = float(
         siamese_config.get("null_space_vocab_freq_alpha", 0.0)
+    )
+    null_space_excess_coherent = bool(
+        siamese_config.get("null_space_excess_coherent", False)
+    )
+    null_space_excess_tolerance = float(
+        siamese_config.get("null_space_excess_tolerance", 0.08)
+    )
+    lambda_clean_stein = float(siamese_config.get("lambda_clean_stein", 0.0))
+    lambda_delta_clean_stein = float(
+        siamese_config.get("lambda_delta_clean_stein", 0.0)
+    )
+    null_space_increment_mode = bool(
+        siamese_config.get(
+            "null_space_increment_mode",
+            null_space_excess_coherent
+            or lambda_clean_stein > 0.0
+            or lambda_delta_clean_stein > 0.0,
+        )
+    )
+    vocab_gram_sqrt: torch.Tensor | None = preextracted_cache.get(
+        "vocab_gram_sqrt"
+    )
+    clean_stein_context_runner = preextracted_cache.get(
+        "clean_stein_context_runner"
+    )
+    clean_stein_horizon_runners: dict = (
+        preextracted_cache.get("clean_stein_horizon_runners") or {}
+    )
+    delta_clean_stein_runners: dict = (
+        preextracted_cache.get("delta_clean_stein_runners") or {}
     )
 
     train_clean_z: torch.Tensor = preextracted_cache["train_clean_z"]
@@ -390,13 +424,39 @@ def train_one_epoch_siamese_debiased(
                         return_shift_branches=True,
                     )
                     k0_has_row: torch.Tensor | None = None
+                    k0_clean_by_row: torch.Tensor | None = None
                     k0_shift_mean_by_row: torch.Tensor | None = None
                     k0_shift_branches_by_row: torch.Tensor | None = None
                     b_pred_all: torch.Tensor | None = None
+                    delta_y_shift_rev_branches: torch.Tensor | None = None
+                    delta_y_shift_rev_mean: torch.Tensor | None = None
+                    if (
+                        siamese_enabled
+                        and null_space_increment_mode
+                        and y_shift_branches is not None
+                        and chosen_keys
+                    ):
+                        rev_global_idx = idx_tensor[revision_rows]
+                        z_shift_rev_self = torch.stack(
+                            [train_shifted_z[k][rev_global_idx] for k in chosen_keys],
+                            dim=0,
+                        )
+                        raw_dy_rev = y_shift_branches.float() - z_shift_rev_self.float()
+                        delta_y_shift_rev_branches = (
+                            raw_dy_rev - raw_dy_rev.mean(dim=1, keepdim=True)
+                            if int(raw_dy_rev.shape[1]) > 1
+                            else raw_dy_rev
+                        )
+                        delta_y_shift_rev_mean = delta_y_shift_rev_branches.mean(dim=0)
                     if siamese_enabled and y_shift_mean is not None:
                         k0_mask = revision_delays == 0
                         k0_has_row = torch.zeros(
                             bs_len, device=device, dtype=torch.bool
+                        )
+                        k0_clean_by_row = torch.zeros(
+                            (bs_len, y_clean.shape[-1]),
+                            device=device,
+                            dtype=y_clean.dtype,
                         )
                         k0_shift_mean_by_row = torch.zeros(
                             (bs_len, y_shift_mean.shape[-1]),
@@ -416,21 +476,39 @@ def train_one_epoch_siamese_debiased(
                         if bool(k0_mask.any()):
                             k0_rows = revision_rows[k0_mask]
                             k0_has_row[k0_rows] = True
-                            k0_shift_mean_by_row[k0_rows] = y_shift_mean[
+                            k0_clean_by_row[k0_rows] = y_clean[k0_mask].detach()
+                            src_k0_mean = (
+                                delta_y_shift_rev_mean.to(dtype=y_shift_mean.dtype)
+                                if delta_y_shift_rev_mean is not None
+                                else y_shift_mean
+                            )
+                            k0_shift_mean_by_row[k0_rows] = src_k0_mean[
                                 k0_mask
                             ].detach()
                             if (
                                 k0_shift_branches_by_row is not None
                                 and y_shift_branches is not None
                             ):
+                                src_k0_br = (
+                                    delta_y_shift_rev_branches.to(
+                                        dtype=y_shift_branches.dtype
+                                    )
+                                    if delta_y_shift_rev_branches is not None
+                                    else y_shift_branches
+                                )
                                 k0_shift_branches_by_row[:, k0_rows, :] = (
-                                    y_shift_branches[:, k0_mask, :].detach()
+                                    src_k0_br[:, k0_mask, :].detach()
                                 )
 
                         if debias_mode == "null_space":
                             if eta_0 > 0.0:
+                                shift_ref = (
+                                    delta_y_shift_rev_mean.to(dtype=y_clean.dtype)
+                                    if delta_y_shift_rev_mean is not None
+                                    else y_shift_mean
+                                )
                                 y_tilde = compute_norm_damped_debiased_embedding(
-                                    y_clean, y_shift_mean, eta_0
+                                    y_clean, shift_ref, eta_0
                                 )
                             else:
                                 y_tilde = y_clean
@@ -497,16 +575,40 @@ def train_one_epoch_siamese_debiased(
                                 and lambda_null > 0.0
                                 and centered_vocab_bank is not None
                             ):
-                                d_null = compute_scaled_shift_null_loss(
-                                    y_shift_mean[delay_mask],
-                                    centered_vocab_bank,
-                                    y_shift_branches=(
-                                        y_shift_branches[:, delay_mask, :]
-                                        if y_shift_branches is not None
-                                        else None
-                                    ),
-                                    coherent_mean=null_space_coherent_mean,
-                                )
+                                if (
+                                    null_space_excess_coherent
+                                    and delta_y_shift_rev_branches is not None
+                                ):
+                                    d_null = compute_excess_coherent_shift_null_loss(
+                                        delta_y_shift_rev_branches[:, delay_mask, :],
+                                        centered_vocab_bank,
+                                        vocab_gram_sqrt=vocab_gram_sqrt,
+                                        excess_tolerance=null_space_excess_tolerance,
+                                    )
+                                elif (
+                                    null_space_increment_mode
+                                    and delta_y_shift_rev_branches is not None
+                                    and delta_y_shift_rev_mean is not None
+                                ):
+                                    d_null = compute_scaled_shift_null_loss(
+                                        delta_y_shift_rev_mean[delay_mask],
+                                        centered_vocab_bank,
+                                        y_shift_branches=delta_y_shift_rev_branches[
+                                            :, delay_mask, :
+                                        ],
+                                        coherent_mean=null_space_coherent_mean,
+                                    )
+                                else:
+                                    d_null = compute_scaled_shift_null_loss(
+                                        y_shift_mean[delay_mask],
+                                        centered_vocab_bank,
+                                        y_shift_branches=(
+                                            y_shift_branches[:, delay_mask, :]
+                                            if y_shift_branches is not None
+                                            else None
+                                        ),
+                                        coherent_mean=null_space_coherent_mean,
+                                    )
                             else:
                                 d_null = d_siglip * 0.0
                             if (
@@ -519,15 +621,25 @@ def train_one_epoch_siamese_debiased(
                                 and bool(k0_has_row[rows_r].any())
                             ):
                                 valid_k0_r = k0_has_row[rows_r]
-                                y_shift_r_m = y_shift_mean[delay_mask][valid_k0_r]
+                                active_mean_src = (
+                                    delta_y_shift_rev_mean
+                                    if delta_y_shift_rev_mean is not None
+                                    else y_shift_mean
+                                )
+                                active_br_src = (
+                                    delta_y_shift_rev_branches
+                                    if delta_y_shift_rev_branches is not None
+                                    else y_shift_branches
+                                )
+                                y_shift_r_m = active_mean_src[delay_mask][valid_k0_r]
                                 y_shift_k0_m = k0_shift_mean_by_row[
                                     rows_r[valid_k0_r]
                                 ]
                                 y_shift_r_br = (
-                                    y_shift_branches[:, delay_mask, :][
+                                    active_br_src[:, delay_mask, :][
                                         :, valid_k0_r, :
                                     ]
-                                    if y_shift_branches is not None
+                                    if active_br_src is not None
                                     else None
                                 )
                                 y_shift_k0_br = (
@@ -537,13 +649,26 @@ def train_one_epoch_siamese_debiased(
                                     if k0_shift_branches_by_row is not None
                                     else None
                                 )
-                                d_delta_null = compute_euclidean_cross_horizon_loss(
-                                    y_shift_r_m,
-                                    y_shift_k0_m,
-                                    y_shift_r_branches=y_shift_r_br,
-                                    y_shift_k0_branches=y_shift_k0_br,
-                                    coherent_mean=null_space_coherent_mean,
-                                )
+                                if (
+                                    null_space_excess_coherent
+                                    and y_shift_r_br is not None
+                                    and y_shift_k0_br is not None
+                                    and centered_vocab_bank is not None
+                                ):
+                                    d_delta_null = compute_excess_coherent_shift_null_loss(
+                                        y_shift_r_br.float() - y_shift_k0_br.detach().float(),
+                                        centered_vocab_bank,
+                                        vocab_gram_sqrt=vocab_gram_sqrt,
+                                        excess_tolerance=null_space_excess_tolerance,
+                                    )
+                                else:
+                                    d_delta_null = compute_euclidean_cross_horizon_loss(
+                                        y_shift_r_m,
+                                        y_shift_k0_m,
+                                        y_shift_r_branches=y_shift_r_br,
+                                        y_shift_k0_branches=y_shift_k0_br,
+                                        coherent_mean=null_space_coherent_mean,
+                                    )
                                 d_delta_weighted = lambda_delta * d_delta_null
                             else:
                                 d_delta_null = d_siglip * 0.0
@@ -625,11 +750,50 @@ def train_one_epoch_siamese_debiased(
                                 d_delta_null = d_siglip * 0.0
                                 d_delta_weighted = d_siglip * 0.0
 
+                        d_stein_weighted = d_siglip * 0.0
+                        if (
+                            lambda_clean_stein > 0.0
+                            and int(delay) in clean_stein_horizon_runners
+                        ):
+                            global_rows_r = idx_tensor[rows_r]
+                            dy_clean_r = (
+                                y_clean[delay_mask].float()
+                                - train_clean_z[global_rows_r].float()
+                            )
+                            d_stein_weighted = d_stein_weighted + (
+                                lambda_clean_stein
+                                * clean_stein_horizon_runners[int(delay)](
+                                    dy_clean_r, global_rows_r
+                                )
+                            )
+                        if (
+                            int(delay) > 0
+                            and lambda_delta_clean_stein > 0.0
+                            and int(delay) in delta_clean_stein_runners
+                            and k0_has_row is not None
+                            and k0_clean_by_row is not None
+                            and bool(k0_has_row[rows_r].any())
+                        ):
+                            valid_k0_c = k0_has_row[rows_r]
+                            rows_r_c = rows_r[valid_k0_c]
+                            global_rows_c = idx_tensor[rows_r_c]
+                            dy_step_clean = (
+                                y_clean[delay_mask][valid_k0_c].float()
+                                - k0_clean_by_row[rows_r_c].detach().float()
+                            )
+                            d_stein_weighted = d_stein_weighted + (
+                                lambda_delta_clean_stein
+                                * delta_clean_stein_runners[int(delay)](
+                                    dy_step_clean, global_rows_c
+                                )
+                            )
+
                         d_total = (
                             d_siglip
                             + lambda_null * d_null
                             + d_delta_weighted
                             + d_distill_weighted
+                            + d_stein_weighted
                         )
                         horizon_total_losses.append(d_total)
                         horizon_siglip_losses.append(d_siglip.detach())
@@ -674,11 +838,36 @@ def train_one_epoch_siamese_debiased(
                         return_shift_branches=True,
                     )
                     b_ctx_pred: torch.Tensor | None = None
+                    delta_y_shift_ctx_branches: torch.Tensor | None = None
+                    delta_y_shift_ctx_mean: torch.Tensor | None = None
+                    if (
+                        siamese_enabled
+                        and null_space_increment_mode
+                        and y_shift_branches is not None
+                        and shifted_z_batches
+                    ):
+                        z_shift_ctx_self = torch.stack(shifted_z_batches, dim=0)
+                        raw_dy_ctx = (
+                            y_shift_branches.float() - z_shift_ctx_self.float()
+                        )
+                        delta_y_shift_ctx_branches = (
+                            raw_dy_ctx - raw_dy_ctx.mean(dim=1, keepdim=True)
+                            if int(raw_dy_ctx.shape[1]) > 1
+                            else raw_dy_ctx
+                        )
+                        delta_y_shift_ctx_mean = delta_y_shift_ctx_branches.mean(
+                            dim=0
+                        )
                     if siamese_enabled and y_shift_mean is not None:
                         if debias_mode == "null_space":
                             if eta_train > 0.0:
+                                shift_ctx_ref = (
+                                    delta_y_shift_ctx_mean.to(dtype=y_clean.dtype)
+                                    if delta_y_shift_ctx_mean is not None
+                                    else y_shift_mean
+                                )
                                 y_tilde = compute_norm_damped_debiased_embedding(
-                                    y_clean, y_shift_mean, eta_train
+                                    y_clean, shift_ctx_ref, eta_train
                                 )
                             else:
                                 y_tilde = y_clean
@@ -715,18 +904,40 @@ def train_one_epoch_siamese_debiased(
                         and lambda_null > 0.0
                         and centered_vocab_bank is not None
                     ):
-                        d_null = (
-                            compute_scaled_shift_null_loss(
+                        if (
+                            is_causal_tier
+                            and null_space_excess_coherent
+                            and delta_y_shift_ctx_branches is not None
+                        ):
+                            d_null = compute_excess_coherent_shift_null_loss(
+                                delta_y_shift_ctx_branches,
+                                centered_vocab_bank,
+                                vocab_gram_sqrt=vocab_gram_sqrt,
+                                excess_tolerance=null_space_excess_tolerance,
+                            )
+                        elif (
+                            is_causal_tier
+                            and null_space_increment_mode
+                            and delta_y_shift_ctx_branches is not None
+                            and delta_y_shift_ctx_mean is not None
+                        ):
+                            d_null = compute_scaled_shift_null_loss(
+                                delta_y_shift_ctx_mean,
+                                centered_vocab_bank,
+                                y_shift_branches=delta_y_shift_ctx_branches,
+                                coherent_mean=null_space_coherent_mean,
+                            )
+                        elif is_causal_tier:
+                            d_null = compute_scaled_shift_null_loss(
                                 y_shift_mean,
                                 centered_vocab_bank,
                                 y_shift_branches=y_shift_branches,
                                 coherent_mean=null_space_coherent_mean,
                             )
-                            if is_causal_tier
-                            else compute_shift_null_loss(
+                        else:
+                            d_null = compute_shift_null_loss(
                                 y_shift_mean, centered_vocab_bank
                             )
-                        )
                     else:
                         d_null = d_siglip * 0.0
                     if (
@@ -740,10 +951,21 @@ def train_one_epoch_siamese_debiased(
                         )
                     else:
                         d_distill = d_siglip * 0.0
+                    if (
+                        lambda_clean_stein > 0.0
+                        and clean_stein_context_runner is not None
+                        and clean_z_batch is not None
+                    ):
+                        d_stein_ctx = clean_stein_context_runner(
+                            y_clean.float() - clean_z_batch.float(), idx_tensor
+                        )
+                    else:
+                        d_stein_ctx = d_siglip * 0.0
                     loss = (
                         d_siglip
                         + lambda_null * d_null
                         + lambda_distill * d_distill
+                        + lambda_clean_stein * d_stein_ctx
                     )
                     batch_siglip_t = d_siglip.detach()
                     batch_null_t = d_null.detach()

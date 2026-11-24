@@ -6,7 +6,11 @@ from torch import nn
 from torch.nn import functional as F
 
 from braindecoding.models.brain_encoder import DilatedConvEncoder
-from braindecoding.models.transformer import GroupedTransformerEncoder
+from braindecoding.models.transformer import (
+    GroupedTransformerEncoder,
+    SalienceGatedAdditiveEncoder,
+    build_context_encoder,
+)
 
 
 class PreTransformerTrajectoryResidual(nn.Module):
@@ -344,7 +348,7 @@ class BrainEmbeddingModel(nn.Module):
                 "model.context_mode must be either 'grouped' or 'singleton'."
             )
         self.context_transformer = (
-            GroupedTransformerEncoder(
+            build_context_encoder(
                 output_dimension, config.get("transformer", {})
             )
             if self.use_transformer

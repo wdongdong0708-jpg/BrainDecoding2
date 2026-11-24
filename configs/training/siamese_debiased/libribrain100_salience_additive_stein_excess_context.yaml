@@ -1,0 +1,6 @@
+# LibriBrain100 英语 MEG 阶段 2.1（方案 1b）：冻结 CNN + 词内显著性门控加性跨词注意力 + 超额相干错位零空间 + 同词间隔残差正交双保险配置
+extends: ./libribrain100_salience_additive_excess_null_context.yaml
+
+siamese_debiased:
+  lambda_clean_stein: 40.0
+  clean_stein_ema_gamma: 0.03

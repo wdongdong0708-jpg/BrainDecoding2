@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 import math
 import os
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import numpy as np
 import torch
@@ -412,6 +412,30 @@ def resolve_siamese_debiased_config(
             f"null_space_vocab_freq_alpha 必须为非负有限实数，收到 {resolved_freq_alpha!r}。"
         )
 
+    resolved_excess_coherent = bool(
+        raw_block.get("null_space_excess_coherent", False)
+    )
+    resolved_excess_tolerance = float(
+        raw_block.get("null_space_excess_tolerance", 0.08)
+    )
+    resolved_lambda_clean_stein = float(
+        raw_block.get("lambda_clean_stein", 0.0)
+    )
+    resolved_lambda_delta_clean_stein = float(
+        raw_block.get("lambda_delta_clean_stein", 0.0)
+    )
+    resolved_clean_stein_ema_gamma = float(
+        raw_block.get("clean_stein_ema_gamma", 0.03)
+    )
+    resolved_increment_mode = bool(
+        raw_block.get(
+            "null_space_increment_mode",
+            resolved_excess_coherent
+            or resolved_lambda_clean_stein > 0.0
+            or resolved_lambda_delta_clean_stein > 0.0,
+        )
+    )
+
     return {
         "enabled": bool(enabled),
         "debias_mode": resolved_debias_mode,
@@ -428,6 +452,12 @@ def resolve_siamese_debiased_config(
         "temporal_bias_hidden_dim": resolved_hidden_dim,
         "null_space_coherent_mean": bool(resolved_coherent_mean),
         "null_space_vocab_freq_alpha": float(resolved_freq_alpha),
+        "null_space_excess_coherent": bool(resolved_excess_coherent),
+        "null_space_excess_tolerance": float(resolved_excess_tolerance),
+        "null_space_increment_mode": bool(resolved_increment_mode),
+        "lambda_clean_stein": float(resolved_lambda_clean_stein),
+        "lambda_delta_clean_stein": float(resolved_lambda_delta_clean_stein),
+        "clean_stein_ema_gamma": float(resolved_clean_stein_ema_gamma),
         "shift_seconds": resolved_shifts,
         "shifts_per_step": int(resolved_m),
         "s3_cms_eta": resolved_s3_cms_eta,
@@ -682,6 +712,339 @@ def compute_scaled_shift_null_loss(
     queries = y_shift_mean.float()
     projections = queries @ bank.t()
     return (projections * projections).mean(dim=-1).mean() * dim_scale
+
+
+def build_vocabulary_gram_sqrt(
+    centered_vocab_bank: torch.Tensor,
+) -> torch.Tensor:
+    """预计算维度归一化词表 Gram 矩阵平方根 G_V^{1/2} in R^(D x D)。
+
+    满足 ||X @ G_V^{1/2}||_F^2 == (D / |V|) * ||X @ E_tilde_V^T||_F^2，
+    将大词表 (|V|=18031) 每步投影耗时缩减约 18 倍且数值严格等价。
+    """
+    bank_f64 = centered_vocab_bank.detach().to(dtype=torch.float64)
+    num_vocab, dim = bank_f64.shape
+    gram = (float(dim) / max(float(num_vocab), 1.0)) * (bank_f64.t() @ bank_f64)
+    gram = 0.5 * (gram + gram.t())
+    eigvals, eigvecs = torch.linalg.eigh(gram)
+    sqrt_vals = torch.sqrt(eigvals.clamp(min=0.0))
+    gram_sqrt = (eigvecs * sqrt_vals.unsqueeze(0)) @ eigvecs.t()
+    return gram_sqrt.to(
+        device=centered_vocab_bank.device, dtype=torch.float32
+    ).contiguous()
+
+
+def compute_excess_coherent_shift_null_loss(
+    delta_y_shift_branches: torch.Tensor,
+    centered_vocab_bank: torch.Tensor,
+    *,
+    vocab_gram_sqrt: torch.Tensor | None = None,
+    excess_tolerance: float = 0.08,
+) -> torch.Tensor:
+    """超额相干错位零空间惩罚（消除满秩 T5-Large 空间中过往语音非相干方差导致的尾部挤压）。
+
+    对 M 路错位跨词球面增量 u_i^(m) = (y_i^(m) - z_i^(m))_c：
+      - 前向：ReLU(E_mean - (1 + tol) * sg(E_incoh)) >= 0（严格半正定，无相干时序偏置时精确归零）；
+      - 反向（当超额能量 > 0 时）：采用跨分支非对角内积 2 * <v^(0), mean_{m>=1} sg(v^(m))>，
+        提供 1.0x 满幅无偏相干时序偏置梯度且对独立过往语音语义保持精确零惩罚。
+    """
+    if delta_y_shift_branches is None or delta_y_shift_branches.numel() == 0:
+        return centered_vocab_bank.new_zeros(())
+    u_br = delta_y_shift_branches.float()
+    if u_br.ndim == 2:
+        u_br = u_br.unsqueeze(0)
+    num_branches, batch_len, _ = u_br.shape
+    if batch_len > 1:
+        u_br = u_br - u_br.mean(dim=1, keepdim=True)
+
+    if vocab_gram_sqrt is not None:
+        gram_sqrt = vocab_gram_sqrt.to(device=u_br.device, dtype=torch.float32)
+        v_br = torch.matmul(u_br, gram_sqrt)
+    else:
+        bank = centered_vocab_bank.to(device=u_br.device, dtype=torch.float32)
+        scale = math.sqrt(float(bank.shape[1]) / max(float(bank.shape[0]), 1.0))
+        v_br = torch.matmul(u_br, bank.t()) * scale
+
+    if num_branches < 2:
+        return (v_br * v_br).sum(dim=-1).mean()
+
+    with torch.no_grad():
+        v_det = v_br.detach()
+        v_mean_det = v_det.mean(dim=0)
+        e_mean_det = (v_mean_det * v_mean_det).sum(dim=-1).mean()
+        diff_incoh = v_det - v_mean_det.unsqueeze(0)
+        e_incoh_det = (diff_incoh * diff_incoh).sum(dim=-1).sum(dim=0).mean() / float(
+            num_branches * (num_branches - 1)
+        )
+        excess_det = F.relu(
+            e_mean_det - (1.0 + max(0.0, float(excess_tolerance))) * e_incoh_det
+        )
+
+    if not v_br.requires_grad or float(excess_det.item()) <= 0.0:
+        return excess_det + (v_br.sum() * 0.0)
+
+    if not v_br[1:].requires_grad:
+        other_mean = v_br[1:].detach().mean(dim=0)
+        cross_term = 2.0 * (v_br[0] * other_mean).sum(dim=-1).mean()
+    else:
+        sum_sq = (v_br.sum(dim=0) ** 2).sum(dim=-1).mean()
+        diag_sq = (v_br * v_br).sum(dim=-1).sum(dim=0).mean()
+        cross_term = (sum_sq - diag_sq) / float(num_branches * (num_branches - 1))
+
+    return excess_det + (cross_term - cross_term.detach())
+
+
+def _count_english_vowels(word: str) -> int:
+    return sum(1 for ch in word.lower() if ch in "aeiouy")
+
+
+def build_clean_stein_residual_basis(
+    words: Sequence[str],
+    targets: torch.Tensor,
+    sentence_indices: torch.Tensor,
+    onset_seconds: torch.Tensor,
+    device: torch.device,
+    *,
+    lags: tuple[int, ...] = (-3, -2, -1, 0, 1, 2),
+    shrinkage_kappa: float = 5.0,
+) -> dict[str, torch.Tensor | tuple[int, ...]]:
+    """仅基于训练划分构建与目标词义严格正交的多滞后同词间隔残差 Stein-RBF 基矩阵。
+
+    步骤：
+      1. 句内相邻词间隔 ell_j = log(clamp(tau_{j+1} - tau_j, 0.02, 5.0))；
+      2. 字形长度线性先验 + 留一法（LOO）经验贝叶斯收缩（消除单次词残差恒零问题）；
+      3. 8 维每滞后 Stein-RBF 基：[r_j, r_j * RBF_1..6(mu_LOO(j)), r_j^2 - var_LOO]；
+      4. 两步目标词正交化（LOO 同目标词均值扣除 + 对中心化目标词嵌入矩阵线性正交投影），
+         消除停顿—句首词相关性混淆，确保对真实神经词义零惩罚。
+    """
+    n_rows = int(len(words))
+    sent_np = sentence_indices.detach().cpu().numpy().astype(np.int64)
+    onset_np = onset_seconds.detach().cpu().numpy().astype(np.float64)
+
+    valid_pair = np.zeros(n_rows, dtype=np.bool_)
+    log_dt = np.zeros(n_rows, dtype=np.float64)
+    if n_rows > 1:
+        same_sent = sent_np[:-1] == sent_np[1:]
+        raw_dt = onset_np[1:] - onset_np[:-1]
+        ok = same_sent & np.isfinite(raw_dt) & (raw_dt > 1e-4) & (raw_dt <= 5.0)
+        valid_pair[:-1] = ok
+        log_dt[:-1] = np.where(
+            ok, np.log(np.clip(raw_dt, 0.02, 5.0)), 0.0
+        )
+
+    # 1. 字形先验 OLS + LOO 词均值收缩
+    unique_words = sorted(set(str(w) for w in words))
+    word_to_id = {w: i for i, w in enumerate(unique_words)}
+    word_ids = np.asarray([word_to_id[str(w)] for w in words], dtype=np.int64)
+    num_types = len(unique_words)
+
+    ortho_feats = np.zeros((num_types, 4), dtype=np.float64)
+    for wid, w_str in enumerate(unique_words):
+        w_len = float(len(w_str))
+        ortho_feats[wid, 0] = 1.0
+        ortho_feats[wid, 1] = w_len
+        ortho_feats[wid, 2] = math.log1p(w_len)
+        ortho_feats[wid, 3] = float(_count_english_vowels(w_str))
+
+    valid_idx = np.flatnonzero(valid_pair)
+    if len(valid_idx) >= 16:
+        x_ols = ortho_feats[word_ids[valid_idx]]
+        y_ols = log_dt[valid_idx]
+        beta, _, _, _ = np.linalg.lstsq(x_ols, y_ols, rcond=None)
+        prior_mu_by_type = ortho_feats @ beta
+    else:
+        prior_mu_by_type = np.full(num_types, -1.2, dtype=np.float64)
+
+    sum_by_type = np.bincount(
+        word_ids[valid_idx], weights=log_dt[valid_idx], minlength=num_types
+    )
+    cnt_by_type = np.bincount(word_ids[valid_idx], minlength=num_types).astype(
+        np.float64
+    )
+    kappa = float(shrinkage_kappa)
+    wid_valid = word_ids[valid_idx]
+    mu_loo_valid = (
+        (sum_by_type[wid_valid] - log_dt[valid_idx])
+        + kappa * prior_mu_by_type[wid_valid]
+    ) / ((cnt_by_type[wid_valid] - 1.0).clip(min=0.0) + kappa)
+
+    raw_res_valid = log_dt[valid_idx] - mu_loo_valid
+    sigma_r = float(np.std(raw_res_valid)) if len(raw_res_valid) > 1 else 0.35
+    sigma_r = max(sigma_r, 1e-3)
+    std_res_valid = np.clip(raw_res_valid / sigma_r, -5.0, 5.0)
+
+    # 2. 构造单位置 8 维 Stein-RBF 特征
+    if len(mu_loo_valid) >= 16:
+        rbf_centers = np.quantile(
+            mu_loo_valid, np.linspace(0.10, 0.90, 6)
+        ).astype(np.float64)
+        rbf_sigma = max(
+            float(np.std(mu_loo_valid)) * 0.45,
+            float(rbf_centers[-1] - rbf_centers[0]) / 5.0,
+            0.12,
+        )
+    else:
+        rbf_centers = np.linspace(-2.0, -0.5, 6, dtype=np.float64)
+        rbf_sigma = 0.25
+
+    sq_res_valid = std_res_valid**2
+    sum_sq_by_type = np.bincount(
+        wid_valid, weights=sq_res_valid, minlength=num_types
+    )
+    global_var = float(np.mean(sq_res_valid)) if len(sq_res_valid) > 0 else 1.0
+    var_loo_valid = (
+        (sum_sq_by_type[wid_valid] - sq_res_valid) + kappa * global_var
+    ) / ((cnt_by_type[wid_valid] - 1.0).clip(min=0.0) + kappa)
+
+    pos_features = np.zeros((n_rows, 8), dtype=np.float32)
+    if len(valid_idx) > 0:
+        rbf_vals = np.exp(
+            -0.5 * ((mu_loo_valid[:, None] - rbf_centers[None, :]) / rbf_sigma) ** 2
+        )
+        feat_v = np.empty((len(valid_idx), 8), dtype=np.float64)
+        feat_v[:, 0] = std_res_valid
+        feat_v[:, 1:7] = std_res_valid[:, None] * rbf_vals
+        feat_v[:, 7] = np.clip(sq_res_valid - var_loo_valid, -6.0, 6.0)
+        pos_features[valid_idx] = feat_v.astype(np.float32)
+
+    # 3. 拼装同句各滞后 d in lags 特征并记录句尾边界距离以支持 Ch.3 各视界精确掩码
+    lag_tuple = tuple(int(d) for d in lags)
+    feat_dim = 8 * len(lag_tuple)
+    raw_basis = np.zeros((n_rows, feat_dim), dtype=np.float64)
+
+    # 计算每行在所属句子内的 (sent_start, sent_end_inclusive)
+    sent_start = np.zeros(n_rows, dtype=np.int64)
+    sent_end = np.zeros(n_rows, dtype=np.int64)
+    s_cur = 0
+    while s_cur < n_rows:
+        e_cur = s_cur + 1
+        s_val = sent_np[s_cur]
+        while e_cur < n_rows and sent_np[e_cur] == s_val:
+            e_cur += 1
+        sent_start[s_cur:e_cur] = s_cur
+        sent_end[s_cur:e_cur] = e_cur - 1
+        s_cur = e_cur
+
+    row_arange = np.arange(n_rows, dtype=np.int64)
+    for l_idx, d in enumerate(lag_tuple):
+        j_idx = row_arange + int(d)
+        # 间隔 j 连接词 j 与 j+1，必须同时位于同一句内 [sent_start, sent_end]
+        in_sent = (j_idx >= sent_start) & ((j_idx + 1) <= sent_end)
+        valid_rows = np.flatnonzero(in_sent)
+        if len(valid_rows) > 0:
+            raw_basis[valid_rows, l_idx * 8 : (l_idx + 1) * 8] = pos_features[
+                j_idx[valid_rows]
+            ]
+
+    # 4. 两步目标词正交化：(a) 同目标词 w_i LOO 均值扣除；(b) 对中心化目标词嵌入矩阵正交投影
+    total_cnt_by_type = np.bincount(word_ids, minlength=num_types).astype(
+        np.float64
+    )
+    basis_step1 = np.empty_like(raw_basis)
+    for col in range(feat_dim):
+        col_vals = raw_basis[:, col]
+        col_sum_by_type = np.bincount(
+            word_ids, weights=col_vals, minlength=num_types
+        )
+        loo_target_mean = (col_sum_by_type[word_ids] - col_vals) / (
+            (total_cnt_by_type[word_ids] - 1.0).clip(min=0.0) + kappa
+        )
+        basis_step1[:, col] = col_vals - loo_target_mean
+    basis_step1 -= basis_step1.mean(axis=0, keepdims=True)
+
+    # 在 GPU 上执行对中心化唯一词嵌入的快速线性正交投影 (仅 O(N * D * P) 一次矩阵乘)
+    basis_gpu = torch.from_numpy(basis_step1).to(
+        device=device, dtype=torch.float32
+    )
+    t_f32 = F.normalize(targets.detach().to(device=device, dtype=torch.float32), dim=-1)
+    t_centered = t_f32 - t_f32.mean(dim=0, keepdim=True)
+    dim_t = int(t_centered.shape[1])
+    gram_t = (t_centered.t() @ t_centered) / max(float(n_rows), 1.0)
+    gram_reg = gram_t + 1e-3 * torch.eye(dim_t, device=device, dtype=torch.float32)
+    cov_tb = (t_centered.t() @ basis_gpu) / max(float(n_rows), 1.0)
+    proj_weights = torch.linalg.solve(gram_reg, cov_tb)
+    basis_orth = basis_gpu - (t_centered @ proj_weights)
+    basis_orth = basis_orth - basis_orth.mean(dim=0, keepdim=True)
+    col_rms = basis_orth.pow(2).mean(dim=0, keepdim=True).sqrt().clamp(min=1e-4)
+    basis_orth = (basis_orth / col_rms).clamp(-6.0, 6.0)
+
+    return {
+        "basis": basis_orth.to(dtype=torch.float16).contiguous(),
+        "lags": lag_tuple,
+        "features_per_lag": 8,
+    }
+
+
+class CleanSteinRunningLoss:
+    """跨批次指数移动平均凸半正定同词间隔残差正交损失（消除 B=128 有限批方差偏置）。"""
+
+    def __init__(
+        self,
+        stein_bundle: dict,
+        vocab_gram_sqrt: torch.Tensor,
+        *,
+        ema_gamma: float = 0.03,
+        active_lags: Iterable[int] | None = None,
+    ) -> None:
+        self.basis_fp16: torch.Tensor = stein_bundle["basis"]
+        self.lags: tuple[int, ...] = tuple(stein_bundle["lags"])
+        self.features_per_lag: int = int(stein_bundle["features_per_lag"])
+        self.vocab_gram_sqrt: torch.Tensor = vocab_gram_sqrt.detach().float()
+        self.ema_gamma = float(ema_gamma)
+
+        if active_lags is None:
+            col_indices = list(range(int(self.basis_fp16.shape[1])))
+        else:
+            allowed = {int(x) for x in active_lags}
+            col_indices = []
+            for idx, lag_val in enumerate(self.lags):
+                if lag_val in allowed:
+                    start = idx * self.features_per_lag
+                    col_indices.extend(range(start, start + self.features_per_lag))
+        self.col_idx = torch.as_tensor(
+            col_indices, device=self.basis_fp16.device, dtype=torch.long
+        )
+        self.probe_dim = int(self.col_idx.numel())
+        self.ema_cov = torch.zeros(
+            (int(self.vocab_gram_sqrt.shape[0]), max(1, self.probe_dim)),
+            device=self.basis_fp16.device,
+            dtype=torch.float32,
+        )
+        self.initialized = False
+
+    def __call__(
+        self,
+        delta_y_clean: torch.Tensor,
+        row_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        if (
+            self.probe_dim == 0
+            or delta_y_clean.numel() == 0
+            or int(delta_y_clean.shape[0]) < 2
+        ):
+            return delta_y_clean.sum() * 0.0
+        bsz = int(delta_y_clean.shape[0])
+        dy = delta_y_clean.float()
+        dy_c = dy - dy.mean(dim=0, keepdim=True)
+        v_clean = dy_c @ self.vocab_gram_sqrt  # [B, D]
+
+        z_stein = (
+            self.basis_fp16.index_select(0, row_indices)
+            .index_select(1, self.col_idx)
+            .float()
+        )
+        z_stein = z_stein - z_stein.mean(dim=0, keepdim=True)
+
+        c_batch = (v_clean.t() @ z_stein) / float(bsz)  # [D, P]
+        gamma = self.ema_gamma
+        if not self.initialized:
+            c_tilde = gamma * c_batch
+        else:
+            c_tilde = (1.0 - gamma) * self.ema_cov.detach() + gamma * c_batch
+        with torch.no_grad():
+            self.ema_cov.copy_(c_tilde.detach())
+            self.initialized = True
+        return (c_tilde * c_tilde).sum() / (2.0 * gamma * float(self.probe_dim))
 
 
 def compute_euclidean_cross_horizon_loss(

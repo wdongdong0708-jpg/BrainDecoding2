@@ -1,0 +1,20 @@
+# LibriBrain100 英语 MEG 阶段 2.3（方案 1）：冻结 CNN + 词内显著性门控加性局部前缀编码（r=0,1,2）+ 超额相干错位零空间配置
+extends: ./libribrain100_causal_null_space_prefix_revision.yaml
+
+model:
+  transformer:
+    architecture: salience_gated_additive
+    heads: 16
+    head_dimension: 32
+    max_relative_distance: 24
+    residual_max_norm: 0.65
+    attention_dropout: 0.1
+
+training:
+  learning_rate: 3.0e-4
+  early_stop_metric: full_vocab
+
+siamese_debiased:
+  null_space_excess_coherent: true
+  null_space_excess_tolerance: 0.08
+  null_space_increment_mode: true

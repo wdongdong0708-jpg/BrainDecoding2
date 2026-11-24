@@ -2219,7 +2219,10 @@ def run_training_workflow(
     refresh_preextracted_train_features_fn = None
     if use_preextracted_cnn and start_epoch < max_epochs:
         from braindecoding.training.siamese_debiased_training import (
+            CleanSteinRunningLoss,
             build_centered_vocabulary_bank,
+            build_clean_stein_residual_basis,
+            build_vocabulary_gram_sqrt,
             preextract_frozen_cnn_features,
             refresh_preextracted_train_features as refresh_preextracted_train_features_fn,
             train_one_epoch_siamese_debiased,
@@ -2263,16 +2266,39 @@ def run_training_workflow(
             ),
             show_progress=show_progress,
         )
-        if siamese_enabled and (
-            float(siamese_spec.get("lambda_null", 0.0)) > 0.0
-            or float(
-                siamese_spec.get(
-                    "lambda_delta", siamese_spec.get("lambda_delta_null", 0.0)
+        ctx_mod = getattr(model, "context_transformer", None)
+        if (
+            ctx_mod is not None
+            and hasattr(ctx_mod, "set_clean_input_mean")
+            and resume_ckpt_path is None
+        ):
+            ctx_mod.set_clean_input_mean(
+                preextracted_cache["train_clean_z"].float().mean(dim=0)
+            )
+
+        lam_clean_stein = float(siamese_spec.get("lambda_clean_stein", 0.0))
+        lam_delta_clean_stein = float(
+            siamese_spec.get("lambda_delta_clean_stein", 0.0)
+        )
+        need_vocab_bank = bool(
+            (
+                siamese_enabled
+                and (
+                    float(siamese_spec.get("lambda_null", 0.0)) > 0.0
+                    or float(
+                        siamese_spec.get(
+                            "lambda_delta",
+                            siamese_spec.get("lambda_delta_null", 0.0),
+                        )
+                    )
+                    > 0.0
+                    or float(siamese_spec.get("beta_delta_cm", 0.0)) > 0.0
                 )
             )
-            > 0.0
-            or float(siamese_spec.get("beta_delta_cm", 0.0)) > 0.0
-        ):
+            or lam_clean_stein > 0.0
+            or lam_delta_clean_stein > 0.0
+        )
+        if need_vocab_bank:
             centered_vocab_bank = build_centered_vocabulary_bank(
                 train_ds,
                 vocabulary,
@@ -2281,6 +2307,60 @@ def run_training_workflow(
                     siamese_spec.get("null_space_vocab_freq_alpha", 0.0)
                 ),
             )
+            vocab_gram_sqrt = build_vocabulary_gram_sqrt(centered_vocab_bank)
+            preextracted_cache["vocab_gram_sqrt"] = vocab_gram_sqrt
+
+            if (lam_clean_stein > 0.0 or lam_delta_clean_stein > 0.0) and not synthetic_mode:
+                t_meta = preextracted_cache["train_meta"]
+                stein_bundle = build_clean_stein_residual_basis(
+                    t_meta["words"],
+                    t_meta["targets"],
+                    t_meta["sentence_indices"],
+                    t_meta["onset_seconds"],
+                    device,
+                )
+                ema_gamma = float(
+                    siamese_spec.get("clean_stein_ema_gamma", 0.03)
+                )
+                if revision:
+                    horizons_cfg = tuple(
+                        int(d)
+                        for d in getattr(
+                            model, "prefix_revision_horizons", (0, 1, 2)
+                        )
+                    )
+                    all_lags = tuple(stein_bundle["lags"])
+                    preextracted_cache["clean_stein_horizon_runners"] = {
+                        d: CleanSteinRunningLoss(
+                            stein_bundle,
+                            vocab_gram_sqrt,
+                            ema_gamma=ema_gamma,
+                            active_lags=[
+                                lg for lg in all_lags if lg <= int(d) - 1
+                            ],
+                        )
+                        for d in horizons_cfg
+                    }
+                    preextracted_cache["delta_clean_stein_runners"] = {
+                        d: CleanSteinRunningLoss(
+                            stein_bundle,
+                            vocab_gram_sqrt,
+                            ema_gamma=ema_gamma,
+                            active_lags=[
+                                lg for lg in all_lags if 0 <= lg <= int(d) - 1
+                            ],
+                        )
+                        for d in horizons_cfg
+                        if int(d) > 0
+                    }
+                else:
+                    preextracted_cache["clean_stein_context_runner"] = (
+                        CleanSteinRunningLoss(
+                            stein_bundle,
+                            vocab_gram_sqrt,
+                            ema_gamma=ema_gamma,
+                        )
+                    )
 
     print(
         f"{sep}\n"

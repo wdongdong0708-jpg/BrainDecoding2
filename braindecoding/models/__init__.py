@@ -35,7 +35,9 @@ from braindecoding.models.transformer import (
     GroupedTransformerEncoder,
     LocalRelativePositionBias,
     PhysicalTimeGapBias,
+    SalienceGatedAdditiveEncoder,
     _local_attention_window_pre_hook,
+    build_context_encoder,
 )
 
 build_word_decoding_model = build_brain_embedding_model
@@ -55,6 +57,8 @@ __all__ = [
     "EventTimeInteractionBias",
     "AdaptiveDirectionalBiasGate",
     "GroupedTransformerEncoder",
+    "SalienceGatedAdditiveEncoder",
+    "build_context_encoder",
     "PreTransformerTrajectoryResidual",
     "RelationDiscriminationHead",
     "TemporalGeometryBiasHead",

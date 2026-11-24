@@ -1,0 +1,17 @@
+# LibriBrain100 英语 MEG 阶段 2.1（方案 2）：冻结 CNN + 4 层软有界残差标准自注意力 + 超额相干错位零空间 + 同词间隔残差正交配置
+extends: ./libribrain100_siamese_debiased_context.yaml
+
+model:
+  transformer:
+    depth: 4
+    soft_bounded_residual_max_norm: 0.65
+
+training:
+  early_stop_metric: full_vocab
+
+siamese_debiased:
+  null_space_excess_coherent: true
+  null_space_excess_tolerance: 0.08
+  null_space_increment_mode: true
+  lambda_clean_stein: 80.0
+  clean_stein_ema_gamma: 0.03

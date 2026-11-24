@@ -6,6 +6,9 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
+from braindecoding.models.transformer import _apply_soft_bounded_residual
+
+
 def _can_use_fast_padded_transformer(model) -> bool:
     """检查模型是否可直接运行零 Python 循环的 2D 张量填充 Transformer 极速路径。"""
     ctx = getattr(model, "context_transformer", None)
@@ -13,6 +16,8 @@ def _can_use_fast_padded_transformer(model) -> bool:
         return False
     if getattr(model, "pre_transformer_trajectory", None) is not None:
         return False
+    if bool(getattr(ctx, "is_salience_gated_additive", False)):
+        return True
     return (
         getattr(ctx, "query_window_left_radius", None) is None
         and not bool(getattr(ctx, "chunk_summary_enabled", False))
@@ -28,6 +33,8 @@ def _can_use_direct_layer_loop(
     use_causal_attention: bool,
 ) -> bool:
     """检查是否可直接执行零冗余同步、支持末层单目标剪枝与多分支共享 Dropout 的原生层循环。"""
+    if bool(getattr(ctx, "is_salience_gated_additive", False)):
+        return True
     enc = getattr(ctx, "encoder", None)
     if enc is None:
         return False
@@ -170,6 +177,18 @@ def _run_fast_padded_transformer(
     3. 唯一窗口去重与末层单目标剪枝：前 15 层仅在去重后的唯一窗口 [G] 上计算，第 16 层（末层）
        仅对目标词位 [Q] 计算 Query、输出投影与 FeedForward，省去末层 80% 冗余计算并直接返回 [Q, D]。
     """
+    if bool(getattr(ctx, "is_salience_gated_additive", False)):
+        return ctx.forward_padded(
+            padded,
+            mask,
+            causal_override=causal_override,
+            target_col_idx=target_col_idx,
+            target_group_idx=target_group_idx,
+            num_branches=num_branches,
+            synchronize_dropout_rng=synchronize_dropout_rng,
+            shared_dropout_fn=_apply_siamese_shared_dropout,
+        )
+    soft_max_norm = getattr(ctx, "soft_bounded_residual_max_norm", None)
     use_causal_attention = (
         ctx.causal_attention
         if causal_override is None
@@ -380,8 +399,25 @@ def _run_fast_padded_transformer(
                     xv = post_main_norm(xv).to(dtype=work_dtype)
 
         if target_col_idx is not None:
-            return enc.final_norm(x_last).squeeze(1)
+            out_q = enc.final_norm(x_last).squeeze(1)
+            if soft_max_norm is not None:
+                z_base_q = x_init[win_idx, target_col_idx]
+                out_q = _apply_soft_bounded_residual(
+                    z_base_q, out_q - z_base_q, soft_max_norm
+                )
+            return out_q
         xv_final = enc.final_norm(xv)
+        if soft_max_norm is not None:
+            xv_final = _apply_soft_bounded_residual(
+                x_init.reshape(bsz * max_len, dim).index_select(
+                    0, valid_flat_idx
+                ),
+                xv_final
+                - x_init.reshape(bsz * max_len, dim).index_select(
+                    0, valid_flat_idx
+                ),
+                soft_max_norm,
+            )
         out_full = xv_final.new_zeros((bsz * max_len, dim))
         out_full.index_copy_(0, valid_flat_idx, xv_final)
         return out_full.view(bsz, max_len, dim)
@@ -443,7 +479,19 @@ def _run_fast_padded_transformer(
                 encoded.shape[0], device=encoded.device, dtype=torch.long
             )
         )
-        return encoded[win_idx, target_col_idx]
+        out_q = encoded[win_idx, target_col_idx]
+        if soft_max_norm is not None:
+            z_base_q = padded[win_idx, target_col_idx].to(dtype=out_q.dtype)
+            out_q = _apply_soft_bounded_residual(
+                z_base_q, out_q - z_base_q, soft_max_norm
+            )
+        return out_q
+    if soft_max_norm is not None:
+        encoded = _apply_soft_bounded_residual(
+            padded.to(dtype=encoded.dtype),
+            encoded - padded.to(dtype=encoded.dtype),
+            soft_max_norm,
+        ) * mask.unsqueeze(-1).to(dtype=encoded.dtype)
     return encoded
 
 
