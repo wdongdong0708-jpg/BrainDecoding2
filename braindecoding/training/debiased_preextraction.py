@@ -38,6 +38,7 @@ def _extract_single_dataset_cnn_embeddings(
     preroll_seconds: float = 45.0,
     show_progress: bool = True,
     progress_desc: str = "Pre-extract CNN",
+    out_tensor: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """在固定 temporal_shift_seconds 下按原始行序提取 Stage-1 CNN 归一化输出向量 [N, D]。"""
     model.brain_encoder.eval()
@@ -68,6 +69,21 @@ def _extract_single_dataset_cnn_embeddings(
                 float(temporal_shift_seconds),
                 shift_mode="preroll",
                 preroll_seconds=float(preroll_seconds),
+            )
+
+        if device.type == "cuda" and hasattr(
+            dataset_obj, "extract_cnn_embeddings_gpu"
+        ):
+            return dataset_obj.extract_cnn_embeddings_gpu(
+                model,
+                device=device,
+                batch_size=int(batch_size),
+                amp=bool(amp),
+                amp_dtype=amp_dtype,
+                show_progress=show_progress,
+                progress_desc=progress_desc,
+                progress_wrap=_wrap_progress,
+                out_tensor=out_tensor,
             )
 
         loader = DataLoader(
@@ -118,7 +134,11 @@ def _extract_single_dataset_cnn_embeddings(
         if hasattr(dataset_obj, "preroll_seconds"):
             dataset_obj.preroll_seconds = orig_preroll_sec
 
-    return torch.cat(chunks, dim=0)
+    result = torch.cat(chunks, dim=0)
+    if out_tensor is not None:
+        out_tensor.copy_(result, non_blocking=False)
+        return out_tensor
+    return result
 
 
 def _extract_static_dataset_metadata(
@@ -754,7 +774,8 @@ def refresh_preextracted_train_features(
     norm_shift_mode = _normalize_shift_mode(shift_mode) or "preroll"
     eff_preroll = float(preroll_seconds)
 
-    train_clean_cpu = _extract_single_dataset_cnn_embeddings(
+    clean_dst = preextracted_cache["train_clean_z_pad"][: len(train_ds)]
+    _extract_single_dataset_cnn_embeddings(
         model,
         train_ds,
         device=device,
@@ -766,30 +787,42 @@ def refresh_preextracted_train_features(
         preroll_seconds=eff_preroll,
         show_progress=show_progress,
         progress_desc="Refresh [Train | Clean 0s]",
-    )
-    preextracted_cache["train_clean_z_pad"][: len(train_clean_cpu)].copy_(
-        train_clean_cpu, non_blocking=False
+        out_tensor=clean_dst,
     )
 
     for f_sec in shifts:
-        shifted_cpu = _extract_single_dataset_cnn_embeddings(
-            model,
-            train_ds,
-            device=device,
-            batch_size=batch_size,
-            amp=amp,
-            amp_dtype=amp_dtype,
-            temporal_shift_seconds=f_sec,
-            shift_mode=norm_shift_mode,
-            preroll_seconds=eff_preroll,
-            show_progress=show_progress,
-            progress_desc=f"Refresh [Train | Shift {f_sec:+.0f}s]",
-        )
         if f_sec in preextracted_cache["train_shifted_z_pad"]:
-            preextracted_cache["train_shifted_z_pad"][f_sec][
-                : len(shifted_cpu)
-            ].copy_(shifted_cpu, non_blocking=False)
+            shift_dst = preextracted_cache["train_shifted_z_pad"][f_sec][
+                : len(train_ds)
+            ]
+            _extract_single_dataset_cnn_embeddings(
+                model,
+                train_ds,
+                device=device,
+                batch_size=batch_size,
+                amp=amp,
+                amp_dtype=amp_dtype,
+                temporal_shift_seconds=f_sec,
+                shift_mode=norm_shift_mode,
+                preroll_seconds=eff_preroll,
+                show_progress=show_progress,
+                progress_desc=f"Refresh [Train | Shift {f_sec:+.0f}s]",
+                out_tensor=shift_dst,
+            )
         else:
+            shifted_cpu = _extract_single_dataset_cnn_embeddings(
+                model,
+                train_ds,
+                device=device,
+                batch_size=batch_size,
+                amp=amp,
+                amp_dtype=amp_dtype,
+                temporal_shift_seconds=f_sec,
+                shift_mode=norm_shift_mode,
+                preroll_seconds=eff_preroll,
+                show_progress=show_progress,
+                progress_desc=f"Refresh [Train | Shift {f_sec:+.0f}s]",
+            )
             unpad, pad = _alloc_padded_gpu_feature_matrix(
                 shifted_cpu,
                 device,

@@ -15,11 +15,15 @@ import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter1d
 import torch
+from torch.nn import functional as F
 from torch.utils.data import Dataset
 
 
 CONDITIONS = ("shared", "independent")
 GENERATOR_VERSION = "smooth_pulses_50hz_v1"
+_GPU_CHUNK_MAX_STREAMS = 256
+_GPU_CHUNK_MAX_PADDED_SAMPLES = 65_536
+_GPU_KERNEL_CACHE: dict[tuple[float, str], tuple[tuple[int, torch.Tensor], ...]] = {}
 
 
 @lru_cache(maxsize=3)
@@ -66,6 +70,132 @@ def synthetic_stream(samples, channels, sfreq, rng, *, pad_seconds=1.0):
         signal += component
     signal /= float(signal.std(dtype=np.float64)) + 1e-6
     return np.ascontiguousarray(signal[:, pad:pad + samples])
+
+
+def _gpu_gaussian_kernels(
+    sfreq: float, device: torch.device
+) -> tuple[tuple[int, torch.Tensor], ...]:
+    cache_key = (round(float(sfreq), 6), str(device))
+    cached = _GPU_KERNEL_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    built: list[tuple[int, torch.Tensor]] = []
+    for sigma_ms in (60, 120, 240):
+        k_np = _gaussian_kernel(sigma_ms / 1000.0 * float(sfreq)).astype(np.float32)
+        radius = len(k_np) // 2
+        k_tensor = torch.from_numpy(k_np).to(
+            device=device, dtype=torch.float32
+        ).view(1, 1, -1)
+        built.append((radius, k_tensor))
+    result = tuple(built)
+    _GPU_KERNEL_CACHE[cache_key] = result
+    return result
+
+
+def synthesize_streams_batch_gpu(
+    lengths,
+    channels: int,
+    sfreq: float,
+    generator: torch.Generator,
+    *,
+    device: torch.device,
+    pad_seconds: float = 1.0,
+) -> torch.Tensor:
+    """在 GPU 上批量合成与 synthetic_stream 同分布的平滑高斯脉冲流 [G, C, L_max]。
+
+    每个流独立按自身有效填充长度 n_g = L_g + 2*pad 采样三尺度 1 Hz 泊松无放回脉冲、
+    通道独立标准正态振幅与精确 1D 高斯卷积，并按各流总体标准差（ddof=0）归一化后切去两端 pad。
+    """
+    channels = int(channels)
+    sfreq = float(sfreq)
+    if channels <= 0 or sfreq <= 0 or pad_seconds < 0.96:
+        raise ValueError("Invalid synthetic stream shape, sampling rate or padding")
+    lengths_t = torch.as_tensor(lengths, device=device, dtype=torch.long).view(-1)
+    if lengths_t.numel() == 0 or bool((lengths_t <= 0).any().item()):
+        raise ValueError("Invalid synthetic stream shape, sampling rate or padding")
+
+    g_count = int(lengths_t.numel())
+    pad = int(np.ceil(pad_seconds * sfreq))
+    n_t = lengths_t + 2 * pad
+    n_max = int(n_t.max().item())
+    l_max = int(lengths_t.max().item())
+
+    pos_grid = torch.arange(n_max, device=device, dtype=torch.long).unsqueeze(0)
+    valid_n = pos_grid < n_t.unsqueeze(1)
+    signal = torch.zeros(
+        (g_count, channels, n_max), device=device, dtype=torch.float32
+    )
+    kernels = _gpu_gaussian_kernels(sfreq, device)
+
+    for radius, k_1d in kernels:
+        counts = torch.minimum(
+            torch.poisson(
+                n_t.to(dtype=torch.float32) / sfreq, generator=generator
+            ).to(dtype=torch.long),
+            n_t,
+        )
+        k_max = int(counts.max().item())
+        if k_max <= 0:
+            continue
+        u = torch.rand(
+            (g_count, n_max),
+            device=device,
+            dtype=torch.float64,
+            generator=generator,
+        )
+        u.masked_fill_(~valid_n, 2.0)
+        _, top_pos = torch.topk(
+            u, k=k_max, dim=-1, largest=False, sorted=True
+        )
+        active = (
+            torch.arange(k_max, device=device, dtype=torch.long).unsqueeze(0)
+            < counts.unsqueeze(1)
+        ).unsqueeze(1)
+        pulse_amps = torch.randn(
+            (g_count, channels, k_max),
+            device=device,
+            dtype=torch.float32,
+            generator=generator,
+        )
+        pulse_amps.masked_fill_(~active, 0.0)
+        impulses = torch.zeros(
+            (g_count, channels, n_max), device=device, dtype=torch.float32
+        )
+        impulses.scatter_add_(
+            2, top_pos.unsqueeze(1).expand(g_count, channels, k_max), pulse_amps
+        )
+        smoothed = F.conv1d(
+            impulses.reshape(g_count * channels, 1, n_max),
+            k_1d,
+            padding=radius,
+        ).view(g_count, channels, n_max)
+        signal.add_(smoothed)
+
+    signal.masked_fill_(~valid_n.unsqueeze(1), 0.0)
+    denom = (n_t * channels).to(dtype=torch.float64).view(g_count, 1, 1)
+    mean_g = signal.sum(dim=(1, 2), keepdim=True, dtype=torch.float64) / denom
+    sq_mean_g = (
+        (signal * signal).sum(dim=(1, 2), keepdim=True, dtype=torch.float64)
+        / denom
+    )
+    var_g = torch.clamp(sq_mean_g - mean_g.pow(2), min=0.0)
+    std_g = (torch.sqrt(var_g) + 1e-6).to(dtype=torch.float32)
+    signal.div_(std_g)
+    return signal[:, :, pad : pad + l_max]
+
+
+def transform_window_gpu(
+    windows: torch.Tensor, *, baseline_samples: int = 0, clamp: float | None = 5.0
+) -> torch.Tensor:
+    """在 GPU 张量 [B, C, W] 上执行与 transform_window 完全一致的基线均值扣除与截断。"""
+    result = windows
+    if baseline_samples:
+        result = result - result[:, :, : int(baseline_samples)].mean(
+            dim=-1, keepdim=True
+        )
+    if clamp is not None:
+        result = result.clamp(-float(clamp), float(clamp))
+    return result
 
 
 def transform_window(window, *, baseline_samples=0, clamp=5.0):
@@ -152,6 +282,7 @@ class SyntheticTimingDataset(Dataset):
                 raise ValueError("Onsets within a segment must be chronological")
             self.starts[indices] -= values.min()
             self.stream_lengths[key] = int(values.max() - values.min() + base.window_samples)
+        self._gpu_stream_plan = None
 
     def __getattr__(self, name):
         return getattr(self.base, name)
@@ -222,6 +353,348 @@ class SyntheticTimingDataset(Dataset):
                 float(self.onset_seconds[index]), dtype=torch.float32
             )
         return sample
+
+    def _get_gpu_stream_plan(self) -> list[dict]:
+        """按句段长度排序并自适应分块，缓存零标签依赖的批量脉冲流索引计划。"""
+        if self._gpu_stream_plan is not None:
+            return self._gpu_stream_plan
+
+        pad = int(np.ceil(1.0 * self.sfreq))
+        units: list[tuple[int, str, np.ndarray]] = []
+        if self.condition == "shared":
+            grouped: dict[tuple[str, str, str], list[int]] = {}
+            for row_idx, key in enumerate(self.group_keys):
+                grouped.setdefault(key, []).append(row_idx)
+            for key, indices in grouped.items():
+                stream_len = int(self.stream_lengths[key])
+                ident_str = f"{key[0]}\x1f{key[1]}\x1f{key[2]}\x1fshared_stream"
+                units.append(
+                    (stream_len, ident_str, np.asarray(indices, dtype=np.int64))
+                )
+        else:
+            for row_idx, key in enumerate(self.group_keys):
+                stream_len = int(self.stream_lengths[key])
+                ident_str = (
+                    f"{key[0]}\x1f{key[1]}\x1f{key[2]}\x1f"
+                    f"{self.event_ids[row_idx]}\x1f{row_idx}"
+                )
+                units.append(
+                    (stream_len, ident_str, np.asarray([row_idx], dtype=np.int64))
+                )
+
+        units.sort(key=lambda item: (item[0], item[1]))
+        plan: list[dict] = []
+        cur: list[tuple[int, str, np.ndarray]] = []
+        for unit in units:
+            next_padded = int(unit[0]) + 2 * pad
+            if cur and (
+                len(cur) >= _GPU_CHUNK_MAX_STREAMS
+                or (len(cur) + 1) * next_padded > _GPU_CHUNK_MAX_PADDED_SAMPLES
+            ):
+                plan.append(self._pack_gpu_chunk_spec(cur))
+                cur = []
+            cur.append(unit)
+        if cur:
+            plan.append(self._pack_gpu_chunk_spec(cur))
+
+        self._gpu_stream_plan = plan
+        return plan
+
+    def _pack_gpu_chunk_spec(
+        self, chunk_units: list[tuple[int, str, np.ndarray]]
+    ) -> dict:
+        digest = hashlib.sha256(
+            "\n".join(u_key for _, u_key, _ in chunk_units).encode("utf-8")
+        ).hexdigest()[:32]
+        lengths_np = np.asarray(
+            [u_len for u_len, _, _ in chunk_units], dtype=np.int64
+        )
+        rows_np = np.concatenate(
+            [u_rows for _, _, u_rows in chunk_units]
+        ).astype(np.int64, copy=False)
+        local_g_np = np.repeat(
+            np.arange(len(chunk_units), dtype=np.int64),
+            [len(u_rows) for _, _, u_rows in chunk_units],
+        )
+        return {
+            "identity_digest": digest,
+            "lengths": lengths_np,
+            "rows": rows_np,
+            "local_g": local_g_np,
+            "starts": self.starts[rows_np].astype(np.int64, copy=False),
+            "subjects": self.subject_indices[rows_np].astype(
+                np.int64, copy=False
+            ),
+        }
+
+    def _chunk_gpu_seed(self, identity_digest: str, shift_key: float) -> int:
+        is_shifted = abs(shift_key) > 1e-9
+        if self.split == "train":
+            seed_parts = (
+                (
+                    GENERATOR_VERSION,
+                    "gpu_batch_v1",
+                    self.condition,
+                    "train",
+                    self.training_seed,
+                    self.epoch,
+                    identity_digest,
+                    "shift",
+                    shift_key,
+                )
+                if is_shifted
+                else (
+                    GENERATOR_VERSION,
+                    "gpu_batch_v1",
+                    self.condition,
+                    "train",
+                    self.training_seed,
+                    self.epoch,
+                    identity_digest,
+                )
+            )
+        else:
+            seed_parts = (
+                (
+                    GENERATOR_VERSION,
+                    "gpu_batch_v1",
+                    self.condition,
+                    self.split,
+                    self.evaluation_seed,
+                    identity_digest,
+                    "shift",
+                    shift_key,
+                )
+                if is_shifted
+                else (
+                    GENERATOR_VERSION,
+                    "gpu_batch_v1",
+                    self.condition,
+                    self.split,
+                    self.evaluation_seed,
+                    identity_digest,
+                )
+            )
+        return stable_seed(*seed_parts) % (1 << 63)
+
+    @torch.no_grad()
+    def materialize_windows_gpu(
+        self,
+        *,
+        device: torch.device,
+        apply_transform: bool = True,
+    ) -> torch.Tensor:
+        """在指定设备上批量合成并按原始行序切出全部词窗 [N, C, W]（供测试与小规模核验）。"""
+        n_rows = len(self.table)
+        ch_count = int(self.channel_count)
+        win_len = int(self.window_samples)
+        if n_rows == 0:
+            return torch.empty(
+                (0, ch_count, win_len), device=device, dtype=torch.float32
+            )
+
+        out = torch.empty(
+            (n_rows, ch_count, win_len), device=device, dtype=torch.float32
+        )
+        plan = self._get_gpu_stream_plan()
+        shift_key = round(float(self.temporal_shift_seconds), 4)
+        win_arange = torch.arange(
+            win_len, device=device, dtype=torch.long
+        ).unsqueeze(0)
+        gen = torch.Generator(device=device)
+
+        for chunk in plan:
+            gen.manual_seed(
+                self._chunk_gpu_seed(chunk["identity_digest"], shift_key)
+            )
+            sig = synthesize_streams_batch_gpu(
+                chunk["lengths"],
+                ch_count,
+                self.sfreq,
+                gen,
+                device=device,
+            )
+            g_chunk, _, l_max = sig.shape
+            sig_flat_tc = (
+                sig.transpose(1, 2).contiguous().view(g_chunk * l_max, ch_count)
+            )
+            rows_dev = torch.as_tensor(
+                chunk["rows"], device=device, dtype=torch.long
+            )
+            local_g_dev = torch.as_tensor(
+                chunk["local_g"], device=device, dtype=torch.long
+            )
+            starts_dev = torch.as_tensor(
+                chunk["starts"], device=device, dtype=torch.long
+            )
+            linear_gt = (
+                local_g_dev.unsqueeze(1) * l_max
+                + starts_dev.unsqueeze(1)
+                + win_arange
+            )
+            windows = (
+                sig_flat_tc.index_select(0, linear_gt.reshape(-1))
+                .view(int(rows_dev.numel()), win_len, ch_count)
+                .transpose(1, 2)
+                .contiguous()
+            )
+            if apply_transform:
+                windows = transform_window_gpu(
+                    windows,
+                    baseline_samples=self.baseline_samples,
+                    clamp=self.clamp,
+                )
+            out.index_copy_(0, rows_dev, windows)
+        return out
+
+    @torch.no_grad()
+    def extract_cnn_embeddings_gpu(
+        self,
+        model,
+        *,
+        device: torch.device,
+        batch_size: int = 512,
+        amp: bool = True,
+        amp_dtype: torch.dtype = torch.bfloat16,
+        show_progress: bool = True,
+        progress_desc: str = "Pre-extract CNN",
+        progress_wrap=None,
+        out_tensor: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """在 GPU 上直接合成平滑脉冲流、切窗归一化并前向提取冻结 CNN 特征 [N, D]。"""
+        n_rows = len(self.table)
+        if n_rows == 0:
+            if out_tensor is not None:
+                return out_tensor
+            return torch.empty((0, 0), dtype=torch.float32)
+
+        model.brain_encoder.eval()
+        plan = self._get_gpu_stream_plan()
+        shift_key = round(float(self.temporal_shift_seconds), 4)
+        ch_count = int(self.channel_count)
+        win_len = int(self.window_samples)
+        eff_bs = max(1, int(batch_size))
+        use_amp = (
+            bool(amp)
+            and device.type == "cuda"
+            and amp_dtype in {torch.float16, torch.bfloat16}
+        )
+        win_arange = torch.arange(
+            win_len, device=device, dtype=torch.long
+        ).unsqueeze(0)
+        gen = torch.Generator(device=device)
+        out_cpu: torch.Tensor | None = None
+
+        if progress_wrap is not None:
+            iterable, pbar = progress_wrap(
+                plan,
+                enabled=show_progress,
+                desc=progress_desc,
+                total=len(plan),
+            )
+        else:
+            iterable, pbar = plan, None
+
+        try:
+            for chunk in iterable:
+                gen.manual_seed(
+                    self._chunk_gpu_seed(chunk["identity_digest"], shift_key)
+                )
+                sig = synthesize_streams_batch_gpu(
+                    chunk["lengths"],
+                    ch_count,
+                    self.sfreq,
+                    gen,
+                    device=device,
+                )
+                g_chunk, _, l_max = sig.shape
+                sig_flat_tc = (
+                    sig.transpose(1, 2)
+                    .contiguous()
+                    .view(g_chunk * l_max, ch_count)
+                )
+                rows_np = chunk["rows"]
+                local_g_dev = torch.as_tensor(
+                    chunk["local_g"], device=device, dtype=torch.long
+                )
+                starts_dev = torch.as_tensor(
+                    chunk["starts"], device=device, dtype=torch.long
+                )
+                subj_dev = torch.as_tensor(
+                    chunk["subjects"], device=device, dtype=torch.long
+                )
+                rows_dev = (
+                    torch.as_tensor(
+                        rows_np, device=out_tensor.device, dtype=torch.long
+                    )
+                    if (out_tensor is not None and out_tensor.device.type != "cpu")
+                    else None
+                )
+
+                w_total = int(len(rows_np))
+                for sub_start in range(0, w_total, eff_bs):
+                    sub_end = min(sub_start + eff_bs, w_total)
+                    sub_b = sub_end - sub_start
+                    linear_gt = (
+                        local_g_dev[sub_start:sub_end].unsqueeze(1) * l_max
+                        + starts_dev[sub_start:sub_end].unsqueeze(1)
+                        + win_arange
+                    )
+                    windows = (
+                        sig_flat_tc.index_select(0, linear_gt.reshape(-1))
+                        .view(sub_b, win_len, ch_count)
+                        .transpose(1, 2)
+                        .contiguous()
+                    )
+                    windows = transform_window_gpu(
+                        windows,
+                        baseline_samples=self.baseline_samples,
+                        clamp=self.clamp,
+                    )
+                    with torch.autocast(
+                        device_type=device.type,
+                        dtype=amp_dtype,
+                        enabled=use_amp,
+                    ):
+                        z_sub = F.normalize(
+                            model.brain_encoder(
+                                windows, subj_dev[sub_start:sub_end]
+                            ),
+                            dim=-1,
+                        )
+                    if out_tensor is not None:
+                        if out_tensor.device.type == "cpu":
+                            out_tensor[rows_np[sub_start:sub_end]] = z_sub.to(
+                                device="cpu", dtype=out_tensor.dtype
+                            )
+                        else:
+                            out_tensor.index_copy_(
+                                0,
+                                rows_dev[sub_start:sub_end],
+                                z_sub.to(
+                                    device=out_tensor.device,
+                                    dtype=out_tensor.dtype,
+                                ),
+                            )
+                    else:
+                        if out_cpu is None:
+                            out_cpu = torch.empty(
+                                (n_rows, int(z_sub.shape[-1])),
+                                dtype=torch.float32,
+                                device="cpu",
+                            )
+                        out_cpu[rows_np[sub_start:sub_end]] = (
+                            z_sub.float().cpu()
+                        )
+                del sig, sig_flat_tc
+        finally:
+            if pbar is not None:
+                pbar.close()
+
+        if out_tensor is not None:
+            return out_tensor
+        assert out_cpu is not None
+        return out_cpu
 
 
 def overlap_statistics(table, *, window_seconds=1.0):

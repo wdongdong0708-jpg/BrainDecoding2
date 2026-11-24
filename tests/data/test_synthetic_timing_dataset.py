@@ -6,8 +6,21 @@ import pandas as pd
 import pytest
 
 from scipy.ndimage import gaussian_filter1d
-from braindecoding.data.synthetic_timing_dataset import SyntheticTimingDataset, overlap_statistics, transform_window, synthetic_stream
+import torch
+from torch import nn
+from torch.nn import functional as F
+from braindecoding.data.synthetic_timing_dataset import (
+    SyntheticTimingDataset,
+    overlap_statistics,
+    synthetic_stream,
+    synthesize_streams_batch_gpu,
+    transform_window,
+)
 from braindecoding.training import synthetic_timing_control as control
+from braindecoding.training.debiased_preextraction import (
+    _extract_single_dataset_cnn_embeddings,
+    refresh_preextracted_train_features,
+)
 
 pytestmark = pytest.mark.current_protocol
 
@@ -178,4 +191,147 @@ def test_include_onset_seconds_passthrough():
     assert item_with_onset["onset_seconds"].dtype == np.float32 or str(item_with_onset["onset_seconds"].dtype) == "torch.float32"
     assert float(item_with_onset["onset_seconds"]) == pytest.approx(0.75, abs=1e-6)
     np.testing.assert_allclose(item_default["meg"].numpy(), item_with_onset["meg"].numpy(), atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "dev_str",
+    ("cpu", "cuda") if torch.cuda.is_available() else ("cpu",),
+)
+def test_gpu_batched_streams_overlap_epoch_and_label_invariance(dev_str):
+    dev = torch.device(dev_str)
+    gen = torch.Generator(device=dev)
+    gen.manual_seed(20261124)
+    mixed = synthesize_streams_batch_gpu(
+        [50, 172, 936], channels=16, sfreq=50.0, generator=gen, device=dev
+    )
+    assert mixed.shape == (3, 16, 936)
+    assert torch.isfinite(mixed).all()
+
+    # Shared vs independent sample-sharing invariant
+    shared = dataset("shared", "train", onsets=(0.0, 0.3, 0.6))
+    indep = dataset("independent", "train", onsets=(0.0, 0.3, 0.6))
+    raw_shared = shared.materialize_windows_gpu(device=dev, apply_transform=False)
+    raw_indep = indep.materialize_windows_gpu(device=dev, apply_transform=False)
+    torch.testing.assert_close(raw_shared[0, :, 15:], raw_shared[1, :, :35], rtol=0, atol=0)
+    assert not torch.equal(raw_indep[0, :, 15:], raw_indep[1, :, :35])
+
+    # Transform matches CPU transform_window bit-for-bit
+    tr_shared = shared.materialize_windows_gpu(device=dev, apply_transform=True).cpu().numpy()
+    expected_tr = np.stack(
+        [
+            transform_window(
+                raw_shared[i].cpu().numpy(),
+                baseline_samples=shared.baseline_samples,
+                clamp=shared.clamp,
+            )
+            for i in range(len(shared))
+        ],
+        axis=0,
+    )
+    np.testing.assert_allclose(tr_shared, expected_tr, rtol=1e-6, atol=1e-6)
+
+    # Train epoch refresh vs fixed val/test & temporal shift independence
+    w_ep0 = shared.materialize_windows_gpu(device=dev, apply_transform=True)
+    shared.set_epoch(1)
+    w_ep1 = shared.materialize_windows_gpu(device=dev, apply_transform=True)
+    assert not torch.equal(w_ep0, w_ep1)
+    shared.set_epoch(0)
+    torch.testing.assert_close(
+        w_ep0, shared.materialize_windows_gpu(device=dev, apply_transform=True), rtol=0, atol=0
+    )
+
+    shared.temporal_shift_seconds = -15.0
+    w_shift = shared.materialize_windows_gpu(device=dev, apply_transform=True)
+    assert not torch.equal(w_ep0, w_shift)
+    shared.temporal_shift_seconds = 0.0
+
+    val_a = SyntheticTimingDataset(fake_base(), "shared", split="val", training_seed=0)
+    val_b = SyntheticTimingDataset(fake_base(), "shared", split="val", training_seed=7)
+    v0 = val_a.materialize_windows_gpu(device=dev, apply_transform=True)
+    val_a.set_epoch(9)
+    torch.testing.assert_close(v0, val_a.materialize_windows_gpu(device=dev, apply_transform=True), rtol=0, atol=0)
+    torch.testing.assert_close(v0, val_b.materialize_windows_gpu(device=dev, apply_transform=True), rtol=0, atol=0)
+
+    # Label invariance
+    base_renamed = fake_base()
+    base_renamed.table.normalized_word = ["other_a", "other_b", "other_c"]
+    val_renamed = SyntheticTimingDataset(base_renamed, "shared", split="val", training_seed=0)
+    torch.testing.assert_close(
+        v0, val_renamed.materialize_windows_gpu(device=dev, apply_transform=True), rtol=0, atol=0
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for GPU preextraction fast path")
+def test_gpu_cnn_preextraction_and_inplace_refresh():
+    dev = torch.device("cuda")
+
+    class DummyBrainEncoder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.proj = nn.Linear(8 * 50, 32, bias=False)
+            self.subj_emb = nn.Embedding(4, 32)
+
+        def forward(self, x, subj_idx):
+            return self.proj(x.flatten(1)) + self.subj_emb(subj_idx)
+
+    dummy_model = SimpleNamespace(brain_encoder=DummyBrainEncoder().to(dev).eval())
+    onsets = (0.0, 0.3, 0.0, 0.2, 0.5, 0.9)
+    groups = ["g_long", "g_long", "g_short", "g_mid", "g_mid", "g_mid"]
+    subjects = ["sub-01", "sub-01", "sub-02", "sub-01", "sub-01", "sub-01"]
+    ds = SyntheticTimingDataset(
+        fake_base(onsets=onsets, group_ids=groups, subjects=subjects),
+        "shared",
+        split="train",
+    )
+
+    # Batch-size invariance & exact match to manual forward on materialized windows
+    z_bs2 = ds.extract_cnn_embeddings_gpu(
+        dummy_model, device=dev, batch_size=2, amp=False, show_progress=False
+    )
+    z_bs64 = _extract_single_dataset_cnn_embeddings(
+        dummy_model,
+        ds,
+        device=dev,
+        batch_size=64,
+        amp=False,
+        temporal_shift_seconds=0.0,
+        shift_mode="preroll",
+        show_progress=False,
+    )
+    torch.testing.assert_close(z_bs2, z_bs64, rtol=1e-5, atol=1e-5)
+
+    win_all = ds.materialize_windows_gpu(device=dev, apply_transform=True)
+    subj_all = torch.as_tensor(ds.subject_indices, device=dev, dtype=torch.long)
+    with torch.no_grad():
+        expected_z = F.normalize(dummy_model.brain_encoder(win_all, subj_all), dim=-1).float().cpu()
+    torch.testing.assert_close(z_bs64, expected_z, rtol=1e-5, atol=1e-5)
+
+    # In-place VRAM refresh updates rows [0:N] and keeps padding row [N] strictly zero
+    n_rows = len(ds)
+    clean_pad = torch.zeros((n_rows + 1, 32), device=dev, dtype=torch.bfloat16)
+    shift_pad = torch.zeros((n_rows + 1, 32), device=dev, dtype=torch.bfloat16)
+    cache = {
+        "train_clean_z": clean_pad[:n_rows],
+        "train_clean_z_pad": clean_pad,
+        "train_shifted_z": {-15.0: shift_pad[:n_rows]},
+        "train_shifted_z_pad": {-15.0: shift_pad},
+    }
+    ds.set_epoch(2)
+    refresh_preextracted_train_features(
+        cache,
+        dummy_model,
+        ds,
+        shift_seconds=(-15.0,),
+        shift_mode="preroll",
+        device=dev,
+        batch_size=3,
+        amp=True,
+        amp_dtype=torch.bfloat16,
+        show_progress=False,
+    )
+    assert float(clean_pad[n_rows].abs().max().item()) == 0.0
+    assert float(shift_pad[n_rows].abs().max().item()) == 0.0
+    assert not torch.allclose(cache["train_clean_z"], cache["train_shifted_z"][-15.0])
+    assert not torch.allclose(cache["train_clean_z"].float().cpu(), z_bs64, atol=1e-3)
+
 
