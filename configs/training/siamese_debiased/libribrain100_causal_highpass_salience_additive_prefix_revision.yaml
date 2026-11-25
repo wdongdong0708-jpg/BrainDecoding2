@@ -1,0 +1,6 @@
+# LibriBrain100 英语 MEG 阶段 2.3（方案体系 II 最小改动，不压制真实听觉韵律）：2.0s 因果高通冻结 CNN + 词内显著性门控加性局部前缀编码（r=0,1,2）+ 超额相干错位零空间
+extends: ./libribrain100_salience_additive_excess_null_prefix_revision.yaml
+
+dataset:
+  baseline_seconds: 0.0
+  causal_highpass_seconds: 2.0

@@ -243,6 +243,8 @@ def _preextracted_cache_path(
     val_len: int,
     shift_mode: str = "deterministic_circular",
     preroll_seconds: float = 45.0,
+    baseline_seconds: float = 0.5,
+    causal_highpass_seconds: float = 0.0,
 ) -> Path:
     norm_mode = _normalize_shift_mode(shift_mode) or "deterministic_circular"
     sig_payload = {
@@ -261,6 +263,12 @@ def _preextracted_cache_path(
     if norm_mode != "deterministic_circular" and shift_seconds:
         sig_payload["shift_mode"] = norm_mode
         sig_payload["preroll_seconds"] = round(float(preroll_seconds), 4)
+    if not np.isclose(float(baseline_seconds), 0.5, atol=1e-6):
+        sig_payload["baseline_seconds"] = round(float(baseline_seconds), 6)
+    if float(causal_highpass_seconds) > 1e-6:
+        sig_payload["causal_highpass_seconds"] = round(
+            float(causal_highpass_seconds), 6
+        )
     digest = hashlib.sha256(
         json.dumps(sig_payload, sort_keys=True).encode("utf-8")
     ).hexdigest()[:16]
@@ -526,6 +534,8 @@ def preextract_frozen_cnn_features(
     shifts = [float(s) for s in shift_seconds]
     norm_shift_mode = _normalize_shift_mode(shift_mode) or "deterministic_circular"
     eff_preroll = float(preroll_seconds)
+    eff_baseline = float(getattr(train_ds, "baseline_seconds", 0.5))
+    eff_causal_hp = float(getattr(train_ds, "causal_highpass_seconds", 0.0))
     feature_dtype = (
         torch.bfloat16
         if (bool(amp) and device.type == "cuda" and amp_dtype == torch.bfloat16)
@@ -544,6 +554,8 @@ def preextract_frozen_cnn_features(
             val_len=len(val_ds),
             shift_mode=norm_shift_mode,
             preroll_seconds=eff_preroll,
+            baseline_seconds=eff_baseline,
+            causal_highpass_seconds=eff_causal_hp,
         )
         if cache_file.is_file():
             t0 = time.perf_counter()
@@ -597,6 +609,8 @@ def preextract_frozen_cnn_features(
                     val_len=len(val_ds),
                     shift_mode=norm_shift_mode,
                     preroll_seconds=eff_preroll,
+                    baseline_seconds=eff_baseline,
+                    causal_highpass_seconds=eff_causal_hp,
                 ),
                 norm_shift_mode,
             ),
@@ -611,6 +625,8 @@ def preextract_frozen_cnn_features(
                     train_len=len(train_ds),
                     val_len=len(val_ds),
                     shift_mode="deterministic_circular",
+                    baseline_seconds=eff_baseline,
+                    causal_highpass_seconds=eff_causal_hp,
                 ),
                 "deterministic_circular",
             ),
@@ -625,6 +641,8 @@ def preextract_frozen_cnn_features(
                     train_len=len(train_ds),
                     val_len=len(val_ds),
                     shift_mode="deterministic_circular",
+                    baseline_seconds=eff_baseline,
+                    causal_highpass_seconds=eff_causal_hp,
                 ),
                 "deterministic_circular",
             ),

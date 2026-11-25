@@ -107,6 +107,134 @@ class SentenceBatchSampler(Sampler):
         return count + int(batch_size > 0)
 
 
+class MinGapBatchSampler(Sampler):
+    """按记录内最小时间间隔贪心分泳道的去重叠词级批采样器。
+
+    将同一记录内事件按 ``onset_seconds`` 升序贪心分配到互不重叠的泳道，保证同一泳道内
+    任意来自相同记录的两个词起始时间间隔不小于 ``min_gap_seconds``；跨记录事件可安全共享
+    同一泳道，从而在保持 100% 训练词覆盖率的前提下，彻底消除同批对比负样本的时间窗物理重叠。
+    """
+
+    def __init__(
+        self,
+        recording_ids,
+        onset_seconds,
+        batch_size,
+        *,
+        min_gap_seconds=2.5,
+        shuffle=True,
+        seed=0,
+    ):
+        self.batch_size = int(batch_size)
+        if self.batch_size <= 0:
+            raise ValueError(f"batch_size 必须为正整数：{self.batch_size}")
+        self.min_gap_seconds = float(min_gap_seconds)
+        if self.min_gap_seconds <= 0.0:
+            raise ValueError(f"min_gap_seconds 必须为正数：{self.min_gap_seconds}")
+        self.shuffle = bool(shuffle)
+        self.seed = int(seed)
+        self.epoch = 0
+
+        self._recording_ids = [str(r) for r in recording_ids]
+        self._onset_seconds = np.asarray(onset_seconds, dtype=np.float64)
+        if len(self._recording_ids) != len(self._onset_seconds):
+            raise ValueError("recording_ids 与 onset_seconds 长度不一致。")
+
+        by_recording = {}
+        for idx, rec in enumerate(self._recording_ids):
+            by_recording.setdefault(rec, []).append(idx)
+
+        global_lanes = []
+        for rec in sorted(by_recording):
+            rec_indices = sorted(
+                by_recording[rec], key=lambda i: (float(self._onset_seconds[i]), i)
+            )
+            rec_lane_last_onset = []
+            for idx in rec_indices:
+                onset = float(self._onset_seconds[idx])
+                placed = False
+                for lane_idx, last_onset in enumerate(rec_lane_last_onset):
+                    if onset - last_onset >= self.min_gap_seconds:
+                        rec_lane_last_onset[lane_idx] = onset
+                        global_lanes[lane_idx].append(idx)
+                        placed = True
+                        break
+                if not placed:
+                    lane_idx = len(rec_lane_last_onset)
+                    rec_lane_last_onset.append(onset)
+                    if lane_idx >= len(global_lanes):
+                        global_lanes.append([])
+                    global_lanes[lane_idx].append(idx)
+
+        self.lanes = [lane for lane in global_lanes if lane]
+
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+
+    def _can_insert_into_batch(self, batch, candidate_idx):
+        cand_rec = self._recording_ids[candidate_idx]
+        cand_onset = float(self._onset_seconds[candidate_idx])
+        for existing_idx in batch:
+            if (
+                self._recording_ids[existing_idx] == cand_rec
+                and abs(float(self._onset_seconds[existing_idx]) - cand_onset)
+                < self.min_gap_seconds
+            ):
+                return False
+        return True
+
+    def _build_batches(self):
+        rng = np.random.default_rng(self.seed + self.epoch)
+        batches = []
+        singletons = []
+        for lane in self.lanes:
+            items = list(lane)
+            if self.shuffle and len(items) > 1:
+                order = rng.permutation(len(items))
+                items = [items[int(i)] for i in order]
+            n = len(items)
+            if n == 1:
+                singletons.append(items[0])
+                continue
+            cursor = 0
+            while cursor < n:
+                remaining = n - cursor
+                if (
+                    remaining == self.batch_size + 1
+                    and self.batch_size >= 3
+                ):
+                    batches.append(items[cursor : cursor + self.batch_size - 1])
+                    batches.append(items[cursor + self.batch_size - 1 : n])
+                    cursor = n
+                else:
+                    stop = min(cursor + self.batch_size, n)
+                    batches.append(items[cursor:stop])
+                    cursor = stop
+
+        for single_idx in singletons:
+            placed = False
+            for batch in batches:
+                if len(batch) < self.batch_size and self._can_insert_into_batch(
+                    batch, single_idx
+                ):
+                    batch.append(single_idx)
+                    placed = True
+                    break
+            if not placed:
+                batches.append([single_idx])
+
+        if self.shuffle and len(batches) > 1:
+            order = rng.permutation(len(batches))
+            batches = [batches[int(i)] for i in order]
+        return batches
+
+    def __iter__(self):
+        yield from self._build_batches()
+
+    def __len__(self):
+        return len(self._build_batches())
+
+
 def _wrap_progress(iterable, *, enabled=False, desc=None, total=None):
     """在启用进度条时使用 tqdm 包装迭代器，若未安装 tqdm 则优雅降级。"""
     if not enabled:
@@ -163,15 +291,43 @@ def make_loader(
     resolved_batch_size = int(
         batch_size if batch_size is not None else training_config["batch_size"]
     )
-    sampler = SentenceBatchSampler(
-        dataset.table[group_column].astype(str).tolist(),
-        batch_size=resolved_batch_size,
-        shuffle=shuffle,
-        seed=int(training_config["seed"]),
-        preserve_complete_groups=bool(
-            training_config.get("preserve_complete_groups", False)
-        ),
-    )
+    preserve_groups = bool(training_config.get("preserve_complete_groups", False))
+    word_sampling = str(training_config.get("word_sampling", "") or "").strip().lower()
+    if (
+        bool(shuffle)
+        and not preserve_groups
+        and word_sampling == "min_gap_sampler"
+    ):
+        rec_col = (
+            "recording_id"
+            if "recording_id" in dataset.table.columns
+            else "记录编号"
+        )
+        onset_col = (
+            "onset_seconds"
+            if "onset_seconds" in dataset.table.columns
+            else "开始时间"
+        )
+        if rec_col not in dataset.table.columns or onset_col not in dataset.table.columns:
+            raise KeyError(
+                f"min_gap_sampler 需要 Dataset 包含 {rec_col!r} 与 {onset_col!r} 列。"
+            )
+        sampler = MinGapBatchSampler(
+            dataset.table[rec_col].astype(str).tolist(),
+            dataset.table[onset_col].to_numpy(dtype=np.float64),
+            batch_size=resolved_batch_size,
+            min_gap_seconds=float(training_config.get("min_gap_seconds", 2.5)),
+            shuffle=shuffle,
+            seed=int(training_config["seed"]),
+        )
+    else:
+        sampler = SentenceBatchSampler(
+            dataset.table[group_column].astype(str).tolist(),
+            batch_size=resolved_batch_size,
+            shuffle=shuffle,
+            seed=int(training_config["seed"]),
+            preserve_complete_groups=preserve_groups,
+        )
     num_workers = int(training_config.get("num_workers", 0))
     loader_kwargs = {
         "batch_sampler": sampler,

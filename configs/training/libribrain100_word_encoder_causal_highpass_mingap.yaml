@@ -1,0 +1,12 @@
+# LibriBrain100 英语 MEG 阶段 1（方案体系 II 最小改动）：单窗词编码器（2.0s 因果滑动高通 + 2.5s 去重叠间隔采样）
+# 启动命令：
+#   python -u -m braindecoding train --config configs/training/libribrain100_word_encoder_causal_highpass_mingap.yaml --require-cache --resume auto
+extends: ./libribrain100_word_encoder.yaml
+
+dataset:
+  baseline_seconds: 0.0
+  causal_highpass_seconds: 2.0
+
+training:
+  word_sampling: min_gap_sampler
+  min_gap_seconds: 2.5

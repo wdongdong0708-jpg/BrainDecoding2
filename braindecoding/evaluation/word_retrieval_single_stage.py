@@ -331,6 +331,18 @@ def _evaluate_single_stage(
             if isinstance(ckpt_cfg_ds, dict)
             else None,
         )
+        ckpt_base = checkpoint.get(
+            "baseline_seconds",
+            ckpt_cfg_ds.get("baseline_seconds")
+            if isinstance(ckpt_cfg_ds, dict)
+            else None,
+        )
+        ckpt_hp = checkpoint.get(
+            "causal_highpass_seconds",
+            ckpt_cfg_ds.get("causal_highpass_seconds")
+            if isinstance(ckpt_cfg_ds, dict)
+            else None,
+        )
         if ckpt_win is not None:
             cfg["dataset"]["window_seconds"] = float(ckpt_win)
             cfg["workflow"]["window_seconds"] = float(ckpt_win)
@@ -339,6 +351,10 @@ def _evaluate_single_stage(
         if ckpt_off is not None:
             cfg["dataset"]["window_start_offset_seconds"] = float(ckpt_off)
             cfg["workflow"]["window_start_offset_seconds"] = float(ckpt_off)
+        if ckpt_base is not None:
+            cfg["dataset"]["baseline_seconds"] = float(ckpt_base)
+        if ckpt_hp is not None:
+            cfg["dataset"]["causal_highpass_seconds"] = float(ckpt_hp)
 
     read_fn = meg_word_task.load_event_table
     build_fn = meg_word_task.build_dataset

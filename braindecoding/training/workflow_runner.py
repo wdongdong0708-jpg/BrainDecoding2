@@ -1980,6 +1980,39 @@ def run_training_workflow(
                 f"输出目录已完成训练：{out}。如需续训请传 `--resume auto`，或指定新子集/新目录。"
             )
 
+    warm_start_checkpoint_payload = None
+    warm_start_source_ckpt: Path | None = None
+    if warm_start_stage and resume_ckpt_path is None:
+        candidate_source = Path(tc["pretrained_brain_encoder_checkpoint"])
+        if candidate_source.is_file():
+            warm_start_source_ckpt = candidate_source
+            warm_start_checkpoint_payload = load_checkpoint(candidate_source)
+            src_ds_cfg = (
+                warm_start_checkpoint_payload.get("config", {}).get("dataset", {})
+                if isinstance(warm_start_checkpoint_payload.get("config"), dict)
+                else {}
+            )
+            src_base = warm_start_checkpoint_payload.get(
+                "baseline_seconds",
+                src_ds_cfg.get("baseline_seconds")
+                if isinstance(src_ds_cfg, dict)
+                else None,
+            )
+            src_hp = warm_start_checkpoint_payload.get(
+                "causal_highpass_seconds",
+                src_ds_cfg.get("causal_highpass_seconds")
+                if isinstance(src_ds_cfg, dict)
+                else None,
+            )
+            if src_base is not None:
+                cfg["dataset"]["baseline_seconds"] = float(src_base)
+            if src_hp is not None:
+                cfg["dataset"]["causal_highpass_seconds"] = float(src_hp)
+        elif mode != "smoke":
+            raise FileNotFoundError(
+                f"{stage} 阶段需要已完成同受试者子集的 word 检查点：{candidate_source}"
+            )
+
     out.mkdir(parents=True, exist_ok=True)
     subjects_file = write_subjects_manifest(
         out, subset_spec, stage=stage, mode=mode, seed=seed
@@ -2009,28 +2042,23 @@ def run_training_workflow(
     embedding_hash = file_sha256(cfg["cache"]["text_embeddings"])
 
     initialization = None
-    if warm_start_stage and resume_ckpt_path is None:
-        source_ckpt = Path(tc["pretrained_brain_encoder_checkpoint"])
-        if source_ckpt.is_file():
-            checkpoint = load_checkpoint(source_ckpt)
-            encoder_state = {
-                key.removeprefix("brain_encoder."): value
-                for key, value in checkpoint["model_state"].items()
-                if key.startswith("brain_encoder.")
-            }
-            if not encoder_state:
-                raise ValueError(f"预训练词检查点缺少 brain_encoder 权重：{source_ckpt}")
-            model.brain_encoder.load_state_dict(encoder_state, strict=True)
-            initialization = {
-                "path": str(source_ckpt),
-                "sha256": file_sha256(source_ckpt),
-                "epoch": int(checkpoint.get("epoch", 0)),
-            }
-            del checkpoint
-        elif mode != "smoke":
-            raise FileNotFoundError(
-                f"{stage} 阶段需要已完成同受试者子集的 word 检查点：{source_ckpt}"
+    if warm_start_checkpoint_payload is not None and warm_start_source_ckpt is not None:
+        encoder_state = {
+            key.removeprefix("brain_encoder."): value
+            for key, value in warm_start_checkpoint_payload["model_state"].items()
+            if key.startswith("brain_encoder.")
+        }
+        if not encoder_state:
+            raise ValueError(
+                f"预训练词检查点缺少 brain_encoder 权重：{warm_start_source_ckpt}"
             )
+        model.brain_encoder.load_state_dict(encoder_state, strict=True)
+        initialization = {
+            "path": str(warm_start_source_ckpt),
+            "sha256": file_sha256(warm_start_source_ckpt),
+            "epoch": int(warm_start_checkpoint_payload.get("epoch", 0)),
+        }
+        del warm_start_checkpoint_payload
 
     optimizer = build_adamw_for_modules([model, loss_module], tc)
     scheduler = build_cosine_annealing_scheduler(optimizer, tc["epochs"])
@@ -2092,6 +2120,9 @@ def run_training_workflow(
     win_samp = int(getattr(train_ds, "window_samples", round(win_sec * 50.0)))
     sr_hz = float(getattr(train_ds, "sampling_rate_hz", cfg["dataset"].get("target_sampling_rate_hz", 50.0)))
     win_off = float(cfg["dataset"].get("window_start_offset_seconds", 0.0))
+    base_sec = float(getattr(train_ds, "baseline_seconds", cfg["dataset"].get("baseline_seconds", 0.5)))
+    causal_hp_sec = float(getattr(train_ds, "causal_highpass_seconds", cfg["dataset"].get("causal_highpass_seconds", 0.0)))
+    sampler_label = type(train_sampler).__name__
     siamese_spec = dict(cfg["workflow"].get("siamese_debiased") or {})
     siamese_enabled = bool(siamese_spec.get("enabled", False))
     raw_early_stop_metric = str(
@@ -2112,8 +2143,8 @@ def run_training_workflow(
         f" Config File : {cfg['workflow']['config_path']}\n"
         f" GPU / AMP   : {gpu_name} ({gpu_total_gb:.1f} GB)  |  precision={tc['precision']} (TF32=on)\n"
         f" Subset      : {subset_spec['subset_tag']} ({subset_spec['subject_count']}/{subset_spec['total_canonical_subjects']} subjects)  |  seed={seed}\n"
-        f" Window      : {win_sec:.2f}s ({win_samp} samples @ {sr_hz:.0f}Hz, start_offset={win_off:+.2f}s)\n"
-        f" DataLoader  : train={len(train_ds):,} rows ({len(train_loader)} batches @ bs={tc['batch_size']})"
+        f" Window      : {win_sec:.2f}s ({win_samp} samples @ {sr_hz:.0f}Hz, start_offset={win_off:+.2f}s, baseline={base_sec:.2f}s, causal_hp={causal_hp_sec:.2f}s)\n"
+        f" DataLoader  : train={len(train_ds):,} rows ({len(train_loader)} batches @ bs={tc['batch_size']}, sampler={sampler_label})"
         f"  |  val={len(val_ds):,} rows (eval_bs={tc.get('eval_batch_size', tc['batch_size'])}, workers={tc.get('num_workers', 0)})\n"
         f" Optimizer   : AdamW (lr={float(tc['learning_rate']):.2e}, wd={float(tc.get('weight_decay', 1e-4)):.1e})"
         f"  |  epochs={max_epochs} (patience={patience}, early_stop={early_stop_target})\n"
@@ -2521,6 +2552,8 @@ def run_training_workflow(
                     "window_seconds": win_sec,
                     "window_samples": win_samp,
                     "window_start_offset_seconds": win_off,
+                    "baseline_seconds": base_sec,
+                    "causal_highpass_seconds": causal_hp_sec,
                     "model_state": cpu_state_dict(model),
                     "loss_state": cpu_state_dict(loss_module),
                     "model_config": cfg["model"],
@@ -2560,6 +2593,8 @@ def run_training_workflow(
             "window_seconds": win_sec,
             "window_samples": win_samp,
             "window_start_offset_seconds": win_off,
+            "baseline_seconds": base_sec,
+            "causal_highpass_seconds": causal_hp_sec,
             "subject_ids": list(subset_spec["subjects"]),
             "subset": subset_spec,
             "model_state": cpu_state_dict(model),

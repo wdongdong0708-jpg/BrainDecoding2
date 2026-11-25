@@ -455,10 +455,24 @@ def _encode_stage_with_shifts(
             if isinstance(ckpt_cfg_ds, dict)
             else None,
         )
+        ckpt_base = checkpoint.get(
+            "baseline_seconds",
+            ckpt_cfg_ds.get("baseline_seconds") if isinstance(ckpt_cfg_ds, dict) else None,
+        )
+        ckpt_hp = checkpoint.get(
+            "causal_highpass_seconds",
+            ckpt_cfg_ds.get("causal_highpass_seconds")
+            if isinstance(ckpt_cfg_ds, dict)
+            else None,
+        )
         if ckpt_win is not None:
             cfg["dataset"]["window_seconds"] = float(ckpt_win)
         if ckpt_off is not None:
             cfg["dataset"]["window_start_offset_seconds"] = float(ckpt_off)
+        if ckpt_base is not None:
+            cfg["dataset"]["baseline_seconds"] = float(ckpt_base)
+        if ckpt_hp is not None:
+            cfg["dataset"]["causal_highpass_seconds"] = float(ckpt_hp)
 
     cfg["dataset"]["shift_mode"] = norm_shift_mode
     cfg["dataset"]["preroll_seconds"] = float(preroll_seconds)

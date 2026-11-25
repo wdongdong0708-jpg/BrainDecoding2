@@ -34,6 +34,7 @@ WINDOW_START_OFFSET_SECONDS = 0.0
 WINDOW_SECONDS = 1.0
 ELIGIBILITY_WINDOW_SECONDS = 3.0
 BASELINE_SECONDS = 0.5
+CAUSAL_HIGHPASS_SECONDS = 0.0
 CLAMP = 5.0
 DEFAULT_MAX_CONTEXT_WORDS = 128
 
@@ -176,6 +177,34 @@ def pallier_legacy_signal_paths(
 def open_derived_signal(path: str) -> np.ndarray:
     """只读 mmap 打开 50 Hz 连续派生 MEG 信号，避免 DataLoader 反复整文件载入。"""
     return np.load(path, mmap_mode="r")
+
+
+def _apply_causal_moving_average_highpass(
+    segment: np.ndarray,
+    *,
+    target_start: int,
+    window_samples: int,
+    highpass_samples: int,
+) -> np.ndarray:
+    """对连续片段执行严格因果滑动均值高通滤波并返回目标窗口（float64 前缀和防精度漂移）。"""
+    win_len = int(window_samples)
+    hp_w = int(highpass_samples)
+    t0 = int(target_start)
+    if hp_w <= 1:
+        return np.array(segment[:, t0 : t0 + win_len], dtype=np.float32, copy=True)
+
+    channels, total_len = int(segment.shape[0]), int(segment.shape[1])
+    cumsum = np.empty((channels, total_len + 1), dtype=np.float64)
+    cumsum[:, 0] = 0.0
+    np.cumsum(segment, axis=1, dtype=np.float64, out=cumsum[:, 1:])
+
+    local_idx = t0 + np.arange(win_len, dtype=np.int64)
+    right_idx = local_idx + 1
+    left_idx = np.maximum(0, right_idx - hp_w)
+    denom = (right_idx - left_idx).astype(np.float64)[None, :]
+    moving_avg = (cumsum[:, right_idx] - cumsum[:, left_idx]) / denom
+    filtered = segment[:, local_idx].astype(np.float64, copy=False) - moving_avg
+    return filtered.astype(np.float32, copy=False)
 
 
 def resolve_meg_channel_positions(
@@ -348,6 +377,7 @@ class WordWindowDataset(Dataset):
         cfg.setdefault("window_seconds", WINDOW_SECONDS)
         cfg.setdefault("window_start_offset_seconds", WINDOW_START_OFFSET_SECONDS)
         cfg.setdefault("baseline_seconds", BASELINE_SECONDS)
+        cfg.setdefault("causal_highpass_seconds", CAUSAL_HIGHPASS_SECONDS)
         cfg.setdefault("clamp", CLAMP)
         cfg.setdefault("max_context_words", DEFAULT_MAX_CONTEXT_WORDS)
         self.dataset_config = cfg
@@ -385,13 +415,22 @@ class WordWindowDataset(Dataset):
         self.sampling_rate_hz = float(cfg["target_sampling_rate_hz"])
         self.window_seconds = float(cfg["window_seconds"])
         self.window_samples = int(round(self.window_seconds * self.sampling_rate_hz))
+        self.baseline_seconds = float(cfg["baseline_seconds"])
         self._baseline_samples = int(
-            round(float(cfg["baseline_seconds"]) * self.sampling_rate_hz)
+            round(self.baseline_seconds * self.sampling_rate_hz)
+        )
+        self.causal_highpass_seconds = float(cfg.get("causal_highpass_seconds", 0.0))
+        self._causal_highpass_samples = int(
+            round(self.causal_highpass_seconds * self.sampling_rate_hz)
         )
         if self.window_samples <= 0:
             raise ValueError(f"窗口样本数必须为正整数：{self.window_samples}")
         if self._baseline_samples < 0:
             raise ValueError(f"baseline 样本数不能为负数：{self._baseline_samples}")
+        if self.causal_highpass_seconds < 0.0 or self._causal_highpass_samples < 0:
+            raise ValueError(
+                f"causal_highpass_seconds 不能为负数：{self.causal_highpass_seconds}"
+            )
         self._clamp = float(cfg["clamp"])
         self._window_offset_seconds = float(cfg["window_start_offset_seconds"])
 
@@ -615,7 +654,9 @@ class WordWindowDataset(Dataset):
 
         required_samples = max(
             int(round(self.preroll_seconds * self.sampling_rate_hz)),
-            abs(int(self.temporal_shift_samples)) + int(self.window_samples),
+            abs(int(self.temporal_shift_samples))
+            + int(self.window_samples)
+            + max(0, int(self._causal_highpass_samples) - 1),
         )
         if self._preroll_by_recording and all(
             int(buf.shape[1]) >= required_samples
@@ -842,50 +883,113 @@ class WordWindowDataset(Dataset):
             stop = start + self.window_samples
 
         effective_shift_mode = getattr(self, "shift_mode", "deterministic_circular")
+        hp_samples = int(getattr(self, "_causal_highpass_samples", 0))
+        hp_history = max(0, hp_samples - 1)
+        win_len = int(self.window_samples)
+
         if self.temporal_shift_samples == 0:
-            window = recording[:, start:stop].astype(np.float32, copy=True)
+            if hp_samples > 1:
+                ctx_start = max(0, start - hp_history)
+                seg = recording[:, ctx_start:stop]
+                window = _apply_causal_moving_average_highpass(
+                    seg,
+                    target_start=start - ctx_start,
+                    window_samples=win_len,
+                    highpass_samples=hp_samples,
+                )
+            else:
+                window = recording[:, start:stop].astype(np.float32, copy=True)
         elif effective_shift_mode == "preroll":
             if self.temporal_shift_samples > 0:
                 raise ValueError("Pre-Roll 因果移位模式仅允许严格过去移位 (temporal_shift_seconds <= 0)。")
             raw_start = start + int(self.temporal_shift_samples)
-            win_len = int(self.window_samples)
-            if raw_start >= 0:
-                window = recording[:, raw_start : raw_start + win_len].astype(
-                    np.float32, copy=True
-                )
-            else:
-                preroll = self._get_preroll_for_index(idx)
-                buf_len = int(preroll.shape[1])
-                buf_start = buf_len + raw_start
-                if buf_start < 0:
-                    raise IndexError(
-                        f"Pre-Roll 缓冲区长度不足：raw_start={raw_start}, buf_len={buf_len}"
-                    )
-                if raw_start + win_len <= 0:
-                    window = preroll[:, buf_start : buf_start + win_len].astype(
+            if hp_samples <= 1:
+                if raw_start >= 0:
+                    window = recording[:, raw_start : raw_start + win_len].astype(
                         np.float32, copy=True
                     )
                 else:
-                    left_len = -raw_start
-                    right_len = win_len - left_len
-                    window = np.empty((self.channel_count, win_len), dtype=np.float32)
-                    window[:, :left_len] = preroll[:, buf_start:buf_len]
-                    window[:, left_len:] = recording[:, :right_len]
+                    preroll = self._get_preroll_for_index(idx)
+                    buf_len = int(preroll.shape[1])
+                    buf_start = buf_len + raw_start
+                    if buf_start < 0:
+                        raise IndexError(
+                            f"Pre-Roll 缓冲区长度不足：raw_start={raw_start}, buf_len={buf_len}"
+                        )
+                    if raw_start + win_len <= 0:
+                        window = preroll[:, buf_start : buf_start + win_len].astype(
+                            np.float32, copy=True
+                        )
+                    else:
+                        left_len = -raw_start
+                        right_len = win_len - left_len
+                        window = np.empty((self.channel_count, win_len), dtype=np.float32)
+                        window[:, :left_len] = preroll[:, buf_start:buf_len]
+                        window[:, left_len:] = recording[:, :right_len]
+            else:
+                if raw_start >= hp_history:
+                    ctx_start = raw_start - hp_history
+                    seg = recording[:, ctx_start : raw_start + win_len]
+                    window = _apply_causal_moving_average_highpass(
+                        seg,
+                        target_start=hp_history,
+                        window_samples=win_len,
+                        highpass_samples=hp_samples,
+                    )
+                else:
+                    preroll = self._get_preroll_for_index(idx)
+                    buf_len = int(preroll.shape[1])
+                    v_start = buf_len + raw_start
+                    if v_start < 0:
+                        raise IndexError(
+                            f"Pre-Roll 缓冲区长度不足：raw_start={raw_start}, buf_len={buf_len}"
+                        )
+                    ctx_v_start = max(0, v_start - hp_history)
+                    v_stop = v_start + win_len
+                    if v_stop <= buf_len:
+                        seg = preroll[:, ctx_v_start:v_stop]
+                    elif ctx_v_start >= buf_len:
+                        seg = recording[:, ctx_v_start - buf_len : v_stop - buf_len]
+                    else:
+                        left_len = buf_len - ctx_v_start
+                        right_len = v_stop - buf_len
+                        seg = np.empty(
+                            (self.channel_count, left_len + right_len),
+                            dtype=np.float32,
+                        )
+                        seg[:, :left_len] = preroll[:, ctx_v_start:buf_len]
+                        seg[:, left_len:] = recording[:, :right_len]
+                    window = _apply_causal_moving_average_highpass(
+                        seg,
+                        target_start=v_start - ctx_v_start,
+                        window_samples=win_len,
+                        highpass_samples=hp_samples,
+                    )
         else:
-            valid_span = int(recording.shape[1]) - self.window_samples + 1
-            if valid_span <= 2 * self.window_samples:
+            valid_span = int(recording.shape[1]) - win_len + 1
+            if valid_span <= 2 * win_len:
                 raise ValueError("连续信号长度不足以执行非重叠时间错位对照。")
             shifted_start = (start + self.temporal_shift_samples) % valid_span
-            if abs(shifted_start - start) < self.window_samples:
+            if abs(shifted_start - start) < win_len:
                 step = (
-                    self.window_samples
+                    win_len
                     if self.temporal_shift_samples > 0
-                    else -self.window_samples
+                    else -win_len
                 )
                 shifted_start = (shifted_start + step) % valid_span
-            window = recording[:, shifted_start : shifted_start + self.window_samples].astype(
-                np.float32, copy=True
-            )
+            if hp_samples > 1:
+                ctx_start = max(0, shifted_start - hp_history)
+                seg = recording[:, ctx_start : shifted_start + win_len]
+                window = _apply_causal_moving_average_highpass(
+                    seg,
+                    target_start=shifted_start - ctx_start,
+                    window_samples=win_len,
+                    highpass_samples=hp_samples,
+                )
+            else:
+                window = recording[:, shifted_start : shifted_start + win_len].astype(
+                    np.float32, copy=True
+                )
 
         effective_baseline = min(self._baseline_samples, int(window.shape[1]))
         if effective_baseline > 0:

@@ -1156,23 +1156,52 @@ def run_duration_shortcut_diagnostics(
     if len(eval_table) == 0:
         raise ValueError(f"数据集 {dataset} 在划分 {split!r} 上无可评估事件。")
 
-    # 从首个检查点同步窗口配置（所有同协议检查点共享 1.0s 窗口）
-    first_ckpt = load_checkpoint(model_specs[0][1], map_location="cpu")
-    ckpt_ds_cfg = (
-        first_ckpt.get("config", {}).get("dataset", {})
-        if isinstance(first_ckpt.get("config"), dict)
-        else {}
-    )
-    win_sec = first_ckpt.get("window_seconds", ckpt_ds_cfg.get("window_seconds"))
-    win_off = first_ckpt.get(
-        "window_start_offset_seconds", ckpt_ds_cfg.get("window_start_offset_seconds")
-    )
-    if win_sec is not None:
-        cfg["dataset"]["window_seconds"] = float(win_sec)
-    if win_off is not None:
-        cfg["dataset"]["window_start_offset_seconds"] = float(win_off)
+    def _extract_ckpt_preprocess_sig(
+        ckpt_obj: Mapping[str, Any],
+    ) -> tuple[float, float, float, float]:
+        ds_sub = (
+            ckpt_obj.get("config", {}).get("dataset", {})
+            if isinstance(ckpt_obj.get("config"), dict)
+            else {}
+        )
+        w_sec = ckpt_obj.get(
+            "window_seconds",
+            ds_sub.get("window_seconds", cfg["dataset"].get("window_seconds", 1.0)),
+        )
+        w_off = ckpt_obj.get(
+            "window_start_offset_seconds",
+            ds_sub.get(
+                "window_start_offset_seconds",
+                cfg["dataset"].get("window_start_offset_seconds", 0.0),
+            ),
+        )
+        b_sec = ckpt_obj.get(
+            "baseline_seconds",
+            ds_sub.get("baseline_seconds", cfg["dataset"].get("baseline_seconds", 0.5)),
+        )
+        hp_sec = ckpt_obj.get(
+            "causal_highpass_seconds",
+            ds_sub.get(
+                "causal_highpass_seconds",
+                cfg["dataset"].get("causal_highpass_seconds", 0.0),
+            ),
+        )
+        return (
+            round(float(w_sec), 6),
+            round(float(w_off), 6),
+            round(float(b_sec), 6),
+            round(float(hp_sec), 6),
+        )
 
-    # 先构建包含 runtime_context_uid 的 train / eval Dataset 与词表
+    # 从首个检查点同步基础配置并支持同次体检中混合比对不同基线/高通预处理检查点
+    first_ckpt = load_checkpoint(model_specs[0][1], map_location="cpu")
+    first_sig = _extract_ckpt_preprocess_sig(first_ckpt)
+    cfg["dataset"]["window_seconds"] = first_sig[0]
+    cfg["dataset"]["window_start_offset_seconds"] = first_sig[1]
+    cfg["dataset"]["baseline_seconds"] = first_sig[2]
+    cfg["dataset"]["causal_highpass_seconds"] = first_sig[3]
+
+    # 先构建包含 runtime_context_uid 的基准 eval Dataset 与词表
     clean_eval_ds = meg_word_task.build_dataset(cfg, eval_table)
     train_word_col = (
         "normalized_word" if "normalized_word" in train_table.columns else "标准词"
@@ -1227,60 +1256,86 @@ def run_duration_shortcut_diagnostics(
     tc_eval["eval_batch_size"] = int(eval_batch_size)
     tc_eval["num_workers"] = int(num_workers)
     tc_eval["preserve_complete_groups"] = True
-    clean_loader, _ = make_loader(
-        clean_eval_ds,
-        tc_eval,
-        shuffle=False,
-        group_column=RUNTIME_CONTEXT_COLUMN,
-        batch_size=int(eval_batch_size),
-    )
 
-    spliced_bundles: dict[str, tuple[SplicedRealOnsetDataset, Any, dict[str, Any]]] = {}
-    if not skip_spliced:
-        for splice_mode in ("same_word", "shuffled"):
-            sp_ds, sp_audit = build_spliced_real_onset_dataset(
-                clean_eval_ds,
-                mode=splice_mode,
-                seed=seed,
-                min_gap_seconds=min_gap_seconds,
-                neighbor_radius=2,
-            )
-            sp_loader, _ = make_loader(
-                sp_ds,
-                tc_eval,
-                shuffle=False,
-                group_column=SPLICED_CONTEXT_COLUMN,
-                batch_size=int(eval_batch_size),
-            )
-            spliced_bundles[splice_mode] = (sp_ds, sp_loader, sp_audit)
+    def _build_eval_bundle_for_sig(
+        sig: tuple[float, float, float, float],
+        *,
+        prebuilt_ds: WordWindowDataset | None = None,
+    ) -> tuple[
+        WordWindowDataset,
+        Any,
+        dict[str, tuple[SplicedRealOnsetDataset, Any, dict[str, Any]]],
+    ]:
+        if prebuilt_ds is not None:
+            ds_obj = prebuilt_ds
+        else:
+            sig_cfg = dict(cfg)
+            sig_cfg["dataset"] = dict(cfg["dataset"])
+            sig_cfg["dataset"]["window_seconds"] = sig[0]
+            sig_cfg["dataset"]["window_start_offset_seconds"] = sig[1]
+            sig_cfg["dataset"]["baseline_seconds"] = sig[2]
+            sig_cfg["dataset"]["causal_highpass_seconds"] = sig[3]
+            ds_obj = meg_word_task.build_dataset(sig_cfg, eval_table)
+        c_loader, _ = make_loader(
+            ds_obj,
+            tc_eval,
+            shuffle=False,
+            group_column=RUNTIME_CONTEXT_COLUMN,
+            batch_size=int(eval_batch_size),
+        )
+        sp_bundles: dict[str, tuple[SplicedRealOnsetDataset, Any, dict[str, Any]]] = {}
+        if not skip_spliced:
+            for splice_mode in ("same_word", "shuffled"):
+                sp_ds, sp_audit = build_spliced_real_onset_dataset(
+                    ds_obj,
+                    mode=splice_mode,
+                    seed=seed,
+                    min_gap_seconds=min_gap_seconds,
+                    neighbor_radius=2,
+                )
+                sp_loader, _ = make_loader(
+                    sp_ds,
+                    tc_eval,
+                    shuffle=False,
+                    group_column=SPLICED_CONTEXT_COLUMN,
+                    batch_size=int(eval_batch_size),
+                )
+                sp_bundles[splice_mode] = (sp_ds, sp_loader, sp_audit)
+        return ds_obj, c_loader, sp_bundles
+
+    eval_bundles_by_sig: dict[
+        tuple[float, float, float, float],
+        tuple[
+            WordWindowDataset,
+            Any,
+            dict[str, tuple[SplicedRealOnsetDataset, Any, dict[str, Any]]],
+        ],
+    ] = {first_sig: _build_eval_bundle_for_sig(first_sig, prebuilt_ds=clean_eval_ds)}
 
     models_report: dict[str, Any] = {}
     summary_rows: list[dict[str, Any]] = []
 
     for label, ckpt_path in model_specs:
         ckpt = load_checkpoint(ckpt_path, map_location="cpu")
-        ckpt_sub_ds = (
-            ckpt.get("config", {}).get("dataset", {})
-            if isinstance(ckpt.get("config"), dict)
-            else {}
-        )
-        ckpt_win = ckpt.get("window_seconds", ckpt_sub_ds.get("window_seconds"))
-        if ckpt_win is not None and not np.isclose(
-            float(ckpt_win), float(clean_eval_ds.window_seconds), atol=1e-4
-        ):
+        ckpt_sig = _extract_ckpt_preprocess_sig(ckpt)
+        if not np.isclose(ckpt_sig[0], first_sig[0], atol=1e-4):
             raise ValueError(
-                f"检查点 {label} 的 window_seconds={ckpt_win} 与首个检查点 "
-                f"{clean_eval_ds.window_seconds} 不一致，请分开运行体检。"
+                f"检查点 {label} 的 window_seconds={ckpt_sig[0]} 与首个检查点 "
+                f"{first_sig[0]} 不一致，请分开运行体检。"
             )
+        if ckpt_sig not in eval_bundles_by_sig:
+            eval_bundles_by_sig[ckpt_sig] = _build_eval_bundle_for_sig(ckpt_sig)
+        ckpt_eval_ds, clean_loader, spliced_bundles = eval_bundles_by_sig[ckpt_sig]
+
         model_cfg = ckpt.get("model_config") or (ckpt.get("config") or {}).get("model")
         if not isinstance(model_cfg, Mapping):
             raise ValueError(f"检查点缺少 model_config：{ckpt_path}")
         ckpt_subjects = list(ckpt.get("subject_ids") or selected_subjects)
-        subject_count = max(len(ckpt_subjects), clean_eval_ds.subject_count)
+        subject_count = max(len(ckpt_subjects), ckpt_eval_ds.subject_count)
 
         model = build_brain_embedding_model(
-            clean_eval_ds.channel_count,
-            clean_eval_ds.channel_positions,
+            ckpt_eval_ds.channel_count,
+            ckpt_eval_ds.channel_positions,
             subject_count,
             model_cfg,
         ).to(device)
