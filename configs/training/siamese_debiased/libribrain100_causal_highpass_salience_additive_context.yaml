@@ -1,6 +1,10 @@
-# LibriBrain100 英语 MEG 阶段 2.1（方案体系 II 最小改动，不压制真实听觉韵律）：2.0s 因果高通冻结 CNN + 词内显著性门控加性跨词注意力 + 超额相干错位零空间
+# LibriBrain100 英语 MEG 阶段 2.1（方案体系 II 最小改动，不压制真实听觉韵律）：2.0s 因果高通冻结 CNN + 词内显著性门控加性跨词注意力 + 零容忍超额相干错位零空间
 extends: ./libribrain100_salience_additive_excess_null_context.yaml
 
 dataset:
   baseline_seconds: 0.0
   causal_highpass_seconds: 2.0
+
+siamese_debiased:
+  null_space_excess_tolerance: 0.0
+  lambda_null: 60.0

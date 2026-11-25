@@ -326,4 +326,9 @@ def test_preextracted_cache_path_and_scheme2_configs() -> None:
         assert float(cfg_s2["dataset"]["baseline_seconds"]) == 0.0
         assert float(cfg_s2["dataset"]["causal_highpass_seconds"]) == 2.0
         assert cfg_s2["model"]["transformer"]["architecture"] == "salience_gated_additive"
-        assert float(cfg_s2["workflow"]["siamese_debiased"].get("lambda_clean_stein", 0.0)) == 0.0
+        siamese_s2 = cfg_s2["workflow"]["siamese_debiased"]
+        assert float(siamese_s2.get("lambda_clean_stein", 0.0)) == 0.0
+        assert float(siamese_s2.get("null_space_excess_tolerance", -1.0)) == 0.0
+        assert float(siamese_s2.get("lambda_null", 0.0)) == 60.0
+        if stage == "prefix_revision":
+            assert float(siamese_s2.get("lambda_delta", 0.0)) == 10.0
