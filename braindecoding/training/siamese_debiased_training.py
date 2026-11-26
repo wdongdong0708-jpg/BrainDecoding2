@@ -89,6 +89,8 @@ def train_one_epoch_siamese_debiased(
     epoch_index: int = 0,
     show_progress: bool = False,
     progress_desc: str | None = None,
+    step_scheduler=None,
+    ema=None,
 ) -> tuple[float, int, int, dict]:
     """基于预提取冻结 CNN 特征执行单轮孪生共模抵消 + 错位零化正则训练。"""
     model.train()
@@ -215,6 +217,11 @@ def train_one_epoch_siamese_debiased(
     targets_all: torch.Tensor = train_meta["targets"]
     sentence_indices_all: torch.Tensor = train_meta["sentence_indices"]
     onset_seconds_all: torch.Tensor | None = train_meta.get("onset_seconds")
+    word_ids_all: torch.Tensor | None = (
+        loss_module.map_words_to_ids(train_meta["words"], device)
+        if bool(getattr(loss_module, "requires_word_ids", False))
+        else None
+    )
     if siamese_enabled and debias_mode == "amortized_timing":
         if getattr(model, "temporal_bias_head", None) is None:
             raise ValueError(
@@ -321,6 +328,9 @@ def train_one_epoch_siamese_debiased(
             bs_len = int(len(idx_tensor))
             batch_targets = targets_all[idx_tensor]
             batch_sentence_indices = sentence_indices_all[idx_tensor]
+            batch_word_ids = (
+                word_ids_all[idx_tensor] if word_ids_all is not None else None
+            )
 
             chosen_keys: list[float] = []
             if siamese_enabled:
@@ -563,10 +573,19 @@ def train_one_epoch_siamese_debiased(
                         if not skip_empty_check and int(d_count_t) == 0:
                             continue
                         rows_r = revision_rows[delay_mask]
-                        d_siglip = loss_module.forward_rectangular(
-                            y_tilde[delay_mask],
-                            batch_targets,
-                            rows_r,
+                        d_siglip = (
+                            loss_module.forward_rectangular(
+                                y_tilde[delay_mask],
+                                batch_targets,
+                                rows_r,
+                                target_word_ids=batch_word_ids[rows_r],
+                            )
+                            if batch_word_ids is not None
+                            else loss_module.forward_rectangular(
+                                y_tilde[delay_mask],
+                                batch_targets,
+                                rows_r,
+                            )
                         )
                         if is_causal_tier:
                             if (
@@ -897,7 +916,15 @@ def train_one_epoch_siamese_debiased(
                             )
                     else:
                         y_tilde = y_clean
-                    d_siglip = loss_module(y_tilde, batch_targets)
+                    d_siglip = (
+                        loss_module(
+                            y_tilde,
+                            batch_targets,
+                            target_word_ids=batch_word_ids,
+                        )
+                        if batch_word_ids is not None
+                        else loss_module(y_tilde, batch_targets)
+                    )
                     if (
                         compute_null_grad
                         and y_shift_mean is not None
@@ -985,11 +1012,16 @@ def train_one_epoch_siamese_debiased(
                 previous_scale = float(scaler.get_scale())
                 scaler.step(optimizer)
                 scaler.update()
-                if float(scaler.get_scale()) >= previous_scale:
-                    optimizer_updates += 1
+                step_succeeded = float(scaler.get_scale()) >= previous_scale
             else:
                 optimizer.step()
+                step_succeeded = True
+            if step_succeeded:
                 optimizer_updates += 1
+                if step_scheduler is not None:
+                    step_scheduler.step()
+                if ema is not None:
+                    ema.update(model)
             batches_seen += 1
 
             total_loss_gpu += loss.detach().to(dtype=torch.float64) * bs_len

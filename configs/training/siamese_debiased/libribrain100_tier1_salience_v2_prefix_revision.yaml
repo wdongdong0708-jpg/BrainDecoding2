@@ -1,0 +1,71 @@
+# LibriBrain100 英语 MEG 阶段 2.3（Tier 1 涨点版）：冻结 Tier-1 CNN + SalienceGatedAdditiveV2（视界条件化 r=0,1,2 + 有符号定分母零汇核 + 独立文本锥轴锁）+ 混合全词表 LA-CE (ls=0) + eta_train=0.0 + 零容忍超额相干错位零空间 (lam=120, d_lam=20)
+extends: ./libribrain100_causal_highpass_salience_additive_prefix_revision.yaml
+
+dataset:
+  baseline_seconds: 0.0
+  causal_highpass_seconds: 0.0
+  causal_highpass_mode: butterworth_iir
+  causal_highpass_hz: 0.5
+  causal_highpass_order: 2
+  clamp: 20.0
+  preload_filtered_recordings: true
+  preload_filtered_dtype: float32
+
+model:
+  transformer:
+    architecture: salience_gated_additive_v2
+    heads: 32
+    head_dimension: 64
+    max_relative_distance: 24
+    residual_max_norm: 0.85
+    attention_dropout: 0.1
+    horizon_conditioned: true
+    num_horizons: 3
+    horizon_readout_rank: 128
+
+loss:
+  name: hybrid_siglip_full_vocab_ce
+  siglip_weight: 0.5
+  ce_weight: 0.5
+  initial_temperature: 10.0
+  initial_bias: -10.0
+  identical_candidates_threshold: 0.999
+  ce_initial_temperature: 12.0
+  ce_max_temperature: 22.0
+  alpha_prior: 1.0
+  label_smoothing: 0.0
+
+training:
+  epochs: 25
+  batch_size: 256
+  eval_batch_size: 1024
+  learning_rate: 4.5e-4
+  weight_decay: 0.02
+  decoupled_weight_decay: true
+  scheduler: step_cosine
+  warmup_ratio: 0.05
+  minimum_learning_rate: 1.0e-6
+  ema_decay: 0.997
+  patience: 6
+  early_stop_metric: full_vocab
+  freeze_brain_encoder_epochs: 25
+
+siamese_debiased:
+  enabled: true
+  debias_mode: null_space
+  shift_mode: preroll
+  preroll_seconds: 55.0
+  eta_0: 0.0
+  eta_train: 0.0
+  lambda_null: 120.0
+  lambda_delta: 20.0
+  null_space_coherent_mean: true
+  null_space_excess_coherent: true
+  null_space_excess_tolerance: 0.0
+  null_space_increment_mode: true
+  null_space_vocab_freq_alpha: 0.5
+  shift_seconds: [-12.0, -19.0, -27.0, -36.0, -46.0]
+  shifts_per_step: 5
+  synchronize_dropout_rng: true
+  preextract_frozen_cnn: true
+  cache_preextracted_to_disk: true

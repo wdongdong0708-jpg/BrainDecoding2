@@ -1076,6 +1076,530 @@ class SalienceGatedAdditiveEncoder(nn.Module):
         return output
 
 
+class SalienceGatedAdditiveV2Encoder(nn.Module):
+    """词内显著性门控加性跨词编码器 V2（有符号定分母零汇核 + 独立文本锥轴锁 + 视界条件化）。
+
+    严格保持词内一元非线性门控（零跨词 Q·K 内积或跨词交互 MLP），在 V1 基础上引入：
+    1. 有符号定分母零汇核（Signed Fixed-Denominator Zero-Sink Kernel）：
+       对全部偏移 \\Delta \\in [-R, R] 与单标量零汇项联合 softmax：
+           w_\\Delta^{(h)} = p_{+,\\Delta}^{(h)} - p_{-,\\Delta}^{(h)},  \\sum_\\Delta |w_\\Delta^{(h)}| < 1
+       天然支持负权重线性 Wiener 去噪、无边界重归一化长度泄漏，且采用非对称初始化
+       （``neg_logits = pos_logits - 2.0``）保证 step-0 满秩非零梯度；
+    2. 独立持久化文本锥轴缓冲区 ``text_cone_axis``：与输入中心化均值 ``clean_input_mean`` 解耦，
+       即使上游 Stage-1 采用混合全词表 CE 损失，仍物理锁定单窗在 T5-Large 词表锥轴上的投影不变；
+    3. 可选视界条件化（``horizon_conditioned=True``，用于第 3 章 ``r \\in \\{0, 1, 2\\}``）：
+       按可用前瞻步数 ``avail_r = clamp(last_valid_col - query_col, 0, num_horizons - 1)``
+       选择每视界专用核与零初始化低秩残差读出，且 ``forward`` 与 ``forward_padded`` 严格逐位一致。
+    """
+
+    def __init__(self, dimension: int, config: dict | None = None):
+        super().__init__()
+        cfg = dict(config or {})
+        self.dimension = int(dimension)
+        self.heads = int(cfg.get("heads", 32))
+        self.head_dimension = int(cfg.get("head_dimension", 64))
+        self.inner_dimension = self.heads * self.head_dimension
+        self.max_relative_distance = int(cfg.get("max_relative_distance", 24))
+        self.residual_max_norm = float(cfg.get("residual_max_norm", 0.85))
+        self.ema_momentum = float(cfg.get("ema_momentum", 0.02))
+        self.causal_attention = bool(cfg.get("causal_attention", False))
+        self.horizon_conditioned = bool(cfg.get("horizon_conditioned", False))
+        self.num_horizons = int(cfg.get("num_horizons", 3))
+        self.horizon_readout_rank = int(cfg.get("horizon_readout_rank", 128))
+
+        if self.dimension <= 0 or self.heads <= 0 or self.head_dimension <= 0:
+            raise ValueError("SalienceGatedAdditiveV2Encoder 维度与头数必须为正整数。")
+        if self.max_relative_distance <= 0:
+            raise ValueError("max_relative_distance 必须为正整数。")
+        if self.residual_max_norm <= 0.0:
+            raise ValueError("residual_max_norm 必须为正数。")
+        if self.horizon_conditioned and (
+            self.num_horizons <= 0 or self.horizon_readout_rank <= 0
+        ):
+            raise ValueError("num_horizons 与 horizon_readout_rank 必须为正整数。")
+
+        # 保持与 GroupedTransformerEncoder 对齐的只读属性契约
+        self.query_window_radius = None
+        self.query_window_left_radius = None
+        self.query_window_right_radius = None
+        self.chunk_summary_enabled = False
+        self.physical_time_gap_bias = None
+        self.event_time_interaction_bias = None
+        self.local_relative_position_bias = None
+        self.is_salience_gated_additive = True
+
+        self.gate_proj = nn.Linear(self.dimension, self.heads, bias=True)
+        self.value_proj = nn.Linear(
+            self.dimension, self.inner_dimension, bias=False
+        )
+
+        num_offsets = 2 * self.max_relative_distance + 1
+        offsets = torch.arange(
+            -self.max_relative_distance,
+            self.max_relative_distance + 1,
+            dtype=torch.float32,
+        )
+        dist_excess = (offsets.abs() - 4.0).clamp(min=0.0)
+        base_pos = -0.25 * dist_excess
+        base_neg = base_pos - 2.0  # 非对称初始化，严禁 pos == neg 导致 step-0 零梯度
+
+        if self.horizon_conditioned:
+            pos_init = (
+                base_pos.view(1, 1, num_offsets)
+                .expand(self.num_horizons, self.heads, num_offsets)
+                .clone()
+            )
+            neg_init = (
+                base_neg.view(1, 1, num_offsets)
+                .expand(self.num_horizons, self.heads, num_offsets)
+                .clone()
+            )
+            sink_init = torch.zeros(
+                self.num_horizons, self.heads, dtype=torch.float32
+            )
+        else:
+            pos_init = (
+                base_pos.view(1, num_offsets)
+                .expand(self.heads, num_offsets)
+                .clone()
+            )
+            neg_init = (
+                base_neg.view(1, num_offsets)
+                .expand(self.heads, num_offsets)
+                .clone()
+            )
+            sink_init = torch.zeros(self.heads, dtype=torch.float32)
+
+        self.pos_logits = nn.Parameter(pos_init)
+        self.neg_logits = nn.Parameter(neg_init)
+        self.sink_logits = nn.Parameter(sink_init)
+
+        self.dropout = nn.Dropout(float(cfg.get("attention_dropout", 0.1)))
+        self.out_proj = nn.Linear(
+            self.inner_dimension, self.dimension, bias=False
+        )
+        nn.init.normal_(self.out_proj.weight, mean=0.0, std=1e-3)
+
+        if self.horizon_conditioned:
+            self.horizon_down = nn.Parameter(
+                torch.empty(
+                    self.num_horizons,
+                    self.horizon_readout_rank,
+                    self.inner_dimension,
+                    dtype=torch.float32,
+                )
+            )
+            nn.init.normal_(
+                self.horizon_down,
+                mean=0.0,
+                std=1.0 / (float(self.inner_dimension) ** 0.5),
+            )
+            self.horizon_up = nn.Parameter(
+                torch.zeros(
+                    self.num_horizons,
+                    self.dimension,
+                    self.horizon_readout_rank,
+                    dtype=torch.float32,
+                )
+            )
+        else:
+            self.register_parameter("horizon_down", None)
+            self.register_parameter("horizon_up", None)
+
+        self.register_buffer(
+            "clean_input_mean",
+            torch.zeros(self.dimension, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "clean_input_mean_ready",
+            torch.tensor(False, dtype=torch.bool),
+        )
+        self.register_buffer(
+            "text_cone_axis",
+            torch.zeros(self.dimension, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "text_cone_axis_ready",
+            torch.tensor(False, dtype=torch.bool),
+        )
+        self.register_buffer(
+            "psi_clean_ema",
+            torch.zeros(self.inner_dimension, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "psi_clean_ema_ready",
+            torch.tensor(False, dtype=torch.bool),
+        )
+
+    @torch.no_grad()
+    def set_clean_input_mean(self, mean_vector: torch.Tensor) -> None:
+        """从训练集全量冻结 Stage-1 特征设置精确输入中心化均值。"""
+        vec = mean_vector.detach().to(
+            device=self.clean_input_mean.device, dtype=torch.float32
+        )
+        if vec.ndim != 1 or int(vec.numel()) != self.dimension:
+            raise ValueError(
+                f"clean_input_mean 维度不匹配：期望 [{self.dimension}]，收到 {tuple(vec.shape)}"
+            )
+        self.clean_input_mean.copy_(vec)
+        self.clean_input_mean_ready.fill_(True)
+
+    @torch.no_grad()
+    def set_text_cone_axis(self, axis_vector: torch.Tensor) -> None:
+        """绑定独立文本词表语义锥单位轴（严格来自训练集词表均值，防锥轴漂移或退化）。"""
+        vec = axis_vector.detach().to(
+            device=self.text_cone_axis.device, dtype=torch.float32
+        )
+        if vec.ndim != 1 or int(vec.numel()) != self.dimension:
+            raise ValueError(
+                f"text_cone_axis 维度不匹配：期望 [{self.dimension}]，收到 {tuple(vec.shape)}"
+            )
+        norm = float(vec.norm(p=2).item())
+        if norm <= 1e-8:
+            raise ValueError("text_cone_axis 范数过小，无法归一化。")
+        self.text_cone_axis.copy_(vec / norm)
+        self.text_cone_axis_ready.fill_(True)
+
+    def _compute_signed_weight_table(self) -> torch.Tensor:
+        """通过单次联合 softmax 计算有符号定分母零汇权重表 [H, 2R+1] 或 [K, H, 2R+1]。"""
+        num_offsets = 2 * self.max_relative_distance + 1
+        cat_logits = torch.cat(
+            [
+                self.pos_logits.float(),
+                self.neg_logits.float(),
+                self.sink_logits.float().unsqueeze(-1),
+            ],
+            dim=-1,
+        )
+        probs = torch.softmax(cat_logits, dim=-1)
+        return probs[..., :num_offsets] - probs[..., num_offsets : 2 * num_offsets]
+
+    def _apply_horizon_readout(
+        self,
+        ctx_flat: torch.Tensor,
+        avail_r_flat: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """共享线性投影 + 可选每视界零初始化低秩残差读出。"""
+        g_raw = self.out_proj(ctx_flat)
+        if not self.horizon_conditioned or avail_r_flat is None:
+            return g_raw
+        delta_h = torch.zeros_like(g_raw)
+        for k in range(self.num_horizons):
+            sel = avail_r_flat == k
+            if bool(sel.any()):
+                h_mid = F.linear(
+                    ctx_flat[sel],
+                    self.horizon_down[k].to(dtype=ctx_flat.dtype),
+                )
+                delta_h[sel] = F.linear(
+                    h_mid,
+                    self.horizon_up[k].to(dtype=ctx_flat.dtype),
+                )
+        return g_raw + delta_h
+
+    def _cone_preserving_readout(
+        self,
+        z_base: torch.Tensor,
+        g_raw: torch.Tensor,
+        fallback_u0_axis: torch.Tensor,
+    ) -> torch.Tensor:
+        """在保持单窗沿文本锥轴投影 c_i = z_i^T u_{0,text} 不变的正交球面上合并有界跨词更新。"""
+        z_f = F.normalize(z_base.float(), dim=-1)
+        if bool(self.text_cone_axis_ready.item()):
+            u0 = F.normalize(self.text_cone_axis.float(), dim=-1)
+            while u0.ndim < z_f.ndim:
+                u0 = u0.unsqueeze(0)
+        else:
+            u0 = F.normalize(fallback_u0_axis.float(), dim=-1, eps=1e-12)
+        c = (z_f * u0).sum(dim=-1, keepdim=True).clamp(-0.999999, 0.999999)
+        z_perp = z_f - c * u0
+
+        g_f = g_raw.float()
+        g_perp = g_f - (g_f * u0).sum(dim=-1, keepdim=True) * u0
+        g_norm = g_perp.norm(p=2, dim=-1, keepdim=True)
+        alpha = float(self.residual_max_norm)
+        delta_perp = (
+            alpha * torch.tanh(g_norm / max(alpha, 1e-6)) / (g_norm + 1e-6)
+        ) * g_perp
+
+        q_perp = F.normalize(z_perp + delta_perp, dim=-1)
+        r_perp = torch.sqrt((1.0 - c * c).clamp(min=0.0))
+        y_f = c * u0 + r_perp * q_perp
+        return F.normalize(y_f, dim=-1).to(dtype=z_base.dtype)
+
+    def forward_padded(
+        self,
+        padded: torch.Tensor,
+        mask: torch.Tensor,
+        *,
+        causal_override: bool | None = None,
+        target_col_idx: torch.Tensor | None = None,
+        target_group_idx: torch.Tensor | None = None,
+        num_branches: int = 1,
+        synchronize_dropout_rng: bool = True,
+        shared_dropout_fn=None,
+    ) -> torch.Tensor:
+        """在 [B_tot, L, D] 填充张量上执行零循环词内显著性门控有符号定分母聚合。"""
+        bsz, max_len, dim = padded.shape
+        work_dtype = (
+            torch.get_autocast_dtype("cuda")
+            if (padded.is_cuda and torch.is_autocast_enabled())
+            else padded.dtype
+        )
+        use_causal = (
+            self.causal_attention
+            if causal_override is None
+            else bool(causal_override)
+        )
+        valid_flat_idx = mask.reshape(-1).nonzero(as_tuple=False).squeeze(-1)
+        n_valid = int(valid_flat_idx.numel())
+        if n_valid == 0:
+            if target_col_idx is not None:
+                win_idx = (
+                    target_group_idx
+                    if target_group_idx is not None
+                    else torch.arange(bsz, device=padded.device, dtype=torch.long)
+                )
+                return padded[win_idx, target_col_idx]
+            return padded
+
+        eff_branches = (
+            int(num_branches)
+            if (int(num_branches) > 1 and bsz % int(num_branches) == 0)
+            else 1
+        )
+        g_per_branch = bsz // eff_branches
+
+        # 1. 分支输入去均值（仅用于构造 zc，不混淆独立文本锥轴 text_cone_axis）
+        padded_f32 = padded.float()
+        mask_f32 = mask.unsqueeze(-1).float()
+        if self.training and not bool(self.clean_input_mean_ready.item()):
+            with torch.no_grad():
+                b0_mask = mask_f32[:g_per_branch]
+                b0_cnt = b0_mask.sum().clamp(min=1.0)
+                b0_mean = (padded_f32[:g_per_branch] * b0_mask).sum(dim=(0, 1)) / b0_cnt
+                self.clean_input_mean.copy_(b0_mean)
+                self.clean_input_mean_ready.fill_(True)
+
+        if eff_branches == 1 or not self.training:
+            mu_per_row = self.clean_input_mean.view(1, 1, dim)
+        else:
+            with torch.no_grad():
+                br_pad = padded_f32.view(eff_branches, g_per_branch, max_len, dim)
+                br_msk = mask_f32.view(eff_branches, g_per_branch, max_len, 1)
+                br_cnt = br_msk.sum(dim=(1, 2)).clamp(min=1.0)
+                br_means = (br_pad * br_msk).sum(dim=(1, 2)) / br_cnt
+                if bool(self.clean_input_mean_ready.item()):
+                    br_means[0] = self.clean_input_mean
+                mu_per_row = (
+                    br_means[:, None, None, :]
+                    .expand(eff_branches, g_per_branch, 1, dim)
+                    .reshape(bsz, 1, dim)
+                )
+
+        zc_all = ((padded_f32 - mu_per_row) * mask_f32).to(dtype=work_dtype)
+        zc_valid = zc_all.reshape(bsz * max_len, dim).index_select(0, valid_flat_idx)
+
+        # 2. 纯词内一元显著性门控与线性值映射
+        gates = torch.sigmoid(self.gate_proj(zc_valid))  # [N_valid, H]
+        vals = self.value_proj(zc_valid).view(
+            n_valid, self.heads, self.head_dimension
+        )
+        psi_valid = (gates.unsqueeze(-1) * vals).reshape(
+            n_valid, self.inner_dimension
+        )
+
+        psi_padded = zc_valid.new_zeros((bsz * max_len, self.inner_dimension))
+        psi_padded.index_copy_(0, valid_flat_idx, psi_valid)
+        psi_padded = psi_padded.view(bsz, max_len, self.inner_dimension)
+
+        # 3. 句外（LOSO）均值中心化与推理期 EMA 统计更新
+        if self.training:
+            psi_br = psi_padded.float().view(
+                eff_branches, g_per_branch, max_len, self.inner_dimension
+            )
+            msk_br = mask_f32.view(eff_branches, g_per_branch, max_len, 1)
+            grp_sum = (psi_br * msk_br).sum(dim=2)
+            grp_cnt = msk_br.sum(dim=2)
+            br_sum = grp_sum.sum(dim=1, keepdim=True)
+            br_cnt = grp_cnt.sum(dim=1, keepdim=True)
+
+            with torch.no_grad():
+                clean_cnt = float(br_cnt[0, 0, 0].item())
+                if clean_cnt > 0.0:
+                    clean_batch_mean = br_sum[0, 0] / clean_cnt
+                    if not bool(self.psi_clean_ema_ready.item()):
+                        self.psi_clean_ema.copy_(clean_batch_mean)
+                        self.psi_clean_ema_ready.fill_(True)
+                    else:
+                        self.psi_clean_ema.lerp_(
+                            clean_batch_mean, float(self.ema_momentum)
+                        )
+
+            other_cnt = br_cnt - grp_cnt
+            fallback_mean = self.psi_clean_ema.view(1, 1, self.inner_dimension)
+            loso_mean = torch.where(
+                other_cnt > 0.5,
+                (br_sum - grp_sum) / other_cnt.clamp(min=1.0),
+                fallback_mean.expand_as(grp_sum),
+            )
+            psi_centered = (
+                (psi_br - loso_mean.unsqueeze(2)) * msk_br
+            ).reshape(bsz, max_len, self.inner_dimension).to(dtype=work_dtype)
+        else:
+            psi_centered = (
+                (psi_padded.float() - self.psi_clean_ema.view(1, 1, -1))
+                * mask_f32
+            ).to(dtype=work_dtype)
+
+        if shared_dropout_fn is not None:
+            psi_centered = shared_dropout_fn(
+                psi_centered,
+                self.dropout,
+                num_branches=eff_branches,
+                synchronize_dropout_rng=synchronize_dropout_rng,
+            )
+        else:
+            psi_centered = self.dropout(psi_centered)
+
+        # 4. 有符号定分母零汇相对位置核汇聚（零边界重归一化泄漏 + 严格 forward/forward_padded 视界一致）
+        r_max = self.max_relative_distance
+        pos_k = torch.arange(max_len, device=padded.device, dtype=torch.long)
+        w_table = self._compute_signed_weight_table().to(dtype=work_dtype)
+
+        if target_col_idx is not None:
+            win_idx = (
+                target_group_idx
+                if target_group_idx is not None
+                else torch.arange(bsz, device=padded.device, dtype=torch.long)
+            )
+            rel_q = pos_k.unsqueeze(0) - target_col_idx.unsqueeze(1)  # [Q, L]
+            in_range_q = (rel_q >= -r_max) & (rel_q <= r_max)
+            rel_idx_q = rel_q.clamp(-r_max, r_max) + r_max
+            key_valid_q = mask[win_idx].unsqueeze(1) & in_range_q.unsqueeze(1)
+            if use_causal:
+                key_valid_q = key_valid_q & (rel_q.unsqueeze(1) <= 0)
+
+            avail_r_q: torch.Tensor | None = None
+            if self.horizon_conditioned:
+                if use_causal:
+                    avail_r_q = torch.zeros_like(target_col_idx)
+                else:
+                    last_col_q = mask[win_idx].long().sum(dim=-1) - 1
+                    avail_r_q = (last_col_q - target_col_idx).clamp(
+                        0, self.num_horizons - 1
+                    )
+                head_arange = torch.arange(
+                    self.heads, device=padded.device, dtype=torch.long
+                )
+                attn_q = w_table[
+                    avail_r_q[:, None, None],
+                    head_arange[None, :, None],
+                    rel_idx_q[:, None, :],
+                ]
+            else:
+                attn_q = w_table[:, rel_idx_q].permute(1, 0, 2)
+            attn_q = attn_q * key_valid_q.to(dtype=work_dtype)
+
+            psi_q = psi_centered[win_idx].view(
+                int(win_idx.shape[0]), max_len, self.heads, self.head_dimension
+            )
+            ctx_q = torch.einsum("qhl,qlhd->qhd", attn_q, psi_q).reshape(
+                int(win_idx.shape[0]), self.inner_dimension
+            )
+            g_raw = self._apply_horizon_readout(ctx_q, avail_r_q)
+            z_base = padded[win_idx, target_col_idx]
+            u0_q = (
+                self.clean_input_mean.unsqueeze(0)
+                if (eff_branches == 1 or not self.training)
+                else mu_per_row.squeeze(1)[win_idx]
+            )
+            return self._cone_preserving_readout(z_base, g_raw, u0_q)
+
+        rel_full = pos_k.unsqueeze(0) - pos_k.unsqueeze(1)  # [L, L]
+        in_range_full = (rel_full >= -r_max) & (rel_full <= r_max)
+        rel_idx_full = rel_full.clamp(-r_max, r_max) + r_max
+        key_valid = mask[:, None, None, :] & in_range_full[None, None, :, :]
+        if use_causal:
+            key_valid = key_valid & (rel_full[None, None, :, :] <= 0)
+
+        avail_r_full: torch.Tensor | None = None
+        if self.horizon_conditioned:
+            if use_causal:
+                avail_r_full = torch.zeros(
+                    (bsz, max_len), device=padded.device, dtype=torch.long
+                )
+            else:
+                last_col_g = mask.long().sum(dim=-1, keepdim=True) - 1  # [B, 1]
+                avail_r_full = (last_col_g - pos_k.unsqueeze(0)).clamp(
+                    0, self.num_horizons - 1
+                )
+            head_arange = torch.arange(
+                self.heads, device=padded.device, dtype=torch.long
+            )
+            attn_full = w_table[
+                avail_r_full[:, None, :, None],
+                head_arange[None, :, None, None],
+                rel_idx_full[None, None, :, :],
+            ]
+        else:
+            attn_full = w_table[:, rel_idx_full].unsqueeze(0)
+        attn_full = attn_full * key_valid.to(dtype=work_dtype)
+
+        psi_heads = psi_centered.view(
+            bsz, max_len, self.heads, self.head_dimension
+        )
+        ctx_full = torch.einsum("bhij,bjhd->bihd", attn_full, psi_heads).reshape(
+            bsz * max_len, self.inner_dimension
+        )
+        g_raw_full = self._apply_horizon_readout(
+            ctx_full,
+            avail_r_full.reshape(-1) if avail_r_full is not None else None,
+        ).view(bsz, max_len, self.dimension)
+        y_full = self._cone_preserving_readout(padded, g_raw_full, mu_per_row)
+        return y_full * mask.unsqueeze(-1).to(dtype=y_full.dtype)
+
+    def forward(
+        self,
+        features: torch.Tensor,
+        group_indices: torch.Tensor,
+        event_times: torch.Tensor | None = None,
+        causal_override: bool | None = None,
+    ) -> torch.Tensor:
+        del event_times
+        if group_indices is None:
+            raise ValueError("group_indices is required by the context transformer.")
+        group_values = group_indices.detach().cpu().tolist()
+        groups: dict[int, list[int]] = {}
+        for row_index, group in enumerate(group_values):
+            groups.setdefault(int(group), []).append(row_index)
+        max_length = max((len(g) for g in groups.values()), default=1)
+        padded = features.new_zeros((len(groups), max_length, features.shape[-1]))
+        mask = torch.zeros(
+            (len(groups), max_length), device=features.device, dtype=torch.bool
+        )
+        ordered_indices: list[torch.Tensor] = []
+        for group_index, indices in enumerate(groups.values()):
+            idx_t = torch.as_tensor(
+                indices, device=features.device, dtype=torch.long
+            )
+            g_len = len(indices)
+            padded[group_index, :g_len] = features.index_select(0, idx_t)
+            mask[group_index, :g_len] = True
+            ordered_indices.append(idx_t)
+        encoded = self.forward_padded(
+            padded,
+            mask,
+            causal_override=causal_override,
+            num_branches=1,
+            synchronize_dropout_rng=False,
+        )
+        output = torch.empty_like(features)
+        for group_index, idx_t in enumerate(ordered_indices):
+            output[idx_t] = encoded[group_index, : len(idx_t)]
+        return output
+
+
 def build_context_encoder(dimension: int, config: dict | None = None) -> nn.Module:
     """根据 model.transformer.architecture 构建跨词编码器（默认保持标准 GroupedTransformerEncoder）。"""
     cfg = dict(config or {})
@@ -1088,7 +1612,13 @@ def build_context_encoder(dimension: int, config: dict | None = None) -> nn.Modu
         "wiener_ag2",
     }:
         return SalienceGatedAdditiveEncoder(dimension, cfg)
+    if arch in {
+        "salience_gated_additive_v2",
+        "unary_gated_additive_v2",
+        "signed_zero_sink_additive",
+    }:
+        return SalienceGatedAdditiveV2Encoder(dimension, cfg)
     raise ValueError(
         f"不支持的 model.transformer.architecture={arch!r}，"
-        "可选：'standard' | 'salience_gated_additive'。"
+        "可选：'standard' | 'salience_gated_additive' | 'salience_gated_additive_v2'。"
     )

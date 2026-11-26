@@ -427,6 +427,8 @@ def train_one_epoch(
     epoch_index=0,
     show_progress=False,
     progress_desc=None,
+    step_scheduler=None,
+    ema=None,
 ):
     """执行 LibriBrain100 与 SMN4Lang 已共同使用的 epoch 级训练。"""
     model.train()
@@ -494,9 +496,15 @@ def train_one_epoch(
         total=total_batches,
     )
     try:
+        needs_word_ids = bool(getattr(loss_module, "requires_word_ids", False))
         for batch in iterable:
             meg, targets, subject_indices, sentence_indices = move_batch(batch, device)
             event_times = event_times_for_model(model, batch, device)
+            batch_word_ids = (
+                loss_module.map_words_to_ids(batch["word"], device)
+                if needs_word_ids
+                else None
+            )
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(
                 device_type=device.type,
@@ -574,10 +582,21 @@ def train_one_epoch(
                                 delay_mask = revision_delays == delay
                                 if not bool(delay_mask.any()):
                                     continue
-                                delay_loss = loss_module.forward_rectangular(
-                                    estimates[delay_mask],
-                                    targets,
-                                    revision_rows[delay_mask],
+                                delay_loss = (
+                                    loss_module.forward_rectangular(
+                                        estimates[delay_mask],
+                                        targets,
+                                        revision_rows[delay_mask],
+                                        target_word_ids=batch_word_ids[
+                                            revision_rows[delay_mask]
+                                        ],
+                                    )
+                                    if batch_word_ids is not None
+                                    else loss_module.forward_rectangular(
+                                        estimates[delay_mask],
+                                        targets,
+                                        revision_rows[delay_mask],
+                                    )
                                 )
                                 horizon_losses.append(delay_loss)
                                 revision_delay_loss_sums[delay] += float(
@@ -588,10 +607,19 @@ def train_one_epoch(
                                 raise RuntimeError("当前 batch 没有可用的滚动回修监督。")
                             revision_loss = torch.stack(horizon_losses).mean()
                         else:
-                            revision_loss = loss_module.forward_rectangular(
-                                estimates,
-                                targets,
-                                revision_rows,
+                            revision_loss = (
+                                loss_module.forward_rectangular(
+                                    estimates,
+                                    targets,
+                                    revision_rows,
+                                    target_word_ids=batch_word_ids[revision_rows],
+                                )
+                                if batch_word_ids is not None
+                                else loss_module.forward_rectangular(
+                                    estimates,
+                                    targets,
+                                    revision_rows,
+                                )
                             )
                         word_loss = revision_loss
                         revision_loss_sum += float(
@@ -603,7 +631,15 @@ def train_one_epoch(
                                 (revision_delays == delay).sum()
                             )
                     else:
-                        immediate_loss = loss_module(estimates, targets)
+                        immediate_loss = (
+                            loss_module(
+                                estimates,
+                                targets,
+                                target_word_ids=batch_word_ids,
+                            )
+                            if batch_word_ids is not None
+                            else loss_module(estimates, targets)
+                        )
                         word_loss = immediate_loss
                     if relation_enabled:
                         margins = positive_scores.float() - negative_scores.float()
@@ -638,6 +674,10 @@ def train_one_epoch(
             )
             if step_succeeded:
                 optimizer_updates += 1
+                if step_scheduler is not None:
+                    step_scheduler.step()
+                if ema is not None:
+                    ema.update(model)
             loss_sum += float(loss.detach()) * len(meg)
             sample_count += len(meg)
             batches_seen += 1

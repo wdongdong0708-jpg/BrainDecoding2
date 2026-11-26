@@ -36,6 +36,7 @@ from braindecoding.models.transformer import (
     LocalRelativePositionBias,
     PhysicalTimeGapBias,
     SalienceGatedAdditiveEncoder,
+    SalienceGatedAdditiveV2Encoder,
     _local_attention_window_pre_hook,
     build_context_encoder,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "AdaptiveDirectionalBiasGate",
     "GroupedTransformerEncoder",
     "SalienceGatedAdditiveEncoder",
+    "SalienceGatedAdditiveV2Encoder",
     "build_context_encoder",
     "PreTransformerTrajectoryResidual",
     "RelationDiscriminationHead",

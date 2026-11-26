@@ -202,6 +202,7 @@ class DilatedConvEncoder(nn.Module):
             frequency_start=0,
             fourier_margin=0.2,
             scale_fourier_coordinates=True,
+            per_sample_dropout=bool(config.get("merger_per_sample_dropout", False)),
         )
         self.initial_projection = nn.Conv1d(virtual_channels, initial_channels, 1)
         self.subject_projection_enabled = bool(

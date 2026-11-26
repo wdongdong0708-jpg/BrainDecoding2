@@ -465,6 +465,28 @@ def _encode_stage_with_shifts(
             if isinstance(ckpt_cfg_ds, dict)
             else None,
         )
+        ckpt_hp_mode = checkpoint.get(
+            "causal_highpass_mode",
+            ckpt_cfg_ds.get("causal_highpass_mode")
+            if isinstance(ckpt_cfg_ds, dict)
+            else None,
+        )
+        ckpt_hp_hz = checkpoint.get(
+            "causal_highpass_hz",
+            ckpt_cfg_ds.get("causal_highpass_hz")
+            if isinstance(ckpt_cfg_ds, dict)
+            else None,
+        )
+        ckpt_hp_order = checkpoint.get(
+            "causal_highpass_order",
+            ckpt_cfg_ds.get("causal_highpass_order")
+            if isinstance(ckpt_cfg_ds, dict)
+            else None,
+        )
+        ckpt_clamp = checkpoint.get(
+            "clamp",
+            ckpt_cfg_ds.get("clamp") if isinstance(ckpt_cfg_ds, dict) else None,
+        )
         if ckpt_win is not None:
             cfg["dataset"]["window_seconds"] = float(ckpt_win)
         if ckpt_off is not None:
@@ -473,6 +495,14 @@ def _encode_stage_with_shifts(
             cfg["dataset"]["baseline_seconds"] = float(ckpt_base)
         if ckpt_hp is not None:
             cfg["dataset"]["causal_highpass_seconds"] = float(ckpt_hp)
+        if ckpt_hp_mode is not None:
+            cfg["dataset"]["causal_highpass_mode"] = str(ckpt_hp_mode)
+        if ckpt_hp_hz is not None:
+            cfg["dataset"]["causal_highpass_hz"] = float(ckpt_hp_hz)
+        if ckpt_hp_order is not None:
+            cfg["dataset"]["causal_highpass_order"] = int(ckpt_hp_order)
+        if ckpt_clamp is not None:
+            cfg["dataset"]["clamp"] = float(ckpt_clamp)
 
     cfg["dataset"]["shift_mode"] = norm_shift_mode
     cfg["dataset"]["preroll_seconds"] = float(preroll_seconds)

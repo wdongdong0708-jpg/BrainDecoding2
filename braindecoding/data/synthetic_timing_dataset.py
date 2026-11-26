@@ -242,6 +242,33 @@ class SyntheticTimingDataset(Dataset):
         group_column = "runtime_context_uid" if self.signal_key == "meg" else "sentence_uid"
         self.baseline_samples = (int(round(float(base.dataset_config["baseline_seconds"]) * self.sfreq))
                                  if self.signal_key == "meg" else 0)
+        self.baseline_seconds = float(base.dataset_config.get("baseline_seconds", 0.5))
+        self.causal_highpass_mode = str(
+            base.dataset_config.get("causal_highpass_mode", "moving_average")
+            or "moving_average"
+        ).strip().lower()
+        self.causal_highpass_seconds = float(
+            base.dataset_config.get("causal_highpass_seconds", 0.0)
+        )
+        self.causal_highpass_samples = int(
+            round(self.causal_highpass_seconds * self.sfreq)
+        )
+        self.causal_highpass_hz = float(
+            base.dataset_config.get("causal_highpass_hz", 0.5)
+        )
+        self.causal_highpass_order = int(
+            base.dataset_config.get("causal_highpass_order", 2)
+        )
+        self._butterworth_active = (
+            self.signal_key == "meg"
+            and self.causal_highpass_mode == "butterworth_iir"
+            and self.causal_highpass_hz > 0.0
+        )
+        self._moving_avg_active = (
+            self.signal_key == "meg"
+            and self.causal_highpass_mode == "moving_average"
+            and self.causal_highpass_samples > 1
+        )
         self.clamp = base.dataset_config.get("clamp", 5.0)
         self.words = self.table.normalized_word.astype(str).tolist()
         self.event_ids = self.table.event_id.astype(str).tolist()
@@ -300,6 +327,67 @@ class SyntheticTimingDataset(Dataset):
             self.epoch = int(epoch)
             self._streams.clear()
 
+    def _filter_synthetic_stream_np(self, stream: np.ndarray) -> np.ndarray:
+        """对连续合成脉冲流施加与真实 MEG 严格同构的因果高通滤波（零标签依赖）。"""
+        if self._butterworth_active:
+            from braindecoding.data.word_window_dataset import (
+                apply_causal_butterworth_highpass,
+            )
+
+            return apply_causal_butterworth_highpass(
+                stream,
+                sampling_rate_hz=self.sfreq,
+                cutoff_hz=self.causal_highpass_hz,
+                order=self.causal_highpass_order,
+            )
+        if self._moving_avg_active:
+            from braindecoding.data.word_window_dataset import (
+                _apply_causal_moving_average_highpass_full,
+            )
+
+            return _apply_causal_moving_average_highpass_full(
+                stream,
+                highpass_samples=self.causal_highpass_samples,
+            )
+        return stream
+
+    def _filter_synthetic_streams_gpu(self, sig: torch.Tensor) -> torch.Tensor:
+        """在 GPU 批量合成路径中对连续脉冲流 [G, C, L] 施加与 CPU 严格一致的因果高通滤波。"""
+        if self._butterworth_active:
+            from braindecoding.data.word_window_dataset import (
+                apply_causal_butterworth_highpass,
+            )
+
+            g_cnt, ch_cnt, l_max = sig.shape
+            sig_np = sig.detach().cpu().numpy().reshape(g_cnt * ch_cnt, l_max)
+            filt_np = apply_causal_butterworth_highpass(
+                sig_np,
+                sampling_rate_hz=self.sfreq,
+                cutoff_hz=self.causal_highpass_hz,
+                order=self.causal_highpass_order,
+            )
+            return torch.from_numpy(filt_np.reshape(g_cnt, ch_cnt, l_max)).to(
+                device=sig.device, dtype=sig.dtype
+            )
+        if self._moving_avg_active:
+            l_max = int(sig.shape[-1])
+            hp_w = int(self.causal_highpass_samples)
+            sig64 = sig.to(dtype=torch.float64)
+            cumsum = torch.zeros(
+                (*sig.shape[:-1], l_max + 1),
+                device=sig.device,
+                dtype=torch.float64,
+            )
+            torch.cumsum(sig64, dim=-1, out=cumsum[..., 1:])
+            right_idx = torch.arange(1, l_max + 1, device=sig.device, dtype=torch.long)
+            left_idx = torch.clamp(right_idx - hp_w, min=0)
+            denom = (right_idx - left_idx).to(dtype=torch.float64).view(1, 1, l_max)
+            moving_avg = (
+                cumsum.index_select(-1, right_idx) - cumsum.index_select(-1, left_idx)
+            ) / denom
+            return (sig64 - moving_avg).to(dtype=sig.dtype)
+        return sig
+
     def _stream(self, index):
         group = self.group_keys[index]
         base_identity = (group, self.event_ids[index] if self.condition == "independent" else "shared_stream")
@@ -324,8 +412,13 @@ class SyntheticTimingDataset(Dataset):
                      base_identity)
                 )
             seed = stable_seed(*seed_parts)
-            self._streams[cache_key] = synthetic_stream(self.stream_lengths[group], self.channel_count,
-                                                       self.sfreq, np.random.default_rng(seed))
+            raw_stream = synthetic_stream(
+                self.stream_lengths[group],
+                self.channel_count,
+                self.sfreq,
+                np.random.default_rng(seed),
+            )
+            self._streams[cache_key] = self._filter_synthetic_stream_np(raw_stream)
             if len(self._streams) > self.cache_streams:
                 self._streams.popitem(last=False)
         self._streams.move_to_end(cache_key)
@@ -514,6 +607,7 @@ class SyntheticTimingDataset(Dataset):
                 gen,
                 device=device,
             )
+            sig = self._filter_synthetic_streams_gpu(sig)
             g_chunk, _, l_max = sig.shape
             sig_flat_tc = (
                 sig.transpose(1, 2).contiguous().view(g_chunk * l_max, ch_count)
@@ -607,6 +701,7 @@ class SyntheticTimingDataset(Dataset):
                     gen,
                     device=device,
                 )
+                sig = self._filter_synthetic_streams_gpu(sig)
                 g_chunk, _, l_max = sig.shape
                 sig_flat_tc = (
                     sig.transpose(1, 2)

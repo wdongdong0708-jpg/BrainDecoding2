@@ -35,6 +35,10 @@ WINDOW_SECONDS = 1.0
 ELIGIBILITY_WINDOW_SECONDS = 3.0
 BASELINE_SECONDS = 0.5
 CAUSAL_HIGHPASS_SECONDS = 0.0
+CAUSAL_HIGHPASS_MODE = "moving_average"
+CAUSAL_HIGHPASS_HZ = 0.5
+CAUSAL_HIGHPASS_ORDER = 2
+VALID_CAUSAL_HIGHPASS_MODES = ("moving_average", "butterworth_iir")
 CLAMP = 5.0
 DEFAULT_MAX_CONTEXT_WORDS = 128
 
@@ -177,6 +181,98 @@ def pallier_legacy_signal_paths(
 def open_derived_signal(path: str) -> np.ndarray:
     """只读 mmap 打开 50 Hz 连续派生 MEG 信号，避免 DataLoader 反复整文件载入。"""
     return np.load(path, mmap_mode="r")
+
+
+def _apply_causal_moving_average_highpass_full(
+    signal: np.ndarray,
+    *,
+    highpass_samples: int,
+) -> np.ndarray:
+    """对整段连续信号 [C, T] 执行严格因果滑动均值高通滤波（float64 前缀和防精度漂移）。"""
+    hp_w = int(highpass_samples)
+    if hp_w <= 1:
+        return np.array(signal, dtype=np.float32, copy=True)
+    channels, total_len = int(signal.shape[0]), int(signal.shape[1])
+    if total_len == 0:
+        return np.empty((channels, 0), dtype=np.float32)
+    cumsum = np.empty((channels, total_len + 1), dtype=np.float64)
+    cumsum[:, 0] = 0.0
+    np.cumsum(signal, axis=1, dtype=np.float64, out=cumsum[:, 1:])
+    right_idx = np.arange(1, total_len + 1, dtype=np.int64)
+    left_idx = np.maximum(0, right_idx - hp_w)
+    denom = (right_idx - left_idx).astype(np.float64)[None, :]
+    moving_avg = (cumsum[:, right_idx] - cumsum[:, left_idx]) / denom
+    filtered = signal.astype(np.float64, copy=False) - moving_avg
+    return filtered.astype(np.float32, copy=False)
+
+
+@lru_cache(maxsize=16)
+def _butterworth_highpass_coeffs(
+    sampling_rate_hz: float,
+    cutoff_hz: float,
+    order: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """缓存因果高通 Butterworth IIR 滤波器系数 (b, a) 与稳态初始条件 zi。"""
+    from scipy.signal import butter, lfilter_zi
+
+    sr = float(sampling_rate_hz)
+    fc = float(cutoff_hz)
+    ord_i = int(order)
+    if ord_i < 1:
+        raise ValueError(f"causal_highpass_order 必须为正整数：{ord_i}")
+    nyquist = 0.5 * sr
+    if not (0.0 < fc < nyquist):
+        raise ValueError(
+            f"causal_highpass_hz 必须严格位于 (0, {nyquist}) Hz 之间，当前为 {fc}"
+        )
+    b, a = butter(ord_i, fc / nyquist, btype="highpass")
+    zi = lfilter_zi(b, a)
+    return b, a, zi
+
+
+def apply_causal_butterworth_highpass(
+    signal: np.ndarray,
+    *,
+    sampling_rate_hz: float = TARGET_SAMPLING_RATE_HZ,
+    cutoff_hz: float = CAUSAL_HIGHPASS_HZ,
+    order: int = CAUSAL_HIGHPASS_ORDER,
+    zi: np.ndarray | None = None,
+    return_zf: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """对连续多通道信号 [C, T] 执行严格因果 Butterworth IIR 高通滤波（float64 内部递推防溢出）。
+
+    默认采用稳态初值 ``zi = lfilter_zi(b, a) * x[:, :1]`` 消除零初值阶跃瞬态；
+    滤波过程仅依赖当前与过去采样点，零未来信号泄漏。
+    """
+    from scipy.signal import lfilter
+
+    sig = np.asarray(signal)
+    if sig.ndim != 2:
+        raise ValueError(f"因果 Butterworth 高通期望二维 [C, T] 数组，收到 {sig.shape}")
+    if sig.shape[1] == 0:
+        empty = np.empty((sig.shape[0], 0), dtype=np.float32)
+        if return_zf:
+            b, a, _ = _butterworth_highpass_coeffs(
+                sampling_rate_hz, cutoff_hz, order
+            )
+            return empty, np.zeros(
+                (sig.shape[0], max(len(a), len(b)) - 1), dtype=np.float64
+            )
+        return empty
+
+    b, a, zi_unit = _butterworth_highpass_coeffs(
+        sampling_rate_hz, cutoff_hz, order
+    )
+    sig64 = np.asarray(sig, dtype=np.float64)
+    if zi is None:
+        zi_eff = zi_unit[None, :] * sig64[:, :1]
+    else:
+        zi_eff = np.asarray(zi, dtype=np.float64)
+    filtered64, zf = lfilter(b, a, sig64, axis=1, zi=zi_eff)
+    filtered32 = np.ascontiguousarray(filtered64, dtype=np.float32)
+    if return_zf:
+        return filtered32, zf
+    return filtered32
 
 
 def _apply_causal_moving_average_highpass(
@@ -378,6 +474,11 @@ class WordWindowDataset(Dataset):
         cfg.setdefault("window_start_offset_seconds", WINDOW_START_OFFSET_SECONDS)
         cfg.setdefault("baseline_seconds", BASELINE_SECONDS)
         cfg.setdefault("causal_highpass_seconds", CAUSAL_HIGHPASS_SECONDS)
+        cfg.setdefault("causal_highpass_mode", CAUSAL_HIGHPASS_MODE)
+        cfg.setdefault("causal_highpass_hz", CAUSAL_HIGHPASS_HZ)
+        cfg.setdefault("causal_highpass_order", CAUSAL_HIGHPASS_ORDER)
+        cfg.setdefault("preload_filtered_recordings", False)
+        cfg.setdefault("preload_filtered_dtype", "float32")
         cfg.setdefault("clamp", CLAMP)
         cfg.setdefault("max_context_words", DEFAULT_MAX_CONTEXT_WORDS)
         self.dataset_config = cfg
@@ -423,6 +524,20 @@ class WordWindowDataset(Dataset):
         self._causal_highpass_samples = int(
             round(self.causal_highpass_seconds * self.sampling_rate_hz)
         )
+        self.causal_highpass_mode = str(
+            cfg.get("causal_highpass_mode", CAUSAL_HIGHPASS_MODE) or CAUSAL_HIGHPASS_MODE
+        ).strip().lower()
+        if self.causal_highpass_mode not in VALID_CAUSAL_HIGHPASS_MODES:
+            raise ValueError(
+                f"无效 causal_highpass_mode：{self.causal_highpass_mode!r}，"
+                f"可选 {VALID_CAUSAL_HIGHPASS_MODES}"
+            )
+        self.causal_highpass_hz = float(
+            cfg.get("causal_highpass_hz", CAUSAL_HIGHPASS_HZ)
+        )
+        self.causal_highpass_order = int(
+            cfg.get("causal_highpass_order", CAUSAL_HIGHPASS_ORDER)
+        )
         if self.window_samples <= 0:
             raise ValueError(f"窗口样本数必须为正整数：{self.window_samples}")
         if self._baseline_samples < 0:
@@ -431,7 +546,51 @@ class WordWindowDataset(Dataset):
             raise ValueError(
                 f"causal_highpass_seconds 不能为负数：{self.causal_highpass_seconds}"
             )
-        self._clamp = float(cfg["clamp"])
+        if self.causal_highpass_mode == "butterworth_iir":
+            if self.causal_highpass_hz < 0.0:
+                raise ValueError(
+                    f"causal_highpass_hz 不能为负数：{self.causal_highpass_hz}"
+                )
+            if self.causal_highpass_hz > 0.0:
+                # 提前验证系数合法性
+                _butterworth_highpass_coeffs(
+                    self.sampling_rate_hz,
+                    self.causal_highpass_hz,
+                    self.causal_highpass_order,
+                )
+        self._butterworth_active = (
+            self.causal_highpass_mode == "butterworth_iir"
+            and self.causal_highpass_hz > 0.0
+        )
+        self._moving_avg_active = (
+            self.causal_highpass_mode == "moving_average"
+            and self._causal_highpass_samples > 1
+        )
+        self._butterworth_settle_samples = (
+            int(
+                round(
+                    max(10.0, 5.0 / max(self.causal_highpass_hz, 0.05))
+                    * self.sampling_rate_hz
+                )
+            )
+            if self._butterworth_active
+            else 0
+        )
+        self.clamp = float(cfg["clamp"])
+        self._clamp = self.clamp
+        self.preload_filtered_recordings = bool(
+            cfg.get("preload_filtered_recordings", False)
+        )
+        preload_dtype_name = str(
+            cfg.get("preload_filtered_dtype", "float32") or "float32"
+        ).strip().lower()
+        if preload_dtype_name not in {"float32", "fp32", "float16", "fp16"}:
+            raise ValueError(
+                f"无效 preload_filtered_dtype：{preload_dtype_name!r}，可选 float32 或 float16"
+            )
+        self.preload_filtered_dtype = (
+            np.float16 if preload_dtype_name in {"float16", "fp16"} else np.float32
+        )
         self._window_offset_seconds = float(cfg["window_start_offset_seconds"])
 
         self.temporal_shift_seconds = float(temporal_shift_seconds)
@@ -555,12 +714,41 @@ class WordWindowDataset(Dataset):
         self._explicit_preroll_buffers = (
             dict(preroll_buffers) if preroll_buffers is not None else None
         )
+        self._preloaded_signals: dict[str, np.ndarray] = {}
+        if not self.zero_meg and self.preload_filtered_recordings:
+            self._preload_filtered_recordings()
         if (
             not self.zero_meg
             and self.shift_mode == "preroll"
             and self.temporal_shift_samples < 0
         ):
             self.ensure_preroll_buffers()
+
+    def _preload_filtered_recordings(self) -> None:
+        """一次性将当前 Dataset 涉及的全部连续记录预滤波并常驻主机 RAM，消除训练期 I/O 与逐窗滤波瓶颈。"""
+        unique_paths = list(dict.fromkeys(self._signal_path_strs))
+        for path_str in unique_paths:
+            if path_str in self._preloaded_signals:
+                continue
+            raw = open_derived_signal(path_str)
+            if self._butterworth_active:
+                filtered = apply_causal_butterworth_highpass(
+                    raw,
+                    sampling_rate_hz=self.sampling_rate_hz,
+                    cutoff_hz=self.causal_highpass_hz,
+                    order=self.causal_highpass_order,
+                )
+            elif self._moving_avg_active:
+                filtered = _apply_causal_moving_average_highpass_full(
+                    raw,
+                    highpass_samples=self._causal_highpass_samples,
+                )
+            else:
+                filtered = np.array(raw, dtype=np.float32, copy=True)
+            if self.preload_filtered_dtype is np.float16:
+                filtered = filtered.astype(np.float16, copy=False)
+            filtered.setflags(write=False)
+            self._preloaded_signals[path_str] = filtered
 
     def _resolve_signal_and_sidecar(
         self, subject: str, run: str = "", relpath: str = ""
@@ -652,11 +840,16 @@ class WordWindowDataset(Dataset):
         if self.temporal_shift_samples > 0:
             raise ValueError("Pre-Roll 因果移位模式仅允许严格过去移位 (temporal_shift_seconds <= 0)。")
 
+        hp_extra_samples = (
+            int(self._butterworth_settle_samples)
+            if bool(getattr(self, "_butterworth_active", False))
+            else max(0, int(self._causal_highpass_samples) - 1)
+        )
         required_samples = max(
             int(round(self.preroll_seconds * self.sampling_rate_hz)),
             abs(int(self.temporal_shift_samples))
             + int(self.window_samples)
-            + max(0, int(self._causal_highpass_samples) - 1),
+            + hp_extra_samples,
         )
         if self._preroll_by_recording and all(
             int(buf.shape[1]) >= required_samples
@@ -867,30 +1060,67 @@ class WordWindowDataset(Dataset):
         idx = int(index)
         if self.zero_meg:
             return np.zeros((self.channel_count, self.window_samples), dtype=np.float32)
-        recording = open_derived_signal(self._signal_path_strs[idx])
-        if recording.ndim != 2 or recording.shape[1] < self.window_samples:
+        path_str = self._signal_path_strs[idx]
+        preloaded_map = getattr(self, "_preloaded_signals", None)
+        preloaded = preloaded_map.get(path_str) if preloaded_map else None
+        recording = None if preloaded is not None else open_derived_signal(path_str)
+        rec_ref = preloaded if preloaded is not None else recording
+        if rec_ref.ndim != 2 or rec_ref.shape[1] < self.window_samples:
             raise ValueError("词窗口超出连续 MEG 信号长度。")
+        rec_len = int(rec_ref.shape[1])
         start = int(self._window_starts[idx])
         stop = start + self.window_samples
-        if start < 0 or stop > recording.shape[1]:
+        if start < 0 or stop > rec_len:
             if (
                 self._strict_window_bounds
                 and self.window_samples == 50
                 and self._window_offset_seconds == 0.0
             ):
                 raise ValueError("词窗口超出 canonical continuous signal。")
-            start = max(0, min(start, int(recording.shape[1]) - self.window_samples))
+            start = max(0, min(start, rec_len - self.window_samples))
             stop = start + self.window_samples
 
         effective_shift_mode = getattr(self, "shift_mode", "deterministic_circular")
+        butter_active = bool(getattr(self, "_butterworth_active", False))
+        ma_active = bool(getattr(self, "_moving_avg_active", False))
         hp_samples = int(getattr(self, "_causal_highpass_samples", 0))
         hp_history = max(0, hp_samples - 1)
+        butter_settle = int(getattr(self, "_butterworth_settle_samples", 0))
         win_len = int(self.window_samples)
 
+        def _raw_recording() -> np.ndarray:
+            nonlocal recording
+            if recording is None:
+                recording = open_derived_signal(path_str)
+            return recording
+
+        def _slice_butterworth_from_raw(raw_rec: np.ndarray, pos_start: int) -> np.ndarray:
+            ctx_start = max(0, pos_start - butter_settle)
+            seg = raw_rec[:, ctx_start : pos_start + win_len]
+            filtered = apply_causal_butterworth_highpass(
+                seg,
+                sampling_rate_hz=self.sampling_rate_hz,
+                cutoff_hz=self.causal_highpass_hz,
+                order=self.causal_highpass_order,
+            )
+            local_off = pos_start - ctx_start
+            return np.array(
+                filtered[:, local_off : local_off + win_len],
+                dtype=np.float32,
+                copy=True,
+            )
+
         if self.temporal_shift_samples == 0:
-            if hp_samples > 1:
+            if preloaded is not None:
+                window = np.array(
+                    preloaded[:, start:stop], dtype=np.float32, copy=True
+                )
+            elif butter_active:
+                window = _slice_butterworth_from_raw(_raw_recording(), start)
+            elif ma_active:
+                raw_rec = _raw_recording()
                 ctx_start = max(0, start - hp_history)
-                seg = recording[:, ctx_start:stop]
+                seg = raw_rec[:, ctx_start:stop]
                 window = _apply_causal_moving_average_highpass(
                     seg,
                     target_start=start - ctx_start,
@@ -898,16 +1128,71 @@ class WordWindowDataset(Dataset):
                     highpass_samples=hp_samples,
                 )
             else:
-                window = recording[:, start:stop].astype(np.float32, copy=True)
+                window = _raw_recording()[:, start:stop].astype(np.float32, copy=True)
         elif effective_shift_mode == "preroll":
             if self.temporal_shift_samples > 0:
                 raise ValueError("Pre-Roll 因果移位模式仅允许严格过去移位 (temporal_shift_seconds <= 0)。")
             raw_start = start + int(self.temporal_shift_samples)
-            if hp_samples <= 1:
-                if raw_start >= 0:
-                    window = recording[:, raw_start : raw_start + win_len].astype(
-                        np.float32, copy=True
+            if butter_active:
+                if raw_start >= butter_settle:
+                    if preloaded is not None:
+                        window = np.array(
+                            preloaded[:, raw_start : raw_start + win_len],
+                            dtype=np.float32,
+                            copy=True,
+                        )
+                    else:
+                        window = _slice_butterworth_from_raw(
+                            _raw_recording(), raw_start
+                        )
+                else:
+                    raw_rec = _raw_recording()
+                    preroll = self._get_preroll_for_index(idx)
+                    buf_len = int(preroll.shape[1])
+                    v_start = buf_len + raw_start
+                    if v_start < 0:
+                        raise IndexError(
+                            f"Pre-Roll 缓冲区长度不足：raw_start={raw_start}, buf_len={buf_len}"
+                        )
+                    ctx_v_start = max(0, v_start - butter_settle)
+                    v_stop = v_start + win_len
+                    if v_stop <= buf_len:
+                        seg = preroll[:, ctx_v_start:v_stop]
+                    elif ctx_v_start >= buf_len:
+                        seg = raw_rec[:, ctx_v_start - buf_len : v_stop - buf_len]
+                    else:
+                        left_len = buf_len - ctx_v_start
+                        right_len = v_stop - buf_len
+                        seg = np.empty(
+                            (self.channel_count, left_len + right_len),
+                            dtype=np.float32,
+                        )
+                        seg[:, :left_len] = preroll[:, ctx_v_start:buf_len]
+                        seg[:, left_len:] = raw_rec[:, :right_len]
+                    filtered = apply_causal_butterworth_highpass(
+                        seg,
+                        sampling_rate_hz=self.sampling_rate_hz,
+                        cutoff_hz=self.causal_highpass_hz,
+                        order=self.causal_highpass_order,
                     )
+                    local_off = v_start - ctx_v_start
+                    window = np.array(
+                        filtered[:, local_off : local_off + win_len],
+                        dtype=np.float32,
+                        copy=True,
+                    )
+            elif not ma_active:
+                if raw_start >= 0:
+                    if preloaded is not None:
+                        window = np.array(
+                            preloaded[:, raw_start : raw_start + win_len],
+                            dtype=np.float32,
+                            copy=True,
+                        )
+                    else:
+                        window = _raw_recording()[
+                            :, raw_start : raw_start + win_len
+                        ].astype(np.float32, copy=True)
                 else:
                     preroll = self._get_preroll_for_index(idx)
                     buf_len = int(preroll.shape[1])
@@ -921,22 +1206,32 @@ class WordWindowDataset(Dataset):
                             np.float32, copy=True
                         )
                     else:
+                        raw_rec = _raw_recording()
                         left_len = -raw_start
                         right_len = win_len - left_len
                         window = np.empty((self.channel_count, win_len), dtype=np.float32)
                         window[:, :left_len] = preroll[:, buf_start:buf_len]
-                        window[:, left_len:] = recording[:, :right_len]
+                        window[:, left_len:] = raw_rec[:, :right_len]
             else:
                 if raw_start >= hp_history:
-                    ctx_start = raw_start - hp_history
-                    seg = recording[:, ctx_start : raw_start + win_len]
-                    window = _apply_causal_moving_average_highpass(
-                        seg,
-                        target_start=hp_history,
-                        window_samples=win_len,
-                        highpass_samples=hp_samples,
-                    )
+                    if preloaded is not None:
+                        window = np.array(
+                            preloaded[:, raw_start : raw_start + win_len],
+                            dtype=np.float32,
+                            copy=True,
+                        )
+                    else:
+                        raw_rec = _raw_recording()
+                        ctx_start = raw_start - hp_history
+                        seg = raw_rec[:, ctx_start : raw_start + win_len]
+                        window = _apply_causal_moving_average_highpass(
+                            seg,
+                            target_start=hp_history,
+                            window_samples=win_len,
+                            highpass_samples=hp_samples,
+                        )
                 else:
+                    raw_rec = _raw_recording()
                     preroll = self._get_preroll_for_index(idx)
                     buf_len = int(preroll.shape[1])
                     v_start = buf_len + raw_start
@@ -949,7 +1244,7 @@ class WordWindowDataset(Dataset):
                     if v_stop <= buf_len:
                         seg = preroll[:, ctx_v_start:v_stop]
                     elif ctx_v_start >= buf_len:
-                        seg = recording[:, ctx_v_start - buf_len : v_stop - buf_len]
+                        seg = raw_rec[:, ctx_v_start - buf_len : v_stop - buf_len]
                     else:
                         left_len = buf_len - ctx_v_start
                         right_len = v_stop - buf_len
@@ -958,7 +1253,7 @@ class WordWindowDataset(Dataset):
                             dtype=np.float32,
                         )
                         seg[:, :left_len] = preroll[:, ctx_v_start:buf_len]
-                        seg[:, left_len:] = recording[:, :right_len]
+                        seg[:, left_len:] = raw_rec[:, :right_len]
                     window = _apply_causal_moving_average_highpass(
                         seg,
                         target_start=v_start - ctx_v_start,
@@ -966,7 +1261,7 @@ class WordWindowDataset(Dataset):
                         highpass_samples=hp_samples,
                     )
         else:
-            valid_span = int(recording.shape[1]) - win_len + 1
+            valid_span = rec_len - win_len + 1
             if valid_span <= 2 * win_len:
                 raise ValueError("连续信号长度不足以执行非重叠时间错位对照。")
             shifted_start = (start + self.temporal_shift_samples) % valid_span
@@ -977,9 +1272,20 @@ class WordWindowDataset(Dataset):
                     else -win_len
                 )
                 shifted_start = (shifted_start + step) % valid_span
-            if hp_samples > 1:
+            if preloaded is not None:
+                window = np.array(
+                    preloaded[:, shifted_start : shifted_start + win_len],
+                    dtype=np.float32,
+                    copy=True,
+                )
+            elif butter_active:
+                window = _slice_butterworth_from_raw(
+                    _raw_recording(), shifted_start
+                )
+            elif ma_active:
+                raw_rec = _raw_recording()
                 ctx_start = max(0, shifted_start - hp_history)
-                seg = recording[:, ctx_start : shifted_start + win_len]
+                seg = raw_rec[:, ctx_start : shifted_start + win_len]
                 window = _apply_causal_moving_average_highpass(
                     seg,
                     target_start=shifted_start - ctx_start,
@@ -987,9 +1293,9 @@ class WordWindowDataset(Dataset):
                     highpass_samples=hp_samples,
                 )
             else:
-                window = recording[:, shifted_start : shifted_start + win_len].astype(
-                    np.float32, copy=True
-                )
+                window = _raw_recording()[
+                    :, shifted_start : shifted_start + win_len
+                ].astype(np.float32, copy=True)
 
         effective_baseline = min(self._baseline_samples, int(window.shape[1]))
         if effective_baseline > 0:

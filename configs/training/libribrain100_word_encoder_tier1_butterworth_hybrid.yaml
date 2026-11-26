@@ -1,0 +1,46 @@
+# LibriBrain100 英语 MEG 阶段 1（Tier 1 涨点版）：因果 2 阶 Butterworth 0.5 Hz 高通 + clamp=20 + RAM 预滤波 + 去重叠间隔采样 + 混合全词表 Logit-Adjusted CE (ls=0) + 解耦 AdamW + Step Warmup-Cosine + EMA
+# 启动命令：
+#   python -u -m braindecoding train --config configs/training/libribrain100_word_encoder_tier1_butterworth_hybrid.yaml --require-cache --resume auto
+extends: ./libribrain100_word_encoder.yaml
+
+dataset:
+  baseline_seconds: 0.0
+  causal_highpass_seconds: 0.0
+  causal_highpass_mode: butterworth_iir
+  causal_highpass_hz: 0.5
+  causal_highpass_order: 2
+  clamp: 20.0
+  preload_filtered_recordings: true
+  preload_filtered_dtype: float32
+
+model:
+  conv:
+    merger_per_sample_dropout: true
+
+loss:
+  name: hybrid_siglip_full_vocab_ce
+  siglip_weight: 0.5
+  ce_weight: 0.5
+  initial_temperature: 10.0
+  initial_bias: -10.0
+  identical_candidates_threshold: 0.999
+  ce_initial_temperature: 12.0
+  ce_max_temperature: 18.0
+  alpha_prior: 1.0
+  label_smoothing: 0.0
+
+training:
+  epochs: 18
+  batch_size: 512
+  eval_batch_size: 1024
+  learning_rate: 6.0e-4
+  weight_decay: 0.05
+  decoupled_weight_decay: true
+  scheduler: step_cosine
+  warmup_ratio: 0.05
+  minimum_learning_rate: 1.0e-6
+  ema_decay: 0.999
+  patience: 6
+  early_stop_metric: full_vocab
+  word_sampling: min_gap_sampler
+  min_gap_seconds: 2.5

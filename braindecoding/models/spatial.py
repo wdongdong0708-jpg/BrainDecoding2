@@ -96,6 +96,7 @@ class SpatialChannelMerger(nn.Module):
         fourier_margin=0.0,
         scale_fourier_coordinates=False,
         initialization_std=None,
+        per_sample_dropout=False,
     ):
         super().__init__()
         positions = torch.as_tensor(channel_positions, dtype=torch.float32)
@@ -126,6 +127,7 @@ class SpatialChannelMerger(nn.Module):
                 "per_subject and residual_per_subject are mutually exclusive."
             )
         self.dropout_radius = float(dropout_radius)
+        self.per_sample_dropout = bool(per_sample_dropout)
 
         coefficient_shape = (int(output_channels), int(position_dimension))
         if self.per_subject:
@@ -227,6 +229,7 @@ class SpatialChannelMerger(nn.Module):
         if channel_count != len(self.channel_positions):
             raise ValueError("Signal channels and channel_positions do not match.")
 
+        shared_across_batch = False
         if self.per_subject:
             if subject_indices is None:
                 subject_indices = torch.zeros(
@@ -239,8 +242,14 @@ class SpatialChannelMerger(nn.Module):
                 self.coefficients
             ):
                 raise IndexError("subject index is outside the spatial merger range.")
-            coefficients = self.coefficients[subject_indices]
-            scores = torch.einsum("bod,cd->boc", coefficients, self.basis)
+            if len(self.coefficients) == 1:
+                scores = torch.einsum("od,cd->oc", self.coefficients[0], self.basis)
+                shared_across_batch = True
+            else:
+                subject_scores = torch.einsum(
+                    "sod,cd->soc", self.coefficients, self.basis
+                )
+                scores = subject_scores[subject_indices]
         elif self.residual_per_subject:
             scores = torch.einsum("od,cd->oc", self.coefficients, self.basis)
             scores = scores.unsqueeze(0).expand(batch_size, -1, -1).clone()
@@ -256,24 +265,42 @@ class SpatialChannelMerger(nn.Module):
                     )
                 known = subject_indices >= 0
                 if known.any():
-                    residual_scores = torch.einsum(
-                        "bod,cd->boc",
-                        self.subject_residuals[subject_indices[known]],
-                        self.basis,
+                    residual_by_subject = torch.einsum(
+                        "sod,cd->soc", self.subject_residuals, self.basis
                     )
-                    scores[known] = scores[known] + residual_scores
+                    scores[known] = (
+                        scores[known] + residual_by_subject[subject_indices[known]]
+                    )
         else:
             scores = torch.einsum("od,cd->oc", self.coefficients, self.basis)
-            scores = scores.unsqueeze(0).expand(batch_size, -1, -1)
+            shared_across_batch = True
 
         if self.training and self.dropout_radius > 0:
-            center = torch.rand(2, device=signals.device, dtype=signals.dtype)
-            banned = (
-                self.channel_positions.to(dtype=signals.dtype) - center
-            ).norm(dim=-1) <= self.dropout_radius
-            scores = scores.masked_fill(banned[None, None], float("-inf"))
+            if self.per_sample_dropout:
+                if shared_across_batch:
+                    scores = scores.unsqueeze(0).expand(batch_size, -1, -1)
+                    shared_across_batch = False
+                centers = torch.rand(
+                    batch_size, 2, device=signals.device, dtype=signals.dtype
+                )
+                banned = (
+                    self.channel_positions.to(dtype=signals.dtype).unsqueeze(0)
+                    - centers.unsqueeze(1)
+                ).norm(dim=-1) <= self.dropout_radius
+                scores = scores.masked_fill(banned.unsqueeze(1), float("-inf"))
+            else:
+                center = torch.rand(2, device=signals.device, dtype=signals.dtype)
+                banned = (
+                    self.channel_positions.to(dtype=signals.dtype) - center
+                ).norm(dim=-1) <= self.dropout_radius
+                if shared_across_batch:
+                    scores = scores.masked_fill(banned.unsqueeze(0), float("-inf"))
+                else:
+                    scores = scores.masked_fill(banned[None, None], float("-inf"))
         weights = torch.softmax(scores, dim=-1)
-        return torch.einsum("bct,boc->bot", signals, weights)
+        if shared_across_batch:
+            return torch.matmul(weights, signals)
+        return torch.bmm(weights, signals)
 
 
 class SubjectLinear(nn.Module):
@@ -324,6 +351,11 @@ class SubjectLinear(nn.Module):
             raise ValueError("subject_indices and batch size do not match.")
         if subject_indices.min() < 0 or subject_indices.max() >= len(self.weights):
             raise IndexError("subject index is outside the subject layer range.")
+        if len(self.weights) == 1:
+            output = torch.matmul(self.weights[0], features)
+            if self.bias is not None:
+                output = output + self.bias[0].view(1, -1, 1)
+            return output
         output = torch.bmm(self.weights[subject_indices], features)
         if self.bias is not None:
             output = output + self.bias[subject_indices].unsqueeze(-1)

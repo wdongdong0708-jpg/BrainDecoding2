@@ -1158,7 +1158,7 @@ def run_duration_shortcut_diagnostics(
 
     def _extract_ckpt_preprocess_sig(
         ckpt_obj: Mapping[str, Any],
-    ) -> tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float, str, float, int, float]:
         ds_sub = (
             ckpt_obj.get("config", {}).get("dataset", {})
             if isinstance(ckpt_obj.get("config"), dict)
@@ -1186,20 +1186,56 @@ def run_duration_shortcut_diagnostics(
                 cfg["dataset"].get("causal_highpass_seconds", 0.0),
             ),
         )
+        hp_mode = str(
+            ckpt_obj.get(
+                "causal_highpass_mode",
+                ds_sub.get(
+                    "causal_highpass_mode",
+                    cfg["dataset"].get("causal_highpass_mode", "moving_average"),
+                ),
+            )
+            or "moving_average"
+        ).strip().lower()
+        hp_hz = ckpt_obj.get(
+            "causal_highpass_hz",
+            ds_sub.get(
+                "causal_highpass_hz",
+                cfg["dataset"].get("causal_highpass_hz", 0.5),
+            ),
+        )
+        hp_order = ckpt_obj.get(
+            "causal_highpass_order",
+            ds_sub.get(
+                "causal_highpass_order",
+                cfg["dataset"].get("causal_highpass_order", 2),
+            ),
+        )
+        clamp_val = ckpt_obj.get(
+            "clamp",
+            ds_sub.get("clamp", cfg["dataset"].get("clamp", 5.0)),
+        )
         return (
             round(float(w_sec), 6),
             round(float(w_off), 6),
             round(float(b_sec), 6),
             round(float(hp_sec), 6),
+            hp_mode,
+            round(float(hp_hz), 6),
+            int(hp_order),
+            round(float(clamp_val), 6),
         )
 
-    # 从首个检查点同步基础配置并支持同次体检中混合比对不同基线/高通预处理检查点
+    # 从首个检查点同步基础配置并支持同次体检中混合比对不同基线/高通/截断预处理检查点
     first_ckpt = load_checkpoint(model_specs[0][1], map_location="cpu")
     first_sig = _extract_ckpt_preprocess_sig(first_ckpt)
     cfg["dataset"]["window_seconds"] = first_sig[0]
     cfg["dataset"]["window_start_offset_seconds"] = first_sig[1]
     cfg["dataset"]["baseline_seconds"] = first_sig[2]
     cfg["dataset"]["causal_highpass_seconds"] = first_sig[3]
+    cfg["dataset"]["causal_highpass_mode"] = first_sig[4]
+    cfg["dataset"]["causal_highpass_hz"] = first_sig[5]
+    cfg["dataset"]["causal_highpass_order"] = first_sig[6]
+    cfg["dataset"]["clamp"] = first_sig[7]
 
     # 先构建包含 runtime_context_uid 的基准 eval Dataset 与词表
     clean_eval_ds = meg_word_task.build_dataset(cfg, eval_table)
@@ -1258,7 +1294,7 @@ def run_duration_shortcut_diagnostics(
     tc_eval["preserve_complete_groups"] = True
 
     def _build_eval_bundle_for_sig(
-        sig: tuple[float, float, float, float],
+        sig: tuple[float, float, float, float, str, float, int, float],
         *,
         prebuilt_ds: WordWindowDataset | None = None,
     ) -> tuple[
@@ -1275,6 +1311,10 @@ def run_duration_shortcut_diagnostics(
             sig_cfg["dataset"]["window_start_offset_seconds"] = sig[1]
             sig_cfg["dataset"]["baseline_seconds"] = sig[2]
             sig_cfg["dataset"]["causal_highpass_seconds"] = sig[3]
+            sig_cfg["dataset"]["causal_highpass_mode"] = sig[4]
+            sig_cfg["dataset"]["causal_highpass_hz"] = sig[5]
+            sig_cfg["dataset"]["causal_highpass_order"] = sig[6]
+            sig_cfg["dataset"]["clamp"] = sig[7]
             ds_obj = meg_word_task.build_dataset(sig_cfg, eval_table)
         c_loader, _ = make_loader(
             ds_obj,
@@ -1304,7 +1344,7 @@ def run_duration_shortcut_diagnostics(
         return ds_obj, c_loader, sp_bundles
 
     eval_bundles_by_sig: dict[
-        tuple[float, float, float, float],
+        tuple[float, float, float, float, str, float, int, float],
         tuple[
             WordWindowDataset,
             Any,

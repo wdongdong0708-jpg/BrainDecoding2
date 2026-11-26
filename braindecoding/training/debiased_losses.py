@@ -780,7 +780,7 @@ def compute_excess_coherent_shift_null_loss(
             e_mean_det - (1.0 + max(0.0, float(excess_tolerance))) * e_incoh_det
         )
 
-    if not v_br.requires_grad or float(excess_det.item()) <= 0.0:
+    if not v_br.requires_grad:
         return excess_det + (v_br.sum() * 0.0)
 
     if not v_br[1:].requires_grad:
@@ -791,7 +791,12 @@ def compute_excess_coherent_shift_null_loss(
         diag_sq = (v_br * v_br).sum(dim=-1).sum(dim=0).mean()
         cross_term = (sum_sq - diag_sq) / float(num_branches * (num_branches - 1))
 
-    return excess_det + (cross_term - cross_term.detach())
+    active_grad = torch.where(
+        excess_det > 0.0,
+        cross_term - cross_term.detach(),
+        excess_det.new_zeros(()),
+    )
+    return excess_det + active_grad
 
 
 def _count_english_vowels(word: str) -> int:

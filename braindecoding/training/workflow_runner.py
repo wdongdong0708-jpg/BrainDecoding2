@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from contextlib import nullcontext
 import copy
 import gc
 import json
@@ -26,6 +28,7 @@ from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 import torch
+from torch.nn import functional as F
 import yaml
 
 from braindecoding.config import (
@@ -78,8 +81,10 @@ from braindecoding.experiment import file_sha256
 from braindecoding.losses import build_siglip_loss
 from braindecoding.models import build_brain_embedding_model
 from braindecoding.optimizers import (
+    ModelEMA,
     build_adamw_for_modules,
     build_cosine_annealing_scheduler,
+    build_scheduler,
 )
 from braindecoding.training import meg_word_task
 from braindecoding.training.protocol_stage_training import (
@@ -722,6 +727,7 @@ def build_workflow_config(
             "training",
             "dataset",
             "model",
+            "loss",
             "siamese_debiased",
         ):
             if isinstance(explicit_yaml.get(overlay_key), dict):
@@ -2004,10 +2010,45 @@ def run_training_workflow(
                 if isinstance(src_ds_cfg, dict)
                 else None,
             )
+            src_hp_mode = warm_start_checkpoint_payload.get(
+                "causal_highpass_mode",
+                src_ds_cfg.get("causal_highpass_mode")
+                if isinstance(src_ds_cfg, dict)
+                else None,
+            )
+            src_hp_hz = warm_start_checkpoint_payload.get(
+                "causal_highpass_hz",
+                src_ds_cfg.get("causal_highpass_hz")
+                if isinstance(src_ds_cfg, dict)
+                else None,
+            )
+            src_hp_order = warm_start_checkpoint_payload.get(
+                "causal_highpass_order",
+                src_ds_cfg.get("causal_highpass_order")
+                if isinstance(src_ds_cfg, dict)
+                else None,
+            )
+            src_clamp = warm_start_checkpoint_payload.get(
+                "clamp",
+                src_ds_cfg.get("clamp") if isinstance(src_ds_cfg, dict) else None,
+            )
+            src_model_cfg = warm_start_checkpoint_payload.get("model_config")
             if src_base is not None:
                 cfg["dataset"]["baseline_seconds"] = float(src_base)
             if src_hp is not None:
                 cfg["dataset"]["causal_highpass_seconds"] = float(src_hp)
+            if src_hp_mode is not None:
+                cfg["dataset"]["causal_highpass_mode"] = str(src_hp_mode)
+            if src_hp_hz is not None:
+                cfg["dataset"]["causal_highpass_hz"] = float(src_hp_hz)
+            if src_hp_order is not None:
+                cfg["dataset"]["causal_highpass_order"] = int(src_hp_order)
+            if src_clamp is not None:
+                cfg["dataset"]["clamp"] = float(src_clamp)
+            if isinstance(src_model_cfg, dict) and isinstance(
+                src_model_cfg.get("conv"), dict
+            ):
+                cfg["model"]["conv"] = copy.deepcopy(src_model_cfg["conv"])
         elif mode != "smoke":
             raise FileNotFoundError(
                 f"{stage} 阶段需要已完成同受试者子集的 word 检查点：{candidate_source}"
@@ -2041,6 +2082,45 @@ def run_training_workflow(
     loss_module = build_siglip_loss(cfg["loss"]).to(device)
     embedding_hash = file_sha256(cfg["cache"]["text_embeddings"])
 
+    # 严格基于训练划分构建词表向量与词频（供全词表 Logit-Adjusted CE 与独立文本锥轴锁使用，绝不触碰 val/test）
+    ctx_mod_init = getattr(model, "context_transformer", None)
+    need_train_vocab_tensors = bool(
+        hasattr(loss_module, "set_vocabulary")
+        or (
+            ctx_mod_init is not None
+            and hasattr(ctx_mod_init, "set_text_cone_axis")
+            and resume_ckpt_path is None
+        )
+    )
+    if need_train_vocab_tensors:
+        train_word_counts = Counter(
+            train_ds.table["normalized_word"].astype(str).tolist()
+        )
+        train_vocab_embs = torch.stack(
+            [
+                torch.as_tensor(train_ds.embedding_map[w], dtype=torch.float32)
+                for w in vocabulary
+            ],
+            dim=0,
+        )
+        if hasattr(loss_module, "set_vocabulary"):
+            loss_module.set_vocabulary(
+                vocabulary,
+                train_vocab_embs,
+                [train_word_counts[w] for w in vocabulary],
+            )
+        if (
+            ctx_mod_init is not None
+            and hasattr(ctx_mod_init, "set_text_cone_axis")
+            and resume_ckpt_path is None
+        ):
+            u0_text = F.normalize(
+                F.normalize(train_vocab_embs, dim=-1).mean(dim=0),
+                dim=-1,
+            )
+            ctx_mod_init.set_text_cone_axis(u0_text)
+        del train_vocab_embs
+
     initialization = None
     if warm_start_checkpoint_payload is not None and warm_start_source_ckpt is not None:
         encoder_state = {
@@ -2060,8 +2140,44 @@ def run_training_workflow(
         }
         del warm_start_checkpoint_payload
 
+    max_epochs = int(tc["epochs"])
+    all_epochs_frozen = (
+        warm_start_stage
+        and int(tc.get("freeze_brain_encoder_epochs", 0)) >= max_epochs
+    )
+    if all_epochs_frozen:
+        meg_word_task.set_brain_encoder_trainable(model, False)
+
     optimizer = build_adamw_for_modules([model, loss_module], tc)
-    scheduler = build_cosine_annealing_scheduler(optimizer, tc["epochs"])
+    scheduler_name = str(
+        tc.get("scheduler", "epoch_cosine") or "epoch_cosine"
+    ).strip().lower()
+    min_lr = float(tc.get("minimum_learning_rate", 0.0))
+    if scheduler_name in {"step_cosine", "warmup_cosine", "cosine_warmup"}:
+        total_steps = max(1, len(train_loader) * max_epochs)
+        scheduler = build_scheduler(
+            optimizer,
+            total_steps=total_steps,
+            warmup_ratio=float(tc.get("warmup_ratio", 0.05)),
+            minimum_learning_rate=min_lr,
+        )
+        is_step_scheduler = True
+    else:
+        scheduler = build_cosine_annealing_scheduler(
+            optimizer, max_epochs, minimum_learning_rate=min_lr
+        )
+        is_step_scheduler = False
+
+    raw_ema_decay = tc.get("ema_decay")
+    ema: ModelEMA | None = (
+        ModelEMA(
+            model,
+            decay=float(raw_ema_decay),
+            trainable_only=all_epochs_frozen,
+        )
+        if (raw_ema_decay is not None and float(raw_ema_decay) > 0.0)
+        else None
+    )
     amp_dtype = resolve_amp_dtype(tc)
     scaler_enabled = (
         bool(tc.get("amp", True))
@@ -2095,6 +2211,8 @@ def run_training_workflow(
         scheduler.load_state_dict(ckpt["scheduler_state"])
         if "scaler_state" in ckpt and scaler.is_enabled():
             scaler.load_state_dict(ckpt["scaler_state"])
+        if ema is not None and isinstance(ckpt.get("ema_state"), dict):
+            ema.load_state_dict(ckpt["ema_state"])
         if "random_state" in ckpt:
             restore_random_state(ckpt["random_state"])
         start_epoch = int(ckpt.get("completed_epochs", ckpt.get("epoch", 0)))
@@ -2108,7 +2226,6 @@ def run_training_workflow(
 
     torch.cuda.reset_peak_memory_stats(device)
     selection_metric = cfg["evaluation"]["selection_metric"]
-    max_epochs = int(tc["epochs"])
     patience = int(tc.get("patience", 6))
     gpu_name = torch.cuda.get_device_name(device)
     gpu_total_gb = torch.cuda.get_device_properties(device).total_memory / (1024.0**3)
@@ -2122,6 +2239,45 @@ def run_training_workflow(
     win_off = float(cfg["dataset"].get("window_start_offset_seconds", 0.0))
     base_sec = float(getattr(train_ds, "baseline_seconds", cfg["dataset"].get("baseline_seconds", 0.5)))
     causal_hp_sec = float(getattr(train_ds, "causal_highpass_seconds", cfg["dataset"].get("causal_highpass_seconds", 0.0)))
+    causal_hp_mode = str(
+        getattr(
+            train_ds,
+            "causal_highpass_mode",
+            cfg["dataset"].get("causal_highpass_mode", "moving_average"),
+        )
+        or "moving_average"
+    ).strip().lower()
+    causal_hp_hz = float(
+        getattr(
+            train_ds,
+            "causal_highpass_hz",
+            cfg["dataset"].get("causal_highpass_hz", 0.5),
+        )
+    )
+    causal_hp_order = int(
+        getattr(
+            train_ds,
+            "causal_highpass_order",
+            cfg["dataset"].get("causal_highpass_order", 2),
+        )
+    )
+    clamp_val = float(
+        getattr(
+            train_ds,
+            "clamp",
+            getattr(train_ds, "_clamp", cfg["dataset"].get("clamp", 5.0)),
+        )
+    )
+    hp_desc = (
+        f"butterworth_iir({causal_hp_hz:.2f}Hz,o{causal_hp_order})"
+        if causal_hp_mode == "butterworth_iir"
+        else f"{causal_hp_sec:.2f}s"
+    )
+    preload_desc = (
+        ", preload_ram=on"
+        if bool(getattr(train_ds, "preload_filtered_recordings", False))
+        else ""
+    )
     sampler_label = type(train_sampler).__name__
     siamese_spec = dict(cfg["workflow"].get("siamese_debiased") or {})
     siamese_enabled = bool(siamese_spec.get("enabled", False))
@@ -2136,6 +2292,14 @@ def run_training_workflow(
         if raw_early_stop_metric in {"full_vocab", "full_vocabulary", "full"}
         else "legacy50"
     )
+    loss_name_desc = str((cfg.get("loss") or {}).get("name", "siglip") or "siglip")
+    sched_desc = "step_cosine" if is_step_scheduler else "epoch_cosine"
+    ema_desc = f", ema={ema.decay:.4f}" if ema is not None else ""
+    wd_desc = (
+        f"wd={float(tc.get('weight_decay', 0.0)):.2e}[decoupled]"
+        if bool(tc.get("decoupled_weight_decay", False))
+        else f"wd={float(tc.get('weight_decay', 1e-4)):.1e}"
+    )
     print(
         f"\n{sep}\n"
         f" BrainDecoding Training  |  dataset={dataset}  |  stage={stage} ({stage_label})  |  mode={mode}\n"
@@ -2143,10 +2307,10 @@ def run_training_workflow(
         f" Config File : {cfg['workflow']['config_path']}\n"
         f" GPU / AMP   : {gpu_name} ({gpu_total_gb:.1f} GB)  |  precision={tc['precision']} (TF32=on)\n"
         f" Subset      : {subset_spec['subset_tag']} ({subset_spec['subject_count']}/{subset_spec['total_canonical_subjects']} subjects)  |  seed={seed}\n"
-        f" Window      : {win_sec:.2f}s ({win_samp} samples @ {sr_hz:.0f}Hz, start_offset={win_off:+.2f}s, baseline={base_sec:.2f}s, causal_hp={causal_hp_sec:.2f}s)\n"
+        f" Window      : {win_sec:.2f}s ({win_samp} samples @ {sr_hz:.0f}Hz, start_offset={win_off:+.2f}s, baseline={base_sec:.2f}s, causal_hp={hp_desc}, clamp={clamp_val:.1f}{preload_desc})\n"
         f" DataLoader  : train={len(train_ds):,} rows ({len(train_loader)} batches @ bs={tc['batch_size']}, sampler={sampler_label})"
         f"  |  val={len(val_ds):,} rows (eval_bs={tc.get('eval_batch_size', tc['batch_size'])}, workers={tc.get('num_workers', 0)})\n"
-        f" Optimizer   : AdamW (lr={float(tc['learning_rate']):.2e}, wd={float(tc.get('weight_decay', 1e-4)):.1e})"
+        f" Optimizer   : AdamW (lr={float(tc['learning_rate']):.2e}, {wd_desc}, sched={sched_desc}{ema_desc}, loss={loss_name_desc})"
         f"  |  epochs={max_epochs} (patience={patience}, early_stop={early_stop_target})\n"
         f" Output Dir  : {out}",
         flush=True,
@@ -2173,10 +2337,6 @@ def run_training_workflow(
             flush=True,
         )
 
-    all_epochs_frozen = (
-        warm_start_stage
-        and int(tc.get("freeze_brain_encoder_epochs", 0)) >= max_epochs
-    )
     use_preextracted_cnn = bool(
         all_epochs_frozen
         and (
@@ -2452,6 +2612,8 @@ def run_training_workflow(
                         if siamese_enabled
                         else f"Epoch {epoch + 1:02d}/{max_epochs:02d} [cached]"
                     ),
+                    step_scheduler=scheduler if is_step_scheduler else None,
+                    ema=ema,
                 )
             )
         else:
@@ -2469,116 +2631,128 @@ def run_training_workflow(
                 epoch_index=epoch,
                 show_progress=show_progress,
                 progress_desc=f"Epoch {epoch + 1:02d}/{max_epochs:02d} [train]",
+                step_scheduler=scheduler if is_step_scheduler else None,
+                ema=ema,
             )
         if not np.isfinite(train_loss):
             raise RuntimeError(f"Epoch {epoch + 1} 训练损失出现非有限值：{train_loss}")
         total_updates += int(epoch_updates)
+        if is_step_scheduler:
+            epoch_lr = float(optimizer.param_groups[0]["lr"])
+        else:
+            scheduler.step()
 
-        val_metrics = _evaluate_subset_validation(
-            model,
-            val_loader,
-            val_ds,
-            vocabulary,
-            vocab50,
-            cfg,
-            revision=revision,
-            device=device,
-            show_progress=show_progress,
-            progress_desc=f"Epoch {epoch + 1:02d}/{max_epochs:02d} [val]  ",
-            preextracted_cache=(
-                preextracted_cache if (preextracted_cache is not None and frozen) else None
-            ),
-        )
-        scheduler.step()
-
-        peak_alloc_mb = float(
-            torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0)
-        )
-        peak_reserved_mb = float(
-            torch.cuda.max_memory_reserved(device) / (1024.0 * 1024.0)
-        )
-        epoch_seconds = time.perf_counter() - epoch_started
-
-        legacy_score = float(
-            val_metrics["legacy"].get(
-                selection_metric,
-                val_metrics["legacy"].get("macro_recall_at_10", 0.0),
+        with (ema.apply_to(model) if ema is not None else nullcontext()):
+            val_metrics = _evaluate_subset_validation(
+                model,
+                val_loader,
+                val_ds,
+                vocabulary,
+                vocab50,
+                cfg,
+                revision=revision,
+                device=device,
+                show_progress=show_progress,
+                progress_desc=f"Epoch {epoch + 1:02d}/{max_epochs:02d} [val]  ",
+                preextracted_cache=(
+                    preextracted_cache
+                    if (preextracted_cache is not None and frozen)
+                    else None
+                ),
             )
-        )
-        full_vocab_score = float(val_metrics["full_vocabulary"]["selection_score"])
 
-        row = {
-            "epoch": epoch + 1,
-            "train_loss": float(train_loss),
-            "learning_rate": epoch_lr,
-            "seconds": float(epoch_seconds),
-            "optimizer_updates": int(total_updates),
-            "epoch_optimizer_updates": int(epoch_updates),
-            "batches": int(batches_seen),
-            "amp_skipped_updates": int(batches_seen - epoch_updates),
-            "brain_encoder_frozen": bool(frozen),
-            "precision": tc["precision"],
-            "amp_dtype": tc["amp_dtype"],
-            "peak_memory_allocated_mb": round(peak_alloc_mb, 2),
-            "peak_memory_reserved_mb": round(peak_reserved_mb, 2),
-            "selection_score_legacy50": legacy_score,
-            "selection_score_full_vocab": full_vocab_score,
-            "training_diagnostics": diagnostics,
-            "validation": val_metrics,
-        }
-        history.append(row)
+            peak_alloc_mb = float(
+                torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0)
+            )
+            peak_reserved_mb = float(
+                torch.cuda.max_memory_reserved(device) / (1024.0 * 1024.0)
+            )
+            epoch_seconds = time.perf_counter() - epoch_started
 
-        scores = {"legacy50": legacy_score, "full_vocab": full_vocab_score}
-        stale_epochs += 1
-        improved_tags: list[str] = []
-        for selection, score in scores.items():
-            if score > best[selection]:
-                best[selection] = score
-                best_rows[selection] = row
-                if selection == early_stop_target:
-                    stale_epochs = 0
-                if selection == "legacy50":
-                    improved_tags.append("50")
-                else:
-                    improved_tags.append("full")
-                best_payload = {
-                    "dataset": dataset,
-                    "stage": stage,
-                    "seed": int(seed),
-                    "epoch": epoch + 1,
-                    "selection": selection,
-                    "precision": tc["precision"],
-                    "amp_dtype": tc["amp_dtype"],
-                    "window_seconds": win_sec,
-                    "window_samples": win_samp,
-                    "window_start_offset_seconds": win_off,
-                    "baseline_seconds": base_sec,
-                    "causal_highpass_seconds": causal_hp_sec,
-                    "model_state": cpu_state_dict(model),
-                    "loss_state": cpu_state_dict(loss_module),
-                    "model_config": cfg["model"],
-                    "loss_config": cfg["loss"],
-                    "text_embedding_config": cfg["text_embedding"],
-                    "embedding_sha256": embedding_hash,
-                    "config": cfg,
-                    "channel_names": list(train_ds.channel_names),
-                    "channel_positions": np.asarray(
-                        train_ds.channel_positions
-                    ).tolist(),
-                    "subject_ids": list(subset_spec["subjects"]),
-                    "subset": subset_spec,
-                    "metrics": val_metrics,
-                    "initialization": initialization,
-                    "test_evaluated": False,
-                }
-                if selection == early_stop_target:
-                    save_checkpoint(out / "best.ckpt", best_payload)
-                    save_checkpoint(out / "best.pt", best_payload)
-                if selection == "legacy50":
-                    save_checkpoint(out / "best_legacy50.pt", best_payload)
-                else:
-                    save_checkpoint(out / "best_full_vocab.pt", best_payload)
-                del best_payload
+            legacy_score = float(
+                val_metrics["legacy"].get(
+                    selection_metric,
+                    val_metrics["legacy"].get("macro_recall_at_10", 0.0),
+                )
+            )
+            full_vocab_score = float(val_metrics["full_vocabulary"]["selection_score"])
+
+            row = {
+                "epoch": epoch + 1,
+                "train_loss": float(train_loss),
+                "learning_rate": epoch_lr,
+                "seconds": float(epoch_seconds),
+                "optimizer_updates": int(total_updates),
+                "epoch_optimizer_updates": int(epoch_updates),
+                "batches": int(batches_seen),
+                "amp_skipped_updates": int(batches_seen - epoch_updates),
+                "brain_encoder_frozen": bool(frozen),
+                "precision": tc["precision"],
+                "amp_dtype": tc["amp_dtype"],
+                "peak_memory_allocated_mb": round(peak_alloc_mb, 2),
+                "peak_memory_reserved_mb": round(peak_reserved_mb, 2),
+                "selection_score_legacy50": legacy_score,
+                "selection_score_full_vocab": full_vocab_score,
+                "training_diagnostics": diagnostics,
+                "validation": val_metrics,
+            }
+            history.append(row)
+
+            scores = {"legacy50": legacy_score, "full_vocab": full_vocab_score}
+            stale_epochs += 1
+            improved_tags: list[str] = []
+            for selection, score in scores.items():
+                if score > best[selection]:
+                    best[selection] = score
+                    best_rows[selection] = row
+                    if selection == early_stop_target:
+                        stale_epochs = 0
+                    if selection == "legacy50":
+                        improved_tags.append("50")
+                    else:
+                        improved_tags.append("full")
+                    best_payload = {
+                        "dataset": dataset,
+                        "stage": stage,
+                        "seed": int(seed),
+                        "epoch": epoch + 1,
+                        "selection": selection,
+                        "precision": tc["precision"],
+                        "amp_dtype": tc["amp_dtype"],
+                        "window_seconds": win_sec,
+                        "window_samples": win_samp,
+                        "window_start_offset_seconds": win_off,
+                        "baseline_seconds": base_sec,
+                        "causal_highpass_seconds": causal_hp_sec,
+                        "causal_highpass_mode": causal_hp_mode,
+                        "causal_highpass_hz": causal_hp_hz,
+                        "causal_highpass_order": causal_hp_order,
+                        "clamp": clamp_val,
+                        "model_state": cpu_state_dict(model),
+                        "loss_state": cpu_state_dict(loss_module),
+                        "model_config": cfg["model"],
+                        "loss_config": cfg["loss"],
+                        "text_embedding_config": cfg["text_embedding"],
+                        "embedding_sha256": embedding_hash,
+                        "config": cfg,
+                        "channel_names": list(train_ds.channel_names),
+                        "channel_positions": np.asarray(
+                            train_ds.channel_positions
+                        ).tolist(),
+                        "subject_ids": list(subset_spec["subjects"]),
+                        "subset": subset_spec,
+                        "metrics": val_metrics,
+                        "initialization": initialization,
+                        "test_evaluated": False,
+                    }
+                    if selection == early_stop_target:
+                        save_checkpoint(out / "best.ckpt", best_payload)
+                        save_checkpoint(out / "best.pt", best_payload)
+                    if selection == "legacy50":
+                        save_checkpoint(out / "best_legacy50.pt", best_payload)
+                    else:
+                        save_checkpoint(out / "best_full_vocab.pt", best_payload)
+                    del best_payload
 
         last_payload = {
             "format": "braindecoding_workflow_last_ckpt_v1",
@@ -2595,6 +2769,10 @@ def run_training_workflow(
             "window_start_offset_seconds": win_off,
             "baseline_seconds": base_sec,
             "causal_highpass_seconds": causal_hp_sec,
+            "causal_highpass_mode": causal_hp_mode,
+            "causal_highpass_hz": causal_hp_hz,
+            "causal_highpass_order": causal_hp_order,
+            "clamp": clamp_val,
             "subject_ids": list(subset_spec["subjects"]),
             "subset": subset_spec,
             "model_state": cpu_state_dict(model),
@@ -2602,6 +2780,7 @@ def run_training_workflow(
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
             "scaler_state": scaler.state_dict(),
+            "ema_state": ema.state_dict() if ema is not None else None,
             "random_state": capture_random_state(),
             "history": history,
             "best_scores": best,

@@ -245,8 +245,13 @@ def _preextracted_cache_path(
     preroll_seconds: float = 45.0,
     baseline_seconds: float = 0.5,
     causal_highpass_seconds: float = 0.0,
+    causal_highpass_mode: str = "moving_average",
+    causal_highpass_hz: float = 0.5,
+    causal_highpass_order: int = 2,
+    clamp: float = 5.0,
 ) -> Path:
     norm_mode = _normalize_shift_mode(shift_mode) or "deterministic_circular"
+    hp_mode = str(causal_highpass_mode or "moving_average").strip().lower()
     sig_payload = {
         "version": "preextracted_frozen_cnn_v1",
         "dataset": str(dataset),
@@ -265,10 +270,16 @@ def _preextracted_cache_path(
         sig_payload["preroll_seconds"] = round(float(preroll_seconds), 4)
     if not np.isclose(float(baseline_seconds), 0.5, atol=1e-6):
         sig_payload["baseline_seconds"] = round(float(baseline_seconds), 6)
-    if float(causal_highpass_seconds) > 1e-6:
+    if hp_mode != "moving_average":
+        sig_payload["causal_highpass_mode"] = hp_mode
+        sig_payload["causal_highpass_hz"] = round(float(causal_highpass_hz), 6)
+        sig_payload["causal_highpass_order"] = int(causal_highpass_order)
+    elif float(causal_highpass_seconds) > 1e-6:
         sig_payload["causal_highpass_seconds"] = round(
             float(causal_highpass_seconds), 6
         )
+    if not np.isclose(float(clamp), 5.0, atol=1e-6):
+        sig_payload["clamp"] = round(float(clamp), 6)
     digest = hashlib.sha256(
         json.dumps(sig_payload, sort_keys=True).encode("utf-8")
     ).hexdigest()[:16]
@@ -536,6 +547,12 @@ def preextract_frozen_cnn_features(
     eff_preroll = float(preroll_seconds)
     eff_baseline = float(getattr(train_ds, "baseline_seconds", 0.5))
     eff_causal_hp = float(getattr(train_ds, "causal_highpass_seconds", 0.0))
+    eff_hp_mode = str(
+        getattr(train_ds, "causal_highpass_mode", "moving_average") or "moving_average"
+    ).strip().lower()
+    eff_hp_hz = float(getattr(train_ds, "causal_highpass_hz", 0.5))
+    eff_hp_order = int(getattr(train_ds, "causal_highpass_order", 2))
+    eff_clamp = float(getattr(train_ds, "clamp", getattr(train_ds, "_clamp", 5.0)))
     feature_dtype = (
         torch.bfloat16
         if (bool(amp) and device.type == "cuda" and amp_dtype == torch.bfloat16)
@@ -556,6 +573,10 @@ def preextract_frozen_cnn_features(
             preroll_seconds=eff_preroll,
             baseline_seconds=eff_baseline,
             causal_highpass_seconds=eff_causal_hp,
+            causal_highpass_mode=eff_hp_mode,
+            causal_highpass_hz=eff_hp_hz,
+            causal_highpass_order=eff_hp_order,
+            clamp=eff_clamp,
         )
         if cache_file.is_file():
             t0 = time.perf_counter()
@@ -611,6 +632,10 @@ def preextract_frozen_cnn_features(
                     preroll_seconds=eff_preroll,
                     baseline_seconds=eff_baseline,
                     causal_highpass_seconds=eff_causal_hp,
+                    causal_highpass_mode=eff_hp_mode,
+                    causal_highpass_hz=eff_hp_hz,
+                    causal_highpass_order=eff_hp_order,
+                    clamp=eff_clamp,
                 ),
                 norm_shift_mode,
             ),
@@ -627,6 +652,10 @@ def preextract_frozen_cnn_features(
                     shift_mode="deterministic_circular",
                     baseline_seconds=eff_baseline,
                     causal_highpass_seconds=eff_causal_hp,
+                    causal_highpass_mode=eff_hp_mode,
+                    causal_highpass_hz=eff_hp_hz,
+                    causal_highpass_order=eff_hp_order,
+                    clamp=eff_clamp,
                 ),
                 "deterministic_circular",
             ),
@@ -643,6 +672,10 @@ def preextract_frozen_cnn_features(
                     shift_mode="deterministic_circular",
                     baseline_seconds=eff_baseline,
                     causal_highpass_seconds=eff_causal_hp,
+                    causal_highpass_mode=eff_hp_mode,
+                    causal_highpass_hz=eff_hp_hz,
+                    causal_highpass_order=eff_hp_order,
+                    clamp=eff_clamp,
                 ),
                 "deterministic_circular",
             ),
