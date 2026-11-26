@@ -1106,6 +1106,20 @@ class SalienceGatedAdditiveV2Encoder(nn.Module):
         self.horizon_conditioned = bool(cfg.get("horizon_conditioned", False))
         self.num_horizons = int(cfg.get("num_horizons", 3))
         self.horizon_readout_rank = int(cfg.get("horizon_readout_rank", 128))
+        self.neighbor_swiglu = bool(cfg.get("neighbor_swiglu", False))
+        self.neighbor_swiglu_heads = int(cfg.get("neighbor_swiglu_heads", 16))
+        self.neighbor_swiglu_head_dimension = int(
+            cfg.get("neighbor_swiglu_head_dimension", 64)
+        )
+        self.neighbor_swiglu_inner_dimension = (
+            self.neighbor_swiglu_heads * self.neighbor_swiglu_head_dimension
+        )
+        self.neighbor_swiglu_hidden_dimension = int(
+            cfg.get("neighbor_swiglu_hidden_dimension", 1024)
+        )
+        self.neighbor_swiglu_dropout = float(
+            cfg.get("neighbor_swiglu_dropout", 0.30)
+        )
 
         if self.dimension <= 0 or self.heads <= 0 or self.head_dimension <= 0:
             raise ValueError("SalienceGatedAdditiveV2Encoder 维度与头数必须为正整数。")
@@ -1117,6 +1131,12 @@ class SalienceGatedAdditiveV2Encoder(nn.Module):
             self.num_horizons <= 0 or self.horizon_readout_rank <= 0
         ):
             raise ValueError("num_horizons 与 horizon_readout_rank 必须为正整数。")
+        if self.neighbor_swiglu and (
+            self.neighbor_swiglu_heads <= 0
+            or self.neighbor_swiglu_head_dimension <= 0
+            or self.neighbor_swiglu_hidden_dimension <= 0
+        ):
+            raise ValueError("neighbor_swiglu 头数与隐维必须为正整数。")
 
         # 保持与 GroupedTransformerEncoder 对齐的只读属性契约
         self.query_window_radius = None
@@ -1231,6 +1251,76 @@ class SalienceGatedAdditiveV2Encoder(nn.Module):
             torch.tensor(False, dtype=torch.bool),
         )
 
+        # 可选 Tier-2B 仅限邻居 (Δ != 0) 无 LayerNorm 纯词内非线性 SwiGLU 分支（严禁对 Δ=0 生效防过拟合自噪声）
+        if self.neighbor_swiglu:
+            self.neighbor_swiglu_w12 = nn.Linear(
+                self.dimension,
+                2 * self.neighbor_swiglu_hidden_dimension,
+                bias=False,
+            )
+            self.neighbor_swiglu_drop = nn.Dropout(self.neighbor_swiglu_dropout)
+            self.neighbor_swiglu_w3 = nn.Linear(
+                self.neighbor_swiglu_hidden_dimension,
+                self.neighbor_swiglu_inner_dimension,
+                bias=False,
+            )
+            nn.init.normal_(self.neighbor_swiglu_w3.weight, mean=0.0, std=1e-2)
+            self.neighbor_swiglu_out_proj = nn.Linear(
+                self.neighbor_swiglu_inner_dimension,
+                self.dimension,
+                bias=False,
+            )
+            nn.init.normal_(self.neighbor_swiglu_out_proj.weight, mean=0.0, std=1e-3)
+            if self.horizon_conditioned:
+                sem_pos_init = (
+                    base_pos.view(1, 1, num_offsets)
+                    .expand(self.num_horizons, self.neighbor_swiglu_heads, num_offsets)
+                    .clone()
+                )
+                sem_neg_init = (
+                    base_neg.view(1, 1, num_offsets)
+                    .expand(self.num_horizons, self.neighbor_swiglu_heads, num_offsets)
+                    .clone()
+                )
+                sem_sink_init = torch.zeros(
+                    self.num_horizons, self.neighbor_swiglu_heads, dtype=torch.float32
+                )
+            else:
+                sem_pos_init = (
+                    base_pos.view(1, num_offsets)
+                    .expand(self.neighbor_swiglu_heads, num_offsets)
+                    .clone()
+                )
+                sem_neg_init = (
+                    base_neg.view(1, num_offsets)
+                    .expand(self.neighbor_swiglu_heads, num_offsets)
+                    .clone()
+                )
+                sem_sink_init = torch.zeros(
+                    self.neighbor_swiglu_heads, dtype=torch.float32
+                )
+            self.neighbor_swiglu_pos_logits = nn.Parameter(sem_pos_init)
+            self.neighbor_swiglu_neg_logits = nn.Parameter(sem_neg_init)
+            self.neighbor_swiglu_sink_logits = nn.Parameter(sem_sink_init)
+            self.register_buffer(
+                "neighbor_swiglu_psi_clean_ema",
+                torch.zeros(self.neighbor_swiglu_inner_dimension, dtype=torch.float32),
+            )
+            self.register_buffer(
+                "neighbor_swiglu_psi_clean_ema_ready",
+                torch.tensor(False, dtype=torch.bool),
+            )
+        else:
+            self.neighbor_swiglu_w12 = None
+            self.neighbor_swiglu_drop = None
+            self.neighbor_swiglu_w3 = None
+            self.neighbor_swiglu_out_proj = None
+            self.register_parameter("neighbor_swiglu_pos_logits", None)
+            self.register_parameter("neighbor_swiglu_neg_logits", None)
+            self.register_parameter("neighbor_swiglu_sink_logits", None)
+            self.register_buffer("neighbor_swiglu_psi_clean_ema", None)
+            self.register_buffer("neighbor_swiglu_psi_clean_ema_ready", None)
+
     @torch.no_grad()
     def set_clean_input_mean(self, mean_vector: torch.Tensor) -> None:
         """从训练集全量冻结 Stage-1 特征设置精确输入中心化均值。"""
@@ -1260,19 +1350,80 @@ class SalienceGatedAdditiveV2Encoder(nn.Module):
         self.text_cone_axis.copy_(vec / norm)
         self.text_cone_axis_ready.fill_(True)
 
-    def _compute_signed_weight_table(self) -> torch.Tensor:
+    def _compute_signed_weight_table_from(
+        self,
+        pos_logits: torch.Tensor,
+        neg_logits: torch.Tensor,
+        sink_logits: torch.Tensor,
+    ) -> torch.Tensor:
         """通过单次联合 softmax 计算有符号定分母零汇权重表 [H, 2R+1] 或 [K, H, 2R+1]。"""
         num_offsets = 2 * self.max_relative_distance + 1
         cat_logits = torch.cat(
             [
-                self.pos_logits.float(),
-                self.neg_logits.float(),
-                self.sink_logits.float().unsqueeze(-1),
+                pos_logits.float(),
+                neg_logits.float(),
+                sink_logits.float().unsqueeze(-1),
             ],
             dim=-1,
         )
         probs = torch.softmax(cat_logits, dim=-1)
         return probs[..., :num_offsets] - probs[..., num_offsets : 2 * num_offsets]
+
+    def _compute_signed_weight_table(self) -> torch.Tensor:
+        return self._compute_signed_weight_table_from(
+            self.pos_logits, self.neg_logits, self.sink_logits
+        )
+
+    def _center_psi_loso(
+        self,
+        psi_padded: torch.Tensor,
+        mask_f32: torch.Tensor,
+        *,
+        eff_branches: int,
+        g_per_branch: int,
+        max_len: int,
+        ema_buf: torch.Tensor,
+        ema_ready_buf: torch.Tensor,
+        work_dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """对词内映射表征执行句外（LOSO）均值中心化，推理期采用持久 EMA 统计。"""
+        inner_dim = int(psi_padded.shape[-1])
+        bsz = int(psi_padded.shape[0])
+        if self.training:
+            psi_br = psi_padded.float().view(
+                eff_branches, g_per_branch, max_len, inner_dim
+            )
+            msk_br = mask_f32.view(eff_branches, g_per_branch, max_len, 1)
+            grp_sum = (psi_br * msk_br).sum(dim=2)
+            grp_cnt = msk_br.sum(dim=2)
+            br_sum = grp_sum.sum(dim=1, keepdim=True)
+            br_cnt = grp_cnt.sum(dim=1, keepdim=True)
+
+            with torch.no_grad():
+                clean_cnt = float(br_cnt[0, 0, 0].item())
+                if clean_cnt > 0.0:
+                    clean_batch_mean = br_sum[0, 0] / clean_cnt
+                    if not bool(ema_ready_buf.item()):
+                        ema_buf.copy_(clean_batch_mean)
+                        ema_ready_buf.fill_(True)
+                    else:
+                        ema_buf.lerp_(
+                            clean_batch_mean, float(self.ema_momentum)
+                        )
+
+            other_cnt = br_cnt - grp_cnt
+            fallback_mean = ema_buf.view(1, 1, inner_dim)
+            loso_mean = torch.where(
+                other_cnt > 0.5,
+                (br_sum - grp_sum) / other_cnt.clamp(min=1.0),
+                fallback_mean.expand_as(grp_sum),
+            )
+            return (
+                (psi_br - loso_mean.unsqueeze(2)) * msk_br
+            ).reshape(bsz, max_len, inner_dim).to(dtype=work_dtype)
+        return (
+            (psi_padded.float() - ema_buf.view(1, 1, -1)) * mask_f32
+        ).to(dtype=work_dtype)
 
     def _apply_horizon_readout(
         self,
@@ -1414,43 +1565,16 @@ class SalienceGatedAdditiveV2Encoder(nn.Module):
         psi_padded = psi_padded.view(bsz, max_len, self.inner_dimension)
 
         # 3. 句外（LOSO）均值中心化与推理期 EMA 统计更新
-        if self.training:
-            psi_br = psi_padded.float().view(
-                eff_branches, g_per_branch, max_len, self.inner_dimension
-            )
-            msk_br = mask_f32.view(eff_branches, g_per_branch, max_len, 1)
-            grp_sum = (psi_br * msk_br).sum(dim=2)
-            grp_cnt = msk_br.sum(dim=2)
-            br_sum = grp_sum.sum(dim=1, keepdim=True)
-            br_cnt = grp_cnt.sum(dim=1, keepdim=True)
-
-            with torch.no_grad():
-                clean_cnt = float(br_cnt[0, 0, 0].item())
-                if clean_cnt > 0.0:
-                    clean_batch_mean = br_sum[0, 0] / clean_cnt
-                    if not bool(self.psi_clean_ema_ready.item()):
-                        self.psi_clean_ema.copy_(clean_batch_mean)
-                        self.psi_clean_ema_ready.fill_(True)
-                    else:
-                        self.psi_clean_ema.lerp_(
-                            clean_batch_mean, float(self.ema_momentum)
-                        )
-
-            other_cnt = br_cnt - grp_cnt
-            fallback_mean = self.psi_clean_ema.view(1, 1, self.inner_dimension)
-            loso_mean = torch.where(
-                other_cnt > 0.5,
-                (br_sum - grp_sum) / other_cnt.clamp(min=1.0),
-                fallback_mean.expand_as(grp_sum),
-            )
-            psi_centered = (
-                (psi_br - loso_mean.unsqueeze(2)) * msk_br
-            ).reshape(bsz, max_len, self.inner_dimension).to(dtype=work_dtype)
-        else:
-            psi_centered = (
-                (psi_padded.float() - self.psi_clean_ema.view(1, 1, -1))
-                * mask_f32
-            ).to(dtype=work_dtype)
+        psi_centered = self._center_psi_loso(
+            psi_padded,
+            mask_f32,
+            eff_branches=eff_branches,
+            g_per_branch=g_per_branch,
+            max_len=max_len,
+            ema_buf=self.psi_clean_ema,
+            ema_ready_buf=self.psi_clean_ema_ready,
+            work_dtype=work_dtype,
+        )
 
         if shared_dropout_fn is not None:
             psi_centered = shared_dropout_fn(
@@ -1461,6 +1585,58 @@ class SalienceGatedAdditiveV2Encoder(nn.Module):
             )
         else:
             psi_centered = self.dropout(psi_centered)
+
+        # 3b. 可选 Tier-2B 仅限邻居 (Δ != 0) 无 LayerNorm 纯词内 SwiGLU 分支
+        psi_sem_centered: torch.Tensor | None = None
+        w_sem_table: torch.Tensor | None = None
+        if self.neighbor_swiglu:
+            u_gate, u_val = self.neighbor_swiglu_w12(zc_valid).chunk(2, dim=-1)
+            h_sem = F.silu(u_gate) * u_val
+            if (
+                shared_dropout_fn is not None
+                and eff_branches > 1
+                and n_valid % eff_branches == 0
+            ):
+                h_sem = shared_dropout_fn(
+                    h_sem.view(eff_branches, n_valid // eff_branches, -1),
+                    self.neighbor_swiglu_drop,
+                    num_branches=eff_branches,
+                    synchronize_dropout_rng=synchronize_dropout_rng,
+                ).reshape(n_valid, -1)
+            else:
+                h_sem = self.neighbor_swiglu_drop(h_sem)
+            psi_sem_valid = self.neighbor_swiglu_w3(h_sem)
+            psi_sem_padded = zc_valid.new_zeros(
+                (bsz * max_len, self.neighbor_swiglu_inner_dimension)
+            )
+            psi_sem_padded.index_copy_(0, valid_flat_idx, psi_sem_valid)
+            psi_sem_padded = psi_sem_padded.view(
+                bsz, max_len, self.neighbor_swiglu_inner_dimension
+            )
+            psi_sem_centered = self._center_psi_loso(
+                psi_sem_padded,
+                mask_f32,
+                eff_branches=eff_branches,
+                g_per_branch=g_per_branch,
+                max_len=max_len,
+                ema_buf=self.neighbor_swiglu_psi_clean_ema,
+                ema_ready_buf=self.neighbor_swiglu_psi_clean_ema_ready,
+                work_dtype=work_dtype,
+            )
+            if shared_dropout_fn is not None:
+                psi_sem_centered = shared_dropout_fn(
+                    psi_sem_centered,
+                    self.dropout,
+                    num_branches=eff_branches,
+                    synchronize_dropout_rng=synchronize_dropout_rng,
+                )
+            else:
+                psi_sem_centered = self.dropout(psi_sem_centered)
+            w_sem_table = self._compute_signed_weight_table_from(
+                self.neighbor_swiglu_pos_logits,
+                self.neighbor_swiglu_neg_logits,
+                self.neighbor_swiglu_sink_logits,
+            ).to(dtype=work_dtype)
 
         # 4. 有符号定分母零汇相对位置核汇聚（零边界重归一化泄漏 + 严格 forward/forward_padded 视界一致）
         r_max = self.max_relative_distance
@@ -1508,6 +1684,34 @@ class SalienceGatedAdditiveV2Encoder(nn.Module):
                 int(win_idx.shape[0]), self.inner_dimension
             )
             g_raw = self._apply_horizon_readout(ctx_q, avail_r_q)
+            if psi_sem_centered is not None and w_sem_table is not None:
+                sem_key_valid_q = key_valid_q & (rel_q.unsqueeze(1) != 0)
+                if self.horizon_conditioned and avail_r_q is not None:
+                    sem_head_arange = torch.arange(
+                        self.neighbor_swiglu_heads,
+                        device=padded.device,
+                        dtype=torch.long,
+                    )
+                    attn_sem_q = w_sem_table[
+                        avail_r_q[:, None, None],
+                        sem_head_arange[None, :, None],
+                        rel_idx_q[:, None, :],
+                    ]
+                else:
+                    attn_sem_q = w_sem_table[:, rel_idx_q].permute(1, 0, 2)
+                attn_sem_q = attn_sem_q * sem_key_valid_q.to(dtype=work_dtype)
+                psi_sem_q = psi_sem_centered[win_idx].view(
+                    int(win_idx.shape[0]),
+                    max_len,
+                    self.neighbor_swiglu_heads,
+                    self.neighbor_swiglu_head_dimension,
+                )
+                ctx_sem_q = torch.einsum(
+                    "qhl,qlhd->qhd", attn_sem_q, psi_sem_q
+                ).reshape(
+                    int(win_idx.shape[0]), self.neighbor_swiglu_inner_dimension
+                )
+                g_raw = g_raw + self.neighbor_swiglu_out_proj(ctx_sem_q)
             z_base = padded[win_idx, target_col_idx]
             u0_q = (
                 self.clean_input_mean.unsqueeze(0)
@@ -1556,6 +1760,35 @@ class SalienceGatedAdditiveV2Encoder(nn.Module):
             ctx_full,
             avail_r_full.reshape(-1) if avail_r_full is not None else None,
         ).view(bsz, max_len, self.dimension)
+        if psi_sem_centered is not None and w_sem_table is not None:
+            sem_key_valid = key_valid & (rel_full[None, None, :, :] != 0)
+            if self.horizon_conditioned and avail_r_full is not None:
+                sem_head_arange = torch.arange(
+                    self.neighbor_swiglu_heads,
+                    device=padded.device,
+                    dtype=torch.long,
+                )
+                attn_sem_full = w_sem_table[
+                    avail_r_full[:, None, :, None],
+                    sem_head_arange[None, :, None, None],
+                    rel_idx_full[None, None, :, :],
+                ]
+            else:
+                attn_sem_full = w_sem_table[:, rel_idx_full].unsqueeze(0)
+            attn_sem_full = attn_sem_full * sem_key_valid.to(dtype=work_dtype)
+            psi_sem_heads = psi_sem_centered.view(
+                bsz,
+                max_len,
+                self.neighbor_swiglu_heads,
+                self.neighbor_swiglu_head_dimension,
+            )
+            ctx_sem_full = torch.einsum(
+                "bhij,bjhd->bihd", attn_sem_full, psi_sem_heads
+            ).reshape(bsz * max_len, self.neighbor_swiglu_inner_dimension)
+            g_sem_full = self.neighbor_swiglu_out_proj(ctx_sem_full).view(
+                bsz, max_len, self.dimension
+            )
+            g_raw_full = g_raw_full + g_sem_full
         y_full = self._cone_preserving_readout(padded, g_raw_full, mu_per_row)
         return y_full * mask.unsqueeze(-1).to(dtype=y_full.dtype)
 

@@ -28,7 +28,7 @@ from braindecoding.evaluation.statistical_significance import sentence_metrics
 from braindecoding.training.training_runtime import save_json
 
 
-DEFAULT_TEMPERATURE_GRID: tuple[float, ...] = (0.05, 0.07)
+DEFAULT_TEMPERATURE_GRID: tuple[float, ...] = (0.025, 0.035, 0.05, 0.07, 0.10)
 DEFAULT_MIN_LANGUAGE_WEIGHT: float = 0.05
 DEFAULT_LANGUAGE_WEIGHT_GRID: tuple[float, ...] = (
     0.05,

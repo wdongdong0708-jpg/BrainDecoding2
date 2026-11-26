@@ -36,6 +36,7 @@ FALLBACK_LANGUAGE_MODELS: tuple[str, ...] = (
 
 PROMPTS: dict[str, str] = {
     "fr": "Écrivez un paragraphe de récit en français. Donnez seulement le texte, sans titre ni liste.",
+    "en": "Write a paragraph of a narrative story in English. Output only the story text, with no title or list.",
     "zh": "请用中文写一段连续的叙述文字。只给出正文，不要标题或列表。",
 }
 ELISIONS: frozenset[str] = frozenset(
@@ -45,14 +46,24 @@ INTERFACE_VERSION = "cached_vocabulary_lm_s3_v1"
 
 
 def render_words(words: Sequence[str], language: str) -> str:
-    """将词序列渲染为法语（含省音撇号与连字符规则）或中文自然表面字符串。"""
+    """将词序列渲染为法语（含省音撇号与连字符规则）、英语或中文自然表面字符串。"""
     words_tuple = tuple(str(w) for w in words)
     if any(not w or w != w.strip() or any(c.isspace() for c in w) for w in words_tuple):
         raise ValueError("Expected nonempty individual evaluation units")
     if language == "zh":
         return "".join(words_tuple)
+    if language == "en":
+        result = ""
+        for i, word in enumerate(words_tuple):
+            if not i:
+                result = word
+            elif word.startswith("-") or word.startswith("'"):
+                result += word
+            else:
+                result += " " + word
+        return result
     if language != "fr":
-        raise ValueError("Only fr and zh are supported")
+        raise ValueError("Only fr, en and zh are supported")
     result = ""
     for i, word in enumerate(words_tuple):
         if not i:
@@ -70,6 +81,8 @@ def prefix_context_kind(prefix_words: Sequence[str], language: str) -> str:
     """根据当前前缀末词判断下一候选词的拼接表面状态。"""
     if language == "zh":
         return "zh"
+    if language == "en":
+        return "initial" if not prefix_words else "continuation"
     if language != "fr":
         raise ValueError(f"Unsupported language: {language!r}")
     if not prefix_words:
@@ -85,7 +98,7 @@ def word_surface_for_context(word: str, context_kind: str) -> str:
     text = str(word)
     if context_kind in {"zh", "initial"}:
         return text
-    if text.startswith("-"):
+    if text.startswith("-") or text.startswith("'"):
         return text
     if context_kind == "after_elision":
         return "'" + text
@@ -338,8 +351,10 @@ class PreTokenizedVocabulary:
         tokenizer,
         language: str,
     ) -> None:
-        if language not in {"fr", "zh"}:
-            raise ValueError(f"Only 'fr' and 'zh' are supported, got {language!r}")
+        if language not in {"fr", "en", "zh"}:
+            raise ValueError(
+                f"Only 'fr', 'en' and 'zh' are supported, got {language!r}"
+            )
         self.vocabulary: tuple[str, ...] = tuple(str(w) for w in vocabulary)
         if not self.vocabulary:
             raise ValueError("Vocabulary must be non-empty")
@@ -347,11 +362,12 @@ class PreTokenizedVocabulary:
             w: idx for idx, w in enumerate(self.vocabulary)
         }
         self.language = language
-        context_kinds = (
-            ("zh",)
-            if language == "zh"
-            else ("initial", "after_elision", "continuation")
-        )
+        if language == "zh":
+            context_kinds: tuple[str, ...] = ("zh",)
+        elif language == "en":
+            context_kinds = ("initial", "continuation")
+        else:
+            context_kinds = ("initial", "after_elision", "continuation")
         self.tokens_by_context: dict[str, list[tuple[int, ...]]] = {}
         self.first_token_by_context: dict[str, torch.Tensor] = {}
         self.is_single_token_by_context: dict[str, np.ndarray] = {}

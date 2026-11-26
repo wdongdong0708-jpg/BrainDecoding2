@@ -105,7 +105,11 @@ def build_adamw_for_modules(modules, config):
             **adamw_kwargs,
         )
 
+    raw_swiglu_wd = config.get("neighbor_swiglu_weight_decay")
+    swiglu_wd = None if raw_swiglu_wd is None else float(raw_swiglu_wd)
+
     decay_params = []
+    swiglu_decay_params = []
     no_decay_params = []
     seen = set()
     for module in modules:
@@ -118,14 +122,20 @@ def build_adamw_for_modules(modules, config):
             seen.add(identifier)
             if _is_no_decay_parameter(name, parameter):
                 no_decay_params.append(parameter)
+            elif swiglu_wd is not None and "neighbor_swiglu" in str(name).lower():
+                swiglu_decay_params.append(parameter)
             else:
                 decay_params.append(parameter)
 
-    if not decay_params and not no_decay_params:
+    if not decay_params and not swiglu_decay_params and not no_decay_params:
         raise ValueError("没有可训练参数。")
     param_groups = []
     if decay_params:
         param_groups.append({"params": decay_params, "weight_decay": wd})
+    if swiglu_decay_params:
+        param_groups.append(
+            {"params": swiglu_decay_params, "weight_decay": swiglu_wd}
+        )
     if no_decay_params:
         param_groups.append({"params": no_decay_params, "weight_decay": 0.0})
     return torch.optim.AdamW(param_groups, lr=lr, **adamw_kwargs)

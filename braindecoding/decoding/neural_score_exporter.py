@@ -1124,7 +1124,11 @@ def export_neural_vocabulary_scores(
     norm_shift_mode = _normalize_s3_shift_mode(shift_mode)
     ema_decay_val = float(cms_ema_decay)
     preroll_sec_val = float(preroll_seconds)
-    language = "fr" if dataset == "pallier2025" else "zh"
+    language = (
+        "fr"
+        if str(dataset).startswith("pallier2025")
+        else ("en" if str(dataset) in {"libribrain100", "armeni2022"} else "zh")
+    )
 
     def _build_cms_metadata() -> dict[str, Any]:
         if norm_cms_mode in {"causal_ema", "pos_causal_ema"}:

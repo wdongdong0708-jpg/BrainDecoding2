@@ -1,0 +1,38 @@
+# LibriBrain100 英语 Stage-3 序列解码协议（Tier 2D）：Qwen3-8B-Base 英语表面渲染与提示词 + 扩展锐利温度网格 + Top-50 闭集候选 + 推理期零共模扣除 (η_eval = 0.0) + 因果 Pre-Roll 负对照
+extends: ./sequence_decoding_protocol.yaml
+
+decoding:
+  candidate_top_k: 50
+
+calibration:
+  temperature_grid:
+    - 0.025
+    - 0.035
+    - 0.05
+    - 0.07
+    - 0.10
+
+control:
+  common_mode_subtraction:
+    enabled: false
+    subtraction_eta: 0.0
+  shifted_negative_control:
+    shift_mode: preroll
+    preroll_seconds: 55.0
+
+evaluation:
+  multi_subject_observations:
+    - 1
+  multi_subject_vocabulary_sizes:
+    - 50
+    - 100
+    - 250
+  core_vocabulary_size: 250
+  core_vocabulary_sizes:
+    - 50
+    - 100
+    - 250
+  vocabulary_scaling_sizes:
+    - 50
+    - 100
+    - 250

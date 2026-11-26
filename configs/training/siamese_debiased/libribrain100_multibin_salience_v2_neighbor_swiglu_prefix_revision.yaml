@@ -1,0 +1,72 @@
+# LibriBrain100 英语 MEG 阶段 2.3（Tier 2B 去毒涨点版）：冻结 MultiBinResConvEncoder + SalienceGatedAdditiveV2（视界条件化 r=0,1,2 + 有符号定分母零汇核 + 独立文本锥轴锁 + 仅限邻居 Δ!=0 无 LN 词内 SwiGLU）+ 纯 SigLIP（bs=128 足步数）+ 零容忍超额相干错位零空间 (eta_train=0.0, lam=60, d_lam=10)
+extends: ./libribrain100_causal_highpass_salience_additive_prefix_revision.yaml
+
+dataset:
+  baseline_seconds: 0.0
+  causal_highpass_seconds: 0.0
+  causal_highpass_mode: butterworth_iir
+  causal_highpass_hz: 0.5
+  causal_highpass_order: 2
+  clamp: 20.0
+  preload_filtered_recordings: true
+  preload_filtered_dtype: float32
+
+model:
+  transformer:
+    architecture: salience_gated_additive_v2
+    heads: 32
+    head_dimension: 64
+    max_relative_distance: 24
+    residual_max_norm: 0.70
+    attention_dropout: 0.1
+    horizon_conditioned: true
+    num_horizons: 3
+    horizon_readout_rank: 128
+    neighbor_swiglu: true
+    neighbor_swiglu_heads: 16
+    neighbor_swiglu_head_dimension: 64
+    neighbor_swiglu_hidden_dimension: 1024
+    neighbor_swiglu_dropout: 0.30
+
+loss:
+  name: siglip
+  initial_temperature: 10.0
+  initial_bias: -10.0
+  identical_candidates_threshold: 0.999
+
+training:
+  epochs: 30
+  batch_size: 128
+  eval_batch_size: 1024
+  learning_rate: 3.0e-4
+  weight_decay: 0.01
+  neighbor_swiglu_weight_decay: 0.04
+  decoupled_weight_decay: true
+  scheduler: step_cosine
+  warmup_ratio: 0.05
+  minimum_learning_rate: 1.0e-6
+  max_grad_norm: 1.0
+  ema_decay: 0.995
+  patience: 6
+  early_stop_metric: full_vocab
+  freeze_brain_encoder_epochs: 30
+
+siamese_debiased:
+  enabled: true
+  debias_mode: null_space
+  shift_mode: preroll
+  preroll_seconds: 55.0
+  eta_0: 0.0
+  eta_train: 0.0
+  lambda_null: 60.0
+  lambda_delta: 10.0
+  null_space_coherent_mean: true
+  null_space_excess_coherent: true
+  null_space_excess_tolerance: 0.0
+  null_space_increment_mode: true
+  null_space_vocab_freq_alpha: 0.5
+  shift_seconds: [-12.0, -19.0, -27.0, -36.0, -46.0]
+  shifts_per_step: 5
+  synchronize_dropout_rng: true
+  preextract_frozen_cnn: true
+  cache_preextracted_to_disk: true

@@ -352,3 +352,337 @@ class DilatedConvEncoder(nn.Module):
         if self.temporal_attention is None:
             raise RuntimeError("当前 DilatedConvEncoder 配置未启用固定时间汇聚。")
         return self.temporal_attention(features)
+
+
+class OrderedMultiBinAttentionPool(nn.Module):
+    """有序多时域分箱槽内注意力汇聚：将 [B, C, T] 划分为 K 个有序时间槽并拼接为 [B, K*C]。"""
+
+    def __init__(
+        self,
+        input_dimension: int,
+        *,
+        num_bins: int = 5,
+        attention_hidden: int = 128,
+    ):
+        super().__init__()
+        self.input_dimension = int(input_dimension)
+        self.num_bins = int(num_bins)
+        self.attention_hidden = int(attention_hidden)
+        if self.input_dimension <= 0 or self.num_bins <= 0 or self.attention_hidden <= 0:
+            raise ValueError(
+                "OrderedMultiBinAttentionPool 的维度、分箱数与注意力隐维必须为正整数。"
+            )
+        self.output_dimension = self.num_bins * self.input_dimension
+        self.key_proj = nn.Linear(self.input_dimension, self.attention_hidden)
+        self.bin_score_weight = nn.Parameter(
+            torch.empty(self.num_bins, self.attention_hidden)
+        )
+        nn.init.normal_(self.bin_score_weight, mean=0.0, std=0.02)
+        self.bin_score_bias = nn.Parameter(torch.zeros(self.num_bins))
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        if features.ndim != 3 or features.shape[1] != self.input_dimension:
+            raise ValueError(
+                f"OrderedMultiBinAttentionPool 期望 [B, {self.input_dimension}, T]，收到 {tuple(features.shape)}"
+            )
+        bsz, channels, total_steps = features.shape
+        if total_steps < self.num_bins:
+            raise ValueError(
+                f"输入时间步数 ({total_steps}) 小于分箱数 ({self.num_bins})。"
+            )
+        x = features.transpose(1, 2)  # [B, T, C]
+        keys = torch.tanh(self.key_proj(x))  # [B, T, H_att]
+        if total_steps % self.num_bins == 0:
+            bin_len = total_steps // self.num_bins
+            keys_bins = keys.view(bsz, self.num_bins, bin_len, self.attention_hidden)
+            scores = (
+                torch.einsum("bkth,kh->bkt", keys_bins, self.bin_score_weight)
+                + self.bin_score_bias[None, :, None]
+            )
+            weights = torch.softmax(scores, dim=-1)
+            x_bins = x.view(bsz, self.num_bins, bin_len, channels)
+            pooled = torch.einsum("bkt,bktc->bkc", weights, x_bins)
+            return pooled.reshape(bsz, self.output_dimension)
+
+        x_chunks = torch.tensor_split(x, self.num_bins, dim=1)
+        key_chunks = torch.tensor_split(keys, self.num_bins, dim=1)
+        pooled_list: list[torch.Tensor] = []
+        for bin_idx, (x_chunk, key_chunk) in enumerate(zip(x_chunks, key_chunks)):
+            scores = (
+                torch.matmul(key_chunk, self.bin_score_weight[bin_idx])
+                + self.bin_score_bias[bin_idx]
+            )
+            weights = torch.softmax(scores, dim=-1).unsqueeze(-1)
+            pooled_list.append((weights * x_chunk).sum(dim=1))
+        return torch.cat(pooled_list, dim=-1)
+
+
+class PreNormResMLPBlock(nn.Module):
+    """Pre-LayerNorm 残差前馈块（仅用于池化后语义投影头，严禁在卷积主干内替代 BatchNorm1d）。"""
+
+    def __init__(self, dimension: int, hidden_dimension: int, *, dropout: float = 0.15):
+        super().__init__()
+        self.norm = nn.LayerNorm(int(dimension))
+        self.fc1 = nn.Linear(int(dimension), int(hidden_dimension))
+        self.act = nn.GELU()
+        self.drop1 = nn.Dropout(float(dropout))
+        self.fc2 = nn.Linear(int(hidden_dimension), int(dimension))
+        self.drop2 = nn.Dropout(float(dropout))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.drop1(self.act(self.fc1(self.norm(x))))
+        return x + self.drop2(self.fc2(h))
+
+
+class MultiBinResConvEncoder(nn.Module):
+    """Tier-2A 多时域分箱残差扩张卷积脑编码器（BatchNorm1d 卷积主干 + K 槽注意力池化 + Pre-Norm ResMLP 头）。
+
+    保持与 DilatedConvEncoder 相同的 ``encode_temporal`` 与 ``forward`` 契约，并额外暴露
+    ``encode_with_bins(signals, subject_indices) -> (z, h_bins)`` 供 Stage-2 多时域特征接口按需复用。
+    """
+
+    def __init__(self, channel_positions, subject_count, output_dimension, config):
+        super().__init__()
+        cfg = dict(config or {})
+        virtual_channels = int(cfg.get("merger_channels", 270))
+        position_dimension = int(cfg.get("merger_position_dimension", 2048))
+        hidden_channels = int(cfg.get("hidden", 256))
+        depth = int(cfg.get("depth", 6))
+        kernel_size = int(cfg.get("kernel_size", 3))
+        dilation_growth = int(cfg.get("dilation_growth", 2))
+        dilation_period = cfg.get("dilation_period", 4)
+        dilation_period = None if dilation_period is None else int(dilation_period)
+        dropout_input = float(cfg.get("dropout_input", 0.05))
+        convolution_dropout = float(cfg.get("convolution_dropout", 0.10))
+        use_batch_norm = bool(cfg.get("batch_norm", True))
+        use_gelu = bool(cfg.get("gelu", True))
+        glu_every = int(cfg.get("glu_every", 2))
+        glu_context = int(cfg.get("glu_context", 1))
+        num_temporal_bins = int(cfg.get("num_temporal_bins", 5))
+        bin_attention_hidden = int(cfg.get("bin_attention_hidden", 128))
+        mlp_dim = int(cfg.get("mlp_dim", int(output_dimension)))
+        mlp_hidden = int(cfg.get("mlp_hidden", 2 * mlp_dim))
+        mlp_depth = int(cfg.get("mlp_depth", 3))
+        mlp_dropout = float(cfg.get("mlp_dropout", 0.15))
+
+        if depth <= 0:
+            raise ValueError("MultiBinResConvEncoder depth 必须为正整数。")
+        if hidden_channels <= 0 or mlp_dim <= 0 or mlp_hidden <= 0 or mlp_depth < 0:
+            raise ValueError("MultiBinResConvEncoder 通道数与 MLP 维度配置无效。")
+
+        self.gaussian_noise_std = max(0.0, float(cfg.get("gaussian_noise_std", 0.0)))
+        self.channel_dropout = float(cfg.get("channel_dropout", 0.0))
+        if not (0.0 <= self.channel_dropout < 1.0):
+            raise ValueError("channel_dropout 必须位于 [0, 1) 之间。")
+
+        self.channel_merger = SpatialChannelMerger(
+            channel_positions,
+            output_channels=virtual_channels,
+            position_dimension=position_dimension,
+            subject_count=subject_count,
+            per_subject=bool(cfg.get("merger_per_subject", True)),
+            residual_per_subject=bool(cfg.get("merger_residual_per_subject", False)),
+            dropout_radius=float(cfg.get("merger_dropout", 0.2)),
+            frequency_start=0,
+            fourier_margin=0.2,
+            scale_fourier_coordinates=True,
+            per_sample_dropout=bool(cfg.get("merger_per_sample_dropout", False)),
+        )
+        self.initial_projection = nn.Conv1d(virtual_channels, hidden_channels, 1)
+        self.subject_projection_enabled = bool(
+            cfg.get("subject_projection_enabled", True)
+        )
+        self.subject_projection_per_subject = bool(
+            cfg.get("subject_projection_per_subject", True)
+        )
+        self.subject_projection_residual_per_subject = bool(
+            cfg.get("subject_projection_residual_per_subject", False)
+        )
+        if (
+            self.subject_projection_per_subject
+            and self.subject_projection_residual_per_subject
+        ):
+            raise ValueError(
+                "subject projection cannot be both independent and residual."
+            )
+        if not self.subject_projection_enabled:
+            if (
+                self.subject_projection_per_subject
+                or self.subject_projection_residual_per_subject
+            ):
+                raise ValueError(
+                    "disabled subject projection cannot have subject-specific parameters."
+                )
+            self.subject_projection = None
+        elif self.subject_projection_residual_per_subject:
+            self.subject_projection = ResidualSubjectLinear(
+                subject_count,
+                hidden_channels,
+                output_channels=hidden_channels,
+                bias=False,
+                initialization="normal",
+            )
+        else:
+            self.subject_projection = SubjectLinear(
+                subject_count if self.subject_projection_per_subject else 1,
+                hidden_channels,
+                output_channels=hidden_channels,
+                bias=False,
+                initialization="normal",
+            )
+
+        temporal_filter_config = cfg.get("temporal_filter")
+        self.temporal_filter = (
+            ExplicitTemporalFilter(
+                hidden_channels,
+                subject_count,
+                temporal_filter_config.get("kernel_size", 7),
+                mode=temporal_filter_config.get("mode", "shared"),
+            )
+            if temporal_filter_config is not None
+            else None
+        )
+
+        self.blocks = nn.ModuleList()
+        self.gates = nn.ModuleList()
+        dilation = 1
+        activation_type = nn.GELU if use_gelu else nn.ReLU
+        for index in range(depth):
+            if dilation_period and index % dilation_period == 0:
+                dilation = 1
+            modules: list[nn.Module] = []
+            if index == 0 and dropout_input > 0.0:
+                modules.append(nn.Dropout(dropout_input))
+            modules.append(
+                nn.Conv1d(
+                    hidden_channels,
+                    hidden_channels,
+                    kernel_size,
+                    stride=1,
+                    padding=(kernel_size // 2) * dilation,
+                    dilation=dilation,
+                )
+            )
+            if use_batch_norm:
+                modules.append(nn.BatchNorm1d(hidden_channels))
+            modules.append(activation_type())
+            if convolution_dropout > 0.0:
+                modules.append(nn.Dropout(convolution_dropout))
+            self.blocks.append(nn.Sequential(*modules))
+            dilation *= dilation_growth
+            if glu_every and (index + 1) % glu_every == 0:
+                self.gates.append(
+                    nn.Sequential(
+                        nn.Conv1d(
+                            hidden_channels,
+                            2 * hidden_channels,
+                            1 + 2 * glu_context,
+                            padding=glu_context,
+                        ),
+                        nn.GLU(dim=1),
+                    )
+                )
+            else:
+                self.gates.append(nn.Identity())
+
+        self.multi_bin_pool = OrderedMultiBinAttentionPool(
+            hidden_channels,
+            num_bins=num_temporal_bins,
+            attention_hidden=bin_attention_hidden,
+        )
+        self.bin_feature_dimension = self.multi_bin_pool.output_dimension
+        self.head_in = nn.Linear(self.bin_feature_dimension, mlp_dim)
+        self.mlp_blocks = nn.ModuleList(
+            [
+                PreNormResMLPBlock(mlp_dim, mlp_hidden, dropout=mlp_dropout)
+                for _ in range(mlp_depth)
+            ]
+        )
+        self.head_norm = nn.LayerNorm(mlp_dim)
+        self.head_out = nn.Linear(mlp_dim, int(output_dimension))
+
+    def _apply_train_augmentation(self, signals: torch.Tensor) -> torch.Tensor:
+        if not self.training:
+            return signals
+        x = signals
+        if self.channel_dropout > 0.0:
+            keep_prob = 1.0 - self.channel_dropout
+            mask = (
+                torch.rand(
+                    (x.shape[0], x.shape[1], 1),
+                    device=x.device,
+                    dtype=x.dtype,
+                )
+                < keep_prob
+            ).to(dtype=x.dtype)
+            x = x * (mask / keep_prob)
+        if self.gaussian_noise_std > 0.0:
+            x = x + torch.randn_like(x) * self.gaussian_noise_std
+        return x
+
+    def encode_temporal(self, signals, subject_indices=None):
+        """提取残差扩张卷积时序表征 [B, hidden, T]（零未来信号泄漏）。"""
+        x = self._apply_train_augmentation(signals)
+        features = self.channel_merger(x, subject_indices)
+        features = self.initial_projection(features)
+        if self.subject_projection is not None:
+            projection_subject_indices = (
+                subject_indices
+                if (
+                    self.subject_projection_per_subject
+                    or self.subject_projection_residual_per_subject
+                )
+                else None
+            )
+            features = self.subject_projection(features, projection_subject_indices)
+        if self.temporal_filter is not None:
+            features = self.temporal_filter(features, subject_indices)
+        for block, gate in zip(self.blocks, self.gates):
+            features = features + block(features)
+            features = gate(features)
+        return features
+
+    def encode_with_bins(
+        self, signals, subject_indices=None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """同时返回单窗投影嵌入 z [B, D] 与池化前有序多时域分箱特征 h_bins [B, K*H]。"""
+        temporal = self.encode_temporal(signals, subject_indices)
+        h_bins = self.multi_bin_pool(temporal)
+        h = self.head_in(h_bins)
+        for mlp_block in self.mlp_blocks:
+            h = mlp_block(h)
+        z = self.head_out(self.head_norm(h))
+        return z, h_bins
+
+    def forward(self, signals, subject_indices=None):
+        z, _ = self.encode_with_bins(signals, subject_indices)
+        return z
+
+
+def build_brain_encoder(
+    channel_positions,
+    subject_count: int,
+    output_dimension: int,
+    config: dict | None = None,
+) -> nn.Module:
+    """根据 model.conv.architecture 构建 Stage-1 脑信号编码器（默认保持 DilatedConvEncoder 零改动）。"""
+    cfg = dict(config or {})
+    arch = str(cfg.get("architecture", "dilated_conv") or "dilated_conv").strip().lower()
+    if arch in {"", "dilated_conv", "default", "legacy"}:
+        return DilatedConvEncoder(
+            channel_positions,
+            subject_count=subject_count,
+            output_dimension=output_dimension,
+            config=cfg,
+        )
+    if arch in {"multibin_resconv", "multi_bin_resconv", "resconv_multibin"}:
+        return MultiBinResConvEncoder(
+            channel_positions,
+            subject_count=subject_count,
+            output_dimension=output_dimension,
+            config=cfg,
+        )
+    raise ValueError(
+        f"不支持的 model.conv.architecture={arch!r}，"
+        "可选：'dilated_conv' | 'multibin_resconv'。"
+    )

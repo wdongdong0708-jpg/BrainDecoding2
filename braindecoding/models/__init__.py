@@ -11,8 +11,12 @@ from __future__ import annotations
 from braindecoding.models.brain_encoder import (
     DilatedConvEncoder,
     ExplicitTemporalFilter,
+    MultiBinResConvEncoder,
+    OrderedMultiBinAttentionPool,
+    PreNormResMLPBlock,
     StridedConvEncoder,
     TemporalAttentionPool,
+    build_brain_encoder,
     build_strided_conv_encoder,
 )
 from braindecoding.models.embedding import (
@@ -51,8 +55,12 @@ __all__ = [
     "ResidualSubjectLinear",
     "StridedConvEncoder",
     "TemporalAttentionPool",
+    "OrderedMultiBinAttentionPool",
+    "PreNormResMLPBlock",
     "DilatedConvEncoder",
+    "MultiBinResConvEncoder",
     "ExplicitTemporalFilter",
+    "build_brain_encoder",
     "LocalRelativePositionBias",
     "PhysicalTimeGapBias",
     "EventTimeInteractionBias",

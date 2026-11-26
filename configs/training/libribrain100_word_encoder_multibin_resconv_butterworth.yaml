@@ -1,0 +1,67 @@
+# LibriBrain100 英语 MEG 阶段 1（Tier 2A 去毒涨点版）：MultiBinResConvEncoder (~15-16M，BatchNorm1d 卷积主干 + K=5 有序多时域注意力池化 + 3x Pre-Norm ResMLP) + 因果 2 阶 Butterworth 0.5 Hz 高通 + clamp=20 + 纯 SigLIP（零全词表先验偏移）+ 去重叠最小间隔采样
+# 启动命令：
+#   python -u -m braindecoding train --config configs/training/libribrain100_word_encoder_multibin_resconv_butterworth.yaml --require-cache --resume auto
+extends: ./libribrain100_word_encoder.yaml
+
+dataset:
+  baseline_seconds: 0.0
+  causal_highpass_seconds: 0.0
+  causal_highpass_mode: butterworth_iir
+  causal_highpass_hz: 0.5
+  causal_highpass_order: 2
+  clamp: 20.0
+  preload_filtered_recordings: true
+  preload_filtered_dtype: float32
+
+model:
+  conv:
+    architecture: multibin_resconv
+    merger_channels: 270
+    merger_position_dimension: 2048
+    merger_per_subject: true
+    merger_dropout: 0.2
+    merger_per_sample_dropout: false
+    subject_projection_enabled: true
+    subject_projection_per_subject: true
+    hidden: 256
+    depth: 6
+    kernel_size: 3
+    dilation_growth: 2
+    dilation_period: 4
+    dropout_input: 0.05
+    convolution_dropout: 0.10
+    batch_norm: true
+    gelu: true
+    glu_every: 2
+    glu_context: 1
+    num_temporal_bins: 5
+    bin_attention_hidden: 128
+    mlp_dim: 1024
+    mlp_hidden: 2048
+    mlp_depth: 3
+    mlp_dropout: 0.15
+    gaussian_noise_std: 0.05
+    channel_dropout: 0.05
+
+loss:
+  name: siglip
+  initial_temperature: 10.0
+  initial_bias: -10.0
+  identical_candidates_threshold: 0.999
+
+training:
+  epochs: 22
+  batch_size: 256
+  eval_batch_size: 1024
+  learning_rate: 4.0e-4
+  weight_decay: 0.01
+  decoupled_weight_decay: true
+  scheduler: step_cosine
+  warmup_ratio: 0.05
+  minimum_learning_rate: 1.0e-6
+  max_grad_norm: 1.0
+  ema_decay: 0.999
+  patience: 6
+  early_stop_metric: full_vocab
+  word_sampling: min_gap_sampler
+  min_gap_seconds: 2.5

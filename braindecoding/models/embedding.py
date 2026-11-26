@@ -5,7 +5,11 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from braindecoding.models.brain_encoder import DilatedConvEncoder
+from braindecoding.models.brain_encoder import (
+    DilatedConvEncoder,
+    MultiBinResConvEncoder,
+    build_brain_encoder,
+)
 from braindecoding.models.transformer import (
     GroupedTransformerEncoder,
     SalienceGatedAdditiveEncoder,
@@ -335,7 +339,7 @@ class BrainEmbeddingModel(nn.Module):
     def __init__(self, channel_positions, subject_count, config):
         super().__init__()
         output_dimension = int(config.get("embedding_dimension", 1024))
-        self.brain_encoder = DilatedConvEncoder(
+        self.brain_encoder = build_brain_encoder(
             channel_positions,
             subject_count=subject_count,
             output_dimension=output_dimension,
