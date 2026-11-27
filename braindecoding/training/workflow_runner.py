@@ -2227,6 +2227,9 @@ def run_training_workflow(
     torch.cuda.reset_peak_memory_stats(device)
     selection_metric = cfg["evaluation"]["selection_metric"]
     patience = int(tc.get("patience", 6))
+    early_stop_min_epoch = max(
+        1, min(int(tc.get("early_stop_min_epoch", 1)), max_epochs)
+    )
     gpu_name = torch.cuda.get_device_name(device)
     gpu_total_gb = torch.cuda.get_device_properties(device).total_memory / (1024.0**3)
 
@@ -2699,7 +2702,13 @@ def run_training_workflow(
             history.append(row)
 
             scores = {"legacy50": legacy_score, "full_vocab": full_vocab_score}
-            stale_epochs += 1
+            in_early_stop_warmup = (epoch + 1) < early_stop_min_epoch
+            if (epoch + 1) == early_stop_min_epoch and early_stop_min_epoch > 1:
+                best = {"legacy50": -float("inf"), "full_vocab": -float("inf")}
+            if in_early_stop_warmup:
+                stale_epochs = 0
+            else:
+                stale_epochs += 1
             improved_tags: list[str] = []
             for selection, score in scores.items():
                 if score > best[selection]:
@@ -2793,7 +2802,9 @@ def run_training_workflow(
         save_checkpoint(out / "last.ckpt", last_payload)
         del last_payload
 
-        if improved_tags:
+        if in_early_stop_warmup:
+            status_str = f"warmup {epoch + 1}/{early_stop_min_epoch - 1}"
+        elif improved_tags:
             status_str = f"* best({','.join(improved_tags)})"
         else:
             status_str = f"stale {stale_epochs}/{patience}"

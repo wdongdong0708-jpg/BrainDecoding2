@@ -342,3 +342,31 @@ def test_tier2_detoxed_configs_resolve_pure_siglip_and_hyperparams(
         0.10,
     ]
     assert float(s3_cfg["control"]["common_mode_subtraction"]["subtraction_eta"]) == 0.0
+
+    for cfg_path, expect_lam_d in (
+        (
+            "configs/training/siamese_debiased/libribrain100_multibin_salience_v1_context.yaml",
+            0.0,
+        ),
+        (
+            "configs/training/siamese_debiased/libribrain100_multibin_salience_v1_prefix_revision.yaml",
+            10.0,
+        ),
+    ):
+        cfg_b, _ = build_workflow_config(
+            "libribrain100",
+            seed=0,
+            config_path=cfg_path,
+            exp_tag="planb_check",
+            word_exp_tag="t2_word_multibin_siglip",
+        )
+        assert cfg_b["model"]["transformer"]["architecture"] == "salience_gated_additive"
+        assert cfg_b["dataset"]["causal_highpass_mode"] == "butterworth_iir"
+        assert float(cfg_b["dataset"]["clamp"]) == pytest.approx(20.0)
+        assert int(cfg_b["training"]["batch_size"]) == 128
+        assert int(cfg_b["training"]["early_stop_min_epoch"]) == 3
+        siam_b = cfg_b["workflow"]["siamese_debiased"]
+        assert float(siam_b["eta_train"]) == pytest.approx(0.50)
+        assert float(siam_b["lambda_null"]) == pytest.approx(60.0)
+        assert float(siam_b["lambda_delta"]) == pytest.approx(expect_lam_d)
+        assert float(siam_b["null_space_excess_tolerance"]) == pytest.approx(0.0)

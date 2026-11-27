@@ -1,0 +1,16 @@
+# LibriBrain100 英语 MEG 阶段 2.1（方案 B 封板验证）：冻结 Tier-2A 最强 18M MultiBinResConvEncoder + 最稳 V1 SalienceGatedAdditiveEncoder (16x32, alpha=0.65) + 纯 SigLIP (bs=128) + eta_train=0.50 + 零容忍超额相干错位零空间 (lam=60)
+extends: ./libribrain100_causal_highpass_salience_additive_context.yaml
+
+dataset:
+  baseline_seconds: 0.0
+  causal_highpass_seconds: 0.0
+  causal_highpass_mode: butterworth_iir
+  causal_highpass_hz: 0.5
+  causal_highpass_order: 2
+  clamp: 20.0
+  preload_filtered_recordings: true
+  preload_filtered_dtype: float32
+
+training:
+  eval_batch_size: 1024
+  early_stop_min_epoch: 3
