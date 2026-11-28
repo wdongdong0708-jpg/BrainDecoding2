@@ -2374,9 +2374,17 @@ def run_training_workflow(
             siam_freq_alpha = float(
                 siamese_spec.get("null_space_vocab_freq_alpha", 0.0)
             )
+            siam_lam_lag = float(
+                siamese_spec.get("lambda_shift_lag_decorr", 0.0)
+            )
+            lag_str = (
+                f", lambda_lag={siam_lam_lag:.2f}(L<={int(siamese_spec.get('shift_lag_decorr_max_lag', 3))})"
+                if siam_lam_lag > 0.0
+                else ""
+            )
             print(
                 f" Siamese Deb : enabled [mode=null_space, shift={siam_shift_mode}] "
-                f"(eta_train={siam_eta0:.2f}, lambda_null={siam_lam:.2f}, lambda_delta={siam_lam_d:.2f}, "
+                f"(eta_train={siam_eta0:.2f}, lambda_null={siam_lam:.2f}, lambda_delta={siam_lam_d:.2f}{lag_str}, "
                 f"coherent_mean={siam_coherent}, freq_alpha={siam_freq_alpha:.2f}, "
                 f"M={int(siamese_spec.get('shifts_per_step', 1))}/{len(siamese_spec.get('shift_seconds', ()))} shifts, "
                 f"preextract_cnn={use_preextracted_cnn})",
@@ -2465,6 +2473,10 @@ def run_training_workflow(
             ctx_mod is not None
             and hasattr(ctx_mod, "set_clean_input_mean")
             and resume_ckpt_path is None
+            and not bool(preextracted_cache.get("session_calibrated", False))
+            and not bool(
+                getattr(ctx_mod, "clean_input_mean_ready", torch.tensor(False)).item()
+            )
         ):
             ctx_mod.set_clean_input_mean(
                 preextracted_cache["train_clean_z"].float().mean(dim=0)
@@ -2834,6 +2846,12 @@ def run_training_workflow(
                 or float(siamese_spec.get("beta_delta_cm", 0.0)) > 0.0
             ):
                 parts.append(f"d_null={dn_val:.4f}")
+            lag_val = float(diagnostics.get("shift_lag_loss", 0.0))
+            if (
+                lag_val > 0.0
+                or float(siamese_spec.get("lambda_shift_lag_decorr", 0.0)) > 0.0
+            ):
+                parts.append(f"lag={lag_val:.4f}")
             status_str += f" [{','.join(parts)}]"
 
         epoch_col = f"{epoch + 1:02d}/{max_epochs:02d}"

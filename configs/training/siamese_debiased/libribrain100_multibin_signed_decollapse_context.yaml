@@ -1,0 +1,58 @@
+# LibriBrain100 英语 MEG 阶段 2.1（第一阶梯 Op3A-v2 纯脑侧解坍缩 + 在线因果会话校准 + 有符号 Wiener 去相关）
+# 零重训复用冻结 Stage-1 T2_WordOnly (18M MultiBinResConvEncoder, Butterworth 0.5Hz o2, clamp=20, baseline=0)
+extends: ./libribrain100_multibin_salience_v1_context.yaml
+
+model:
+  transformer:
+    architecture: signed_decollapse_additive
+    heads: 16
+    head_dimension: 32
+    max_relative_distance: 24
+    residual_max_norm: 0.75
+    attention_dropout: 0.15
+    include_self_offset: false
+    horizon_conditioned: false
+    self_decollapse_rank: 128
+    self_decollapse_dropout: 0.35
+    use_h_bins_pca: true
+    h_bins_pca_dim: 128
+    session_calibration:
+      enabled: true
+      shrinkage_m0: 50.0
+      lag_gap: 2
+      alpha: 1.0
+
+training:
+  epochs: 30
+  batch_size: 128
+  eval_batch_size: 1024
+  learning_rate: 3.0e-4
+  weight_decay: 0.01
+  self_decollapse_weight_decay: 0.03
+  decoupled_weight_decay: true
+  patience: 6
+  early_stop_metric: full_vocab
+  early_stop_min_epoch: 3
+  freeze_brain_encoder_epochs: 30
+
+siamese_debiased:
+  enabled: true
+  debias_mode: null_space
+  shift_mode: preroll
+  preroll_seconds: 55.0
+  eta_0: 0.0
+  eta_train: 0.0
+  lambda_null: 60.0
+  lambda_delta: 0.0
+  null_space_coherent_mean: true
+  null_space_excess_coherent: true
+  null_space_excess_tolerance: 0.0
+  null_space_increment_mode: true
+  null_space_vocab_freq_alpha: 0.5
+  lambda_shift_lag_decorr: 2.0
+  shift_lag_decorr_max_lag: 3
+  shift_seconds: [-12.0, -19.0, -27.0, -36.0, -46.0]
+  shifts_per_step: 5
+  synchronize_dropout_rng: true
+  preextract_frozen_cnn: true
+  cache_preextracted_to_disk: true

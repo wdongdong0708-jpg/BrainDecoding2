@@ -34,6 +34,7 @@ from braindecoding.training.debiased_losses import (
     compute_norm_damped_rolling_debiased_embedding,
     compute_scaled_shift_null_loss,
     compute_shift_null_loss,
+    compute_shifted_lag_decorrelation_loss,
     compute_temporal_bias_distillation_loss,
     resolve_siamese_debiased_config,
 )
@@ -165,6 +166,12 @@ def train_one_epoch_siamese_debiased(
     lambda_delta_clean_stein = float(
         siamese_config.get("lambda_delta_clean_stein", 0.0)
     )
+    lambda_shift_lag_decorr = float(
+        siamese_config.get("lambda_shift_lag_decorr", 0.0)
+    )
+    shift_lag_decorr_max_lag = max(
+        1, int(siamese_config.get("shift_lag_decorr_max_lag", 3))
+    )
     null_space_increment_mode = bool(
         siamese_config.get(
             "null_space_increment_mode",
@@ -195,6 +202,18 @@ def train_one_epoch_siamese_debiased(
     )
     train_shifted_z_pad: dict[float, torch.Tensor] = preextracted_cache.get(
         "train_shifted_z_pad", {}
+    )
+    train_clean_self: torch.Tensor | None = preextracted_cache.get(
+        "train_clean_self"
+    )
+    train_clean_self_pad: torch.Tensor | None = preextracted_cache.get(
+        "train_clean_self_pad"
+    )
+    train_shifted_self: dict[float, torch.Tensor] = (
+        preextracted_cache.get("train_shifted_self") or {}
+    )
+    train_shifted_self_pad: dict[float, torch.Tensor] = (
+        preextracted_cache.get("train_shifted_self_pad") or {}
     )
     shift_keys = sorted(train_shifted_z.keys())
     if siamese_enabled and not shift_keys:
@@ -268,6 +287,7 @@ def train_one_epoch_siamese_debiased(
     null_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
     delta_null_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
     distill_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
+    shift_lag_loss_gpu = torch.zeros((), device=device, dtype=torch.float64)
     sample_count = 0
     optimizer_updates = 0
     batches_seen = 0
@@ -294,17 +314,23 @@ def train_one_epoch_siamese_debiased(
             and (
                 (lambda_null > 0.0 and centered_vocab_bank is not None)
                 or lambda_delta > 0.0
+                or lambda_shift_lag_decorr > 0.0
             )
         )
     else:
         compute_null_grad = bool(
             siamese_enabled
             and (
-                lambda_null > 0.0
-                or lambda_delta_null > 0.0
-                or beta_delta_cm > 0.0
+                (
+                    (
+                        lambda_null > 0.0
+                        or lambda_delta_null > 0.0
+                        or beta_delta_cm > 0.0
+                    )
+                    and centered_vocab_bank is not None
+                )
+                or lambda_shift_lag_decorr > 0.0
             )
-            and centered_vocab_bank is not None
         )
 
     current_lr = (
@@ -388,9 +414,28 @@ def train_one_epoch_siamese_debiased(
                     if siamese_enabled
                     else None
                 )
+                clean_self_padded = (
+                    train_clean_self_pad[win_global_2d]
+                    if train_clean_self_pad is not None
+                    else None
+                )
+                shifted_self_padded_list = (
+                    [
+                        train_shifted_self_pad[k][win_global_2d]
+                        for k in chosen_keys
+                    ]
+                    if (
+                        siamese_enabled
+                        and train_clean_self_pad is not None
+                        and all(k in train_shifted_self_pad for k in chosen_keys)
+                    )
+                    else None
+                )
                 padded_plan = {
                     "clean_padded": clean_padded,
                     "shifted_padded_list": shifted_padded_list,
+                    "clean_self_padded": clean_self_padded,
+                    "shifted_self_padded_list": shifted_self_padded_list,
                     "mask_2d": mask_2d,
                     "target_group_idx": target_group_idx,
                     "target_col_idx": target_col_idx,
@@ -399,12 +444,28 @@ def train_one_epoch_siamese_debiased(
                 }
                 clean_z_batch = None
                 shifted_z_batches = None
+                clean_self_batch = None
+                shifted_self_batches = None
             else:
                 padded_plan = None
                 clean_z_batch = train_clean_z[idx_tensor]
                 shifted_z_batches = (
                     [train_shifted_z[k][idx_tensor] for k in chosen_keys]
                     if siamese_enabled
+                    else None
+                )
+                clean_self_batch = (
+                    train_clean_self[idx_tensor]
+                    if train_clean_self is not None
+                    else None
+                )
+                shifted_self_batches = (
+                    [train_shifted_self[k][idx_tensor] for k in chosen_keys]
+                    if (
+                        siamese_enabled
+                        and train_clean_self is not None
+                        and all(k in train_shifted_self for k in chosen_keys)
+                    )
                     else None
                 )
 
@@ -426,6 +487,8 @@ def train_one_epoch_siamese_debiased(
                         clean_z_batch,
                         batch_sentence_indices,
                         shifted_z_batches=shifted_z_batches,
+                        clean_self_batch=clean_self_batch,
+                        shifted_self_batches=shifted_self_batches,
                         cutoff_generator=prefix_generator,
                         cutoff_policy=cutoff_policy,
                         synchronize_dropout_rng=sync_rng,
@@ -564,6 +627,7 @@ def train_one_epoch_siamese_debiased(
                     horizon_null_losses = []
                     horizon_delta_null_losses = []
                     horizon_distill_losses = []
+                    horizon_lag_losses = []
                     skip_empty_check = (
                         use_static_rev_table and bs_len > max_horizon * 2
                     )
@@ -807,18 +871,34 @@ def train_one_epoch_siamese_debiased(
                                 )
                             )
 
+                        if (
+                            compute_null_grad
+                            and y_shift_branches is not None
+                            and lambda_shift_lag_decorr > 0.0
+                        ):
+                            d_lag = compute_shifted_lag_decorrelation_loss(
+                                y_shift_branches[:, delay_mask, :],
+                                batch_sentence_indices[rows_r],
+                                rows_r,
+                                max_lag=shift_lag_decorr_max_lag,
+                            )
+                        else:
+                            d_lag = d_siglip * 0.0
+
                         d_total = (
                             d_siglip
                             + lambda_null * d_null
                             + d_delta_weighted
                             + d_distill_weighted
                             + d_stein_weighted
+                            + lambda_shift_lag_decorr * d_lag
                         )
                         horizon_total_losses.append(d_total)
                         horizon_siglip_losses.append(d_siglip.detach())
                         horizon_null_losses.append(d_null.detach())
                         horizon_delta_null_losses.append(d_delta_null.detach())
                         horizon_distill_losses.append(d_distill.detach())
+                        horizon_lag_losses.append(d_lag.detach())
 
                         delay_counts_gpu[delay] += d_count_t
                         delay_siglip_sums_gpu[delay] += d_siglip.detach().to(
@@ -841,6 +921,7 @@ def train_one_epoch_siamese_debiased(
                         horizon_delta_null_losses
                     ).mean()
                     batch_distill_t = torch.stack(horizon_distill_losses).mean()
+                    batch_lag_t = torch.stack(horizon_lag_losses).mean()
                     revision_supervision_count += int(y_tilde.shape[0])
                 else:
                     (
@@ -852,6 +933,8 @@ def train_one_epoch_siamese_debiased(
                         clean_z_batch,
                         batch_sentence_indices,
                         shifted_z_batches=shifted_z_batches,
+                        clean_self_batch=clean_self_batch,
+                        shifted_self_batches=shifted_self_batches,
                         synchronize_dropout_rng=sync_rng,
                         compute_null_grad=compute_null_grad,
                         return_shift_branches=True,
@@ -988,16 +1071,30 @@ def train_one_epoch_siamese_debiased(
                         )
                     else:
                         d_stein_ctx = d_siglip * 0.0
+                    if (
+                        compute_null_grad
+                        and y_shift_branches is not None
+                        and lambda_shift_lag_decorr > 0.0
+                    ):
+                        d_lag_ctx = compute_shifted_lag_decorrelation_loss(
+                            y_shift_branches,
+                            batch_sentence_indices,
+                            max_lag=shift_lag_decorr_max_lag,
+                        )
+                    else:
+                        d_lag_ctx = d_siglip * 0.0
                     loss = (
                         d_siglip
                         + lambda_null * d_null
                         + lambda_distill * d_distill
                         + lambda_clean_stein * d_stein_ctx
+                        + lambda_shift_lag_decorr * d_lag_ctx
                     )
                     batch_siglip_t = d_siglip.detach()
                     batch_null_t = d_null.detach()
                     batch_delta_null_t = d_null.detach() * 0.0
                     batch_distill_t = d_distill.detach()
+                    batch_lag_t = d_lag_ctx.detach()
 
             scaler.scale(loss).backward()
             max_grad_norm = float(training_config.get("max_grad_norm", 0.0))
@@ -1033,6 +1130,7 @@ def train_one_epoch_siamese_debiased(
             distill_loss_gpu += (
                 batch_distill_t.to(dtype=torch.float64) * bs_len
             )
+            shift_lag_loss_gpu += batch_lag_t.to(dtype=torch.float64) * bs_len
             sample_count += bs_len
 
             if pbar is not None and (
@@ -1053,6 +1151,10 @@ def train_one_epoch_siamese_debiased(
                     postfix["d_null"] = (
                         f"{float(delta_null_loss_gpu.item()) / denom_cur:.4f}"
                     )
+                if lambda_shift_lag_decorr > 0.0:
+                    postfix["lag"] = (
+                        f"{float(shift_lag_loss_gpu.item()) / denom_cur:.4f}"
+                    )
                 if debias_mode == "amortized_timing" and lambda_distill > 0.0:
                     postfix["dist"] = (
                         f"{float(distill_loss_gpu.item()) / denom_cur:.4f}"
@@ -1069,6 +1171,7 @@ def train_one_epoch_siamese_debiased(
     null_loss_sum = float(null_loss_gpu.item())
     delta_null_loss_sum = float(delta_null_loss_gpu.item())
     distill_loss_sum = float(distill_loss_gpu.item())
+    shift_lag_loss_sum = float(shift_lag_loss_gpu.item())
     revision_delay_counts = {
         d: int(delay_counts_gpu[d].item()) for d in horizons
     }
@@ -1096,6 +1199,9 @@ def train_one_epoch_siamese_debiased(
         "lambda_delta": lambda_delta if siamese_enabled else 0.0,
         "lambda_delta_null": lambda_delta_null if siamese_enabled else 0.0,
         "lambda_distill": lambda_distill if siamese_enabled else 0.0,
+        "lambda_shift_lag_decorr": (
+            lambda_shift_lag_decorr if siamese_enabled else 0.0
+        ),
         "beta_delta_cm": beta_delta_cm if siamese_enabled else 0.0,
         "null_space_coherent_mean": null_space_coherent_mean if siamese_enabled else False,
         "null_space_vocab_freq_alpha": null_space_vocab_freq_alpha if siamese_enabled else 0.0,
@@ -1115,6 +1221,12 @@ def train_one_epoch_siamese_debiased(
         "distill_loss": float(distill_loss_sum / denom),
         "weighted_distill_loss": float(
             (lambda_distill * distill_loss_sum) / denom
+        )
+        if siamese_enabled
+        else 0.0,
+        "shift_lag_loss": float(shift_lag_loss_sum / denom),
+        "weighted_shift_lag_loss": float(
+            (lambda_shift_lag_decorr * shift_lag_loss_sum) / denom
         )
         if siamese_enabled
         else 0.0,

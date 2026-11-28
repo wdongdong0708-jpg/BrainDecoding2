@@ -427,6 +427,12 @@ def resolve_siamese_debiased_config(
     resolved_clean_stein_ema_gamma = float(
         raw_block.get("clean_stein_ema_gamma", 0.03)
     )
+    resolved_lambda_shift_lag_decorr = float(
+        raw_block.get("lambda_shift_lag_decorr", 0.0)
+    )
+    resolved_shift_lag_decorr_max_lag = max(
+        1, int(raw_block.get("shift_lag_decorr_max_lag", 3))
+    )
     resolved_increment_mode = bool(
         raw_block.get(
             "null_space_increment_mode",
@@ -458,6 +464,8 @@ def resolve_siamese_debiased_config(
         "lambda_clean_stein": float(resolved_lambda_clean_stein),
         "lambda_delta_clean_stein": float(resolved_lambda_delta_clean_stein),
         "clean_stein_ema_gamma": float(resolved_clean_stein_ema_gamma),
+        "lambda_shift_lag_decorr": float(resolved_lambda_shift_lag_decorr),
+        "shift_lag_decorr_max_lag": int(resolved_shift_lag_decorr_max_lag),
         "shift_seconds": resolved_shifts,
         "shifts_per_step": int(resolved_m),
         "s3_cms_eta": resolved_s3_cms_eta,
@@ -1050,6 +1058,75 @@ class CleanSteinRunningLoss:
             self.ema_cov.copy_(c_tilde.detach())
             self.initialized = True
         return (c_tilde * c_tilde).sum() / (2.0 * gamma * float(self.probe_dim))
+
+
+def compute_shifted_lag_decorrelation_loss(
+    y_shift_branches: torch.Tensor | None,
+    sentence_indices: torch.Tensor,
+    row_positions: torch.Tensor | None = None,
+    *,
+    max_lag: int = 3,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """零 Host 同步错位分支句内 Lag-1..L_max 自相关白化惩罚 sum_{d=1}^{L_max} rho_shift(d)^2。
+
+    仅作用于时间错位（纯重叠背景噪声）分支，引导 Stage-2 有符号邻居核主动消除相邻词窗
+    重叠造成的 lag-1..3 伪相关性，同时完整保留 Clean 分支的真实跨词语义连续性。
+    支持多分支直通均值估计（分支 0 满幅梯度 + 全部分支精确前向统计）。
+    """
+    if y_shift_branches is None or y_shift_branches.numel() == 0:
+        return sentence_indices.new_zeros((), dtype=torch.float32)
+    y_br = y_shift_branches.float()
+    if y_br.ndim == 2:
+        y_br = y_br.unsqueeze(0)
+    num_branches, batch_len, _ = y_br.shape
+    l_max = max(1, int(max_lag))
+    if batch_len <= 1:
+        return y_br.sum() * 0.0
+
+    sent = sentence_indices.to(device=y_br.device, dtype=torch.long)
+    if row_positions is None:
+        pos = torch.arange(batch_len, device=y_br.device, dtype=torch.long)
+    else:
+        pos = row_positions.to(device=y_br.device, dtype=torch.long)
+
+    def _single_branch_lag_loss(y_mat: torch.Tensor) -> torch.Tensor:
+        u = y_mat - y_mat.mean(dim=0, keepdim=True)
+        total = u.new_zeros(())
+        for lag in range(1, l_max + 1):
+            if batch_len <= lag:
+                break
+            pair_mask = (sent[:-lag] == sent[lag:]) & (
+                (pos[lag:] - pos[:-lag]) == lag
+            )
+            m = pair_mask.to(dtype=torch.float32)
+            u_a = u[:-lag]
+            u_b = u[lag:]
+            num = ((u_a * u_b).sum(dim=-1) * m).sum()
+            den_a = ((u_a * u_a).sum(dim=-1) * m).sum()
+            den_b = ((u_b * u_b).sum(dim=-1) * m).sum()
+            rho = num / torch.sqrt((den_a + eps) * (den_b + eps))
+            total = total + rho * rho
+        return total
+
+    if (
+        num_branches > 1
+        and y_br.requires_grad
+        and not y_br[1:].requires_grad
+    ):
+        with torch.no_grad():
+            det_losses = [
+                _single_branch_lag_loss(y_br[m_idx].detach())
+                for m_idx in range(num_branches)
+            ]
+            loss_det = torch.stack(det_losses).mean()
+        loss_0 = _single_branch_lag_loss(y_br[0])
+        return loss_det + (loss_0 - loss_0.detach())
+
+    branch_losses = [
+        _single_branch_lag_loss(y_br[m_idx]) for m_idx in range(num_branches)
+    ]
+    return torch.stack(branch_losses).mean()
 
 
 def compute_euclidean_cross_horizon_loss(

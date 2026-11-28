@@ -591,6 +591,7 @@ class MultiBinResConvEncoder(nn.Module):
             attention_hidden=bin_attention_hidden,
         )
         self.bin_feature_dimension = self.multi_bin_pool.output_dimension
+        self.pre_head_dimension = int(mlp_dim)
         self.head_in = nn.Linear(self.bin_feature_dimension, mlp_dim)
         self.mlp_blocks = nn.ModuleList(
             [
@@ -642,16 +643,24 @@ class MultiBinResConvEncoder(nn.Module):
             features = gate(features)
         return features
 
-    def encode_with_bins(
+    def encode_with_pre_head(
         self, signals, subject_indices=None
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """同时返回单窗投影嵌入 z [B, D] 与池化前有序多时域分箱特征 h_bins [B, K*H]。"""
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """同时返回单窗投影嵌入 z [B, D]、末层投影前特征 h_pre = head_norm(mlp_blocks(...)) [B, M] 与有序分箱特征 h_bins [B, K*H]。"""
         temporal = self.encode_temporal(signals, subject_indices)
         h_bins = self.multi_bin_pool(temporal)
         h = self.head_in(h_bins)
         for mlp_block in self.mlp_blocks:
             h = mlp_block(h)
-        z = self.head_out(self.head_norm(h))
+        h_pre = self.head_norm(h)
+        z = self.head_out(h_pre)
+        return z, h_pre, h_bins
+
+    def encode_with_bins(
+        self, signals, subject_indices=None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """同时返回单窗投影嵌入 z [B, D] 与池化前有序多时域分箱特征 h_bins [B, K*H]。"""
+        z, _, h_bins = self.encode_with_pre_head(signals, subject_indices)
         return z, h_bins
 
     def forward(self, signals, subject_indices=None):

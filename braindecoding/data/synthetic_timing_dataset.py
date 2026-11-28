@@ -654,13 +654,24 @@ class SyntheticTimingDataset(Dataset):
         progress_desc: str = "Pre-extract CNN",
         progress_wrap=None,
         out_tensor: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """在 GPU 上直接合成平滑脉冲流、切窗归一化并前向提取冻结 CNN 特征 [N, D]。"""
+        return_pre_head: bool = False,
+        return_raw_h_bins: bool = False,
+        project_h_bins_fn=None,
+        out_pre_head_tensor: torch.Tensor | None = None,
+        out_h_bins_proj_tensor: torch.Tensor | None = None,
+    ):
+        """在 GPU 上直接合成平滑脉冲流、切窗归一化并前向提取冻结 CNN 特征 [N, D]（可选同步提取 h_pre / h_bins）。"""
         n_rows = len(self.table)
+        need_extra = bool(return_pre_head or return_raw_h_bins or project_h_bins_fn is not None)
         if n_rows == 0:
-            if out_tensor is not None:
-                return out_tensor
-            return torch.empty((0, 0), dtype=torch.float32)
+            z_empty = (
+                out_tensor
+                if out_tensor is not None
+                else torch.empty((0, 0), dtype=torch.float32)
+            )
+            if not need_extra:
+                return z_empty
+            return z_empty, out_pre_head_tensor, out_h_bins_proj_tensor
 
         model.brain_encoder.eval()
         plan = self._get_gpu_stream_plan()
@@ -678,6 +689,8 @@ class SyntheticTimingDataset(Dataset):
         ).unsqueeze(0)
         gen = torch.Generator(device=device)
         out_cpu: torch.Tensor | None = None
+        pre_cpu: torch.Tensor | None = None
+        bins_cpu: torch.Tensor | None = None
 
         if progress_wrap is not None:
             iterable, pbar = progress_wrap(
@@ -688,6 +701,35 @@ class SyntheticTimingDataset(Dataset):
             )
         else:
             iterable, pbar = plan, None
+
+        def _write_slot(
+            src_t: torch.Tensor,
+            dst_t: torch.Tensor | None,
+            cpu_buf: torch.Tensor | None,
+            rows_slice_np: np.ndarray,
+            rows_slice_dev: torch.Tensor | None,
+        ) -> torch.Tensor | None:
+            if dst_t is not None:
+                if dst_t.device.type == "cpu":
+                    dst_t[rows_slice_np] = src_t.to(device="cpu", dtype=dst_t.dtype)
+                else:
+                    r_dev = (
+                        rows_slice_dev
+                        if (rows_slice_dev is not None and rows_slice_dev.device == dst_t.device)
+                        else torch.as_tensor(rows_slice_np, device=dst_t.device, dtype=torch.long)
+                    )
+                    dst_t.index_copy_(
+                        0, r_dev, src_t.to(device=dst_t.device, dtype=dst_t.dtype)
+                    )
+                return cpu_buf
+            if cpu_buf is None:
+                cpu_buf = torch.empty(
+                    (n_rows, int(src_t.shape[-1])),
+                    dtype=torch.float32,
+                    device="cpu",
+                )
+            cpu_buf[rows_slice_np] = src_t.float().cpu()
+            return cpu_buf
 
         try:
             for chunk in iterable:
@@ -751,45 +793,70 @@ class SyntheticTimingDataset(Dataset):
                         dtype=amp_dtype,
                         enabled=use_amp,
                     ):
-                        z_sub = F.normalize(
-                            model.brain_encoder(
-                                windows, subj_dev[sub_start:sub_end]
-                            ),
-                            dim=-1,
-                        )
-                    if out_tensor is not None:
-                        if out_tensor.device.type == "cpu":
-                            out_tensor[rows_np[sub_start:sub_end]] = z_sub.to(
-                                device="cpu", dtype=out_tensor.dtype
+                        if need_extra and hasattr(
+                            model.brain_encoder, "encode_with_pre_head"
+                        ):
+                            z_raw_sub, h_pre_sub, h_bins_sub = (
+                                model.brain_encoder.encode_with_pre_head(
+                                    windows, subj_dev[sub_start:sub_end]
+                                )
                             )
+                            z_sub = F.normalize(z_raw_sub, dim=-1)
+                            if return_raw_h_bins:
+                                h_bins_out_sub = h_bins_sub
+                            elif project_h_bins_fn is not None:
+                                h_bins_out_sub = project_h_bins_fn(h_bins_sub)
+                            else:
+                                h_bins_out_sub = None
                         else:
-                            out_tensor.index_copy_(
-                                0,
-                                rows_dev[sub_start:sub_end],
-                                z_sub.to(
-                                    device=out_tensor.device,
-                                    dtype=out_tensor.dtype,
+                            z_sub = F.normalize(
+                                model.brain_encoder(
+                                    windows, subj_dev[sub_start:sub_end]
                                 ),
+                                dim=-1,
                             )
-                    else:
-                        if out_cpu is None:
-                            out_cpu = torch.empty(
-                                (n_rows, int(z_sub.shape[-1])),
-                                dtype=torch.float32,
-                                device="cpu",
-                            )
-                        out_cpu[rows_np[sub_start:sub_end]] = (
-                            z_sub.float().cpu()
+                            h_pre_sub = z_sub if return_pre_head else None
+                            h_bins_out_sub = None
+
+                    rows_slice = rows_np[sub_start:sub_end]
+                    rows_dev_slice = (
+                        rows_dev[sub_start:sub_end] if rows_dev is not None else None
+                    )
+                    out_cpu = _write_slot(
+                        z_sub, out_tensor, out_cpu, rows_slice, rows_dev_slice
+                    )
+                    if return_pre_head and h_pre_sub is not None:
+                        pre_cpu = _write_slot(
+                            h_pre_sub,
+                            out_pre_head_tensor,
+                            pre_cpu,
+                            rows_slice,
+                            rows_dev_slice,
+                        )
+                    if h_bins_out_sub is not None:
+                        bins_cpu = _write_slot(
+                            h_bins_out_sub,
+                            out_h_bins_proj_tensor,
+                            bins_cpu,
+                            rows_slice,
+                            rows_dev_slice,
                         )
                 del sig, sig_flat_tc
         finally:
             if pbar is not None:
                 pbar.close()
 
-        if out_tensor is not None:
-            return out_tensor
-        assert out_cpu is not None
-        return out_cpu
+        z_res = out_tensor if out_tensor is not None else out_cpu
+        assert z_res is not None
+        if not need_extra:
+            return z_res
+        pre_res = out_pre_head_tensor if out_pre_head_tensor is not None else pre_cpu
+        bins_res = (
+            out_h_bins_proj_tensor
+            if out_h_bins_proj_tensor is not None
+            else bins_cpu
+        )
+        return z_res, pre_res, bins_res
 
 
 def overlap_statistics(table, *, window_seconds=1.0):

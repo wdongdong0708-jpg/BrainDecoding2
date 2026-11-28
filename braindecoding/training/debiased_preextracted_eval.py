@@ -96,6 +96,8 @@ def encode_from_preextracted_cnn(
     )
     local_context_radius = int(getattr(model, "local_context_radius", 1))
     clean_z_pad: torch.Tensor | None = meta.get("clean_z_pad")
+    clean_self_all: torch.Tensor | None = meta.get("clean_self_all")
+    clean_self_pad: torch.Tensor | None = meta.get("clean_self_pad")
     static_eval_table: dict[int, dict[str, torch.Tensor]] | None = meta.get(
         "static_revision_table"
     )
@@ -180,6 +182,11 @@ def encode_from_preextracted_cnn(
                                 model.context_transformer,
                                 clean_z_pad[win_idx_2d],
                                 mask_2d,
+                                self_padded=(
+                                    clean_self_pad[win_idx_2d]
+                                    if clean_self_pad is not None
+                                    else None
+                                ),
                                 causal_override=False,
                                 target_col_idx=all_col_idx,
                                 target_group_idx=all_group_idx,
@@ -207,14 +214,27 @@ def encode_from_preextracted_cnn(
                                     model.context_transformer,
                                     clean_z_pad[win_idx_2d],
                                     mask_2d,
+                                    self_padded=(
+                                        clean_self_pad[win_idx_2d]
+                                        if clean_self_pad is not None
+                                        else None
+                                    ),
                                     causal_override=False,
                                     target_col_idx=target_col_t,
                                 )
                                 delayed[int(d)] = F.normalize(revised, dim=-1)
                     else:
                         z_batch = clean_z_all[idx_tensor]
+                        self_batch = (
+                            clean_self_all[idx_tensor]
+                            if clean_self_all is not None
+                            else None
+                        )
                         delayed = _forward_prefix_revisions_from_z(
-                            model, z_batch, sent_batch
+                            model,
+                            z_batch,
+                            sent_batch,
+                            self_features=self_batch,
                         )
                         masks = model.revision_availability_masks(sent_batch)
                     if has_temporal_bias_head and onset_seconds_all is not None:
@@ -239,11 +259,17 @@ def encode_from_preextracted_cnn(
                     out_batch = delayed[maximum_delay]
                 else:
                     z_batch = clean_z_all[idx_tensor]
+                    self_batch = (
+                        clean_self_all[idx_tensor]
+                        if clean_self_all is not None
+                        else None
+                    )
                     out_batch, _ = forward_context_from_preextracted(
                         model,
                         z_batch,
                         sent_batch,
                         shifted_z_batches=None,
+                        clean_self_batch=self_batch,
                         synchronize_dropout_rng=False,
                     )
                     if has_temporal_bias_head and onset_seconds_all is not None:
@@ -308,6 +334,8 @@ def _forward_prefix_revisions_from_z(
     model,
     brain_embedding: torch.Tensor,
     group_indices: torch.Tensor,
+    *,
+    self_features: torch.Tensor | None = None,
 ) -> dict[int, torch.Tensor]:
     """与 BrainEmbeddingModel.forward_prefix_revisions 完全等价，但直接接收预提取的 brain_embedding。"""
     outputs: dict[int, torch.Tensor] = {}
@@ -323,6 +351,11 @@ def _forward_prefix_revisions_from_z(
     if _can_use_fast_padded_transformer(model):
         n_rows = int(len(brain_embedding))
         z_pad = F.pad(brain_embedding, (0, 0, 0, 1))
+        self_pad = (
+            F.pad(self_features, (0, 0, 0, 1))
+            if self_features is not None
+            else None
+        )
         for delay in model.prefix_revision_horizons:
             delayed = torch.empty_like(brain_embedding)
             for start in range(0, n_rows, batch_size):
@@ -363,6 +396,9 @@ def _forward_prefix_revisions_from_z(
                     model.context_transformer,
                     z_pad[win_idx_2d],
                     mask_2d,
+                    self_padded=(
+                        self_pad[win_idx_2d] if self_pad is not None else None
+                    ),
                     causal_override=False,
                     target_col_idx=target_col_t,
                 )

@@ -107,9 +107,14 @@ def build_adamw_for_modules(modules, config):
 
     raw_swiglu_wd = config.get("neighbor_swiglu_weight_decay")
     swiglu_wd = None if raw_swiglu_wd is None else float(raw_swiglu_wd)
+    raw_decollapse_wd = config.get("self_decollapse_weight_decay")
+    decollapse_wd = (
+        None if raw_decollapse_wd is None else float(raw_decollapse_wd)
+    )
 
     decay_params = []
     swiglu_decay_params = []
+    decollapse_decay_params = []
     no_decay_params = []
     seen = set()
     for module in modules:
@@ -120,14 +125,25 @@ def build_adamw_for_modules(modules, config):
             if not parameter.requires_grad or identifier in seen:
                 continue
             seen.add(identifier)
+            lowered_name = str(name).lower()
             if _is_no_decay_parameter(name, parameter):
                 no_decay_params.append(parameter)
-            elif swiglu_wd is not None and "neighbor_swiglu" in str(name).lower():
+            elif swiglu_wd is not None and "neighbor_swiglu" in lowered_name:
                 swiglu_decay_params.append(parameter)
+            elif (
+                decollapse_wd is not None
+                and "self_decollapse" in lowered_name
+            ):
+                decollapse_decay_params.append(parameter)
             else:
                 decay_params.append(parameter)
 
-    if not decay_params and not swiglu_decay_params and not no_decay_params:
+    if (
+        not decay_params
+        and not swiglu_decay_params
+        and not decollapse_decay_params
+        and not no_decay_params
+    ):
         raise ValueError("没有可训练参数。")
     param_groups = []
     if decay_params:
@@ -135,6 +151,10 @@ def build_adamw_for_modules(modules, config):
     if swiglu_decay_params:
         param_groups.append(
             {"params": swiglu_decay_params, "weight_decay": swiglu_wd}
+        )
+    if decollapse_decay_params:
+        param_groups.append(
+            {"params": decollapse_decay_params, "weight_decay": decollapse_wd}
         )
     if no_decay_params:
         param_groups.append({"params": no_decay_params, "weight_decay": 0.0})

@@ -162,6 +162,7 @@ def _run_fast_padded_transformer(
     padded: torch.Tensor,
     mask: torch.Tensor,
     *,
+    self_padded: torch.Tensor | None = None,
     causal_override: bool | None = None,
     target_col_idx: torch.Tensor | None = None,
     target_group_idx: torch.Tensor | None = None,
@@ -178,16 +179,17 @@ def _run_fast_padded_transformer(
        仅对目标词位 [Q] 计算 Query、输出投影与 FeedForward，省去末层 80% 冗余计算并直接返回 [Q, D]。
     """
     if bool(getattr(ctx, "is_salience_gated_additive", False)):
-        return ctx.forward_padded(
-            padded,
-            mask,
-            causal_override=causal_override,
-            target_col_idx=target_col_idx,
-            target_group_idx=target_group_idx,
-            num_branches=num_branches,
-            synchronize_dropout_rng=synchronize_dropout_rng,
-            shared_dropout_fn=_apply_siamese_shared_dropout,
-        )
+        fwd_kwargs = {
+            "causal_override": causal_override,
+            "target_col_idx": target_col_idx,
+            "target_group_idx": target_group_idx,
+            "num_branches": num_branches,
+            "synchronize_dropout_rng": synchronize_dropout_rng,
+            "shared_dropout_fn": _apply_siamese_shared_dropout,
+        }
+        if bool(getattr(ctx, "uses_pre_head_features", False)):
+            fwd_kwargs["self_padded"] = self_padded
+        return ctx.forward_padded(padded, mask, **fwd_kwargs)
     soft_max_norm = getattr(ctx, "soft_bounded_residual_max_norm", None)
     use_causal_attention = (
         ctx.causal_attention

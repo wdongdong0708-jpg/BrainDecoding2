@@ -919,6 +919,202 @@ def build_spliced_real_onset_dataset(
     return dataset, audit
 
 
+def _shannon_effective_rank(eigenvalues: np.ndarray) -> float:
+    """根据对称协方差矩阵非负特征值计算香农有效秩 exp(-sum p_i log p_i)。"""
+    vals = np.asarray(eigenvalues, dtype=np.float64)
+    vals = vals[np.isfinite(vals) & (vals > 1e-12)]
+    if len(vals) == 0:
+        return float("nan")
+    total = float(vals.sum())
+    if total <= 1e-12:
+        return float("nan")
+    probs = vals / total
+    entropy = -float(np.sum(probs * np.log(probs)))
+    return float(math.exp(entropy))
+
+
+def compute_representation_health_and_noise_anatomy(
+    predictions: torch.Tensor | np.ndarray,
+    words: Sequence[str],
+    recording_ids: Sequence[str],
+    sentence_indices: torch.Tensor | np.ndarray | Sequence[int],
+    onset_seconds: np.ndarray | Sequence[float],
+    *,
+    eval_mask: np.ndarray | None = None,
+    min_gap_seconds: float = DEFAULT_MIN_NON_OVERLAP_GAP_SECONDS,
+    rec_drift_min_gap_seconds: float = 30.0,
+    device: torch.device | None = None,
+) -> dict[str, float | int]:
+    """计算第一阶梯 6 闸门表征健康度与噪声解剖：EffRank(N)、零重叠 EffRank(S)、r_in、Lag1/2/5 与 Rec30。"""
+    preds_np = (
+        predictions.detach().cpu().numpy().astype(np.float32, copy=False)
+        if isinstance(predictions, torch.Tensor)
+        else np.asarray(predictions, dtype=np.float32)
+    )
+    n_total = int(len(preds_np))
+    if eval_mask is not None:
+        mask = np.asarray(eval_mask, dtype=bool)
+    else:
+        mask = np.ones(n_total, dtype=bool)
+
+    x_sub = preds_np[mask]
+    n_rows = int(len(x_sub))
+    if n_rows < 4:
+        return {
+            "eff_rank_total": float("nan"),
+            "eff_rank_signal": float("nan"),
+            "r_within_zero_overlap": float("nan"),
+            "same_word_pair_count": 0,
+            "lag1_corr": float("nan"),
+            "lag2_corr": float("nan"),
+            "lag5_corr": float("nan"),
+            "rec30_diff_word_corr": float("nan"),
+        }
+
+    words_sub = np.asarray(
+        [str(w) for w, keep in zip(words, mask) if keep], dtype=object
+    )
+    recs_sub = np.asarray(
+        [str(r) for r, keep in zip(recording_ids, mask) if keep], dtype=object
+    )
+    sent_all = (
+        sentence_indices.detach().cpu().numpy()
+        if isinstance(sentence_indices, torch.Tensor)
+        else np.asarray(sentence_indices)
+    )
+    sent_sub = sent_all[mask].astype(np.int64, copy=False)
+    onset_sub = np.asarray(onset_seconds, dtype=np.float64)[mask]
+
+    run_dev = (
+        device
+        if (device is not None and device.type == "cuda")
+        else torch.device("cpu")
+    )
+    x_t = torch.from_numpy(x_sub).to(device=run_dev, dtype=torch.float32)
+    x_centered = x_t - x_t.mean(dim=0, keepdim=True)
+
+    # 1. 总协方差有效秩 EffRank(N)
+    cov_n = (x_centered.t() @ x_centered) / float(n_rows)
+    cov_n = 0.5 * (cov_n + cov_n.t())
+    eig_n = torch.linalg.eigvalsh(cov_n.double()).cpu().numpy()
+    eff_rank_n = _shannon_effective_rank(eig_n)
+
+    # 2. 严格零重叠同词对 (|dt| >= min_gap_seconds 或跨录音) 的信号协方差有效秩 EffRank(S) 与 r_in
+    by_word: dict[str, list[int]] = {}
+    for idx, w in enumerate(words_sub):
+        by_word.setdefault(str(w), []).append(idx)
+
+    pair_a: list[int] = []
+    pair_b: list[int] = []
+    for rows_w in by_word.values():
+        n_w = len(rows_w)
+        if n_w < 2:
+            continue
+        half = max(1, n_w // 2)
+        probe_offsets = (half, half + 1, 1, n_w - 1)
+        for pos_i, idx_a in enumerate(rows_w):
+            rec_a = recs_sub[idx_a]
+            on_a = onset_sub[idx_a]
+            picked_b = -1
+            for off in probe_offsets:
+                idx_b = rows_w[(pos_i + off) % n_w]
+                if idx_b == idx_a:
+                    continue
+                if rec_a != recs_sub[idx_b] or (
+                    np.isfinite(on_a)
+                    and np.isfinite(onset_sub[idx_b])
+                    and abs(on_a - onset_sub[idx_b]) >= float(min_gap_seconds)
+                ):
+                    picked_b = idx_b
+                    break
+            if picked_b >= 0:
+                pair_a.append(idx_a)
+                pair_b.append(picked_b)
+
+    x_unit = torch.nn.functional.normalize(x_centered, dim=-1, eps=1e-8)
+    if len(pair_a) >= 4:
+        a_t = torch.as_tensor(pair_a, device=run_dev, dtype=torch.long)
+        b_t = torch.as_tensor(pair_b, device=run_dev, dtype=torch.long)
+        xa = x_centered.index_select(0, a_t)
+        xb = x_centered.index_select(0, b_t)
+        r_in = float(
+            (x_unit.index_select(0, a_t) * x_unit.index_select(0, b_t))
+            .sum(dim=-1)
+            .mean()
+            .item()
+        )
+        cov_s = 0.5 * ((xa.t() @ xb) + (xb.t() @ xa)) / float(len(pair_a))
+        cov_s = 0.5 * (cov_s + cov_s.t())
+        eig_s = torch.linalg.eigvalsh(cov_s.double()).cpu().numpy()
+        eff_rank_s = _shannon_effective_rank(eig_s)
+    else:
+        r_in = float("nan")
+        eff_rank_s = float("nan")
+
+    # 3. 句内 Lag-1 / Lag-2 / Lag-5 中心化余弦自相关
+    sent_t = torch.from_numpy(sent_sub).to(device=run_dev, dtype=torch.long)
+    lag_corrs: dict[int, float] = {}
+    for lag in (1, 2, 5):
+        if n_rows > lag:
+            same_s = sent_t[:-lag] == sent_t[lag:]
+            if bool(same_s.any()):
+                dots = (x_unit[:-lag] * x_unit[lag:]).sum(dim=-1)
+                lag_corrs[lag] = float(dots[same_s].mean().item())
+            else:
+                lag_corrs[lag] = float("nan")
+        else:
+            lag_corrs[lag] = float("nan")
+
+    # 4. 同录音异词 >= 30s 慢波/头位漂移残余相关性 Rec30
+    by_rec: dict[str, list[int]] = {}
+    for idx, r_id in enumerate(recs_sub):
+        by_rec.setdefault(str(r_id), []).append(idx)
+    rng = np.random.default_rng(0)
+    rec_a_list: list[int] = []
+    rec_b_list: list[int] = []
+    for rows_r in by_rec.values():
+        m_r = len(rows_r)
+        if m_r < 8:
+            continue
+        rows_arr = np.asarray(rows_r, dtype=np.int64)
+        sample_n = min(3000, m_r * 2)
+        ia = rows_arr[rng.integers(0, m_r, size=sample_n)]
+        ib = rows_arr[rng.integers(0, m_r, size=sample_n)]
+        ok = (
+            (ia != ib)
+            & (words_sub[ia] != words_sub[ib])
+            & np.isfinite(onset_sub[ia])
+            & np.isfinite(onset_sub[ib])
+            & (np.abs(onset_sub[ia] - onset_sub[ib]) >= float(rec_drift_min_gap_seconds))
+        )
+        if np.any(ok):
+            rec_a_list.extend(ia[ok].tolist())
+            rec_b_list.extend(ib[ok].tolist())
+
+    if len(rec_a_list) >= 4:
+        ra_t = torch.as_tensor(rec_a_list, device=run_dev, dtype=torch.long)
+        rb_t = torch.as_tensor(rec_b_list, device=run_dev, dtype=torch.long)
+        rec30_corr = float(
+            (x_unit.index_select(0, ra_t) * x_unit.index_select(0, rb_t))
+            .sum(dim=-1)
+            .mean()
+            .item()
+        )
+    else:
+        rec30_corr = float("nan")
+
+    return {
+        "eff_rank_total": float(eff_rank_n),
+        "eff_rank_signal": float(eff_rank_s),
+        "r_within_zero_overlap": float(r_in),
+        "same_word_pair_count": int(len(pair_a)),
+        "lag1_corr": float(lag_corrs[1]),
+        "lag2_corr": float(lag_corrs[2]),
+        "lag5_corr": float(lag_corrs[5]),
+        "rec30_diff_word_corr": float(rec30_corr),
+    }
+
+
 def _summarize_retrieval_slice(
     ranks: np.ndarray,
     words: Sequence[str],
@@ -1009,6 +1205,17 @@ def _evaluate_clean_predictions_diagnostics(
         cov_ioi = ioi_sub[covered]
         cov_prev_ioi = prev_ioi_sub[covered]
         cov_top_idx = top_idx[covered]
+        unique_top1_count = (
+            int(len(np.unique(cov_top_idx[:, 0])))
+            if len(cov_top_idx) > 0
+            else 0
+        )
+        retrieval["unique_top1_count"] = unique_top1_count
+        retrieval["unique_top1_ratio"] = (
+            float(unique_top1_count) / float(len(cand_words))
+            if len(cand_words) > 0
+            else float("nan")
+        )
 
         dur_prior = train_priors["acoustic_duration"]
         ioi_prior = train_priors["inter_onset_interval"]
@@ -1270,6 +1477,12 @@ def run_duration_shortcut_diagnostics(
     eval_prev_ioi_ms = extract_prev_inter_onset_interval_ms(
         clean_eval_ds.table, group_col=RUNTIME_CONTEXT_COLUMN
     )
+    eval_onset_col = (
+        "onset_seconds" if "onset_seconds" in clean_eval_ds.table.columns else "开始时间"
+    )
+    eval_onset_seconds = pd.to_numeric(
+        clean_eval_ds.table[eval_onset_col], errors="coerce"
+    ).to_numpy(dtype=np.float64)
     eval_words = clean_eval_ds.table["normalized_word"].astype(str).tolist()
     dur_oracle_n50 = compute_duration_oracle_n50(
         eval_words, eval_dur_ms, vocab50, train_priors["acoustic_duration"]
@@ -1426,6 +1639,17 @@ def run_duration_shortcut_diagnostics(
                 device=device,
                 prev_ioi_ms=eval_prev_ioi_ms,
             )
+            repr_health = compute_representation_health_and_noise_anatomy(
+                h_preds,
+                clean_encoded["words"],
+                clean_encoded["recording_ids"],
+                clean_encoded["sentence_indices"],
+                eval_onset_seconds,
+                eval_mask=h_common_mask,
+                min_gap_seconds=min_gap_seconds,
+                device=device,
+            )
+            clean_diag["representation_health"] = repr_health
 
             spliced_diag: dict[str, Any] = {}
             for splice_mode, (sp_ds, _, sp_audit) in spliced_bundles.items():
@@ -1489,7 +1713,19 @@ def run_duration_shortcut_diagnostics(
                     "clean_n50_mac10": n50_clean["macro_top10"],
                     "clean_n50_mac1": n50_clean["macro_top1"],
                     "clean_fv_mic10": fv_clean["micro_top10"],
+                    "clean_fv_mac10": fv_clean["macro_top10"],
                     "clean_fv_med": fv_clean["median_rank"],
+                    "clean_fv_utop1": fv_clean.get("unique_top1_count", 0),
+                    "clean_fv_utop1_ratio": fv_clean.get(
+                        "unique_top1_ratio", float("nan")
+                    ),
+                    "eff_rank_signal": repr_health["eff_rank_signal"],
+                    "eff_rank_total": repr_health["eff_rank_total"],
+                    "r_within_zero_overlap": repr_health["r_within_zero_overlap"],
+                    "lag1_corr": repr_health["lag1_corr"],
+                    "lag2_corr": repr_health["lag2_corr"],
+                    "lag5_corr": repr_health["lag5_corr"],
+                    "rec30_diff_word_corr": repr_health["rec30_diff_word_corr"],
                     "fig2b_n50_dur_err_red_ms": f2b_n50_dur["error_reduction_micro_ms"],
                     "fig2b_n50_ioi_err_red_ms": f2b_n50_ioi["error_reduction_micro_ms"],
                     "fig2b_n50_prev_ioi_err_red_ms": f2b_n50_prev_ioi["error_reduction_micro_ms"],
@@ -1666,6 +1902,33 @@ def format_diagnostics_table(report: Mapping[str, Any]) -> str:
                 f"{_fmt_num(row.get('fig2b_fv_prev_ioi_err_red_ms', float('nan')), '+7.2f'):>10s} "
                 f"{_fmt_num(row.get('fig2b_fv_prev_ioi_within_r', float('nan')), '+7.3f'):>10s} "
                 f"{_fmt_num(row.get('clean_fv_prev_ioi_fast_slow_shift_ms', float('nan')), '+8.2f'):>9s}"
+            )
+    if any("eff_rank_signal" in r for r in report["summary_table"]):
+        lines.append("-" * 124)
+        lines.append(
+            " [Part D] Representation Health & Noise Anatomy (6-Gate Anti-Mirage Scorecard: FV Macro / UTop1 / EffRank(S,N) / Lag / Rec30)"
+        )
+        header_health = (
+            f"{'Model / Horizon':24s} | {'FV Mac10':>8s} {'UTop1':>6s} | "
+            f"{'EffR(S)':>7s} {'EffR(N)':>7s} {'r_in':>7s} | "
+            f"{'Lag1':>7s} {'Lag2':>7s} {'Lag5':>7s} {'Rec30':>7s}"
+        )
+        lines.append(header_health)
+        lines.append("-" * 124)
+        for row in report["summary_table"]:
+            utop1_val = row.get("clean_fv_utop1")
+            utop1_str = f"{int(utop1_val):6d}" if utop1_val is not None else "   —  "
+            lines.append(
+                f"{str(row['model'])[:24]:24s} | "
+                f"{_fmt_pct(row.get('clean_fv_mac10', float('nan'))):>8s} "
+                f"{utop1_str} | "
+                f"{_fmt_num(row.get('eff_rank_signal', float('nan')), '7.1f'):>7s} "
+                f"{_fmt_num(row.get('eff_rank_total', float('nan')), '7.1f'):>7s} "
+                f"{_fmt_num(row.get('r_within_zero_overlap', float('nan')), '+7.4f'):>7s} | "
+                f"{_fmt_num(row.get('lag1_corr', float('nan')), '+7.4f'):>7s} "
+                f"{_fmt_num(row.get('lag2_corr', float('nan')), '+7.4f'):>7s} "
+                f"{_fmt_num(row.get('lag5_corr', float('nan')), '+7.4f'):>7s} "
+                f"{_fmt_num(row.get('rec30_diff_word_corr', float('nan')), '+7.4f'):>7s}"
             )
     lines.append("=" * 124)
     lines.append(

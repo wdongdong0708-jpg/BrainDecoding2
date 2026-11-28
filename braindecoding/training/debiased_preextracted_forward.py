@@ -24,6 +24,8 @@ def forward_revision_from_preextracted(
     group_indices: torch.Tensor,
     *,
     shifted_z_batches: list[torch.Tensor] | None = None,
+    clean_self_batch: torch.Tensor | None = None,
+    shifted_self_batches: list[torch.Tensor] | None = None,
     cutoff_generator=None,
     cutoff_policy: str = "all",
     synchronize_dropout_rng: bool = True,
@@ -56,12 +58,27 @@ def forward_revision_from_preextracted(
         if "clean_padded" in plan:
             clean_padded = plan["clean_padded"]
             shifted_padded_list = plan.get("shifted_padded_list")
+            clean_self_padded = plan.get("clean_self_padded")
+            shifted_self_padded_list = plan.get("shifted_self_padded_list")
         else:
             win_idx_2d = plan["win_idx_2d"]
             clean_padded = F.pad(clean_z_batch, (0, 0, 0, 1))[win_idx_2d]
             shifted_padded_list = (
                 [F.pad(shift_z, (0, 0, 0, 1))[win_idx_2d] for shift_z in shifted_z_batches]
                 if shifted_z_batches
+                else None
+            )
+            clean_self_padded = (
+                F.pad(clean_self_batch, (0, 0, 0, 1))[win_idx_2d]
+                if clean_self_batch is not None
+                else None
+            )
+            shifted_self_padded_list = (
+                [
+                    F.pad(shift_s, (0, 0, 0, 1))[win_idx_2d]
+                    for shift_s in shifted_self_batches
+                ]
+                if shifted_self_batches
                 else None
             )
 
@@ -74,6 +91,7 @@ def forward_revision_from_preextracted(
                 model.context_transformer,
                 clean_padded,
                 mask_2d,
+                self_padded=clean_self_padded,
                 causal_override=False,
                 target_col_idx=target_col_idx,
                 target_group_idx=base_target_group,
@@ -87,11 +105,11 @@ def forward_revision_from_preextracted(
             model.context_transformer, use_causal_attention=False
         ):
             num_shifts = len(shifted_padded_list)
-            # 当启用梯度且 M > 1 时，机制 1 (y_tilde) 对 y_shift_mean 施加了 .detach()，
-            # 只有机制 2 (L_null / L_delta_null) 对错位分支求导。因此仅需将 1 个随机错位分支与 Clean
-            # 合并做带梯度前反向传播（num_branches=2），其余 M-1 个错位分支在 torch.no_grad()
-            # 下共享相同 Dropout RNG 前向计算，通过直通均值估计器 (Straight-Through Mean)
-            # 保证前向 100% 精确等于 M 分支均值、反向提供 L_null 与 L_delta_null 的无偏梯度估计，消去 5/6 错位反向耗时。
+            has_self_shifts = bool(
+                clean_self_padded is not None
+                and shifted_self_padded_list is not None
+                and len(shifted_self_padded_list) == num_shifts
+            )
             if torch.is_grad_enabled() and (
                 not compute_null_grad or num_shifts > 1
             ):
@@ -115,6 +133,7 @@ def forward_revision_from_preextracted(
                         model.context_transformer,
                         clean_padded,
                         mask_2d,
+                        self_padded=clean_self_padded,
                         causal_override=False,
                         target_col_idx=target_col_idx,
                         target_group_idx=base_target_group,
@@ -122,6 +141,11 @@ def forward_revision_from_preextracted(
                         synchronize_dropout_rng=synchronize_dropout_rng,
                     )
                     y_clean = F.normalize(clean_out, dim=-1)
+                    shift_self_cat = (
+                        torch.cat(shifted_self_padded_list, dim=0)
+                        if has_self_shifts
+                        else None
+                    )
                     with torch.no_grad():
                         if synchronize_dropout_rng and cpu_rng_state is not None:
                             with torch.random.fork_rng(devices=fork_devices):
@@ -134,6 +158,7 @@ def forward_revision_from_preextracted(
                                     model.context_transformer,
                                     torch.cat(shifted_padded_list, dim=0),
                                     mask_2d.repeat(num_shifts, 1),
+                                    self_padded=shift_self_cat,
                                     causal_override=False,
                                     target_col_idx=target_col_idx.repeat(
                                         num_shifts
@@ -149,6 +174,7 @@ def forward_revision_from_preextracted(
                                 model.context_transformer,
                                 torch.cat(shifted_padded_list, dim=0),
                                 mask_2d.repeat(num_shifts, 1),
+                                self_padded=shift_self_cat,
                                 causal_override=False,
                                 target_col_idx=target_col_idx.repeat(num_shifts),
                                 target_group_idx=_repeat_target_group_idx(
@@ -174,10 +200,18 @@ def forward_revision_from_preextracted(
                 grad_padded = torch.cat(
                     [clean_padded, shifted_padded_list[0]], dim=0
                 )
+                grad_self_padded = (
+                    torch.cat(
+                        [clean_self_padded, shifted_self_padded_list[0]], dim=0
+                    )
+                    if has_self_shifts
+                    else None
+                )
                 grad_out = _run_fast_padded_transformer(
                     model.context_transformer,
                     grad_padded,
                     mask_2d.repeat(2, 1),
+                    self_padded=grad_self_padded,
                     causal_override=False,
                     target_col_idx=target_col_idx.repeat(2),
                     target_group_idx=_repeat_target_group_idx(
@@ -186,7 +220,7 @@ def forward_revision_from_preextracted(
                     num_branches=2,
                     synchronize_dropout_rng=synchronize_dropout_rng,
                 )
-                del grad_padded
+                del grad_padded, grad_self_padded
                 grad_norm = F.normalize(grad_out, dim=-1).view(2, q_len, -1)
                 del grad_out
                 y_clean = grad_norm[0]
@@ -194,6 +228,9 @@ def forward_revision_from_preextracted(
 
                 num_rest = num_shifts - 1
                 rest_branches = shifted_padded_list[1:]
+                rest_self_branches = (
+                    shifted_self_padded_list[1:] if has_self_shifts else None
+                )
                 max_seq_len = int(clean_padded.shape[1])
                 chunk_b = (
                     2
@@ -210,6 +247,17 @@ def forward_revision_from_preextracted(
                             if c_num == 1
                             else torch.cat(c_slice, dim=0)
                         )
+                        if rest_self_branches is not None:
+                            cs_slice = rest_self_branches[
+                                c_start : c_start + chunk_b
+                            ]
+                            c_self_padded = (
+                                cs_slice[0]
+                                if c_num == 1
+                                else torch.cat(cs_slice, dim=0)
+                            )
+                        else:
+                            c_self_padded = None
                         c_mask = (
                             mask_2d if c_num == 1 else mask_2d.repeat(c_num, 1)
                         )
@@ -232,6 +280,7 @@ def forward_revision_from_preextracted(
                                     model.context_transformer,
                                     c_padded,
                                     c_mask,
+                                    self_padded=c_self_padded,
                                     causal_override=False,
                                     target_col_idx=c_tcol,
                                     target_group_idx=c_tgrp,
@@ -243,13 +292,14 @@ def forward_revision_from_preextracted(
                                 model.context_transformer,
                                 c_padded,
                                 c_mask,
+                                self_padded=c_self_padded,
                                 causal_override=False,
                                 target_col_idx=c_tcol,
                                 target_group_idx=c_tgrp,
                                 num_branches=c_num,
                                 synchronize_dropout_rng=False,
                             )
-                        del c_padded
+                        del c_padded, c_self_padded
                         rest_norm_chunks.append(
                             F.normalize(c_out, dim=-1).view(c_num, q_len, -1)
                         )
@@ -282,6 +332,11 @@ def forward_revision_from_preextracted(
 
             num_branches = 1 + num_shifts
             all_padded = torch.cat([clean_padded, *shifted_padded_list], dim=0)
+            all_self_padded = (
+                torch.cat([clean_self_padded, *shifted_self_padded_list], dim=0)
+                if has_self_shifts
+                else None
+            )
             all_mask = mask_2d.repeat(num_branches, 1)
             all_target_col = target_col_idx.repeat(num_branches)
             all_target_group = _repeat_target_group_idx(
@@ -291,6 +346,7 @@ def forward_revision_from_preextracted(
                 model.context_transformer,
                 all_padded,
                 all_mask,
+                self_padded=all_self_padded,
                 causal_override=False,
                 target_col_idx=all_target_col,
                 target_group_idx=all_target_group,
@@ -465,6 +521,8 @@ def forward_context_from_preextracted(
     group_indices: torch.Tensor,
     *,
     shifted_z_batches: list[torch.Tensor] | None = None,
+    clean_self_batch: torch.Tensor | None = None,
+    shifted_self_batches: list[torch.Tensor] | None = None,
     synchronize_dropout_rng: bool = True,
     padded_plan: dict[str, torch.Tensor] | None = None,
     compute_null_grad: bool = True,
@@ -486,9 +544,17 @@ def forward_context_from_preextracted(
         row_to_col = plan["row_to_col"]
 
         clean_padded = F.pad(clean_z_batch, (0, 0, 0, 1))[win_idx_2d]
+        clean_self_padded = (
+            F.pad(clean_self_batch, (0, 0, 0, 1))[win_idx_2d]
+            if clean_self_batch is not None
+            else None
+        )
         if not shifted_z_batches:
             clean_encoded = _run_fast_padded_transformer(
-                model.context_transformer, clean_padded, mask_2d
+                model.context_transformer,
+                clean_padded,
+                mask_2d,
+                self_padded=clean_self_padded,
             )
             y_clean = F.normalize(
                 clean_encoded[row_to_group, row_to_col], dim=-1
@@ -507,7 +573,20 @@ def forward_context_from_preextracted(
                 F.pad(shift_z, (0, 0, 0, 1))[win_idx_2d]
                 for shift_z in shifted_z_batches
             ]
+            shifted_self_padded_list = (
+                [
+                    F.pad(shift_s, (0, 0, 0, 1))[win_idx_2d]
+                    for shift_s in shifted_self_batches
+                ]
+                if shifted_self_batches
+                else None
+            )
             num_shifts = len(shifted_padded_list)
+            has_self_shifts = bool(
+                clean_self_padded is not None
+                and shifted_self_padded_list is not None
+                and len(shifted_self_padded_list) == num_shifts
+            )
             g_len = int(clean_padded.shape[0])
             max_len = int(clean_padded.shape[1])
 
@@ -534,11 +613,17 @@ def forward_context_from_preextracted(
                         model.context_transformer,
                         clean_padded,
                         mask_2d,
+                        self_padded=clean_self_padded,
                         num_branches=1,
                         synchronize_dropout_rng=synchronize_dropout_rng,
                     )
                     y_clean = F.normalize(
                         clean_encoded[row_to_group, row_to_col], dim=-1
+                    )
+                    shift_self_cat = (
+                        torch.cat(shifted_self_padded_list, dim=0)
+                        if has_self_shifts
+                        else None
                     )
                     with torch.no_grad():
                         if synchronize_dropout_rng and cpu_rng_state is not None:
@@ -552,6 +637,7 @@ def forward_context_from_preextracted(
                                     model.context_transformer,
                                     torch.cat(shifted_padded_list, dim=0),
                                     mask_2d.repeat(num_shifts, 1),
+                                    self_padded=shift_self_cat,
                                     num_branches=num_shifts,
                                     synchronize_dropout_rng=synchronize_dropout_rng,
                                 ).view(num_shifts, g_len, max_len, -1)
@@ -560,6 +646,7 @@ def forward_context_from_preextracted(
                                 model.context_transformer,
                                 torch.cat(shifted_padded_list, dim=0),
                                 mask_2d.repeat(num_shifts, 1),
+                                self_padded=shift_self_cat,
                                 num_branches=num_shifts,
                                 synchronize_dropout_rng=False,
                             ).view(num_shifts, g_len, max_len, -1)
@@ -571,13 +658,22 @@ def forward_context_from_preextracted(
                         return y_clean, y_shift_mean, y_shift_branches
                     return y_clean, y_shift_mean
 
+                grad_self_padded = (
+                    torch.cat(
+                        [clean_self_padded, shifted_self_padded_list[0]], dim=0
+                    )
+                    if has_self_shifts
+                    else None
+                )
                 grad_encoded = _run_fast_padded_transformer(
                     model.context_transformer,
                     torch.cat([clean_padded, shifted_padded_list[0]], dim=0),
                     mask_2d.repeat(2, 1),
+                    self_padded=grad_self_padded,
                     num_branches=2,
                     synchronize_dropout_rng=synchronize_dropout_rng,
                 ).view(2, g_len, max_len, -1)
+                del grad_self_padded
                 grad_norm = F.normalize(
                     grad_encoded[:, row_to_group, row_to_col], dim=-1
                 )
@@ -587,6 +683,9 @@ def forward_context_from_preextracted(
 
                 num_rest = num_shifts - 1
                 rest_branches = shifted_padded_list[1:]
+                rest_self_branches = (
+                    shifted_self_padded_list[1:] if has_self_shifts else None
+                )
                 chunk_b = (
                     2
                     if (num_rest > 2 and num_rest * g_len * max_len > 16384)
@@ -602,6 +701,17 @@ def forward_context_from_preextracted(
                             if c_num == 1
                             else torch.cat(c_slice, dim=0)
                         )
+                        if rest_self_branches is not None:
+                            cs_slice = rest_self_branches[
+                                c_start : c_start + chunk_b
+                            ]
+                            c_self_padded = (
+                                cs_slice[0]
+                                if c_num == 1
+                                else torch.cat(cs_slice, dim=0)
+                            )
+                        else:
+                            c_self_padded = None
                         c_mask = (
                             mask_2d if c_num == 1 else mask_2d.repeat(c_num, 1)
                         )
@@ -616,6 +726,7 @@ def forward_context_from_preextracted(
                                     model.context_transformer,
                                     c_padded,
                                     c_mask,
+                                    self_padded=c_self_padded,
                                     num_branches=c_num,
                                     synchronize_dropout_rng=synchronize_dropout_rng,
                                 ).view(c_num, g_len, max_len, -1)
@@ -624,10 +735,11 @@ def forward_context_from_preextracted(
                                 model.context_transformer,
                                 c_padded,
                                 c_mask,
+                                self_padded=c_self_padded,
                                 num_branches=c_num,
                                 synchronize_dropout_rng=False,
                             ).view(c_num, g_len, max_len, -1)
-                        del c_padded
+                        del c_padded, c_self_padded
                         rest_norm_chunks.append(
                             F.normalize(
                                 c_encoded[:, row_to_group, row_to_col], dim=-1
@@ -656,11 +768,17 @@ def forward_context_from_preextracted(
 
             num_branches = 1 + num_shifts
             all_padded = torch.cat([clean_padded, *shifted_padded_list], dim=0)
+            all_self_padded = (
+                torch.cat([clean_self_padded, *shifted_self_padded_list], dim=0)
+                if has_self_shifts
+                else None
+            )
             all_mask = mask_2d.repeat(num_branches, 1)
             all_encoded = _run_fast_padded_transformer(
                 model.context_transformer,
                 all_padded,
                 all_mask,
+                self_padded=all_self_padded,
                 num_branches=num_branches,
                 synchronize_dropout_rng=synchronize_dropout_rng,
             ).view(num_branches, g_len, max_len, -1)

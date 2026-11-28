@@ -749,6 +749,317 @@ def train_one_epoch(
 
 
 @torch.inference_mode()
+def _encode_loader_with_session_calibration(
+    model,
+    loader,
+    device,
+    *,
+    use_amp: bool,
+    resolved_dtype: torch.dtype,
+    subject_index_map=None,
+    show_progress: bool = False,
+    progress_desc: str | None = None,
+) -> dict:
+    """两步无泄漏因果在线会话校准推理（与预提取验证编码严格逐位一致，同时兼容零重叠拼接数据集）。"""
+    model.eval()
+    ctx = getattr(model, "context_transformer", None)
+    assert ctx is not None
+    local_context_radius = int(getattr(model, "local_context_radius", 1))
+    prefix_revision_enabled = bool(
+        getattr(model, "prefix_revision_enabled", False)
+    )
+    dataset_obj = getattr(loader, "dataset", None)
+    is_spliced = bool(
+        dataset_obj is not None
+        and hasattr(dataset_obj, "base_dataset")
+        and hasattr(dataset_obj, "donor_indices")
+        and hasattr(dataset_obj, "group_ids")
+    )
+
+    if is_spliced:
+        base_ds = dataset_obj.base_dataset
+        donor_indices = torch.as_tensor(
+            dataset_obj.donor_indices, dtype=torch.long
+        )
+        eval_bs = int(
+            getattr(loader, "batch_size", None)
+            or getattr(getattr(loader, "batch_sampler", None), "batch_size", None)
+            or 512
+        )
+        base_loader = DataLoader(
+            base_ds,
+            batch_size=max(1, eval_bs),
+            shuffle=False,
+            num_workers=0,
+            pin_memory=(device.type == "cuda"),
+        )
+        base_z_chunks: list[torch.Tensor] = []
+        base_h_pre_chunks: list[torch.Tensor] = []
+        base_h_bins_chunks: list[torch.Tensor] = []
+        base_targets_chunks: list[torch.Tensor] = []
+        base_subj_chunks: list[torch.Tensor] = []
+        base_onset_chunks: list[torch.Tensor] = []
+        base_words: list[str] = []
+        base_event_ids: list[str] = []
+        base_recording_ids: list[str] = []
+        iterable_b, pbar_b = _wrap_progress(
+            base_loader,
+            enabled=show_progress,
+            desc=(progress_desc or "Validating") + " [base Stage-1]",
+            total=len(base_loader),
+        )
+        try:
+            for batch in iterable_b:
+                meg, text_emb, subj_idx, _ = move_batch(batch, device)
+                if subject_index_map is not None:
+                    from braindecoding.subject_generalization import (
+                        remap_subject_indices,
+                    )
+
+                    subj_idx = remap_subject_indices(subj_idx, subject_index_map)
+                with torch.autocast(
+                    device_type=device.type,
+                    dtype=resolved_dtype,
+                    enabled=use_amp,
+                ):
+                    z_b, h_pre_b, h_bins_b = model.extract_stage1_features(
+                        meg, subj_idx
+                    )
+                base_z_chunks.append(z_b.float().cpu())
+                if h_pre_b is not None:
+                    base_h_pre_chunks.append(h_pre_b.float().cpu())
+                if h_bins_b is not None:
+                    base_h_bins_chunks.append(h_bins_b.float().cpu())
+                base_targets_chunks.append(text_emb.float().cpu())
+                base_subj_chunks.append(subj_idx.detach().cpu())
+                if "onset_seconds" in batch:
+                    base_onset_chunks.append(
+                        batch["onset_seconds"].detach().float().cpu()
+                    )
+                base_words.extend(str(w) for w in batch["word"])
+                base_event_ids.extend(str(v) for v in batch["event_id"])
+                base_recording_ids.extend(str(v) for v in batch["recording_id"])
+        finally:
+            if pbar_b is not None:
+                pbar_b.close()
+
+        base_z_all = torch.cat(base_z_chunks, dim=0)
+        base_h_pre_all = (
+            torch.cat(base_h_pre_chunks, dim=0) if base_h_pre_chunks else None
+        )
+        base_h_bins_all = (
+            torch.cat(base_h_bins_chunks, dim=0) if base_h_bins_chunks else None
+        )
+        base_subj_all = torch.cat(base_subj_chunks, dim=0)
+        base_onset_all = (
+            torch.cat(base_onset_chunks, dim=0)
+            if base_onset_chunks
+            else torch.arange(len(base_z_all), dtype=torch.float32) * 0.35
+        )
+        base_z_cal, base_self_cal = ctx.calibrate_stage1_features(
+            base_z_all,
+            base_h_pre_all,
+            base_h_bins_all,
+            recording_ids=base_recording_ids,
+            subject_indices=base_subj_all,
+            onset_seconds=base_onset_all,
+        )
+        base_targets_all = torch.cat(base_targets_chunks, dim=0)
+
+        # 按拼接数据集 batch_sampler 顺序提取每个供体在原始录音中因果校准后的 Stage-1 特征
+        all_z_cal = base_z_cal.index_select(0, donor_indices)
+        all_self_cal = (
+            base_self_cal.index_select(0, donor_indices)
+            if base_self_cal is not None
+            else None
+        )
+        all_targets = base_targets_all.index_select(0, donor_indices)
+        all_subj = base_subj_all.index_select(0, donor_indices)
+        all_sent = torch.as_tensor(dataset_obj.group_ids, dtype=torch.long)
+        all_onset = base_onset_all.index_select(0, donor_indices)
+        donor_list = donor_indices.tolist()
+        all_words = [base_words[d] for d in donor_list]
+        all_event_ids = [base_event_ids[d] for d in donor_list]
+        all_recording_ids = [base_recording_ids[d] for d in donor_list]
+
+        batch_index_lists = [list(b_idx) for b_idx in loader.batch_sampler]
+        order_flat = [i for b_idx in batch_index_lists for i in b_idx]
+        words = [all_words[i] for i in order_flat]
+        event_ids = [all_event_ids[i] for i in order_flat]
+        recording_ids = [all_recording_ids[i] for i in order_flat]
+        ordered_idx_t = torch.as_tensor(order_flat, dtype=torch.long)
+        targets_ordered = all_targets.index_select(0, ordered_idx_t)
+        subj_ordered = all_subj.index_select(0, ordered_idx_t)
+        sent_ordered = all_sent.index_select(0, ordered_idx_t)
+    else:
+        z_chunks: list[torch.Tensor] = []
+        h_pre_chunks: list[torch.Tensor] = []
+        h_bins_chunks: list[torch.Tensor] = []
+        targets_chunks: list[torch.Tensor] = []
+        subj_chunks: list[torch.Tensor] = []
+        sent_chunks: list[torch.Tensor] = []
+        onset_chunks: list[torch.Tensor] = []
+        words = []
+        event_ids = []
+        recording_ids = []
+        batch_slices: list[tuple[int, int]] = []
+        cursor = 0
+
+        iterable, pbar = _wrap_progress(
+            loader,
+            enabled=show_progress,
+            desc=progress_desc or "Validating",
+            total=len(loader),
+        )
+        try:
+            for batch in iterable:
+                meg, text_emb, subj_idx, sent_idx = move_batch(batch, device)
+                if subject_index_map is not None:
+                    from braindecoding.subject_generalization import (
+                        remap_subject_indices,
+                    )
+
+                    subj_idx = remap_subject_indices(subj_idx, subject_index_map)
+                with torch.autocast(
+                    device_type=device.type,
+                    dtype=resolved_dtype,
+                    enabled=use_amp,
+                ):
+                    z_b, h_pre_b, h_bins_b = model.extract_stage1_features(
+                        meg, subj_idx
+                    )
+                b_len = int(len(z_b))
+                batch_slices.append((cursor, cursor + b_len))
+                cursor += b_len
+                z_chunks.append(z_b.float().cpu())
+                if h_pre_b is not None:
+                    h_pre_chunks.append(h_pre_b.float().cpu())
+                if h_bins_b is not None:
+                    h_bins_chunks.append(h_bins_b.float().cpu())
+                targets_chunks.append(text_emb.float().cpu())
+                subj_chunks.append(subj_idx.detach().cpu())
+                sent_chunks.append(sent_idx.detach().cpu())
+                if "onset_seconds" in batch:
+                    onset_chunks.append(
+                        batch["onset_seconds"].detach().float().cpu()
+                    )
+                words.extend(str(w) for w in batch["word"])
+                event_ids.extend(str(v) for v in batch["event_id"])
+                recording_ids.extend(str(v) for v in batch["recording_id"])
+        finally:
+            if pbar is not None:
+                pbar.close()
+            if not bool(getattr(loader, "persistent_workers", False)):
+                shutdown_dataloader_iterator(loader)
+
+        raw_z_all = torch.cat(z_chunks, dim=0)
+        raw_h_pre_all = (
+            torch.cat(h_pre_chunks, dim=0) if h_pre_chunks else None
+        )
+        raw_h_bins_all = (
+            torch.cat(h_bins_chunks, dim=0) if h_bins_chunks else None
+        )
+        targets_ordered = torch.cat(targets_chunks, dim=0)
+        subj_ordered = torch.cat(subj_chunks, dim=0)
+        sent_ordered = torch.cat(sent_chunks, dim=0)
+        onset_ordered = (
+            torch.cat(onset_chunks, dim=0)
+            if onset_chunks
+            else torch.arange(len(raw_z_all), dtype=torch.float32) * 0.35
+        )
+        all_z_cal, all_self_cal = ctx.calibrate_stage1_features(
+            raw_z_all,
+            raw_h_pre_all,
+            raw_h_bins_all,
+            recording_ids=recording_ids,
+            subject_indices=subj_ordered,
+            onset_seconds=onset_ordered,
+        )
+        all_sent = sent_ordered
+        all_onset = onset_ordered
+        batch_index_lists = [list(range(s, e)) for s, e in batch_slices]
+
+    predictions: list[torch.Tensor] = []
+    internal_masks: list[torch.Tensor] = []
+    revision_predictions: dict[int, list[torch.Tensor]] = {}
+    revision_availability_masks: dict[int, list[torch.Tensor]] = {}
+    has_temporal_bias_head = (
+        getattr(model, "temporal_bias_head", None) is not None
+    )
+
+    for b_indices in batch_index_lists:
+        idx_cpu = torch.as_tensor(b_indices, dtype=torch.long)
+        z_batch = all_z_cal.index_select(0, idx_cpu).to(device, non_blocking=True)
+        self_batch = (
+            all_self_cal.index_select(0, idx_cpu).to(device, non_blocking=True)
+            if all_self_cal is not None
+            else None
+        )
+        sent_batch = all_sent.index_select(0, idx_cpu).to(device, non_blocking=True)
+        onset_batch = (
+            all_onset.index_select(0, idx_cpu).to(device, non_blocking=True)
+            if has_temporal_bias_head
+            else None
+        )
+        with torch.autocast(
+            device_type=device.type,
+            dtype=resolved_dtype,
+            enabled=use_amp,
+        ):
+            if prefix_revision_enabled:
+                batch_revisions = model.forward_prefix_revisions_from_stage1_features(
+                    z_batch,
+                    sent_batch,
+                    self_features=self_batch,
+                    onset_seconds=onset_batch,
+                )
+                batch_availability = model.revision_availability_masks(sent_batch)
+                for delay, pred in batch_revisions.items():
+                    revision_predictions.setdefault(int(delay), []).append(
+                        pred.float().cpu()
+                    )
+                    revision_availability_masks.setdefault(int(delay), []).append(
+                        batch_availability[delay].cpu()
+                    )
+                estimate = batch_revisions[max(batch_revisions)]
+            else:
+                estimate = model.forward_from_stage1_features(
+                    z_batch,
+                    sent_batch,
+                    self_features=self_batch,
+                    onset_seconds=onset_batch,
+                )
+        predictions.append(estimate.float().cpu())
+        internal_masks.append(
+            local_context_internal_mask(
+                sent_batch, radius=local_context_radius
+            ).cpu()
+        )
+
+    concatenated_internal_masks = torch.cat(internal_masks)
+    encoded = {
+        "predictions": torch.cat(predictions),
+        "targets": targets_ordered,
+        "words": words,
+        "event_ids": event_ids,
+        "recording_ids": recording_ids,
+        "subject_indices": subj_ordered,
+        "sentence_indices": sent_ordered,
+        "local_context_internal_mask": concatenated_internal_masks,
+        "three_state_internal_mask": concatenated_internal_masks,
+    }
+    if revision_predictions:
+        encoded["revision_predictions"] = {
+            delay: torch.cat(vals) for delay, vals in revision_predictions.items()
+        }
+        encoded["revision_availability_masks"] = {
+            delay: torch.cat(vals)
+            for delay, vals in revision_availability_masks.items()
+        }
+    return encoded
+
+
+@torch.inference_mode()
 def encode_loader(
     model,
     loader,
@@ -762,6 +1073,27 @@ def encode_loader(
     progress_desc=None,
 ):
     """编码完整数据划分并保留现有检索元数据。"""
+    resolved_dtype = resolve_amp_dtype(amp_dtype)
+    use_amp = (
+        bool(amp)
+        and device.type == "cuda"
+        and resolved_dtype in {torch.float16, torch.bfloat16}
+    )
+    if (
+        not evaluate_relation_auxiliary
+        and bool(getattr(model, "requires_session_calibration", False))
+    ):
+        return _encode_loader_with_session_calibration(
+            model,
+            loader,
+            device,
+            use_amp=use_amp,
+            resolved_dtype=resolved_dtype,
+            subject_index_map=subject_index_map,
+            show_progress=show_progress,
+            progress_desc=progress_desc,
+        )
+
     model.eval()
     predictions = []
     targets = []
@@ -778,12 +1110,6 @@ def encode_loader(
     relation_generator = torch.Generator(device="cpu")
     relation_generator.manual_seed(int(relation_seed))
     local_context_radius = int(getattr(model, "local_context_radius", 1))
-    resolved_dtype = resolve_amp_dtype(amp_dtype)
-    use_amp = (
-        bool(amp)
-        and device.type == "cuda"
-        and resolved_dtype in {torch.float16, torch.bfloat16}
-    )
     iterable, pbar = _wrap_progress(
         loader,
         enabled=show_progress,

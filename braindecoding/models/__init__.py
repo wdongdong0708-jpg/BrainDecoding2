@@ -41,7 +41,9 @@ from braindecoding.models.transformer import (
     PhysicalTimeGapBias,
     SalienceGatedAdditiveEncoder,
     SalienceGatedAdditiveV2Encoder,
+    SignedDeCollapseAdditiveEncoder,
     _local_attention_window_pre_hook,
+    apply_causal_session_calibration,
     build_context_encoder,
 )
 
@@ -68,6 +70,8 @@ __all__ = [
     "GroupedTransformerEncoder",
     "SalienceGatedAdditiveEncoder",
     "SalienceGatedAdditiveV2Encoder",
+    "SignedDeCollapseAdditiveEncoder",
+    "apply_causal_session_calibration",
     "build_context_encoder",
     "PreTransformerTrajectoryResidual",
     "RelationDiscriminationHead",

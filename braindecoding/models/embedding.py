@@ -13,6 +13,7 @@ from braindecoding.models.brain_encoder import (
 from braindecoding.models.transformer import (
     GroupedTransformerEncoder,
     SalienceGatedAdditiveEncoder,
+    SignedDeCollapseAdditiveEncoder,
     build_context_encoder,
 )
 
@@ -351,10 +352,31 @@ class BrainEmbeddingModel(nn.Module):
             raise ValueError(
                 "model.context_mode must be either 'grouped' or 'singleton'."
             )
+        transformer_cfg = dict(config.get("transformer", {}) or {})
+        transformer_arch = str(
+            transformer_cfg.get("architecture", "standard") or "standard"
+        ).strip().lower()
+        if transformer_arch in {
+            "signed_decollapse_additive",
+            "decollapse_signed_additive",
+            "op3a_v2",
+        }:
+            if "pre_head_dimension" not in transformer_cfg:
+                transformer_cfg["pre_head_dimension"] = int(
+                    getattr(
+                        self.brain_encoder,
+                        "pre_head_dimension",
+                        output_dimension,
+                    )
+                )
+            if "bin_feature_dimension" not in transformer_cfg and hasattr(
+                self.brain_encoder, "bin_feature_dimension"
+            ):
+                transformer_cfg["bin_feature_dimension"] = int(
+                    getattr(self.brain_encoder, "bin_feature_dimension")
+                )
         self.context_transformer = (
-            build_context_encoder(
-                output_dimension, config.get("transformer", {})
-            )
+            build_context_encoder(output_dimension, transformer_cfg)
             if self.use_transformer
             else None
         )
@@ -514,18 +536,90 @@ class BrainEmbeddingModel(nn.Module):
             error_msgs,
         )
 
-    def forward(
+    @property
+    def uses_pre_head_features(self) -> bool:
+        return bool(
+            self.context_transformer is not None
+            and getattr(self.context_transformer, "uses_pre_head_features", False)
+        )
+
+    @property
+    def requires_session_calibration(self) -> bool:
+        return bool(
+            self.context_transformer is not None
+            and getattr(
+                self.context_transformer, "session_calibration_enabled", False
+            )
+        )
+
+    def extract_stage1_features(
         self,
         signals,
         subject_indices=None,
-        group_indices=None,
-        event_times=None,
-        return_brain_embedding=False,
-        onset_seconds=None,
-    ):
-        brain_embedding = F.normalize(
+        *,
+        return_raw_h_bins: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        """提取冻结 Stage-1 单窗归一化嵌入 z，以及按需暴露的 h_pre 与 h_bins（或其 PCA 投影）。"""
+        ctx = self.context_transformer
+        need_pre = bool(
+            ctx is not None and getattr(ctx, "uses_pre_head_features", False)
+        )
+        need_bins = bool(
+            need_pre and getattr(ctx, "use_h_bins_pca", False)
+        )
+        if not need_pre:
+            z_norm = F.normalize(
+                self.brain_encoder(signals, subject_indices), dim=-1
+            )
+            return z_norm, None, None
+        if hasattr(self.brain_encoder, "encode_with_pre_head"):
+            z_raw, h_pre, h_bins = self.brain_encoder.encode_with_pre_head(
+                signals, subject_indices
+            )
+            z_norm = F.normalize(z_raw, dim=-1)
+            if not need_bins:
+                return z_norm, h_pre, None
+            if return_raw_h_bins:
+                return z_norm, h_pre, h_bins
+            return z_norm, h_pre, ctx.project_h_bins(h_bins)
+        z_norm = F.normalize(
             self.brain_encoder(signals, subject_indices), dim=-1
         )
+        if need_bins:
+            raise RuntimeError(
+                "当前上下文编码器启用了 use_h_bins_pca=True，但 Stage-1 brain_encoder 不支持 encode_with_pre_head。"
+            )
+        return z_norm, z_norm, None
+
+    def _assemble_self_features(
+        self,
+        h_pre: torch.Tensor | None,
+        h_bins_proj: torch.Tensor | None,
+    ) -> torch.Tensor | None:
+        if not self.uses_pre_head_features or h_pre is None:
+            return None
+        ctx = self.context_transformer
+        if ctx is not None and getattr(ctx, "use_h_bins_pca", False):
+            if h_bins_proj is None:
+                h_bins_proj = h_pre.new_zeros(
+                    (int(h_pre.shape[0]), int(getattr(ctx, "h_bins_pca_dim", 0)))
+                )
+            return torch.cat(
+                [h_pre, h_bins_proj.to(device=h_pre.device, dtype=h_pre.dtype)],
+                dim=-1,
+            )
+        return h_pre
+
+    def forward_from_stage1_features(
+        self,
+        brain_embedding: torch.Tensor,
+        group_indices=None,
+        *,
+        event_times=None,
+        self_features: torch.Tensor | None = None,
+        onset_seconds=None,
+    ) -> torch.Tensor:
+        """从已提取（并可选已完成在线会话校准）的 Stage-1 特征直接运行 Stage-2 上下文编码器。"""
         output = brain_embedding
         if self.context_transformer is not None:
             if self.context_mode == "singleton":
@@ -536,9 +630,17 @@ class BrainEmbeddingModel(nn.Module):
                 output = self.pre_transformer_trajectory(
                     output, group_indices
                 )
-            output = self.context_transformer(
-                output, group_indices, event_times=event_times
-            )
+            if self.uses_pre_head_features:
+                output = self.context_transformer(
+                    output,
+                    group_indices,
+                    event_times=event_times,
+                    self_features=self_features,
+                )
+            else:
+                output = self.context_transformer(
+                    output, group_indices, event_times=event_times
+                )
             output = F.normalize(output, dim=-1)
             if (
                 self.temporal_bias_head is not None
@@ -555,6 +657,28 @@ class BrainEmbeddingModel(nn.Module):
                 output = F.normalize(
                     output - float(self.temporal_bias_eta) * b_pred, dim=-1
                 )
+        return output
+
+    def forward(
+        self,
+        signals,
+        subject_indices=None,
+        group_indices=None,
+        event_times=None,
+        return_brain_embedding=False,
+        onset_seconds=None,
+    ):
+        brain_embedding, h_pre, h_bins_proj = self.extract_stage1_features(
+            signals, subject_indices
+        )
+        self_features = self._assemble_self_features(h_pre, h_bins_proj)
+        output = self.forward_from_stage1_features(
+            brain_embedding,
+            group_indices,
+            event_times=event_times,
+            self_features=self_features,
+            onset_seconds=onset_seconds,
+        )
         if return_brain_embedding:
             return output, brain_embedding
         return output
@@ -792,19 +916,17 @@ class BrainEmbeddingModel(nn.Module):
         return queries, rows_tensor, delays_tensor
 
     @torch.inference_mode()
-    def forward_prefix_revisions(
+    def forward_prefix_revisions_from_stage1_features(
         self,
-        signals,
-        subject_indices,
+        brain_embedding: torch.Tensor,
         group_indices,
+        *,
+        self_features: torch.Tensor | None = None,
         onset_seconds=None,
     ):
-        """严格截断输入，返回每个目标在延迟 0/1/2 时的预测。"""
+        """从已提取（并可选已完成在线会话校准）的 Stage-1 特征严格截断输出延迟 0/1/2 预测。"""
         if not self.prefix_revision_enabled:
             raise ValueError("模型没有启用共享前缀回修。")
-        brain_embedding = F.normalize(
-            self.brain_encoder(signals, subject_indices), dim=-1
-        )
         outputs = {}
         groups = self._ordered_groups(group_indices)
         row_to_group = {}
@@ -813,7 +935,6 @@ class BrainEmbeddingModel(nn.Module):
                 row_to_group[row_index] = (group_id, indices, position)
 
         if self.prefix_revision_history_radius is None:
-            # Stage 2.3 (full_prefix): 同组内相同 window_stop 的不同 (position, delay) 共享完全相同的前缀 [0 : window_stop]
             outputs = {
                 delay: torch.empty_like(brain_embedding)
                 for delay in self.prefix_revision_horizons
@@ -842,6 +963,7 @@ class BrainEmbeddingModel(nn.Module):
             for start in range(0, len(unique_windows), batch_size):
                 stop = min(start + batch_size, len(unique_windows))
                 prefix_parts = []
+                self_parts = []
                 prefix_groups = []
                 lengths = []
                 for virtual_group, w_idx in enumerate(range(start, stop)):
@@ -850,6 +972,8 @@ class BrainEmbeddingModel(nn.Module):
                     )
                     prefix = brain_embedding[sel]
                     prefix_parts.append(prefix)
+                    if self_features is not None:
+                        self_parts.append(self_features[sel])
                     lengths.append(len(prefix))
                     prefix_groups.append(
                         torch.full(
@@ -859,11 +983,14 @@ class BrainEmbeddingModel(nn.Module):
                             dtype=group_indices.dtype,
                         )
                     )
+                ctx_kwargs = {"causal_override": False}
+                if self.uses_pre_head_features and self_parts:
+                    ctx_kwargs["self_features"] = torch.cat(self_parts, dim=0)
                 revised = F.normalize(
                     self.context_transformer(
                         torch.cat(prefix_parts, dim=0),
                         torch.cat(prefix_groups, dim=0),
-                        causal_override=False,
+                        **ctx_kwargs,
                     ),
                     dim=-1,
                 )
@@ -883,6 +1010,7 @@ class BrainEmbeddingModel(nn.Module):
                 for start in range(0, len(brain_embedding), batch_size):
                     stop = min(start + batch_size, len(brain_embedding))
                     prefix_parts = []
+                    self_parts = []
                     prefix_groups = []
                     target_locations = []
                     cursor = 0
@@ -899,6 +1027,8 @@ class BrainEmbeddingModel(nn.Module):
                         )
                         prefix = brain_embedding[selected_indices]
                         prefix_parts.append(prefix)
+                        if self_features is not None:
+                            self_parts.append(self_features[selected_indices])
                         prefix_groups.append(
                             torch.full(
                                 (len(prefix),),
@@ -909,10 +1039,13 @@ class BrainEmbeddingModel(nn.Module):
                         )
                         target_locations.append(cursor + target_offset)
                         cursor += len(prefix)
+                    ctx_kwargs = {"causal_override": False}
+                    if self.uses_pre_head_features and self_parts:
+                        ctx_kwargs["self_features"] = torch.cat(self_parts, dim=0)
                     revised = self.context_transformer(
                         torch.cat(prefix_parts, dim=0),
                         torch.cat(prefix_groups, dim=0),
-                        causal_override=False,
+                        **ctx_kwargs,
                     )
                     delayed[start:stop] = F.normalize(
                         revised[
@@ -942,6 +1075,28 @@ class BrainEmbeddingModel(nn.Module):
                     dim=-1,
                 )
         return outputs
+
+    @torch.inference_mode()
+    def forward_prefix_revisions(
+        self,
+        signals,
+        subject_indices,
+        group_indices,
+        onset_seconds=None,
+    ):
+        """严格截断输入，返回每个目标在延迟 0/1/2 时的预测。"""
+        if not self.prefix_revision_enabled:
+            raise ValueError("模型没有启用共享前缀回修。")
+        brain_embedding, h_pre, h_bins_proj = self.extract_stage1_features(
+            signals, subject_indices
+        )
+        self_features = self._assemble_self_features(h_pre, h_bins_proj)
+        return self.forward_prefix_revisions_from_stage1_features(
+            brain_embedding,
+            group_indices,
+            self_features=self_features,
+            onset_seconds=onset_seconds,
+        )
 
 
 def build_brain_embedding_model(

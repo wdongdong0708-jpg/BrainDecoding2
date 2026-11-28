@@ -141,6 +141,153 @@ def _extract_single_dataset_cnn_embeddings(
     return result
 
 
+def _extract_single_dataset_stage1_features(
+    model,
+    dataset_obj,
+    *,
+    device: torch.device,
+    batch_size: int = 512,
+    amp: bool = True,
+    amp_dtype: torch.dtype = torch.bfloat16,
+    temporal_shift_seconds: float = 0.0,
+    shift_mode: str = "deterministic_circular",
+    preroll_seconds: float = 45.0,
+    show_progress: bool = True,
+    progress_desc: str = "Pre-extract Stage-1",
+    return_pre_head: bool = True,
+    return_raw_h_bins: bool = False,
+    project_h_bins_fn=None,
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    """单遍提取冻结 Stage-1 的 (z_norm, h_pre, h_bins_or_proj)，支持真实 MEG 与合成脉冲流 GPU 快路径。"""
+    model.brain_encoder.eval()
+    orig_shift_sec = getattr(dataset_obj, "temporal_shift_seconds", 0.0)
+    orig_shift_samp = getattr(dataset_obj, "temporal_shift_samples", 0)
+    orig_shift_mode = getattr(dataset_obj, "shift_mode", "deterministic_circular")
+    orig_preroll_sec = getattr(dataset_obj, "preroll_seconds", 45.0)
+    sr_hz = float(getattr(dataset_obj, "sampling_rate_hz", 50.0))
+    norm_mode = _normalize_shift_mode(shift_mode) or "deterministic_circular"
+
+    try:
+        if hasattr(dataset_obj, "shift_mode"):
+            dataset_obj.shift_mode = norm_mode
+        if hasattr(dataset_obj, "preroll_seconds"):
+            dataset_obj.preroll_seconds = float(preroll_seconds)
+        if hasattr(dataset_obj, "temporal_shift_seconds"):
+            dataset_obj.temporal_shift_seconds = float(temporal_shift_seconds)
+        if hasattr(dataset_obj, "temporal_shift_samples"):
+            dataset_obj.temporal_shift_samples = int(
+                round(float(temporal_shift_seconds) * sr_hz)
+            )
+        if (
+            abs(float(temporal_shift_seconds)) > 1e-9
+            and norm_mode == "preroll"
+            and hasattr(dataset_obj, "ensure_preroll_buffers")
+        ):
+            dataset_obj.ensure_preroll_buffers(
+                float(temporal_shift_seconds),
+                shift_mode="preroll",
+                preroll_seconds=float(preroll_seconds),
+            )
+
+        if device.type == "cuda" and hasattr(
+            dataset_obj, "extract_cnn_embeddings_gpu"
+        ):
+            return dataset_obj.extract_cnn_embeddings_gpu(
+                model,
+                device=device,
+                batch_size=int(batch_size),
+                amp=bool(amp),
+                amp_dtype=amp_dtype,
+                show_progress=show_progress,
+                progress_desc=progress_desc,
+                progress_wrap=_wrap_progress,
+                return_pre_head=bool(return_pre_head),
+                return_raw_h_bins=bool(return_raw_h_bins),
+                project_h_bins_fn=project_h_bins_fn,
+            )
+
+        loader = DataLoader(
+            dataset_obj,
+            batch_size=int(batch_size),
+            shuffle=False,
+            num_workers=0,
+            pin_memory=(device.type == "cuda"),
+        )
+        use_amp = (
+            bool(amp)
+            and device.type == "cuda"
+            and amp_dtype in {torch.float16, torch.bfloat16}
+        )
+        z_chunks: list[torch.Tensor] = []
+        pre_chunks: list[torch.Tensor] = []
+        bins_chunks: list[torch.Tensor] = []
+        has_pre_head = hasattr(model.brain_encoder, "encode_with_pre_head")
+        store_dtype = torch.bfloat16 if (use_amp and amp_dtype == torch.bfloat16) else torch.float32
+        iterable, pbar = _wrap_progress(
+            loader,
+            enabled=show_progress,
+            desc=progress_desc,
+            total=len(loader),
+        )
+        try:
+            with torch.no_grad():
+                for batch in iterable:
+                    signal_key = "meg" if "meg" in batch else "eeg"
+                    signals = batch[signal_key].to(device, non_blocking=True)
+                    subject_indices = batch["subject_index"].to(
+                        device, non_blocking=True
+                    )
+                    with torch.autocast(
+                        device_type=device.type,
+                        dtype=amp_dtype,
+                        enabled=use_amp,
+                    ):
+                        if has_pre_head:
+                            z_raw, h_pre, h_bins = (
+                                model.brain_encoder.encode_with_pre_head(
+                                    signals, subject_indices
+                                )
+                            )
+                            z = F.normalize(z_raw, dim=-1)
+                            if return_raw_h_bins:
+                                h_bins_out = h_bins
+                            elif project_h_bins_fn is not None:
+                                h_bins_out = project_h_bins_fn(h_bins)
+                            else:
+                                h_bins_out = None
+                        else:
+                            z = F.normalize(
+                                model.brain_encoder(signals, subject_indices),
+                                dim=-1,
+                            )
+                            h_pre = z if return_pre_head else None
+                            h_bins_out = None
+                    z_chunks.append(z.to(device="cpu", dtype=store_dtype))
+                    if return_pre_head and h_pre is not None:
+                        pre_chunks.append(h_pre.to(device="cpu", dtype=store_dtype))
+                    if h_bins_out is not None:
+                        bins_chunks.append(
+                            h_bins_out.to(device="cpu", dtype=store_dtype)
+                        )
+        finally:
+            if pbar is not None:
+                pbar.close()
+    finally:
+        if hasattr(dataset_obj, "temporal_shift_seconds"):
+            dataset_obj.temporal_shift_seconds = orig_shift_sec
+        if hasattr(dataset_obj, "temporal_shift_samples"):
+            dataset_obj.temporal_shift_samples = orig_shift_samp
+        if hasattr(dataset_obj, "shift_mode"):
+            dataset_obj.shift_mode = orig_shift_mode
+        if hasattr(dataset_obj, "preroll_seconds"):
+            dataset_obj.preroll_seconds = orig_preroll_sec
+
+    z_all = torch.cat(z_chunks, dim=0)
+    pre_all = torch.cat(pre_chunks, dim=0) if pre_chunks else None
+    bins_all = torch.cat(bins_chunks, dim=0) if bins_chunks else None
+    return z_all, pre_all, bins_all
+
+
 def _extract_static_dataset_metadata(
     dataset_obj,
     device: torch.device,
@@ -249,6 +396,7 @@ def _preextracted_cache_path(
     causal_highpass_hz: float = 0.5,
     causal_highpass_order: int = 2,
     clamp: float = 5.0,
+    feature_profile: str | None = None,
 ) -> Path:
     norm_mode = _normalize_shift_mode(shift_mode) or "deterministic_circular"
     hp_mode = str(causal_highpass_mode or "moving_average").strip().lower()
@@ -280,6 +428,8 @@ def _preextracted_cache_path(
         )
     if not np.isclose(float(clamp), 5.0, atol=1e-6):
         sig_payload["clamp"] = round(float(clamp), 6)
+    if feature_profile:
+        sig_payload["feature_profile"] = str(feature_profile)
     digest = hashlib.sha256(
         json.dumps(sig_payload, sort_keys=True).encode("utf-8")
     ).hexdigest()[:16]
@@ -458,10 +608,18 @@ def _finalize_gpu_preextracted_bundle(
     loaded_from_disk: bool,
     elapsed: float,
     feature_dtype: torch.dtype = torch.float32,
+    train_clean_self: torch.Tensor | None = None,
+    train_shifted_self: dict[float, torch.Tensor] | None = None,
+    val_clean_self: torch.Tensor | None = None,
+    session_calibrated: bool = False,
+    train_meta: dict | None = None,
+    val_meta: dict | None = None,
 ) -> dict:
     """将预提取张量、尾部零填充视图及全数据集静态 GPU 窗口查表常驻于 GPU 显存（零冗余单份存储）。"""
-    train_meta = _extract_static_dataset_metadata(train_ds, device)
-    val_meta = _extract_static_dataset_metadata(val_ds, device)
+    if train_meta is None:
+        train_meta = _extract_static_dataset_metadata(train_ds, device)
+    if val_meta is None:
+        val_meta = _extract_static_dataset_metadata(val_ds, device)
 
     train_clean_z, train_clean_z_pad = _alloc_padded_gpu_feature_matrix(
         train_clean_z, device, dtype=feature_dtype
@@ -481,26 +639,77 @@ def _finalize_gpu_preextracted_bundle(
         train_shifted_z_pad[float(k)] = v_pad
     train_shifted_z = train_shifted_z_gpu
 
+    train_clean_self_gpu: torch.Tensor | None = None
+    train_clean_self_pad: torch.Tensor | None = None
+    val_clean_self_gpu: torch.Tensor | None = None
+    val_clean_self_pad: torch.Tensor | None = None
+    train_shifted_self_gpu: dict[float, torch.Tensor] = {}
+    train_shifted_self_pad: dict[float, torch.Tensor] = {}
+    if train_clean_self is not None:
+        train_clean_self_gpu, train_clean_self_pad = (
+            _alloc_padded_gpu_feature_matrix(
+                train_clean_self, device, dtype=feature_dtype
+            )
+        )
+    if val_clean_self is not None:
+        val_clean_self_gpu, val_clean_self_pad = (
+            _alloc_padded_gpu_feature_matrix(
+                val_clean_self, device, dtype=feature_dtype
+            )
+        )
+    if train_shifted_self:
+        for k in list(train_shifted_self.keys()):
+            s_src = train_shifted_self.pop(k)
+            s_unpad, s_pad = _alloc_padded_gpu_feature_matrix(
+                s_src, device, dtype=feature_dtype
+            )
+            del s_src
+            train_shifted_self_gpu[float(k)] = s_unpad
+            train_shifted_self_pad[float(k)] = s_pad
+
     train_static_rev = _build_static_revision_train_table(
         model, train_meta["sentence_indices"], device
     )
     val_static_rev = _build_static_revision_eval_table(
         model, val_meta["sentence_indices"], device
     )
+    train_meta["clean_z_pad"] = train_clean_z_pad
+    if train_clean_self_gpu is not None:
+        train_meta["clean_self_all"] = train_clean_self_gpu
+        train_meta["clean_self_pad"] = train_clean_self_pad
     val_meta["clean_z_pad"] = val_clean_z_pad
     val_meta["static_revision_table"] = val_static_rev
+    if val_clean_self_gpu is not None:
+        val_meta["clean_self_all"] = val_clean_self_gpu
+        val_meta["clean_self_pad"] = val_clean_self_pad
 
     total_vram_bytes = (
         train_clean_z_pad.numel() * train_clean_z_pad.element_size()
         + val_clean_z_pad.numel() * val_clean_z_pad.element_size()
         + sum(t.numel() * t.element_size() for t in train_shifted_z_pad.values())
     )
+    if train_clean_self_pad is not None:
+        total_vram_bytes += (
+            train_clean_self_pad.numel() * train_clean_self_pad.element_size()
+        )
+    if val_clean_self_pad is not None:
+        total_vram_bytes += (
+            val_clean_self_pad.numel() * val_clean_self_pad.element_size()
+        )
+    total_vram_bytes += sum(
+        t.numel() * t.element_size() for t in train_shifted_self_pad.values()
+    )
     vram_mb = total_vram_bytes / (1024.0 * 1024.0)
     src_tag = f"Loaded from {cache_file}" if loaded_from_disk else "Extracted & cached"
+    extra_tag = ""
+    if train_clean_self_gpu is not None:
+        extra_tag += f", self_feat={int(train_clean_self_gpu.shape[-1])}d"
+    if session_calibrated:
+        extra_tag += ", causal_sess_cal=on"
     print(
         f" [Pre-Extract Cache] {src_tag} in {elapsed:.2f}s | "
         f"Resident in GPU VRAM ({device}): {vram_mb:.1f} MB "
-        f"(train={len(train_ds):,}, shifts={len(train_shifted_z)}, val={len(val_ds):,}; "
+        f"(train={len(train_ds):,}, shifts={len(train_shifted_z)}, val={len(val_ds):,}{extra_tag}; "
         f"raw MEG DataLoader & cnn(x) 100% bypassed)",
         flush=True,
     )
@@ -511,6 +720,13 @@ def _finalize_gpu_preextracted_bundle(
         "train_shifted_z_pad": train_shifted_z_pad,
         "val_clean_z": val_clean_z,
         "val_clean_z_pad": val_clean_z_pad,
+        "train_clean_self": train_clean_self_gpu,
+        "train_clean_self_pad": train_clean_self_pad,
+        "train_shifted_self": train_shifted_self_gpu,
+        "train_shifted_self_pad": train_shifted_self_pad,
+        "val_clean_self": val_clean_self_gpu,
+        "val_clean_self_pad": val_clean_self_pad,
+        "session_calibrated": bool(session_calibrated),
         "train_meta": train_meta,
         "val_meta": val_meta,
         "train_static_revision_table": train_static_rev,
@@ -519,6 +735,387 @@ def _finalize_gpu_preextracted_bundle(
         "loaded_from_disk": bool(loaded_from_disk),
         "seconds": float(elapsed),
     }
+
+
+def _export_stage1_calibration_buffers(ctx) -> dict:
+    payload: dict[str, object] = {}
+    if ctx is None:
+        return payload
+    for key in (
+        "clean_input_mean",
+        "pre_head_mean",
+        "h_bins_mean",
+        "h_bins_pca_proj",
+        "h_bins_pca_scale",
+    ):
+        val = getattr(ctx, key, None)
+        if isinstance(val, torch.Tensor):
+            payload[key] = val.detach().float().cpu()
+    return payload
+
+
+@torch.no_grad()
+def _restore_stage1_calibration_buffers(ctx, payload: dict | None) -> None:
+    if ctx is None or not isinstance(payload, dict):
+        return
+    if (
+        "clean_input_mean" in payload
+        and hasattr(ctx, "set_clean_input_mean")
+        and not bool(getattr(ctx, "clean_input_mean_ready", torch.tensor(False)).item())
+    ):
+        ctx.set_clean_input_mean(payload["clean_input_mean"])
+    if (
+        "pre_head_mean" in payload
+        and hasattr(ctx, "set_pre_head_mean")
+        and getattr(ctx, "pre_head_mean_ready", None) is not None
+        and not bool(ctx.pre_head_mean_ready.item())
+    ):
+        ctx.set_pre_head_mean(payload["pre_head_mean"])
+    if (
+        "h_bins_pca_proj" in payload
+        and getattr(ctx, "use_h_bins_pca", False)
+        and getattr(ctx, "h_bins_pca_ready", None) is not None
+        and not bool(ctx.h_bins_pca_ready.item())
+    ):
+        ctx.h_bins_mean.copy_(
+            payload["h_bins_mean"].to(device=ctx.h_bins_mean.device, dtype=torch.float32)
+        )
+        ctx.h_bins_pca_proj.copy_(
+            payload["h_bins_pca_proj"].to(
+                device=ctx.h_bins_pca_proj.device, dtype=torch.float32
+            )
+        )
+        ctx.h_bins_pca_scale.copy_(
+            payload["h_bins_pca_scale"].to(
+                device=ctx.h_bins_pca_scale.device, dtype=torch.float32
+            )
+        )
+        ctx.h_bins_pca_ready.fill_(True)
+
+
+def _preextract_with_prehead_or_session_calibration(
+    model,
+    train_ds,
+    val_ds,
+    *,
+    dataset: str,
+    subset_tag: str,
+    word_ckpt_sha256: str,
+    window_seconds: float,
+    window_start_offset_seconds: float,
+    shifts: list[float],
+    norm_shift_mode: str,
+    eff_preroll: float,
+    eff_baseline: float,
+    eff_causal_hp: float,
+    eff_hp_mode: str,
+    eff_hp_hz: float,
+    eff_hp_order: int,
+    eff_clamp: float,
+    device: torch.device,
+    batch_size: int,
+    amp: bool,
+    amp_dtype: torch.dtype,
+    feature_dtype: torch.dtype,
+    cache_to_disk: bool,
+    show_progress: bool,
+) -> dict:
+    """支持 pre-head 解坍缩特征（h_pre + 可选 PCA(h_bins)）与在线因果会话校准的预提取快路径。"""
+    ctx = getattr(model, "context_transformer", None)
+    need_pre_head = bool(getattr(ctx, "uses_pre_head_features", False))
+    need_bins_pca = bool(need_pre_head and getattr(ctx, "use_h_bins_pca", False))
+    need_sess_cal = bool(getattr(ctx, "session_calibration_enabled", False))
+    pca_dim = int(getattr(ctx, "h_bins_pca_dim", 0)) if need_bins_pca else 0
+    m0 = float(getattr(ctx, "session_calibration_m0", 50.0))
+    lag_gap = int(getattr(ctx, "session_calibration_lag_gap", 2))
+    alpha_cal = float(getattr(ctx, "session_calibration_alpha", 1.0))
+    profile = (
+        f"op3a_pre{int(need_pre_head)}_pca{pca_dim}"
+        f"_sc{int(need_sess_cal)}_m0{m0:g}_g{lag_gap}_a{alpha_cal:g}"
+    )
+
+    cache_file: Path | None = None
+    if cache_to_disk and word_ckpt_sha256:
+        cache_file = _preextracted_cache_path(
+            dataset=dataset,
+            subset_tag=subset_tag,
+            word_ckpt_sha256=word_ckpt_sha256,
+            window_seconds=window_seconds,
+            window_start_offset_seconds=window_start_offset_seconds,
+            shift_seconds=shifts,
+            train_len=len(train_ds),
+            val_len=len(val_ds),
+            shift_mode=norm_shift_mode,
+            preroll_seconds=eff_preroll,
+            baseline_seconds=eff_baseline,
+            causal_highpass_seconds=eff_causal_hp,
+            causal_highpass_mode=eff_hp_mode,
+            causal_highpass_hz=eff_hp_hz,
+            causal_highpass_order=eff_hp_order,
+            clamp=eff_clamp,
+            feature_profile=profile,
+        )
+        if cache_file.is_file():
+            t0 = time.perf_counter()
+            try:
+                saved = torch.load(
+                    cache_file, map_location="cpu", weights_only=False
+                )
+                has_self_ok = (not need_pre_head) or (
+                    saved.get("train_clean_self") is not None
+                    and saved.get("val_clean_self") is not None
+                    and len(saved["train_clean_self"]) == len(train_ds)
+                    and len(saved["val_clean_self"]) == len(val_ds)
+                )
+                if (
+                    isinstance(saved, dict)
+                    and saved.get("train_clean_z") is not None
+                    and len(saved["train_clean_z"]) == len(train_ds)
+                    and len(saved["val_clean_z"]) == len(val_ds)
+                    and has_self_ok
+                ):
+                    _restore_stage1_calibration_buffers(
+                        ctx, saved.get("stage1_buffers")
+                    )
+                    elapsed = time.perf_counter() - t0
+                    t_clean = saved.pop("train_clean_z")
+                    t_shifted = saved.pop("train_shifted_z", None) or {}
+                    v_clean = saved.pop("val_clean_z")
+                    t_self = saved.pop("train_clean_self", None)
+                    t_self_sh = saved.pop("train_shifted_self", None) or {}
+                    v_self = saved.pop("val_clean_self", None)
+                    saved.clear()
+                    del saved
+                    return _finalize_gpu_preextracted_bundle(
+                        model,
+                        train_ds,
+                        val_ds,
+                        t_clean,
+                        t_shifted,
+                        v_clean,
+                        device,
+                        cache_file=cache_file,
+                        loaded_from_disk=True,
+                        elapsed=elapsed,
+                        feature_dtype=feature_dtype,
+                        train_clean_self=t_self,
+                        train_shifted_self=t_self_sh,
+                        val_clean_self=v_self,
+                        session_calibrated=need_sess_cal,
+                    )
+            except Exception:
+                pass
+
+    t0 = time.perf_counter()
+    train_meta = _extract_static_dataset_metadata(train_ds, device)
+    val_meta = _extract_static_dataset_metadata(val_ds, device)
+
+    print(
+        f" [Pre-Extract Cache] Extracting frozen Stage-1 features ({profile}; "
+        f"Clean 0s + {len(shifts)} shifted conditions [{norm_shift_mode}])...",
+        flush=True,
+    )
+    need_raw_bins_on_train = bool(
+        need_bins_pca
+        and (
+            getattr(ctx, "h_bins_pca_ready", None) is None
+            or not bool(ctx.h_bins_pca_ready.item())
+        )
+    )
+    train_z_raw, train_h_pre_raw, train_h_bins_obj = (
+        _extract_single_dataset_stage1_features(
+            model,
+            train_ds,
+            device=device,
+            batch_size=batch_size,
+            amp=amp,
+            amp_dtype=amp_dtype,
+            temporal_shift_seconds=0.0,
+            shift_mode=norm_shift_mode,
+            preroll_seconds=eff_preroll,
+            show_progress=show_progress,
+            progress_desc="Pre-extract [Train | Clean 0s + PreHead]",
+            return_pre_head=need_pre_head,
+            return_raw_h_bins=need_raw_bins_on_train,
+            project_h_bins_fn=(
+                ctx.project_h_bins
+                if (need_bins_pca and not need_raw_bins_on_train)
+                else None
+            ),
+        )
+    )
+
+    # 严格仅基于训练集原始特征初始化均值与 Top-K PCA 基（绝不触碰 val/test）
+    if (
+        hasattr(ctx, "set_clean_input_mean")
+        and not bool(getattr(ctx, "clean_input_mean_ready", torch.tensor(False)).item())
+    ):
+        ctx.set_clean_input_mean(train_z_raw.float().mean(dim=0))
+    if (
+        need_pre_head
+        and train_h_pre_raw is not None
+        and hasattr(ctx, "set_pre_head_mean")
+        and getattr(ctx, "pre_head_mean_ready", None) is not None
+        and not bool(ctx.pre_head_mean_ready.item())
+    ):
+        ctx.set_pre_head_mean(train_h_pre_raw.float().mean(dim=0))
+
+    train_h_bins_proj: torch.Tensor | None = None
+    if need_bins_pca:
+        if need_raw_bins_on_train and train_h_bins_obj is not None:
+            ctx.fit_h_bins_pca(
+                train_h_bins_obj,
+                recording_ids=train_meta["recording_ids"],
+                subject_indices=train_meta["subject_indices"],
+                onset_seconds=train_meta["onset_seconds"],
+            )
+            # 分块线性投影后立即释放原始 1280-d h_bins 节省内存
+            proj_chunks: list[torch.Tensor] = []
+            n_tr = int(train_h_bins_obj.shape[0])
+            for s_i in range(0, n_tr, 16384):
+                e_i = min(s_i + 16384, n_tr)
+                proj_chunks.append(
+                    ctx.project_h_bins(
+                        train_h_bins_obj[s_i:e_i].to(device=device)
+                    ).to(device="cpu", dtype=train_z_raw.dtype)
+                )
+            train_h_bins_proj = torch.cat(proj_chunks, dim=0)
+            del train_h_bins_obj, proj_chunks
+        else:
+            train_h_bins_proj = train_h_bins_obj
+
+    train_clean_z, train_clean_self = ctx.calibrate_stage1_features(
+        train_z_raw,
+        train_h_pre_raw,
+        train_h_bins_proj,
+        recording_ids=train_meta["recording_ids"],
+        subject_indices=train_meta["subject_indices"],
+        onset_seconds=train_meta["onset_seconds"],
+    )
+    del train_z_raw, train_h_pre_raw, train_h_bins_proj
+
+    val_z_raw, val_h_pre_raw, val_h_bins_proj = (
+        _extract_single_dataset_stage1_features(
+            model,
+            val_ds,
+            device=device,
+            batch_size=batch_size,
+            amp=amp,
+            amp_dtype=amp_dtype,
+            temporal_shift_seconds=0.0,
+            shift_mode=norm_shift_mode,
+            preroll_seconds=eff_preroll,
+            show_progress=show_progress,
+            progress_desc="Pre-extract [Val   | Clean 0s + PreHead]",
+            return_pre_head=need_pre_head,
+            return_raw_h_bins=False,
+            project_h_bins_fn=(ctx.project_h_bins if need_bins_pca else None),
+        )
+    )
+    val_clean_z, val_clean_self = ctx.calibrate_stage1_features(
+        val_z_raw,
+        val_h_pre_raw,
+        val_h_bins_proj,
+        recording_ids=val_meta["recording_ids"],
+        subject_indices=val_meta["subject_indices"],
+        onset_seconds=val_meta["onset_seconds"],
+    )
+    del val_z_raw, val_h_pre_raw, val_h_bins_proj
+
+    train_shifted_z: dict[float, torch.Tensor] = {}
+    train_shifted_self: dict[float, torch.Tensor] = {}
+    for shift_sec in shifts:
+        f_sec = float(shift_sec)
+        shift_label = (
+            f"{shift_sec:+.0f}s"
+            if abs(shift_sec - round(shift_sec)) < 1e-6
+            else f"{shift_sec:+.1f}s"
+        )
+        sh_z_raw, sh_h_pre_raw, sh_h_bins_proj = (
+            _extract_single_dataset_stage1_features(
+                model,
+                train_ds,
+                device=device,
+                batch_size=batch_size,
+                amp=amp,
+                amp_dtype=amp_dtype,
+                temporal_shift_seconds=f_sec,
+                shift_mode=norm_shift_mode,
+                preroll_seconds=eff_preroll,
+                show_progress=show_progress,
+                progress_desc=f"Pre-extract [Train | Shift {shift_label} + PreHead]",
+                return_pre_head=need_pre_head,
+                return_raw_h_bins=False,
+                project_h_bins_fn=(ctx.project_h_bins if need_bins_pca else None),
+            )
+        )
+        sh_z_cal, sh_self_cal = ctx.calibrate_stage1_features(
+            sh_z_raw,
+            sh_h_pre_raw,
+            sh_h_bins_proj,
+            recording_ids=train_meta["recording_ids"],
+            subject_indices=train_meta["subject_indices"],
+            onset_seconds=train_meta["onset_seconds"],
+        )
+        train_shifted_z[f_sec] = sh_z_cal
+        if sh_self_cal is not None:
+            train_shifted_self[f_sec] = sh_self_cal
+        del sh_z_raw, sh_h_pre_raw, sh_h_bins_proj
+
+    if cache_file is not None:
+        try:
+            tmp_file = cache_file.with_suffix(".pt.tmp")
+            disk_payload = {
+                "word_ckpt_sha256": str(word_ckpt_sha256),
+                "shift_mode": norm_shift_mode,
+                "preroll_seconds": eff_preroll,
+                "feature_profile": profile,
+                "stage1_buffers": _export_stage1_calibration_buffers(ctx),
+                "train_clean_z": train_clean_z.to(dtype=torch.bfloat16),
+                "val_clean_z": val_clean_z.to(dtype=torch.bfloat16),
+                "train_shifted_z": {
+                    float(k): v.to(dtype=torch.bfloat16)
+                    for k, v in train_shifted_z.items()
+                },
+            }
+            if train_clean_self is not None:
+                disk_payload["train_clean_self"] = train_clean_self.to(
+                    dtype=torch.bfloat16
+                )
+            if val_clean_self is not None:
+                disk_payload["val_clean_self"] = val_clean_self.to(
+                    dtype=torch.bfloat16
+                )
+            if train_shifted_self:
+                disk_payload["train_shifted_self"] = {
+                    float(k): v.to(dtype=torch.bfloat16)
+                    for k, v in train_shifted_self.items()
+                }
+            torch.save(disk_payload, tmp_file)
+            os.replace(tmp_file, cache_file)
+        except Exception:
+            pass
+
+    elapsed = time.perf_counter() - t0
+    return _finalize_gpu_preextracted_bundle(
+        model,
+        train_ds,
+        val_ds,
+        train_clean_z,
+        train_shifted_z,
+        val_clean_z,
+        device,
+        cache_file=cache_file,
+        loaded_from_disk=False,
+        elapsed=elapsed,
+        feature_dtype=feature_dtype,
+        train_clean_self=train_clean_self,
+        train_shifted_self=train_shifted_self,
+        val_clean_self=val_clean_self,
+        session_calibrated=need_sess_cal,
+        train_meta=train_meta,
+        val_meta=val_meta,
+    )
 
 
 def preextract_frozen_cnn_features(
@@ -558,6 +1155,37 @@ def preextract_frozen_cnn_features(
         if (bool(amp) and device.type == "cuda" and amp_dtype == torch.bfloat16)
         else torch.float32
     )
+    ctx_mod = getattr(model, "context_transformer", None)
+    if ctx_mod is not None and (
+        bool(getattr(ctx_mod, "uses_pre_head_features", False))
+        or bool(getattr(ctx_mod, "session_calibration_enabled", False))
+    ):
+        return _preextract_with_prehead_or_session_calibration(
+            model,
+            train_ds,
+            val_ds,
+            dataset=dataset,
+            subset_tag=subset_tag,
+            word_ckpt_sha256=word_ckpt_sha256,
+            window_seconds=window_seconds,
+            window_start_offset_seconds=window_start_offset_seconds,
+            shifts=shifts,
+            norm_shift_mode=norm_shift_mode,
+            eff_preroll=eff_preroll,
+            eff_baseline=eff_baseline,
+            eff_causal_hp=eff_causal_hp,
+            eff_hp_mode=eff_hp_mode,
+            eff_hp_hz=eff_hp_hz,
+            eff_hp_order=eff_hp_order,
+            eff_clamp=eff_clamp,
+            device=device,
+            batch_size=batch_size,
+            amp=amp,
+            amp_dtype=amp_dtype,
+            feature_dtype=feature_dtype,
+            cache_to_disk=cache_to_disk,
+            show_progress=show_progress,
+        )
     cache_file: Path | None = None
     if cache_to_disk and word_ckpt_sha256:
         cache_file = _preextracted_cache_path(
@@ -824,6 +1452,113 @@ def refresh_preextracted_train_features(
     shifts = [float(s) for s in shift_seconds]
     norm_shift_mode = _normalize_shift_mode(shift_mode) or "preroll"
     eff_preroll = float(preroll_seconds)
+    ctx_mod = getattr(model, "context_transformer", None)
+    need_pre_head = bool(
+        ctx_mod is not None and getattr(ctx_mod, "uses_pre_head_features", False)
+    )
+    need_sess_cal = bool(
+        ctx_mod is not None and getattr(ctx_mod, "session_calibration_enabled", False)
+    )
+    if need_pre_head or need_sess_cal:
+        need_bins_pca = bool(
+            need_pre_head and getattr(ctx_mod, "use_h_bins_pca", False)
+        )
+        t_meta = preextracted_cache["train_meta"]
+        z_raw, h_pre_raw, h_bins_proj = _extract_single_dataset_stage1_features(
+            model,
+            train_ds,
+            device=device,
+            batch_size=batch_size,
+            amp=amp,
+            amp_dtype=amp_dtype,
+            temporal_shift_seconds=0.0,
+            shift_mode=norm_shift_mode,
+            preroll_seconds=eff_preroll,
+            show_progress=show_progress,
+            progress_desc="Refresh [Train | Clean 0s + PreHead]",
+            return_pre_head=need_pre_head,
+            return_raw_h_bins=False,
+            project_h_bins_fn=(ctx_mod.project_h_bins if need_bins_pca else None),
+        )
+        z_cal, self_cal = ctx_mod.calibrate_stage1_features(
+            z_raw,
+            h_pre_raw,
+            h_bins_proj,
+            recording_ids=t_meta["recording_ids"],
+            subject_indices=t_meta["subject_indices"],
+            onset_seconds=t_meta["onset_seconds"],
+        )
+        preextracted_cache["train_clean_z_pad"][: len(train_ds)].copy_(
+            z_cal, non_blocking=False
+        )
+        if (
+            self_cal is not None
+            and preextracted_cache.get("train_clean_self_pad") is not None
+        ):
+            preextracted_cache["train_clean_self_pad"][: len(train_ds)].copy_(
+                self_cal, non_blocking=False
+            )
+        for f_sec in shifts:
+            sh_z_raw, sh_h_pre_raw, sh_h_bins_proj = (
+                _extract_single_dataset_stage1_features(
+                    model,
+                    train_ds,
+                    device=device,
+                    batch_size=batch_size,
+                    amp=amp,
+                    amp_dtype=amp_dtype,
+                    temporal_shift_seconds=f_sec,
+                    shift_mode=norm_shift_mode,
+                    preroll_seconds=eff_preroll,
+                    show_progress=show_progress,
+                    progress_desc=f"Refresh [Train | Shift {f_sec:+.0f}s + PreHead]",
+                    return_pre_head=need_pre_head,
+                    return_raw_h_bins=False,
+                    project_h_bins_fn=(
+                        ctx_mod.project_h_bins if need_bins_pca else None
+                    ),
+                )
+            )
+            sh_z_cal, sh_self_cal = ctx_mod.calibrate_stage1_features(
+                sh_z_raw,
+                sh_h_pre_raw,
+                sh_h_bins_proj,
+                recording_ids=t_meta["recording_ids"],
+                subject_indices=t_meta["subject_indices"],
+                onset_seconds=t_meta["onset_seconds"],
+            )
+            if f_sec in preextracted_cache["train_shifted_z_pad"]:
+                preextracted_cache["train_shifted_z_pad"][f_sec][
+                    : len(train_ds)
+                ].copy_(sh_z_cal, non_blocking=False)
+            else:
+                unpad, pad = _alloc_padded_gpu_feature_matrix(
+                    sh_z_cal,
+                    device,
+                    dtype=preextracted_cache["train_clean_z_pad"].dtype,
+                )
+                preextracted_cache["train_shifted_z"][f_sec] = unpad
+                preextracted_cache["train_shifted_z_pad"][f_sec] = pad
+            if sh_self_cal is not None:
+                self_sh_pad = preextracted_cache.setdefault(
+                    "train_shifted_self_pad", {}
+                )
+                self_sh_unpad = preextracted_cache.setdefault(
+                    "train_shifted_self", {}
+                )
+                if f_sec in self_sh_pad:
+                    self_sh_pad[f_sec][: len(train_ds)].copy_(
+                        sh_self_cal, non_blocking=False
+                    )
+                else:
+                    s_unpad, s_pad = _alloc_padded_gpu_feature_matrix(
+                        sh_self_cal,
+                        device,
+                        dtype=preextracted_cache["train_clean_z_pad"].dtype,
+                    )
+                    self_sh_unpad[f_sec] = s_unpad
+                    self_sh_pad[f_sec] = s_pad
+        return preextracted_cache
 
     clean_dst = preextracted_cache["train_clean_z_pad"][: len(train_ds)]
     _extract_single_dataset_cnn_embeddings(
