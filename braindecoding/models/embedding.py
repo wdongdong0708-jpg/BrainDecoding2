@@ -659,6 +659,20 @@ class BrainEmbeddingModel(nn.Module):
                 )
         return output
 
+    def forward_word_with_pre_head(
+        self,
+        signals: torch.Tensor,
+        subject_indices=None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Stage-1 单词前向：返回单位球面输出 z [B, D] 与末层投影前特征 h_pre [B, M]（供训练期多试次原型抗坍缩损失）。"""
+        if hasattr(self.brain_encoder, "encode_with_pre_head"):
+            z_raw, h_pre, _ = self.brain_encoder.encode_with_pre_head(
+                signals, subject_indices
+            )
+            return F.normalize(z_raw, dim=-1), h_pre
+        z_norm = F.normalize(self.brain_encoder(signals, subject_indices), dim=-1)
+        return z_norm, z_norm
+
     def forward(
         self,
         signals,

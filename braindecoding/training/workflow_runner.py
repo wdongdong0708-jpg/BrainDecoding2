@@ -2079,7 +2079,25 @@ def run_training_workflow(
         train_ds.subject_count,
         cfg["model"],
     ).to(device)
-    loss_module = build_siglip_loss(cfg["loss"]).to(device)
+    loss_cfg_resolved = dict(cfg["loss"] or {})
+    loss_name_norm = str(loss_cfg_resolved.get("name", "siglip") or "siglip").strip().lower()
+    if loss_name_norm in {
+        "multi_trial_prototype_siglip",
+        "prototype_siglip",
+        "anticollapse_prototype_siglip",
+    }:
+        out_dim = int(
+            cfg["model"].get(
+                "embedding_dimension",
+                cfg["model"].get("output_dimension", 1024),
+            )
+        )
+        loss_cfg_resolved.setdefault("output_dimension", out_dim)
+        loss_cfg_resolved.setdefault(
+            "pre_head_dimension",
+            int(getattr(model.brain_encoder, "pre_head_dimension", out_dim)),
+        )
+    loss_module = build_siglip_loss(loss_cfg_resolved).to(device)
     embedding_hash = file_sha256(cfg["cache"]["text_embeddings"])
 
     # 严格基于训练划分构建词表向量与词频（供全词表 Logit-Adjusted CE 与独立文本锥轴锁使用，绝不触碰 val/test）
@@ -2853,6 +2871,18 @@ def run_training_workflow(
             ):
                 parts.append(f"lag={lag_val:.4f}")
             status_str += f" [{','.join(parts)}]"
+        elif (
+            isinstance(diagnostics, dict)
+            and isinstance(diagnostics.get("prototype_anti_collapse"), dict)
+        ):
+            p_diag = diagnostics["prototype_anti_collapse"]
+            status_str += (
+                f" [s={float(p_diag.get('single_loss', 0.0)):.3f},"
+                f"p_pre={float(p_diag.get('proto_pre_loss', 0.0)):.3f},"
+                f"p_z={float(p_diag.get('proto_z_loss', 0.0)):.3f},"
+                f"np={float(p_diag.get('mean_active_prototypes', 0.0)):.0f}"
+                f"x{float(p_diag.get('mean_group_size', 0.0)):.1f}]"
+            )
 
         epoch_col = f"{epoch + 1:02d}/{max_epochs:02d}"
         vram_col = f"{peak_alloc_mb:6.0f} / {peak_reserved_mb:5.0f} MB"

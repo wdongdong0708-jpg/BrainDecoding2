@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-10-17T17:42:27Z",
-  "updated_at": "2026-11-28T04:31:56Z",
+  "updated_at": "2026-11-28T08:09:38Z",
   "files": {
     ".gitattributes": {
       "role": "index",
@@ -29,9 +29,9 @@
     },
     "aoci.code.txt": {
       "role": "index",
-      "sha256": "b8e304f966d48580e920071fddb38b42e67a6f2ee676a0dd56d3b0f4cc67f2a8",
-      "size": 45069,
-      "normalized_sha256": "b8e304f966d48580e920071fddb38b42e67a6f2ee676a0dd56d3b0f4cc67f2a8"
+      "sha256": "ad0b637b40c1030b5ae40494d5393723b5812baa232bf85215194e402cb9e6af",
+      "size": 45139,
+      "normalized_sha256": "ad0b637b40c1030b5ae40494d5393723b5812baa232bf85215194e402cb9e6af"
     },
     "aoci.meta.txt": {
       "role": "index",
@@ -359,9 +359,9 @@
     },
     "braindecoding/losses.py": {
       "role": "index",
-      "sha256": "d8c59340cefb4c93ef5cfc7efaaccf38aaf83b832b685d5412d8e720f152fd26",
-      "size": 17526,
-      "normalized_sha256": "d8c59340cefb4c93ef5cfc7efaaccf38aaf83b832b685d5412d8e720f152fd26"
+      "sha256": "552b6c7b7677e0d62c126735d80e189666a1125e2fa4ae4bcaeff35e4225353d",
+      "size": 27886,
+      "normalized_sha256": "552b6c7b7677e0d62c126735d80e189666a1125e2fa4ae4bcaeff35e4225353d"
     },
     "braindecoding/models/__init__.py": {
       "role": "index",
@@ -371,15 +371,15 @@
     },
     "braindecoding/models/brain_encoder.py": {
       "role": "index",
-      "sha256": "fcae5b2af925f8737386ff9dde0d7ab3c6382de084865bb649774406478e2db8",
-      "size": 30322,
-      "normalized_sha256": "b57feca6b1711cf9f1ec131643c607ee3410b52c6f226ee86e69a6bda8ec58db"
+      "sha256": "578f7fec01c0b55bc070a1128660e807e4c0ef7a80c836a9661b6fb57acbab79",
+      "size": 30735,
+      "normalized_sha256": "d9e291643d71f055826b3631c1cb7318f2750cb3ff3eab886308b9a9eb2d75e8"
     },
     "braindecoding/models/embedding.py": {
       "role": "index",
-      "sha256": "9e5f319b1cc9c1dc8cd52b4f611af786662b18e96d123bfc9dcc622e8469b44b",
-      "size": 47405,
-      "normalized_sha256": "9e5f319b1cc9c1dc8cd52b4f611af786662b18e96d123bfc9dcc622e8469b44b"
+      "sha256": "c64c15ae7a6795ce6a86f178071bb4b9be1050895cbf2edf94a2bb6cd9a47b9f",
+      "size": 48077,
+      "normalized_sha256": "c64c15ae7a6795ce6a86f178071bb4b9be1050895cbf2edf94a2bb6cd9a47b9f"
     },
     "braindecoding/models/experimental.py": {
       "role": "index",
@@ -581,15 +581,15 @@
     },
     "braindecoding/training/word_encoder_training.py": {
       "role": "index",
-      "sha256": "82684f7e3ffc366f8c76fbb212fc7a8f28bff2d43194e87046d1814330e14ffe",
-      "size": 51429,
-      "normalized_sha256": "82684f7e3ffc366f8c76fbb212fc7a8f28bff2d43194e87046d1814330e14ffe"
+      "sha256": "5a92017f65dee73046e05f232dff83648c5ebe76082cd07a48de0eaaf08f62e2",
+      "size": 68762,
+      "normalized_sha256": "5a92017f65dee73046e05f232dff83648c5ebe76082cd07a48de0eaaf08f62e2"
     },
     "braindecoding/training/workflow_runner.py": {
       "role": "index",
-      "sha256": "692766c33cc5c4556e8ef1b9c63b6c0786f8180de219cc228e32b03977473d4c",
-      "size": 123941,
-      "normalized_sha256": "692766c33cc5c4556e8ef1b9c63b6c0786f8180de219cc228e32b03977473d4c"
+      "sha256": "d10ea7e3822f9b3bd42d73a8bc373c7d8b5080a2974fd9e0b401fe2034f8fccb",
+      "size": 125237,
+      "normalized_sha256": "d10ea7e3822f9b3bd42d73a8bc373c7d8b5080a2974fd9e0b401fe2034f8fccb"
     },
     "configs/controls/common_mode_subtraction/chineseeeg2_common_mode_subtraction_control.yaml": {
       "role": "observe",
@@ -1198,9 +1198,9 @@
     },
     "scripts/colab/train_libribrain.ipynb": {
       "role": "index",
-      "sha256": "fb4aa46503f40c49265db857aa429576e3e5ed2130062977e9e06ccff98fa177",
-      "size": 47615,
-      "normalized_sha256": "fb4aa46503f40c49265db857aa429576e3e5ed2130062977e9e06ccff98fa177"
+      "sha256": "727006b7d4eadf3e16bfc82f2a1151d887d8281e7006e9e2edf5e9826d314541",
+      "size": 54450,
+      "normalized_sha256": "727006b7d4eadf3e16bfc82f2a1151d887d8281e7006e9e2edf5e9826d314541"
     },
     "scripts/colab/train_pallier.ipynb": {
       "role": "index",

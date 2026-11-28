@@ -235,6 +235,325 @@ class MinGapBatchSampler(Sampler):
         return len(self._build_batches())
 
 
+class MultiTrialPrototypeBatchSampler(Sampler):
+    """第三阶梯 Stage-1 抗坍缩多试次原型批采样器（100% 轮次覆盖 + 零物理窗口重叠）。
+
+    每轮将训练集内同一词的出现无放回划分为大小不超过 ``proto_group_size`` 的零重叠小组
+    （同录音任意两试次间隔 ``>= proto_min_gap_seconds``，默认 10.0s；跨录音天然零重叠），
+    再将各词小组打包装入 ``batch_size`` 批次，同时严格保证：
+      1. 同批任意同录音样本起始间隔 ``>= min_gap_seconds``（默认 2.5s）；
+      2. 同批任意同词同录音样本起始间隔 ``>= proto_min_gap_seconds``（默认 10.0s）；
+      3. 全轮 100% 不重不漏覆盖全部训练样本，并规避单样本尾批防止 BatchNorm1d 崩溃。
+    """
+
+    def __init__(
+        self,
+        words,
+        recording_ids,
+        onset_seconds,
+        batch_size,
+        *,
+        proto_group_size=4,
+        min_gap_seconds=2.5,
+        proto_min_gap_seconds=10.0,
+        shuffle=True,
+        seed=0,
+        max_open_batches=32,
+    ):
+        self.batch_size = int(batch_size)
+        if self.batch_size <= 0:
+            raise ValueError(f"batch_size 必须为正整数：{self.batch_size}")
+        self.proto_group_size = int(proto_group_size)
+        if self.proto_group_size <= 0:
+            raise ValueError(
+                f"proto_group_size 必须为正整数：{self.proto_group_size}"
+            )
+        self.min_gap_seconds = float(min_gap_seconds)
+        self.proto_min_gap_seconds = max(
+            float(proto_min_gap_seconds), self.min_gap_seconds
+        )
+        if self.min_gap_seconds <= 0.0:
+            raise ValueError(f"min_gap_seconds 必须为正数：{self.min_gap_seconds}")
+        self.shuffle = bool(shuffle)
+        self.seed = int(seed)
+        self.max_open_batches = max(4, int(max_open_batches))
+        self.epoch = 0
+        self._cached_epoch = None
+        self._cached_batches = None
+
+        n_rows = len(words)
+        if len(recording_ids) != n_rows or len(onset_seconds) != n_rows:
+            raise ValueError("words、recording_ids 与 onset_seconds 长度必须一致。")
+
+        word_map: dict[str, int] = {}
+        rec_map: dict[str, int] = {}
+        word_ids = np.empty(n_rows, dtype=np.int64)
+        rec_ids = np.empty(n_rows, dtype=np.int64)
+        indices_by_word: list[list[int]] = []
+        for idx in range(n_rows):
+            w_str = str(words[idx])
+            wid = word_map.get(w_str)
+            if wid is None:
+                wid = len(word_map)
+                word_map[w_str] = wid
+                indices_by_word.append([])
+            word_ids[idx] = wid
+            indices_by_word[wid].append(idx)
+
+            r_str = str(recording_ids[idx])
+            rid = rec_map.get(r_str)
+            if rid is None:
+                rid = len(rec_map)
+                rec_map[r_str] = rid
+            rec_ids[idx] = rid
+
+        self._word_ids = word_ids.tolist()
+        self._rec_ids = rec_ids.tolist()
+        self._onset_seconds = np.asarray(onset_seconds, dtype=np.float64).tolist()
+        self._indices_by_word = [
+            np.asarray(items, dtype=np.int64) for items in indices_by_word
+        ]
+
+    def set_epoch(self, epoch):
+        new_epoch = int(epoch)
+        if new_epoch != self.epoch:
+            self.epoch = new_epoch
+            self._cached_epoch = None
+            self._cached_batches = None
+
+    def _can_add_item(self, rec_dict, word_rec_dict, idx_val):
+        rid = self._rec_ids[idx_val]
+        wid = self._word_ids[idx_val]
+        onset = self._onset_seconds[idx_val]
+        existing_r = rec_dict.get(rid)
+        if existing_r is not None:
+            min_gap = self.min_gap_seconds
+            for prev_t in existing_r:
+                if abs(onset - prev_t) < min_gap:
+                    return False
+        existing_wr = word_rec_dict.get((wid, rid))
+        if existing_wr is not None:
+            p_gap = self.proto_min_gap_seconds
+            for prev_t in existing_wr:
+                if abs(onset - prev_t) < p_gap:
+                    return False
+        return True
+
+    def _build_batches(self):
+        if self._cached_epoch == self.epoch and self._cached_batches is not None:
+            return self._cached_batches
+
+        rng = np.random.default_rng(self.seed + self.epoch)
+        proto_gap = self.proto_min_gap_seconds
+        group_k = self.proto_group_size
+        rec_ids = self._rec_ids
+        onsets = self._onset_seconds
+
+        # 阶段 1：每词内部按 >= proto_min_gap_seconds 无放回划分最多 K 试次小组
+        groups: list[tuple[int, list[int]]] = []
+        for wid, raw_idx in enumerate(self._indices_by_word):
+            n_w = len(raw_idx)
+            if n_w == 1 or group_k == 1:
+                for item in raw_idx.tolist():
+                    groups.append((wid, [int(item)]))
+                continue
+            perm_idx = raw_idx[rng.permutation(n_w)] if self.shuffle else raw_idx
+            open_groups: list[list[int]] = []
+            open_rec_onsets: list[dict[int, list[float]]] = []
+            for idx_val in perm_idx.tolist():
+                rid = rec_ids[idx_val]
+                onset = onsets[idx_val]
+                placed = False
+                for g_i in range(len(open_groups)):
+                    rec_map = open_rec_onsets[g_i]
+                    existing = rec_map.get(rid)
+                    conflict = False
+                    if existing is not None:
+                        for prev_t in existing:
+                            if abs(onset - prev_t) < proto_gap:
+                                conflict = True
+                                break
+                    if not conflict:
+                        open_groups[g_i].append(idx_val)
+                        if existing is None:
+                            rec_map[rid] = [onset]
+                        else:
+                            existing.append(onset)
+                        if len(open_groups[g_i]) >= group_k:
+                            groups.append((wid, open_groups.pop(g_i)))
+                            open_rec_onsets.pop(g_i)
+                        placed = True
+                        break
+                if not placed:
+                    open_groups.append([idx_val])
+                    open_rec_onsets.append({rid: [onset]})
+            for g in open_groups:
+                groups.append((wid, g))
+
+        if self.shuffle and len(groups) > 1:
+            order = rng.permutation(len(groups))
+            groups = [groups[int(i)] for i in order]
+
+        # 阶段 2：将各词小组打包装入 batch_size 批次并严格守卫同录音 2.5s 与同词 10.0s 间隔
+        open_batches: list[list[int]] = []
+        open_b_recs: list[dict[int, list[float]]] = []
+        open_b_wrecs: list[dict[tuple[int, int], list[float]]] = []
+        batches: list[list[int]] = []
+        final_b_recs: list[dict[int, list[float]]] = []
+        final_b_wrecs: list[dict[tuple[int, int], list[float]]] = []
+
+        bs = self.batch_size
+        min_gap = self.min_gap_seconds
+        max_open = self.max_open_batches
+
+        for wid, grp in groups:
+            g_len = len(grp)
+            placed = False
+            for b_i in range(len(open_batches)):
+                if len(open_batches[b_i]) + g_len > bs:
+                    continue
+                b_recs = open_b_recs[b_i]
+                b_wrecs = open_b_wrecs[b_i]
+                conflict = False
+                for idx_val in grp:
+                    rid = rec_ids[idx_val]
+                    onset = onsets[idx_val]
+                    existing_r = b_recs.get(rid)
+                    if existing_r is not None:
+                        for prev_t in existing_r:
+                            if abs(onset - prev_t) < min_gap:
+                                conflict = True
+                                break
+                        if conflict:
+                            break
+                    existing_wr = b_wrecs.get((wid, rid))
+                    if existing_wr is not None:
+                        for prev_t in existing_wr:
+                            if abs(onset - prev_t) < proto_gap:
+                                conflict = True
+                                break
+                        if conflict:
+                            break
+                if not conflict:
+                    open_batches[b_i].extend(grp)
+                    for idx_val in grp:
+                        rid = rec_ids[idx_val]
+                        onset = onsets[idx_val]
+                        b_recs.setdefault(rid, []).append(onset)
+                        b_wrecs.setdefault((wid, rid), []).append(onset)
+                    if len(open_batches[b_i]) >= bs:
+                        batches.append(open_batches.pop(b_i))
+                        final_b_recs.append(open_b_recs.pop(b_i))
+                        final_b_wrecs.append(open_b_wrecs.pop(b_i))
+                    placed = True
+                    break
+
+            if not placed:
+                if g_len >= bs:
+                    b_recs_new: dict[int, list[float]] = {}
+                    b_wrecs_new: dict[tuple[int, int], list[float]] = {}
+                    for idx_val in grp:
+                        rid = rec_ids[idx_val]
+                        onset = onsets[idx_val]
+                        b_recs_new.setdefault(rid, []).append(onset)
+                        b_wrecs_new.setdefault((wid, rid), []).append(onset)
+                    batches.append(list(grp))
+                    final_b_recs.append(b_recs_new)
+                    final_b_wrecs.append(b_wrecs_new)
+                else:
+                    if len(open_batches) >= max_open:
+                        fullest_idx = max(
+                            range(len(open_batches)),
+                            key=lambda i: len(open_batches[i]),
+                        )
+                        batches.append(open_batches.pop(fullest_idx))
+                        final_b_recs.append(open_b_recs.pop(fullest_idx))
+                        final_b_wrecs.append(open_b_wrecs.pop(fullest_idx))
+                    b_recs_new = {}
+                    b_wrecs_new = {}
+                    for idx_val in grp:
+                        rid = rec_ids[idx_val]
+                        onset = onsets[idx_val]
+                        b_recs_new.setdefault(rid, []).append(onset)
+                        b_wrecs_new.setdefault((wid, rid), []).append(onset)
+                    open_batches.append(list(grp))
+                    open_b_recs.append(b_recs_new)
+                    open_b_wrecs.append(b_wrecs_new)
+
+        singletons: list[int] = []
+        for b_items, b_r, b_wr in zip(open_batches, open_b_recs, open_b_wrecs):
+            if len(b_items) == 1:
+                singletons.append(b_items[0])
+            else:
+                batches.append(b_items)
+                final_b_recs.append(b_r)
+                final_b_wrecs.append(b_wr)
+
+        # 尽量吸收单样本尾批，防止 BatchNorm1d 单样本方差异常
+        for single_idx in singletons:
+            placed = False
+            for b_i, b_items in enumerate(batches):
+                if len(b_items) < bs and self._can_add_item(
+                    final_b_recs[b_i], final_b_wrecs[b_i], single_idx
+                ):
+                    b_items.append(single_idx)
+                    rid = rec_ids[single_idx]
+                    wid = self._word_ids[single_idx]
+                    onset = onsets[single_idx]
+                    final_b_recs[b_i].setdefault(rid, []).append(onset)
+                    final_b_wrecs[b_i].setdefault((wid, rid), []).append(onset)
+                    placed = True
+                    break
+            if not placed and bs >= 2:
+                s_rid = rec_ids[single_idx]
+                s_wid = self._word_ids[single_idx]
+                s_onset = onsets[single_idx]
+                for b_i, b_items in enumerate(batches):
+                    if len(b_items) < 3:
+                        continue
+                    for pos in range(len(b_items) - 1, -1, -1):
+                        donor = b_items[pos]
+                        d_rid = rec_ids[donor]
+                        d_wid = self._word_ids[donor]
+                        d_onset = onsets[donor]
+                        if d_rid == s_rid and abs(d_onset - s_onset) < (
+                            proto_gap if d_wid == s_wid else min_gap
+                        ):
+                            continue
+                        b_items.pop(pos)
+                        new_b = [single_idx, donor]
+                        new_r: dict[int, list[float]] = {}
+                        new_wr: dict[tuple[int, int], list[float]] = {}
+                        for v in new_b:
+                            new_r.setdefault(rec_ids[v], []).append(onsets[v])
+                            new_wr.setdefault((self._word_ids[v], rec_ids[v]), []).append(
+                                onsets[v]
+                            )
+                        batches.append(new_b)
+                        final_b_recs.append(new_r)
+                        final_b_wrecs.append(new_wr)
+                        placed = True
+                        break
+                    if placed:
+                        break
+            if not placed:
+                batches.append([single_idx])
+
+        if self.shuffle and len(batches) > 1:
+            order = rng.permutation(len(batches))
+            batches = [batches[int(i)] for i in order]
+
+        self._cached_epoch = self.epoch
+        self._cached_batches = batches
+        return batches
+
+    def __iter__(self):
+        yield from self._build_batches()
+
+    def __len__(self):
+        return len(self._build_batches())
+
+
 def _wrap_progress(iterable, *, enabled=False, desc=None, total=None):
     """在启用进度条时使用 tqdm 包装迭代器，若未安装 tqdm 则优雅降级。"""
     if not enabled:
@@ -296,7 +615,7 @@ def make_loader(
     if (
         bool(shuffle)
         and not preserve_groups
-        and word_sampling == "min_gap_sampler"
+        and word_sampling in {"min_gap_sampler", "multi_trial_prototype_sampler"}
     ):
         rec_col = (
             "recording_id"
@@ -310,16 +629,40 @@ def make_loader(
         )
         if rec_col not in dataset.table.columns or onset_col not in dataset.table.columns:
             raise KeyError(
-                f"min_gap_sampler 需要 Dataset 包含 {rec_col!r} 与 {onset_col!r} 列。"
+                f"{word_sampling} 需要 Dataset 包含 {rec_col!r} 与 {onset_col!r} 列。"
             )
-        sampler = MinGapBatchSampler(
-            dataset.table[rec_col].astype(str).tolist(),
-            dataset.table[onset_col].to_numpy(dtype=np.float64),
-            batch_size=resolved_batch_size,
-            min_gap_seconds=float(training_config.get("min_gap_seconds", 2.5)),
-            shuffle=shuffle,
-            seed=int(training_config["seed"]),
-        )
+        if word_sampling == "multi_trial_prototype_sampler":
+            word_col = (
+                "normalized_word"
+                if "normalized_word" in dataset.table.columns
+                else ("word" if "word" in dataset.table.columns else "规范词")
+            )
+            if word_col not in dataset.table.columns:
+                raise KeyError(
+                    f"multi_trial_prototype_sampler 需要 Dataset 包含 {word_col!r} 列。"
+                )
+            sampler = MultiTrialPrototypeBatchSampler(
+                dataset.table[word_col].astype(str).tolist(),
+                dataset.table[rec_col].astype(str).tolist(),
+                dataset.table[onset_col].to_numpy(dtype=np.float64),
+                batch_size=resolved_batch_size,
+                proto_group_size=int(training_config.get("proto_group_size", 4)),
+                min_gap_seconds=float(training_config.get("min_gap_seconds", 2.5)),
+                proto_min_gap_seconds=float(
+                    training_config.get("proto_min_gap_seconds", 10.0)
+                ),
+                shuffle=shuffle,
+                seed=int(training_config["seed"]),
+            )
+        else:
+            sampler = MinGapBatchSampler(
+                dataset.table[rec_col].astype(str).tolist(),
+                dataset.table[onset_col].to_numpy(dtype=np.float64),
+                batch_size=resolved_batch_size,
+                min_gap_seconds=float(training_config.get("min_gap_seconds", 2.5)),
+                shuffle=shuffle,
+                seed=int(training_config["seed"]),
+            )
     else:
         sampler = SentenceBatchSampler(
             dataset.table[group_column].astype(str).tolist(),
@@ -497,6 +840,18 @@ def train_one_epoch(
     )
     try:
         needs_word_ids = bool(getattr(loss_module, "requires_word_ids", False))
+        needs_pre_head = bool(
+            getattr(loss_module, "requires_pre_head", False)
+            and getattr(model, "context_transformer", None) is None
+            and not prefix_revision_enabled
+            and not relation_enabled
+        )
+        proto_single_sum = 0.0
+        proto_pre_sum = 0.0
+        proto_z_sum = 0.0
+        proto_active_sum = 0.0
+        proto_group_size_sum = 0.0
+        proto_batches = 0
         for batch in iterable:
             meg, targets, subject_indices, sentence_indices = move_batch(batch, device)
             event_times = event_times_for_model(model, batch, device)
@@ -505,6 +860,7 @@ def train_one_epoch(
                 if needs_word_ids
                 else None
             )
+            batch_pre_head = None
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(
                 device_type=device.type,
@@ -559,6 +915,10 @@ def train_one_epoch(
                                 event_times=event_times,
                                 corruption_generator=relation_generator,
                             )
+                        )
+                    elif needs_pre_head and hasattr(model, "forward_word_with_pre_head"):
+                        estimates, batch_pre_head = model.forward_word_with_pre_head(
+                            meg, subject_indices
                         )
                     elif event_times is None:
                         estimates = model(meg, subject_indices, sentence_indices)
@@ -631,15 +991,21 @@ def train_one_epoch(
                                 (revision_delays == delay).sum()
                             )
                     else:
-                        immediate_loss = (
-                            loss_module(
+                        if batch_pre_head is not None:
+                            immediate_loss = loss_module(
+                                estimates,
+                                targets,
+                                target_word_ids=batch_word_ids,
+                                pre_head=batch_pre_head,
+                            )
+                        elif batch_word_ids is not None:
+                            immediate_loss = loss_module(
                                 estimates,
                                 targets,
                                 target_word_ids=batch_word_ids,
                             )
-                            if batch_word_ids is not None
-                            else loss_module(estimates, targets)
-                        )
+                        else:
+                            immediate_loss = loss_module(estimates, targets)
                         word_loss = immediate_loss
                     if relation_enabled:
                         margins = positive_scores.float() - negative_scores.float()
@@ -663,7 +1029,11 @@ def train_one_epoch(
             max_grad_norm = float(config.get("max_grad_norm", 0.0))
             if max_grad_norm > 0:
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                clip_params = list(model.parameters())
+                proto_head = getattr(loss_module, "proto_pre_head", None)
+                if proto_head is not None:
+                    clip_params.extend(proto_head.parameters())
+                torch.nn.utils.clip_grad_norm_(clip_params, max_grad_norm)
             previous_scale = float(scaler.get_scale())
             scaler.step(optimizer)
             scaler.update()
@@ -679,6 +1049,14 @@ def train_one_epoch(
                 if ema is not None:
                     ema.update(model)
             loss_sum += float(loss.detach()) * len(meg)
+            last_comp = getattr(loss_module, "last_components", None)
+            if isinstance(last_comp, dict) and last_comp:
+                proto_single_sum += float(last_comp["single_loss"]) * len(meg)
+                proto_pre_sum += float(last_comp["proto_pre_loss"]) * len(meg)
+                proto_z_sum += float(last_comp["proto_z_loss"]) * len(meg)
+                proto_active_sum += float(last_comp["active_prototypes"])
+                proto_group_size_sum += float(last_comp["mean_group_size"])
+                proto_batches += 1
             sample_count += len(meg)
             batches_seen += 1
             if pbar is not None and (
@@ -740,6 +1118,17 @@ def train_one_epoch(
             )
             for delay in revision_delay_counts
         },
+        "prototype_anti_collapse": (
+            {
+                "single_loss": proto_single_sum / max(sample_count, 1),
+                "proto_pre_loss": proto_pre_sum / max(sample_count, 1),
+                "proto_z_loss": proto_z_sum / max(sample_count, 1),
+                "mean_active_prototypes": proto_active_sum / max(proto_batches, 1),
+                "mean_group_size": proto_group_size_sum / max(proto_batches, 1),
+            }
+            if proto_batches > 0
+            else None
+        ),
     }
     if return_stats:
         if return_diagnostics:

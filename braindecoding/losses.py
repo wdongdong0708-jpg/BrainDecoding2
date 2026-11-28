@@ -374,6 +374,214 @@ class HybridSigLipFullVocabCELoss(nn.Module):
         return self.siglip_weight * loss_sig + self.ce_weight * loss_ce
 
 
+class MultiTrialPrototypeSigLipLoss(nn.Module):
+    """第三阶梯 Stage-1 抗坍缩多试次原型对比损失（测试期仍严格单试次 k=1，零 model state_dict 改动）。
+
+    组合三项：
+      1. ``single_weight * SigLIP(z_norm, targets)``：保住出口 ``z_out`` 在 k=1 单试次下的最优检索；
+      2. ``proto_pre_weight * SigLIP_rect(proto(proto_pre_head(h_pre)), E_U)``：将同词多试次（>=10s 零重叠）
+         平均降噪原型梯度送入 ``h_pre`` 与 18M 卷积主干，打破单试次噪声引发的维度坍缩；
+      3. ``proto_z_weight * SigLIP_rect(proto(z_norm), E_U)``：温和撑大 ``z_out`` 自身有效信号秩，
+         使下游 Stage-2 跨词邻居 ``z_{i±Δ}`` 同步受益。
+
+    辅助线性头 ``proto_pre_head`` 与原型温度/偏置仅存于 ``loss_state``，不污染 ``model.state_dict()``，
+    保证产出的 Stage-1 检查点可 ``strict=True`` 零摩擦热启动任意 Stage-2 模型。
+    """
+
+    def __init__(
+        self,
+        *,
+        single_weight: float = 1.0,
+        proto_pre_weight: float = 0.5,
+        proto_z_weight: float = 0.25,
+        min_group_size: int = 2,
+        pre_head_dimension: int = 1024,
+        output_dimension: int = 1024,
+        initial_temperature: float = 10.0,
+        initial_bias: float = -10.0,
+        proto_initial_temperature: float = 12.0,
+        proto_initial_bias: float = -10.0,
+        identical_candidates_threshold: float | None = 0.999,
+    ):
+        super().__init__()
+        self.single_weight = float(single_weight)
+        self.proto_pre_weight = float(proto_pre_weight)
+        self.proto_z_weight = float(proto_z_weight)
+        self.min_group_size = max(2, int(min_group_size))
+        self.pre_head_dimension = int(pre_head_dimension)
+        self.output_dimension = int(output_dimension)
+        if self.single_weight < 0.0 or self.proto_pre_weight < 0.0 or self.proto_z_weight < 0.0:
+            raise ValueError("MultiTrialPrototypeSigLipLoss 各项损失权重不能为负。")
+        if self.pre_head_dimension <= 0 or self.output_dimension <= 0:
+            raise ValueError("pre_head_dimension 与 output_dimension 必须为正整数。")
+
+        self.siglip = SigLipLoss(
+            initial_temperature=initial_temperature,
+            initial_bias=initial_bias,
+            identical_candidates_threshold=identical_candidates_threshold,
+        )
+        self.proto_pre_head: nn.Linear | None = (
+            nn.Linear(self.pre_head_dimension, self.output_dimension, bias=True)
+            if self.proto_pre_weight > 0.0
+            else None
+        )
+        self.proto_pre_siglip: SigLipLoss | None = (
+            SigLipLoss(
+                initial_temperature=proto_initial_temperature,
+                initial_bias=proto_initial_bias,
+                identical_candidates_threshold=identical_candidates_threshold,
+            )
+            if self.proto_pre_weight > 0.0
+            else None
+        )
+        self.proto_z_siglip: SigLipLoss | None = (
+            SigLipLoss(
+                initial_temperature=proto_initial_temperature,
+                initial_bias=proto_initial_bias,
+                identical_candidates_threshold=identical_candidates_threshold,
+            )
+            if self.proto_z_weight > 0.0
+            else None
+        )
+        self.word_to_id: dict[str, int] = {}
+        self.requires_word_ids: bool = True
+        self.requires_pre_head: bool = bool(self.proto_pre_weight > 0.0)
+        self.last_components: dict[str, float] = {}
+
+    @torch.no_grad()
+    def set_vocabulary(self, words, vocab_embeddings=None, word_counts=None) -> None:
+        """绑定训练集词表映射（零大张量缓冲区，不膨胀检查点体积，绝不触碰 val/test）。"""
+        del vocab_embeddings, word_counts
+        self.word_to_id = {str(w): idx for idx, w in enumerate(words)}
+
+    def map_words_to_ids(self, words, device: torch.device) -> torch.Tensor:
+        if not self.word_to_id:
+            # 独立单元测试未调 set_vocabulary 时按批内确定性词表回退映射
+            local_map: dict[str, int] = {}
+            ids = []
+            for w in words:
+                key = str(w)
+                wid = local_map.get(key)
+                if wid is None:
+                    wid = len(local_map)
+                    local_map[key] = wid
+                ids.append(wid)
+            return torch.tensor(ids, device=device, dtype=torch.long)
+        return torch.tensor(
+            [self.word_to_id[str(w)] for w in words],
+            device=device,
+            dtype=torch.long,
+        )
+
+    def _pool_unique_word_prototypes(
+        self,
+        unit_embeddings: torch.Tensor,
+        inverse_idx: torch.Tensor,
+        counts: torch.Tensor,
+        proto_indices: torch.Tensor,
+        num_unique: int,
+    ) -> torch.Tensor:
+        """按批内唯一词 ID 聚合单位球面试次均值并重归一化（等价于训练期 SimpleB2T 原型平均）。"""
+        emb_f = unit_embeddings.float()
+        summed = emb_f.new_zeros((num_unique, emb_f.shape[-1]))
+        summed.index_add_(0, inverse_idx, emb_f)
+        denom = counts[proto_indices].to(dtype=torch.float32).clamp(min=1.0).unsqueeze(-1)
+        proto_mean = summed[proto_indices] / denom
+        return F.normalize(proto_mean, dim=-1, eps=1e-12)
+
+    def forward(
+        self,
+        estimate: torch.Tensor,
+        candidate: torch.Tensor,
+        target_word_ids: torch.Tensor | None = None,
+        pre_head: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        loss_single = (
+            self.siglip(estimate, candidate)
+            if self.single_weight > 0.0
+            else estimate.sum() * 0.0
+        )
+        loss_proto_pre = loss_single * 0.0
+        loss_proto_z = loss_single * 0.0
+        active_prototypes = 0
+        mean_group_size_t = loss_single.new_zeros(())
+
+        need_proto = (self.proto_pre_weight > 0.0) or (self.proto_z_weight > 0.0)
+        if need_proto and target_word_ids is not None and len(estimate) >= self.min_group_size:
+            word_ids = torch.as_tensor(
+                target_word_ids, device=estimate.device, dtype=torch.long
+            )
+            unique_ids, inverse_idx, counts = torch.unique(
+                word_ids, sorted=False, return_inverse=True, return_counts=True
+            )
+            num_unique = int(unique_ids.shape[0])
+            proto_indices = torch.nonzero(
+                counts >= self.min_group_size, as_tuple=False
+            ).squeeze(-1)
+            active_prototypes = int(proto_indices.numel())
+            if active_prototypes > 0:
+                mean_group_size_t = counts[proto_indices].float().mean().detach()
+                cand_norm = F.normalize(candidate.float(), dim=-1, eps=1e-12)
+                target_sum = cand_norm.new_zeros((num_unique, cand_norm.shape[-1]))
+                target_sum.index_add_(0, inverse_idx, cand_norm)
+                unique_targets = F.normalize(target_sum, dim=-1, eps=1e-12)
+
+                if self.proto_pre_weight > 0.0:
+                    if pre_head is None:
+                        raise ValueError(
+                            "MultiTrialPrototypeSigLipLoss 启用了 proto_pre_weight > 0，"
+                            "但 forward 未收到 pre_head 特征。"
+                        )
+                    assert self.proto_pre_head is not None and self.proto_pre_siglip is not None
+                    u_pre = F.normalize(
+                        self.proto_pre_head(pre_head.to(dtype=self.proto_pre_head.weight.dtype)),
+                        dim=-1,
+                        eps=1e-12,
+                    )
+                    proto_pre = self._pool_unique_word_prototypes(
+                        u_pre, inverse_idx, counts, proto_indices, num_unique
+                    )
+                    loss_proto_pre = self.proto_pre_siglip.forward_rectangular(
+                        proto_pre, unique_targets, proto_indices
+                    )
+
+                if self.proto_z_weight > 0.0:
+                    assert self.proto_z_siglip is not None
+                    u_z = F.normalize(estimate.float(), dim=-1, eps=1e-12)
+                    proto_z = self._pool_unique_word_prototypes(
+                        u_z, inverse_idx, counts, proto_indices, num_unique
+                    )
+                    loss_proto_z = self.proto_z_siglip.forward_rectangular(
+                        proto_z, unique_targets, proto_indices
+                    )
+
+        total = (
+            self.single_weight * loss_single
+            + self.proto_pre_weight * loss_proto_pre
+            + self.proto_z_weight * loss_proto_z
+        )
+        self.last_components = {
+            "single_loss": loss_single.detach(),
+            "proto_pre_loss": loss_proto_pre.detach(),
+            "proto_z_loss": loss_proto_z.detach(),
+            "active_prototypes": float(active_prototypes),
+            "mean_group_size": mean_group_size_t,
+        }
+        return total
+
+    def forward_rectangular(
+        self,
+        estimate,
+        candidate_bank,
+        positive_indices,
+        target_word_ids=None,
+    ):
+        del target_word_ids
+        return self.siglip.forward_rectangular(
+            estimate, candidate_bank, positive_indices
+        )
+
+
 def build_siglip_loss(config=None):
     """根据配置构建共享词解码损失（默认保持 LibriBrain SigLipLoss）。"""
     cfg = dict(config or {})
@@ -411,7 +619,26 @@ def build_siglip_loss(config=None):
             alpha_prior=float(cfg.get("alpha_prior", 1.0)),
             label_smoothing=float(cfg.get("label_smoothing", 0.0)),
         )
+    if name in {"multi_trial_prototype_siglip", "prototype_siglip", "anticollapse_prototype_siglip"}:
+        return MultiTrialPrototypeSigLipLoss(
+            single_weight=float(cfg.get("single_weight", 1.0)),
+            proto_pre_weight=float(cfg.get("proto_pre_weight", 0.5)),
+            proto_z_weight=float(cfg.get("proto_z_weight", 0.25)),
+            min_group_size=int(cfg.get("min_group_size", 2)),
+            pre_head_dimension=int(cfg.get("pre_head_dimension", 1024)),
+            output_dimension=int(cfg.get("output_dimension", 1024)),
+            initial_temperature=float(cfg.get("initial_temperature", 10.0)),
+            initial_bias=float(cfg.get("initial_bias", -10.0)),
+            proto_initial_temperature=float(
+                cfg.get("proto_initial_temperature", 12.0)
+            ),
+            proto_initial_bias=float(cfg.get("proto_initial_bias", -10.0)),
+            identical_candidates_threshold=cfg.get(
+                "identical_candidates_threshold", 0.999
+            ),
+        )
     raise ValueError(
         f"不支持的 loss.name={name!r}，可选：'siglip' | "
-        "'logit_adjusted_full_vocab_ce' | 'hybrid_siglip_full_vocab_ce'。"
+        "'logit_adjusted_full_vocab_ce' | 'hybrid_siglip_full_vocab_ce' | "
+        "'multi_trial_prototype_siglip'。"
     )

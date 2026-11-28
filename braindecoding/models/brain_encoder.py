@@ -471,6 +471,7 @@ class MultiBinResConvEncoder(nn.Module):
             raise ValueError("MultiBinResConvEncoder 通道数与 MLP 维度配置无效。")
 
         self.gaussian_noise_std = max(0.0, float(cfg.get("gaussian_noise_std", 0.0)))
+        self.channel_offset_std = max(0.0, float(cfg.get("channel_offset_std", 0.0)))
         self.channel_dropout = float(cfg.get("channel_dropout", 0.0))
         if not (0.0 <= self.channel_dropout < 1.0):
             raise ValueError("channel_dropout 必须位于 [0, 1) 之间。")
@@ -617,6 +618,16 @@ class MultiBinResConvEncoder(nn.Module):
                 < keep_prob
             ).to(dtype=x.dtype)
             x = x * (mask / keep_prob)
+        if self.channel_offset_std > 0.0:
+            offset = (
+                torch.randn(
+                    (x.shape[0], x.shape[1], 1),
+                    device=x.device,
+                    dtype=x.dtype,
+                )
+                * self.channel_offset_std
+            )
+            x = x + offset
         if self.gaussian_noise_std > 0.0:
             x = x + torch.randn_like(x) * self.gaussian_noise_std
         return x
