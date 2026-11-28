@@ -1,19 +1,20 @@
-# LibriBrain100 英语 MEG 阶段 1（第三阶梯抗坍缩：同词多试次零重叠原型对齐 + 单试次 SigLIP 主损 + 轻度通道慢漂移增强）
-# 训练期利用训练集内部同词 >=10s 零重叠多试次平均原型向 h_pre 与卷积主干回传高信噪比梯度，测试与下游 Stage-2 仍严格单试次 k=1。
-# 产出的 model_state 与 MultiBinResConvEncoder 键名完全一致，可直接 strict=True 热启动 Op3A-v2 Stage-2。
+# LibriBrain100 英语 MEG 阶段 1（第三阶梯抗坍缩：同词多试次零重叠原型对齐 + 纯单试次 SigLIP 出口）
+# 训练期严格控制单一变量：出口 z_out 保持 100% 纯 k=1 SigLIP（proto_z_weight=0.0），
+# 仅在倒数第二层 h_pre 施加温和多试次（>=10s 零重叠）原型辅损（proto_pre_weight=0.20）防止高阶维度坍缩；
+# 使用 Macro N50（legacy50）+ min_epoch=5 选模防早期停用词假峰误早停，产出的 model_state 可 strict=True 直连 Op3A-v2。
 # 启动命令：
 #   python -u -m braindecoding train --config configs/training/libribrain100_word_encoder_multibin_resconv_prototype_anticollapse.yaml --require-cache --resume auto
 extends: ./libribrain100_word_encoder_multibin_resconv_butterworth.yaml
 
 model:
   conv:
-    channel_offset_std: 0.10
+    channel_offset_std: 0.0
 
 loss:
   name: multi_trial_prototype_siglip
   single_weight: 1.0
-  proto_pre_weight: 0.50
-  proto_z_weight: 0.25
+  proto_pre_weight: 0.20
+  proto_z_weight: 0.0
   min_group_size: 2
   initial_temperature: 10.0
   initial_bias: -10.0
@@ -22,10 +23,10 @@ loss:
   identical_candidates_threshold: 0.999
 
 training:
-  epochs: 24
-  batch_size: 512
+  epochs: 22
+  batch_size: 256
   eval_batch_size: 1024
-  learning_rate: 5.0e-4
+  learning_rate: 4.0e-4
   weight_decay: 0.01
   decoupled_weight_decay: true
   scheduler: step_cosine
@@ -34,7 +35,8 @@ training:
   max_grad_norm: 1.0
   ema_decay: 0.999
   patience: 6
-  early_stop_metric: full_vocab
+  early_stop_metric: legacy50
+  early_stop_min_epoch: 5
   word_sampling: multi_trial_prototype_sampler
   proto_group_size: 4
   min_gap_seconds: 2.5

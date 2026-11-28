@@ -249,8 +249,13 @@ def test_stage1_prototype_yaml_state_dict_parity_and_stage2_warm_start(
         "configs/training/siamese_debiased/libribrain100_multibin_signed_decollapse_prefix_revision.yaml"
     )
     assert proto_cfg["loss"]["name"] == "multi_trial_prototype_siglip"
+    assert proto_cfg["loss"]["proto_pre_weight"] == pytest.approx(0.20)
+    assert proto_cfg["loss"]["proto_z_weight"] == pytest.approx(0.0)
     assert proto_cfg["training"]["word_sampling"] == "multi_trial_prototype_sampler"
-    assert proto_cfg["model"]["conv"]["channel_offset_std"] == pytest.approx(0.10)
+    assert proto_cfg["training"]["batch_size"] == 256
+    assert proto_cfg["training"]["early_stop_metric"] == "legacy50"
+    assert proto_cfg["training"]["early_stop_min_epoch"] == 5
+    assert proto_cfg["model"]["conv"]["channel_offset_std"] == pytest.approx(0.0)
 
     positions = np.zeros((16, 2), dtype=np.float32)
     # 使用小尺寸通道快速构建同构检查
